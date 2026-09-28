@@ -13,6 +13,10 @@ categories.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion.workspace = true
 
+# Picks the x86-64 backend the running CPU has, without `std`.
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+cpufeatures.workspace = true
+
 [features]
 default = []
 

@@ -1,19 +1,22 @@
 //! The SHA2-256 hash function.
 //!
-//! Batched hashing and batched compression run many messages at once where the build enables a batched backend.
+//! Batched hashing and batched compression run many messages at once where a batched backend exists.
 //!
-//! The backend is picked at compile time, the first match winning:
+//! On x86-64 every backend is compiled, and the first one the running CPU supports wins:
 //!
-//! - x86-64 with `avx512f` and `avx512bw`: 32 messages, one per 32-bit lane, and SHA-NI streams for the last few when `sha` is on too;
-//! - x86-64 with `sha` and `sse4.1`: four messages, as four interleaved SHA-NI streams;
+//! - AVX-512F and AVX-512BW: 32 messages, one per 32-bit lane, and SHA-NI streams for the last few when the CPU has SHA-NI;
+//! - SHA-NI: four messages, as four interleaved streams;
+//! - otherwise one message at a time through `sha2`.
+//!
+//! Other targets pick their backend at compile time:
+//!
 //! - AArch64 with `neon` and `sha2`: four messages, as four streams of the SHA-2 extension;
 //! - wasm32 with `simd128`: four messages, one per lane.
 //!
-//! No x86-64 microarchitecture level enables `sha`, so SHA-NI needs `-C target-feature=+sha` or `-C target-cpu=native`.
-//! AArch64 Linux likewise needs `+sha2`, which the Apple silicon targets enable by default.
+//! AArch64 Linux needs `+sha2`, which the Apple silicon targets enable by default.
 //!
 //! Any other build hashes one message at a time through `sha2`.
-//! That crate detects SHA-NI or the ARMv8 SHA-2 extension at runtime on its own.
+//! That crate detects the ARMv8 SHA-2 extension at runtime on its own.
 
 #![no_std]
 
@@ -23,21 +26,16 @@ extern crate alloc;
 use p3_symmetric::{CompressionFunction, CryptographicHasher, PseudoCompressionFunction};
 use sha2::Digest;
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx512f",
-    target_feature = "avx512bw"
-))]
+#[cfg(target_arch = "x86_64")]
+mod x86_64;
+
+#[cfg(target_arch = "x86_64")]
 mod x86_64_avx512;
 
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 mod wasm32_simd128;
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "sha",
-    target_feature = "sse4.1"
-))]
+#[cfg(target_arch = "x86_64")]
 mod x86_64_sha_ni;
 
 #[cfg(all(
@@ -59,13 +57,6 @@ mod aarch64_sha2;
 use aarch64_sha2::ArmSha2 as Backend;
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 use wasm32_simd128::Simd128 as Backend;
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "sha",
-    target_feature = "sse4.1",
-    not(all(target_feature = "avx512f", target_feature = "avx512bw"))
-))]
-use x86_64_sha_ni::ShaNi as Backend;
 
 pub const H256_256: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
@@ -77,21 +68,12 @@ pub struct Sha256;
 
 impl CryptographicHasher<u8, [u8; 32]> for Sha256 {
     #[cfg(any(
+        target_arch = "x86_64",
         all(target_arch = "wasm32", target_feature = "simd128"),
-        all(
-            target_arch = "x86_64",
-            target_feature = "sha",
-            target_feature = "sse4.1"
-        ),
         all(
             target_arch = "aarch64",
             target_feature = "neon",
             target_feature = "sha2"
-        ),
-        all(
-            target_arch = "x86_64",
-            target_feature = "avx512f",
-            target_feature = "avx512bw"
         )
     ))]
     const LANES: usize = many::LANES;
@@ -119,21 +101,12 @@ impl CryptographicHasher<u8, [u8; 32]> for Sha256 {
     }
 
     #[cfg(any(
+        target_arch = "x86_64",
         all(target_arch = "wasm32", target_feature = "simd128"),
-        all(
-            target_arch = "x86_64",
-            target_feature = "sha",
-            target_feature = "sse4.1"
-        ),
         all(
             target_arch = "aarch64",
             target_feature = "neon",
             target_feature = "sha2"
-        ),
-        all(
-            target_arch = "x86_64",
-            target_feature = "avx512f",
-            target_feature = "avx512bw"
         )
     ))]
     fn hash_many(&self, input: &[u8], out: &mut [[u8; 32]]) {
@@ -148,21 +121,12 @@ pub struct Sha256Compress;
 
 impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
     #[cfg(any(
+        target_arch = "x86_64",
         all(target_arch = "wasm32", target_feature = "simd128"),
-        all(
-            target_arch = "x86_64",
-            target_feature = "sha",
-            target_feature = "sse4.1"
-        ),
         all(
             target_arch = "aarch64",
             target_feature = "neon",
             target_feature = "sha2"
-        ),
-        all(
-            target_arch = "x86_64",
-            target_feature = "avx512f",
-            target_feature = "avx512bw"
         )
     ))]
     const LANES: usize = many::LANES;
@@ -181,21 +145,12 @@ impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
     }
 
     #[cfg(any(
+        target_arch = "x86_64",
         all(target_arch = "wasm32", target_feature = "simd128"),
-        all(
-            target_arch = "x86_64",
-            target_feature = "sha",
-            target_feature = "sse4.1"
-        ),
         all(
             target_arch = "aarch64",
             target_feature = "neon",
             target_feature = "sha2"
-        ),
-        all(
-            target_arch = "x86_64",
-            target_feature = "avx512f",
-            target_feature = "avx512bw"
         )
     ))]
     fn compress_many(&self, inputs: &[[[u8; 32]; 2]], out: &mut [[u8; 32]]) {
@@ -205,23 +160,13 @@ impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
 
 impl CompressionFunction<[u8; 32], 2> for Sha256Compress {}
 
-/// The batched path of an AVX-512 build.
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx512f",
-    target_feature = "avx512bw"
-))]
-use x86_64_avx512 as many;
+/// The batched path of x86-64, picked at run time.
+#[cfg(target_arch = "x86_64")]
+use x86_64 as many;
 
 /// The batched path of a four-lane build, through the backend it compiles.
 #[cfg(any(
     all(target_arch = "wasm32", target_feature = "simd128"),
-    all(
-        target_arch = "x86_64",
-        target_feature = "sha",
-        target_feature = "sse4.1",
-        not(all(target_feature = "avx512f", target_feature = "avx512bw"))
-    ),
     all(
         target_arch = "aarch64",
         target_feature = "neon",
@@ -248,14 +193,10 @@ mod many {
 /// that turns a batch of messages into blocks lives here, so a padding fix cannot reach one
 /// backend and miss the others.
 ///
-/// An AVX-512 build with SHA-NI also compiles it, for the last few messages of a batch.
+/// x86-64 always compiles it, for SHA-NI.
 #[cfg(any(
+    target_arch = "x86_64",
     all(target_arch = "wasm32", target_feature = "simd128"),
-    all(
-        target_arch = "x86_64",
-        target_feature = "sha",
-        target_feature = "sse4.1"
-    ),
     all(
         target_arch = "aarch64",
         target_feature = "neon",
@@ -461,6 +402,9 @@ mod four_lane {
 }
 
 #[cfg(test)]
+mod cavp;
+
+#[cfg(test)]
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
@@ -476,7 +420,7 @@ mod tests {
     // - 1 to 4: the 0x80 marker lands on each byte of its word in turn.
     // - 55 fits the marker and the length in one block, and 56 does not.
     // - 0, 64 and 128 end with a block that carries no message byte at all.
-    const SHAPE_LENGTHS: [usize; 18] = [
+    pub(crate) const SHAPE_LENGTHS: [usize; 18] = [
         0, 1, 2, 3, 4, 5, 31, 32, 55, 56, 57, 63, 64, 65, 119, 120, 128, 200,
     ];
 
@@ -486,7 +430,7 @@ mod tests {
     // - 16 is one AVX-512 register, and 32 two of them.
     // - 8, 9, 20 and 21 sit on each side of the points where AVX-512 changes pass.
     // - 52 and 53 leave 20 and 21 after a whole group of 32.
-    const BATCH_COUNTS: [usize; 23] = [
+    pub(crate) const BATCH_COUNTS: [usize; 23] = [
         0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 20, 21, 31, 32, 33, 48, 52, 53, 64, 65, 100,
     ];
 
@@ -497,14 +441,14 @@ mod tests {
     };
 
     // Hash each message on its own, which is the behaviour a batched backend must reproduce.
-    fn reference(messages: &[u8], len: usize, count: usize) -> Vec<[u8; 32]> {
+    pub(crate) fn reference(messages: &[u8], len: usize, count: usize) -> Vec<[u8; 32]> {
         (0..count)
             .map(|k| Sha256.hash_slice(&messages[k * len..k * len + len]))
             .collect()
     }
 
     // A cheap deterministic stream, so a failing case reproduces exactly.
-    fn random_bytes(len: usize, mut state: u64) -> Vec<u8> {
+    pub(crate) fn random_bytes(len: usize, mut state: u64) -> Vec<u8> {
         (0..len)
             .map(|_| {
                 state ^= state << 13;
@@ -566,7 +510,7 @@ mod tests {
     }
 
     // `Sha256Compress::compress` as the specification defines it: one block from the IV.
-    fn spec_compress_pair(input: [[u8; 32]; 2]) -> [u8; 32] {
+    pub(crate) fn spec_compress_pair(input: [[u8; 32]; 2]) -> [u8; 32] {
         let mut block = [0u8; 64];
         block[..32].copy_from_slice(&input[0]);
         block[32..].copy_from_slice(&input[1]);
@@ -603,7 +547,7 @@ mod tests {
     }
 
     // Reinterpret a flat byte run as the 64-byte pairs `compress_many` consumes.
-    fn compression_inputs(bytes: &[u8]) -> Vec<[[u8; 32]; 2]> {
+    pub(crate) fn compression_inputs(bytes: &[u8]) -> Vec<[[u8; 32]; 2]> {
         bytes
             .as_chunks::<64>()
             .0
@@ -845,20 +789,11 @@ mod tests {
 
     #[test]
     fn reports_the_lane_count_of_the_compiled_backend() {
-        // AVX-512 runs 32 messages at a time, the other batched backends four.
+        // x86-64 reports the AVX-512 width whatever the running CPU, since it picks at run time.
         //
-        // Every other target hashes one.
-        let avx512 = cfg!(all(
-            target_arch = "x86_64",
-            target_feature = "avx512f",
-            target_feature = "avx512bw"
-        ));
+        // The other batched backends run four, and every other target hashes one.
+        let avx512 = cfg!(target_arch = "x86_64");
         let four_lanes = cfg!(all(target_arch = "wasm32", target_feature = "simd128"))
-            || cfg!(all(
-                target_arch = "x86_64",
-                target_feature = "sha",
-                target_feature = "sse4.1"
-            ))
             || cfg!(all(
                 target_arch = "aarch64",
                 target_feature = "neon",
