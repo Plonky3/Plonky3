@@ -10,18 +10,18 @@ use p3_util::log2_strict_usize;
 use crate::domain::domain_point;
 use crate::traits::AdditiveNtt;
 
-/// Reference additive NTT.
+/// The reference additive NTT, evaluated straight from the definition.
 ///
-/// The forward transform evaluates `Σ_i d_i · X_i(x)` directly, with the normalised subspace
-/// polynomials taken from the product definition `Ŵ_j(x) = ∏_{s ∈ S_j}(x − s) / ∏_{s ∈ S_j}(v_j − s)`.
-/// It therefore depends on none of D8's identities and is a genuine oracle for the fast [`crate::LchNtt`].
-/// The cost is `O(n² log n)`; keep test sizes at or below `2^10`.
+/// - The forward transform evaluates `sum_i d_i * X_i(x)` point by point.
+/// - Each subspace polynomial comes from its product definition, `prod_(s in S_j) (x - s)`, normalised at `v_j`.
+/// - It relies on none of the recurrences the fast transforms use, which makes it their oracle.
+/// - The cost is `O(n^2 log n)`, so tests keep it at or below `2^10` rows.
 #[derive(Clone, Debug, Default)]
 pub struct NaiveAdditiveNtt<F> {
     _marker: PhantomData<F>,
 }
 
-/// `Ŵ_j` from the product definition, normalised at `v_j`.
+/// The subspace polynomial of `S_j` from its product definition, normalised to one at `v_j`.
 fn normalised_subspace_poly<F: TowerLevel>(j: usize, x: F) -> F {
     let vanishing = |y: F| (0..1 << j).map(|m| y + domain_point::<F>(m)).product::<F>();
     vanishing(x)
@@ -39,7 +39,7 @@ impl<F: TowerLevel> AdditiveNtt<F> for NaiveAdditiveNtt<F> {
         let mut out = F::zero_vec(width * height);
         for row in 0..height {
             let x = shift + domain_point::<F>(row);
-            // X_i(x) = ∏_j Ŵ_j(x)^{bit_j(i)}; build the 2^log_n products by doubling.
+            // X_i(x) = prod_j W_j(x)^(bit j of i), built by doubling the filled prefix.
             let mut basis = F::zero_vec(height);
             basis[0] = F::ONE;
             for j in 0..log_n {
@@ -107,7 +107,7 @@ mod tests {
             let evals = ntt.ntt_batch(RowMajorMatrix::new_col(coeffs));
 
             for m in 0..1 << LOG_N {
-                // X_k(x) = ∏_j W_j(x)^{bit_j(k)}, with W_j normalised to W_j(v_j) = 1.
+                // X_k(x) = prod_j W_j(x)^(bit j of k), with each W_j normalised to one at v_j.
                 let x = domain_point::<BinaryField8>(m);
                 let expected = (0..LOG_N)
                     .filter(|j| k >> j & 1 == 1)
@@ -143,8 +143,8 @@ mod tests {
     }
 
     /// The Cantor basis makes the normalisation trivial. Assert that rather than believing it:
-    /// `normalised_subspace_poly` divides by `∏_{m ∈ S_j}(v_j − m)` and this pins that divisor
-    /// to `1`, independently of the `x² + x` recurrence the fast transform relies on instead.
+    /// The reference divides by `prod_(m in S_j) (v_j - m)`, and this pins that divisor to one.
+    /// That holds independently of the squaring recurrence the fast transforms rely on.
     #[test]
     fn the_normalisation_divisor_is_one() {
         for j in 0..8 {

@@ -6,7 +6,7 @@
 //! Scaling by a subfield element acts on every group alike.
 //! That map is a `D x D` matrix of `8 x 8` blocks, and one block is one instruction.
 
-use crate::lanes::{ByteLanes, butterfly_run, group_mask};
+use super::lanes::{ByteLanes, butterfly_run, group_mask};
 
 /// The `8 x 8` `GF(2)` blocks of a linear map on a group of `D` bytes.
 ///
@@ -179,12 +179,9 @@ pub(crate) fn dword_blocks(scalar: u32) -> Blocks<4> {
 
 /// The image of one register under a `D`-byte-group map.
 ///
-/// A register interleaves the groups, so byte position `p` carries coordinate `p mod D`:
+/// A register interleaves the groups, so byte position `p` carries coordinate `p mod D`.
 ///
-/// ```text
-///     x                   in_0 in_1 .. in_{D-1} in_0 in_1 ..
-///     rotate(x, r)        in_r in_{r+1} ..                      indices modulo D
-/// ```
+/// Rotating each group by `r` moves coordinate `(p + r) mod D` into position `p`.
 ///
 /// At rotation `r = (j - k) mod D` output coordinate `k` and its input `j` share a position.
 /// So one rotation serves every output at once, under the block the write mask selects.
@@ -229,7 +226,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{byte_blocks, dword_blocks, map_blocks, tower_mul, word_blocks};
-    use crate::test_util::{LANE_BYTES, Model};
+    use crate::butterfly::subfield::model::{LANE_BYTES, Model};
 
     /// Zero, one, a lone top basis element of each level, a full lower coordinate, all bits.
     const CORNERS: [u32; 8] = [0, 1, 0xff, 0x80, 0x8000, 0xffff, 0x8000_0000, u32::MAX];

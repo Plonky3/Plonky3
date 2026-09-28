@@ -37,6 +37,7 @@ jobs:
       sha_ni: ${{ steps.impact.outputs.sha_ni }}
       gfni: ${{ steps.impact.outputs.gfni }}
       avx512: ${{ steps.impact.outputs.avx512 }}
+      vpclmulqdq: ${{ steps.impact.outputs.vpclmulqdq }}
       toml: ${{ steps.impact.outputs.toml }}
       manifests: ${{ steps.impact.outputs.manifests }}
       scripts: ${{ steps.impact.outputs.scripts }}
@@ -123,6 +124,7 @@ jobs:
             features: "+avx2,+vpclmulqdq"
             compile_only: true
             miri_clmul: true
+            vpclmulqdq: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
           - name: linux, avx512f+vpclmulqdq, build only
@@ -416,6 +418,30 @@ jobs:
             packed::x86_64::poly192::tests::every_lane_matches_the_scalar_field_at_the_corners \
             packed::x86_64::poly192::tests::the_shared_packed_extension_suite_passes \
             packed::x86_64::lanes::triples::tests::the_plans_round_trip_at_both_widths
+
+      # The interpreter has shims for the 256-bit carryless multiply, so the `Poly64` butterfly's register kernel runs on every host.
+      #
+      # The 512-bit arm stays build-only, since the interpreter has no shim for its ternary logic.
+      #
+      # One deterministic corner sweep rather than the module, as the proptests take minutes under interpretation.
+      - uses: dtolnay/rust-toolchain@nightly
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.vpclmulqdq &&
+          needs.plan.outputs.vpclmulqdq == 'true'
+        with:
+          components: miri
+
+      - name: Interpret binary-dft (x86-64 AVX2 VPCLMULQDQ)
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.vpclmulqdq &&
+          needs.plan.outputs.vpclmulqdq == 'true'
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: |
+          cargo +nightly miri test --package p3-binary-dft --lib \
+            butterfly::tests::the_polynomial_basis_level_agrees_with_the_element_loop_at_the_corners
 
   check_embedded:
     name: Build embedded
