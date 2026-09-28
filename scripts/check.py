@@ -659,6 +659,16 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
                 "--ignored",
                 "--exact",
             ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-examples",
+                "binary::tests::backends_prove_the_quadratic_hash_airs_byte_for_byte_on_the_tensor",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
         ]
     raise AssertionError(f"unhandled command: {command}")
 
