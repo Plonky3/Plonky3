@@ -97,8 +97,8 @@ cat P3{Monty31,Mds}/Extraction/{Types,Funs}.lean | wc -l                    # ge
 cat P3*/Assumptions/*.lean | wc -l                                          # hand-written, trusted
 grep -hcE '^(noncomputable )?opaque ' P3*/Assumptions/*.lean | paste -sd+ - | bc   # opaque declarations
 grep -hE '^axiom ' P3*/Assumptions/*.lean P3BabyBear/Verification/*.lean | wc -l  # must be 0
-grep -rn 'sorry' P3*/Extraction P3*/Assumptions P3BabyBear/Verification \
-    --include='*.lean' --exclude='*_Template.lean' | wc -l                  # must be 0
+grep -rnE '(^|[^`])sorry([^`]|$)' P3*/Extraction P3*/Assumptions P3BabyBear/Verification \
+    --include='*.lean' --exclude='*_Template.lean' | wc -l                  # must be 0 (`sorry` in prose is skipped)
 for d in pre-extraction post-extraction; do
   echo "$d: $(ls patches/$d/*.patch | wc -l) files, $(cat patches/$d/*.patch | grep -c '^@@') hunks"
 done

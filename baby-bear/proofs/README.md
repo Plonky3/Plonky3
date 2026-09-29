@@ -57,7 +57,7 @@ The pins, and how to move them to a newer hax, are in
 ```
 
 The generated Lean is not committed, so this is how to build. A run takes about
-20 seconds, most of it the three extractions. The exception is when the Rust or
+30 seconds, most of it the three extractions. The exception is when the Rust or
 a pre-extraction patch has changed: step 2 then re-runs the workspace test
 suite on the tree with and without the patches, which takes about 10 minutes;
 the result is cached on the content of the Rust tree. After a run, `lake build`
