@@ -1172,6 +1172,38 @@ where
         final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
         validate_eta(0, log_inv_rate, final_eta)?;
 
+        // Round i's degree correction batches its t + s answers into stage i+1's code.
+        // That is Lemma 5.4's err*(d_{i+1}, rho_{i+1}, delta_{i+1}, t + s) term.
+        // It is drawn after round i's query grind, so only round i's query PoW protects it.
+        //
+        // The capacity-bound eta floor for stage i+1 prices this term at the PoW-assisted target.
+        // That target assumes the whole grinding budget.
+        // Round i only grinds what its own terms need, which can be far less.
+        // Stage i+1's eta is only fixed once it is derived, so the term is charged from there.
+        let charge_degree_correction = |previous: &mut StirRoundConfig<F>,
+                                        round: usize,
+                                        log_degree: usize,
+                                        log_inv_rate: usize,
+                                        eta: f64|
+         -> Result<(), StirConfigError> {
+            // Only the capacity bound floors eta for this term.
+            //
+            // Johnson schedules do not price it yet, so charging them here would reject many.
+            if params.soundness_type != SecurityAssumption::CapacityBound {
+                return Ok(());
+            }
+            let bits = params.soundness_type.prox_gaps_error_at_log_eta(
+                log_degree,
+                log_inv_rate,
+                field_size_bits,
+                previous.num_queries + previous.num_ood_samples,
+                libm::log2(eta),
+            );
+            let pow_bits = derive_pow_bits("degree correction", Stage::Round(round), bits)?;
+            previous.pow_bits = previous.pow_bits.max(pow_bits);
+            Ok(())
+        };
+
         // Round 0 reuses the `stir_initial_eta` already computed above; every subsequent
         // round derives eta from the previous round's query count via `stir_recursive_eta`.
         let mut prev_queries = 0;
@@ -1195,6 +1227,10 @@ where
                 )?;
                 final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
                 validate_eta(round, log_inv_rate, final_eta)?;
+                let previous = round_configs
+                    .last_mut()
+                    .expect("every round after the first follows a recorded round");
+                charge_degree_correction(previous, round - 1, log_degree, log_inv_rate, final_eta)?;
             }
 
             let num_queries = query_count(log_inv_rate, final_eta)?;
@@ -1296,6 +1332,16 @@ where
             )?;
             final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
             validate_eta(num_rounds, log_inv_rate, final_eta)?;
+            let previous = round_configs
+                .last_mut()
+                .expect("a schedule with more than one fold records its last round");
+            charge_degree_correction(
+                previous,
+                num_rounds - 1,
+                log_degree,
+                log_inv_rate,
+                final_eta,
+            )?;
         }
         let final_queries = query_count(log_inv_rate, final_eta)?;
 
@@ -1538,6 +1584,62 @@ mod tests {
                 min_log_final_poly_len: 1,
             }
         );
+    }
+
+    #[test]
+    fn every_round_grinds_for_the_degree_correction_it_feeds() {
+        // Invariant: round i's query PoW covers the err* term of stage i+1's degree correction.
+        //
+        //     err*(d_{i+1}, rho_{i+1}, eta_{i+1}, t_i + s) + pow_bits_i >= security_level
+        //
+        // That combination is drawn after round i's query grind, so no later grind protects it.
+        // The capacity-bound eta floor for stage i+1 assumes the whole budget.
+        // Round i may grind far less.
+        type Config = StirConfig<TestF, TestEF, TestMmcs, TestChallenger>;
+        let soundness_type = SecurityAssumption::CapacityBound;
+        let field_bits = crate::pcs_budget::field_bits::<TestEF>(soundness_type);
+        let mut checked = 0;
+        for (security_level, max_pow_bits) in [(80, 0), (80, 20), (100, 10), (100, 24)] {
+            for (log_blowup, log_folding_factor) in
+                (1..=4).flat_map(|b| (2..=5).map(move |k| (b, k)))
+            {
+                for log_degree in [12, 16, 20, 24] {
+                    let params = params_with(
+                        soundness_type,
+                        security_level,
+                        max_pow_bits,
+                        log_blowup,
+                        log_folding_factor,
+                        log_folding_factor,
+                    );
+                    let Ok(config) = Config::try_new(log_degree, params) else {
+                        continue;
+                    };
+                    let rounds = &config.round_configs;
+                    let mut log_inv_rate = log_blowup;
+                    for (round, rc) in rounds.iter().enumerate() {
+                        log_inv_rate += rc.log_folding_factor - 1;
+                        let next_eta = rounds.get(round + 1).map_or(config.final_eta, |r| r.eta);
+                        let bits = soundness_type.prox_gaps_error_at_log_eta(
+                            rc.log_degree - rc.log_folding_factor,
+                            log_inv_rate,
+                            field_bits,
+                            rc.num_queries + rc.num_ood_samples,
+                            libm::log2(next_eta),
+                        ) + rc.pow_bits as f64;
+                        assert!(
+                            bits >= security_level as f64,
+                            "{soundness_type:?} sec={security_level} pow={max_pow_bits} \
+                                 blowup={log_blowup} fold={log_folding_factor} \
+                                 degree=2^{log_degree}: round {round} degree correction \
+                                 reaches {bits}"
+                        );
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 0);
     }
 
     /// [`test_params`] with every knob the fallibility tests need to vary exposed.
