@@ -152,7 +152,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
     #[must_use]
     pub fn cap(&self, cap_height: usize) -> MerkleCap<F, [W; DIGEST_ELEMS]>
     where
-        W: Clone,
+        W: Clone + Default,
     {
         let num_layers = self.digest_layers.len();
         assert!(
@@ -166,9 +166,13 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
         let layer = &self.digest_layers[layer_idx];
 
         let cap_len: usize = self.arity_schedule[layer_idx..].iter().product();
-        let cap_len = cap_len.min(layer.len());
 
-        MerkleCap::new(layer[..cap_len].to_vec())
+        // The stored layer stops at its padded length, which can be short of the cap's power of two.
+        // Every slot past it is padding, and padding holds the default digest.
+        let mut cap = layer[..cap_len.min(layer.len())].to_vec();
+        cap.resize_with(cap_len, || core::array::from_fn(|_| W::default()));
+
+        MerkleCap::new(cap)
     }
 
     #[must_use]

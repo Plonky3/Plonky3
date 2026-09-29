@@ -919,6 +919,51 @@ mod tests {
     }
 
     #[test]
+    fn cap_reaching_a_padded_layer_commits_and_opens() {
+        // Invariant: a cap holds a power-of-two number of roots even when the tree is not full.
+        //
+        // Fixture state: 5 rows under a binary tree.
+        //
+        //     layers: 6 leaf digests (5 rows, padded to even) -> 3 -> 2 -> 1
+        //
+        // A cap of height 3 sits at the leaf layer, where the arities call for 8 roots.
+        // The stored layer only holds 6 of them.
+        let mut rng = SmallRng::seed_from_u64(10);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 3);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 5, 4);
+        let dims = vec![mat.dimensions()];
+        let (cap, prover_data) = mmcs.commit(vec![mat]);
+        assert_eq!(cap.num_roots(), 8);
+
+        for index in 0..5 {
+            let opening = mmcs.open_batch(index, &prover_data);
+            mmcs.verify_batch(&cap, &dims, index, (&opening).into())
+                .unwrap_or_else(|e| panic!("row {index} must verify: {e:?}"));
+        }
+        let indices: Vec<usize> = (0..5).collect();
+        let (values, proof) = mmcs.open_multi_batch(&indices, &prover_data);
+        mmcs.verify_multi_batch(&cap, &dims, &indices, &values, &proof)
+            .unwrap();
+
+        // Fixture state: 9 rows under a 4-ary tree, whose cap of height 2 needs 16 roots.
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let perm_wide = PermWide::new_from_rng_128(&mut rng);
+        let mmcs4 = MyMmcs4::new(MyHash::new(perm), MyCompress4::new(perm_wide), 2);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 9, 4);
+        let dims = vec![mat.dimensions()];
+        let (cap, prover_data) = mmcs4.commit(vec![mat]);
+        assert_eq!(cap.num_roots(), 16);
+
+        for index in 0..9 {
+            let opening = mmcs4.open_batch(index, &prover_data);
+            mmcs4
+                .verify_batch(&cap, &dims, index, (&opening).into())
+                .unwrap_or_else(|e| panic!("row {index} must verify: {e:?}"));
+        }
+    }
+
+    #[test]
     fn single_row_matrix_with_cap_height() {
         let mut rng = SmallRng::seed_from_u64(7);
         let perm = Perm::new_from_rng_128(&mut rng);
