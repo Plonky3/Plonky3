@@ -523,13 +523,34 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
             return;
         }
 
+        // Blocks of 8 go through the extension-by-base dot product on stack arrays.
+        const BLOCK: usize = 8;
+
+        // On NEON without a full block, one scalar sum per lane is cheaper than broadcasting.
+        //
+        //     out[k] = sum_i scalars[i] * final_packed_evals[i][k]
+        //
+        // AVX2 and AVX-512 keep the broadcast path, which is faster there at every batch size.
+        if cfg!(target_arch = "aarch64") && scalars.len() < BLOCK {
+            for (k, out_val) in out.iter_mut().enumerate() {
+                let lane_sum = scalars
+                    .iter()
+                    .zip(final_packed_evals)
+                    .map(|(&scalar, packed_eval)| scalar * packed_eval.as_slice()[k])
+                    .sum::<Self::OutputField>();
+                if INITIALIZED {
+                    *out_val += lane_sum;
+                } else {
+                    *out_val = lane_sum;
+                }
+            }
+            return;
+        }
+
         // Every lane shares the same scalars, so broadcast them and work on all lanes at once:
         //
         //     packed_sum = sum_i broadcast(scalars[i]) * final_packed_evals[i]
         //     lane k of packed_sum = sum_i scalars[i] * final_packed_evals[i][k]
-        //
-        // Blocks of 8 go through the extension-by-base dot product on stack arrays.
-        const BLOCK: usize = 8;
         let (scalar_blocks, scalar_tail) = scalars.as_chunks::<BLOCK>();
         let (eval_blocks, eval_tail) = final_packed_evals.as_chunks::<BLOCK>();
         let mut packed_sum = EF::ExtensionPacking::ZERO;
@@ -1379,6 +1400,8 @@ mod tests {
     fn base_batch_packed_path_matches_basic_across_batch_sizes() {
         // The packed leaf sums the points in blocks of 8, then sweeps a tail.
         //
+        //     num_points = 1  -> no full block
+        //     num_points = 7  -> no full block, largest tail
         //     num_points = 8  -> one full block, no tail
         //     num_points = 9  -> one full block, tail of 1
         //     num_points = 23 -> two full blocks, tail of 7
@@ -1388,7 +1411,7 @@ mod tests {
         let num_variables = packing_width.ilog2() as usize + 2 + log_num_threads;
         let mut rng = SmallRng::seed_from_u64(0xB10C);
 
-        for num_points in [8, 9, 23] {
+        for num_points in [1, 7, 8, 9, 23] {
             let eval_points: Vec<Vec<F>> = (0..num_points)
                 .map(|_| (0..num_variables).map(|_| rng.random()).collect())
                 .collect();
@@ -1406,7 +1429,9 @@ mod tests {
             eval_eq_batch_basic::<F, F, EF4, false>(evals, &scalars, &mut basic, &mut workspace);
 
             // Overwrite mode must equal the reference.
-            let mut packed = EF4::zero_vec(1 << num_variables);
+            //
+            // Random prior contents catch a leaf that adds instead of assigning.
+            let mut packed: Vec<EF4> = (0..1 << num_variables).map(|_| rng.random()).collect();
             eval_eq_base_batch::<F, EF4, false>(evals, &mut packed, &scalars);
             assert_eq!(
                 packed, basic,
