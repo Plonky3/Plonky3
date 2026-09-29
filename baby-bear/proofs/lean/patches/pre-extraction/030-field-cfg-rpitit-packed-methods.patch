@@ -113,7 +113,7 @@ index 1f326e3f..5dbde4ed 100644
 --- a/matrix/src/lib.rs
 +++ b/matrix/src/lib.rs
 @@ -8,6 +8,9 @@ use core::fmt::{Debug, Display, Formatter};
- use core::ops::Deref;
+ use core::ops::{Deref, Range};
  
  use itertools::Itertools;
 +// PATCHED: under hax's Lean backend `to_ext_iter` lives on this extension trait.

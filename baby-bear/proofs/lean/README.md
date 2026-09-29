@@ -46,7 +46,6 @@ lean/
       FunsExternal.lean          the 4 opaque Debug::fmt bodies
       P3Monty31.lean             the p3-monty-31 items aeneas drops (new_array, …), built on P3Monty31.Extraction
       P3Poseidon1.lean  P3Poseidon2.lean   stand-ins for p3-poseidon1/2 (constructors opaque)
-    Verification/              hand-written
     Verification.lean          imports Proofs and ProofObligations
     Verification/              hand-written
       Proofs.lean                Lean-only specs with their proofs
@@ -56,7 +55,10 @@ lean/
     Assumptions/               hand-written: TypesExternal, FunsExternal, and the stand-ins they import:
       P3Field.lean               p3-field's traits
       CoreModelsExt.lean         two gaps in hax-lean's CoreModels
-  P3Mds/Extraction/            scoped extraction of p3-mds (hax, gitignored)
+    Verification/              hax's empty stub (gitignored): nothing is proved about p3-monty-31
+  P3Mds/                       scoped extraction of p3-mds
+    Extraction/                hax (gitignored)
+    Verification/              hax's empty stub (gitignored)
   P3Monty31.lean  P3Mds.lean   hax's library roots for the dependencies (created by hax, gitignored)
   .pristine/                   the output before post-extraction patches (gitignored)
   llbc/                        charon's output, aeneas's input (gitignored, as hax's .gitignore has it)
@@ -70,7 +72,13 @@ lean/
 
 hax creates `lakefile.toml`, `lean-toolchain`, `.gitignore`, the library roots,
 `Assumptions/` and `Verification/ProofObligations.lean` only when they are
-missing, so it never overwrites the hand-written versions here. `extract.sh`
+missing, so it never overwrites the hand-written versions here. The one
+place this package departs from hax's scaffolding is the root: hax's
+`P3BabyBear.lean` imports `P3BabyBear.Verification.ProofObligations` directly,
+while this one imports it through `P3BabyBear.Verification`. hax checks for the
+direct import, so every run prints `P3BabyBear.lean does not import
+P3BabyBear.Verification.ProofObligations`. The warning is expected: `lake build`
+does build that file. `extract.sh`
 checks each `Assumptions/*External.lean` against the regenerated template: it
 must declare exactly the names the template does, and a file hax has just
 seeded (with `axiom`s for holes) is refused until it is filled in.

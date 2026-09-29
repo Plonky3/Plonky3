@@ -3,11 +3,12 @@
 # Re-extraction runbook
 
 Follow this when `baby-bear/src` (or a dependency's `src`) changes, or when the
-hax / Lean pins move.
+hax / Lean pins move. Steps 1–4 are the whole sync: re-extract, reconcile, re-measure,
+and bring the documentation in line with the result.
 
 ## Current pins
 
-Checked for a newer hax release on **2026-09-28**: 0.4.1 (released
+Checked for a newer hax release on **2026-09-29**: 0.4.1 (released
 2026-09-23) is the latest. `extract.sh` fails if this table does not state the
 pins it uses, and prints a note when a newer hax release exists.
 
@@ -87,7 +88,7 @@ there except by a post-extraction patch. Everything else (each `Assumptions/`,
 5. **Do not preserve a patch needlessly.** If a hunk no longer applies because
    aeneas improved, delete it.
 
-## Step 3 — refresh `TCB.md`
+## Step 3 — re-measure
 
 ```bash
 cd baby-bear/proofs/lean
@@ -114,6 +115,27 @@ and the axiom footprint of every theorem, which must be within
 lake env lean /tmp/ax.lean
 ```
 
+## Step 4 — update the documentation
+
+A sync is not finished while any document describes the tree as it was. Read
+the diff of the sync (Rust, patches, `Assumptions/`, `Verification/`,
+`extract.sh`) against this table, and update every document it names:
+
+| When the sync changed… | Update |
+|---|---|
+| any count from step 3 (lines, `opaque`s, hunks, tests run, theorems) | the measured-totals table at the top of `TCB.md`; the test counts in `TCB.md` layer 4; the "Currently" row in `patches/README.md` |
+| a patch: added, removed, or its hunks or targets changed | its own header (`Target`, `Hunks`, `Cost`, `Drop when`); the patch tables in `TCB.md` layer 4; this file's list of sources the pre-patches touch (above) |
+| a hand-written `Assumptions/` file, or `DEPS` in `extract.sh` | `TCB.md` layer 3 (both tables, and the opaque list); "Where the dependency code lives" in `README.md`; the hand-mirrored list in "Does an upstream change need re-extraction?" above |
+| a workaround for an extractor bug, added or dropped | `TCB.md` layer 5; the troubleshooting table below |
+| a theorem: added, removed, renamed or restated | `TCB.md`, "The theorems are not in the TCB" and "What is *not* established"; "What is proved" in `../README.md` |
+| a file added, moved or removed in the package | the layout tree and import chain in `README.md` |
+| the shape of the generated code (names, file sizes, a quoted example) | the naming table and "Where a Rust item ends up" in `README.md` |
+| a pin | **Current pins** above; the Requirements table in `../README.md`; `TCB.md` layers 1, 2 and 6 |
+| how long a run takes | "Build" in `../README.md` |
+
+Every Lean name a document quotes must still resolve: `#check` each changed one
+against `import P3BabyBear`. Describe the tree as it is, not how it changed.
+
 ## Troubleshooting the extraction
 
 | Symptom | Cause |
@@ -121,6 +143,8 @@ lake env lean /tmp/ax.lean
 | NEON or AVX modules in the output | `--targets` did not reach charon. `-C --target` does not (TCB layer 5, bug 1) |
 | `Fields missing: clone_from` / `ne` | charon's multi-target mode dropped the default-method roots; extend post-patch 010 |
 | `GATs cannot work with the --lift-associated-types option` | a new `-> impl Trait` trait method is reachable; gate it as pre-patch 030 does |
+| `P3BabyBear.lean does not import P3BabyBear.Verification.ProofObligations` | expected: the root imports it through `P3BabyBear.Verification`, and hax only checks for the direct import (`README.md`, Layout) |
+| `Type error after transformations` (2, in `core`'s slice-iterator macros) | expected, in the scoped p3-monty-31 run (`TCB.md`, layer 5, bug 7) |
 | `Mutually recursive trait declarations … will not type-check` | informational while those traits stay hand-written in `P3Monty31/Assumptions/P3Field.lean` |
 | `E0514` / `can't find crate for core` from charon | stale `rustc-build-sysroot` cache: `rm -rf ~/Library/Caches/org.rust-lang.miri` |
 
@@ -149,5 +173,6 @@ A new `cargo-hax` resolves a new charon, aeneas, Lean toolchain and hax-lean.
    the Requirements table in `../README.md`.
 5. Run step 1. Step 0 fails until every pin agrees. Re-check each "Drop when"
    in the patch headers: a bump is the usual moment a patch becomes deletable.
+6. Finish with step 4.
 
 If no newer release exists, update only the date in **Current pins**.

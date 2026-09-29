@@ -76,8 +76,8 @@ instant.
 `--check` writes nothing and instead fails if a header is out of date, which is
 the mode for CI. Tests that already fail as shipped are reported but not
 attributed. The goal is **no divergences at all**, and today there are none. Results are cached under
-`/tmp/hax-extract/pretest/`, keyed on the tree, the patch bytes and the
-script.
+`/tmp/hax-extract/pretest/`, keyed on the tree's content outside
+`baby-bear/proofs/`, each patch's diff, the script and `rustc --version`.
 
 ## Use
 
