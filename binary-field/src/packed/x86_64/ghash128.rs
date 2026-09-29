@@ -1,13 +1,11 @@
 //! The packing of the polynomial-basis `GF(2^128)` over the wide carryless multiply.
 //!
 //! `VPCLMULQDQ` applies the carryless multiply to every 128-bit lane of a wide register.
+//!
 //! One field element is exactly one lane, so the scalar kernel becomes the packed one.
 //!
 //! Every other operation is exclusive or, a lane-local shift, or a permutation of lanes.
 //!
-//! Only the widest register the target supports is compiled.
-//! One width per build means everything below the lane wrappers is written once.
-
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -23,247 +21,10 @@ use p3_field::{
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
-use super::split::{HIGH_BY_HIGH, LOW_BY_LOW, Lanes, fold_shifted};
+use super::lanes::{self, WIDTH};
 use crate::gf2::characteristic_two_methods;
+use crate::packed::split::{HIGH_BY_HIGH, LOW_BY_LOW, fold_shifted};
 use crate::{BinaryField128, Gf2, Ghash128};
-
-/// Swaps the two quadwords of every lane, so `x ^ swap(x)` holds `x_lo ^ x_hi` in both halves.
-const SWAP_QUADWORDS: i32 = 0x4e;
-
-/// The 256-bit register, holding two field elements.
-#[cfg(all(
-    target_feature = "avx2",
-    target_feature = "vpclmulqdq",
-    not(target_feature = "avx512f")
-))]
-pub(crate) mod lanes {
-    use core::arch::x86_64::{
-        __m256i, _mm_set_epi64x, _mm256_broadcastsi128_si256, _mm256_clmulepi64_epi128,
-        _mm256_loadu_si256, _mm256_setzero_si256, _mm256_shuffle_epi32, _mm256_storeu_si256,
-        _mm256_unpacklo_epi64, _mm256_xor_si256,
-    };
-
-    use p3_field::interleave::interleave_u128;
-
-    /// The register one packed value occupies.
-    pub(crate) type Reg = __m256i;
-
-    /// Field elements per register.
-    pub(crate) const WIDTH: usize = 2;
-
-    // SAFETY for every wrapper below: this module is compiled only when the target features
-    // its intrinsics require are enabled for the crate, which is what makes each call sound.
-
-    /// All lanes zero.
-    #[inline(always)]
-    pub(crate) fn zero() -> Reg {
-        unsafe { _mm256_setzero_si256() }
-    }
-
-    /// Bitwise exclusive or.
-    #[inline(always)]
-    pub(crate) fn xor(a: Reg, b: Reg) -> Reg {
-        unsafe { _mm256_xor_si256(a, b) }
-    }
-
-    /// The low quadword of each operand, paired within each lane.
-    #[inline(always)]
-    pub(crate) fn unpack_low_64(a: Reg, b: Reg) -> Reg {
-        unsafe { _mm256_unpacklo_epi64(a, b) }
-    }
-
-    /// The carryless product of one quadword of each operand, in every lane.
-    #[inline(always)]
-    pub(crate) fn clmul<const IMM: i32>(a: Reg, b: Reg) -> Reg {
-        unsafe { _mm256_clmulepi64_epi128::<IMM>(a, b) }
-    }
-
-    /// Exchanges the two halves of every lane.
-    #[inline(always)]
-    pub(crate) fn swap_halves(a: Reg) -> Reg {
-        unsafe { _mm256_shuffle_epi32::<{ super::SWAP_QUADWORDS }>(a) }
-    }
-
-    /// The same field element in every lane.
-    #[inline(always)]
-    pub(crate) fn broadcast(value: u128) -> Reg {
-        unsafe {
-            // Arguments run from the highest quadword down.
-            let lane = _mm_set_epi64x((value >> 64) as i64, value as i64);
-            _mm256_broadcastsi128_si256(lane)
-        }
-    }
-
-    /// Reads one register of consecutive field elements.
-    ///
-    /// # Safety
-    ///
-    /// The address must be readable for as many elements as one register holds.
-    /// No alignment is required.
-    #[inline(always)]
-    pub(crate) unsafe fn load(from: *const u128) -> Reg {
-        // SAFETY: the readability of the address is the caller's obligation.
-        unsafe { _mm256_loadu_si256(from.cast()) }
-    }
-
-    /// Writes one register of consecutive field elements.
-    ///
-    /// # Safety
-    ///
-    /// The address must be writable for as many elements as one register holds.
-    /// No alignment is required.
-    #[inline(always)]
-    pub(crate) unsafe fn store(to: *mut u128, value: Reg) {
-        // SAFETY: the writability of the address is the caller's obligation.
-        unsafe { _mm256_storeu_si256(to.cast(), value) }
-    }
-
-    /// Interleaves whole field elements between two registers.
-    ///
-    /// # Panics
-    /// Panics if the block length does not divide the width.
-    #[inline(always)]
-    pub(crate) fn interleave(a: Reg, b: Reg, block_len: usize) -> (Reg, Reg) {
-        match block_len {
-            1 => interleave_u128(a, b),
-            WIDTH => (a, b),
-            _ => panic!("unsupported block_len"),
-        }
-    }
-}
-
-/// The 512-bit register, holding four field elements.
-#[cfg(all(target_feature = "avx512f", target_feature = "vpclmulqdq"))]
-pub(crate) mod lanes {
-    use core::arch::x86_64::{
-        __m512i, _mm_set_epi64x, _mm512_broadcast_i32x4, _mm512_clmulepi64_epi128,
-        _mm512_loadu_si512, _mm512_setzero_si512, _mm512_shuffle_epi32, _mm512_storeu_si512,
-        _mm512_unpacklo_epi64, _mm512_xor_si512,
-    };
-
-    use p3_field::interleave::{interleave_u128, interleave_u256};
-
-    /// The register one packed value occupies.
-    pub(crate) type Reg = __m512i;
-
-    /// Field elements per register.
-    pub(crate) const WIDTH: usize = 4;
-
-    // SAFETY for every wrapper below: this module is compiled only when the target features
-    // its intrinsics require are enabled for the crate, which is what makes each call sound.
-
-    /// All lanes zero.
-    #[inline(always)]
-    pub(crate) fn zero() -> Reg {
-        unsafe { _mm512_setzero_si512() }
-    }
-
-    /// Bitwise exclusive or.
-    #[inline(always)]
-    pub(crate) fn xor(a: Reg, b: Reg) -> Reg {
-        unsafe { _mm512_xor_si512(a, b) }
-    }
-
-    /// The low quadword of each operand, paired within each lane.
-    #[inline(always)]
-    pub(crate) fn unpack_low_64(a: Reg, b: Reg) -> Reg {
-        unsafe { _mm512_unpacklo_epi64(a, b) }
-    }
-
-    /// The carryless product of one quadword of each operand, in every lane.
-    #[inline(always)]
-    pub(crate) fn clmul<const IMM: i32>(a: Reg, b: Reg) -> Reg {
-        unsafe { _mm512_clmulepi64_epi128::<IMM>(a, b) }
-    }
-
-    /// Exchanges the two halves of every lane.
-    #[inline(always)]
-    pub(crate) fn swap_halves(a: Reg) -> Reg {
-        unsafe { _mm512_shuffle_epi32::<{ super::SWAP_QUADWORDS }>(a) }
-    }
-
-    /// The same field element in every lane.
-    #[inline(always)]
-    pub(crate) fn broadcast(value: u128) -> Reg {
-        unsafe {
-            // Arguments run from the highest quadword down.
-            let lane = _mm_set_epi64x((value >> 64) as i64, value as i64);
-            _mm512_broadcast_i32x4(lane)
-        }
-    }
-
-    /// Reads one register of consecutive field elements.
-    ///
-    /// # Safety
-    ///
-    /// The address must be readable for as many elements as one register holds.
-    /// No alignment is required.
-    #[inline(always)]
-    pub(crate) unsafe fn load(from: *const u128) -> Reg {
-        // SAFETY: the readability of the address is the caller's obligation.
-        unsafe { _mm512_loadu_si512(from.cast()) }
-    }
-
-    /// Writes one register of consecutive field elements.
-    ///
-    /// # Safety
-    ///
-    /// The address must be writable for as many elements as one register holds.
-    /// No alignment is required.
-    #[inline(always)]
-    pub(crate) unsafe fn store(to: *mut u128, value: Reg) {
-        // SAFETY: the writability of the address is the caller's obligation.
-        unsafe { _mm512_storeu_si512(to.cast(), value) }
-    }
-
-    /// Interleaves whole field elements between two registers.
-    ///
-    /// # Panics
-    /// Panics if the block length does not divide the width.
-    #[inline(always)]
-    pub(crate) fn interleave(a: Reg, b: Reg, block_len: usize) -> (Reg, Reg) {
-        match block_len {
-            1 => interleave_u128(a, b),
-            2 => interleave_u256(a, b),
-            WIDTH => (a, b),
-            _ => panic!("unsupported block_len"),
-        }
-    }
-}
-
-use lanes::WIDTH;
-
-// The register is the production backend of the shared split-multiplier algebra.
-//
-// Every method is one intrinsic.
-//
-// So the generic code monomorphizes to the instructions a hand-written kernel would emit.
-impl Lanes for lanes::Reg {
-    #[inline(always)]
-    fn zero() -> Self {
-        lanes::zero()
-    }
-
-    #[inline(always)]
-    fn broadcast(value: u128) -> Self {
-        lanes::broadcast(value)
-    }
-
-    #[inline(always)]
-    fn xor(self, other: Self) -> Self {
-        lanes::xor(self, other)
-    }
-
-    #[inline(always)]
-    fn unpack_low_64(self, other: Self) -> Self {
-        lanes::unpack_low_64(self, other)
-    }
-
-    #[inline(always)]
-    fn clmul<const IMM: i32>(self, other: Self) -> Self {
-        lanes::clmul::<IMM>(self, other)
-    }
-}
 
 /// Several elements of the polynomial-basis `GF(2^128)`, one per 128-bit lane of a register.
 ///
@@ -279,8 +40,10 @@ impl PackedGhash128 {
     #[inline]
     #[must_use]
     fn to_vector(self) -> lanes::Reg {
-        // SAFETY: the scalar is `repr(transparent)` over `u128`, so the array is `WIDTH`
-        // contiguous `u128` values, which is the register's own layout.
+        // SAFETY: the scalar is `repr(transparent)` over `u128`.
+        //
+        // So the array is `WIDTH` contiguous `u128` values, the register's own layout.
+        //
         // This type is `repr(transparent)` over that array.
         unsafe { transmute(self) }
     }
@@ -289,6 +52,7 @@ impl PackedGhash128 {
     #[inline]
     fn from_vector(vector: lanes::Reg) -> Self {
         // SAFETY: the inverse of the transmute above.
+        //
         // Every bit pattern is a valid element, so no value can be out of range.
         unsafe { transmute(vector) }
     }
@@ -355,8 +119,10 @@ impl Mul for PackedGhash128 {
         //     middle = (a0 + a1)(b0 + b1) + a0 b0 + a1 b1
         //
         // The scalar kernel takes the schoolbook form instead.
-        // A wide carryless multiply has half the throughput of the 128-bit one on Zen 4 and
-        // Zen 5, so trading a product for two shuffles and three exclusive ors pays only here.
+        //
+        // A wide carryless multiply has half the throughput of the 128-bit one on Zen 4 and 5.
+        //
+        // So trading a product for two shuffles and three exclusive ors pays only here.
         //
         // Measured on Zen 5, four lanes: 0.47 ns per element against 0.55 for schoolbook.
         let mixed_x = lanes::xor(x, lanes::swap_halves(x));
@@ -392,16 +158,18 @@ impl PrimeCharacteristicRing for PackedGhash128 {
     fn square(&self) -> Self {
         let x = self.to_vector();
 
-        // The cross term of `(p0 + p1 x^64)^2` doubles to zero, so the square has no middle
-        // coefficient and the inner fold has nothing to add to.
+        // The cross term of `(p0 + p1 x^64)^2` doubles to zero.
+        //
+        // So the square has no middle coefficient, and the inner fold has nothing to add to.
         let low = lanes::clmul::<LOW_BY_LOW>(x, x);
         let high = lanes::clmul::<HIGH_BY_HIGH>(x, x);
 
         Self::from_vector(fold_shifted(low, fold_shifted(lanes::zero(), high)))
     }
 
-    /// `x·(x - 1) = x² - x = x² + x` in characteristic 2, and [`Self::square`] skips the
-    /// cross-term carryless multiplies a general product pays for.
+    /// `x (x - 1) = x^2 - x = x^2 + x` in characteristic 2.
+    ///
+    /// A square skips the cross-term carryless multiplies a general product pays for.
     #[inline]
     fn bool_check(&self) -> Self {
         self.square() + *self
@@ -464,8 +232,9 @@ impl Algebra<Gf2> for PackedGhash128 {}
 impl From<BinaryField128> for PackedGhash128 {
     /// The same field element, seen in the polynomial basis, in every lane.
     ///
-    /// The change of basis is a field isomorphism, so it makes this packing an algebra over
-    /// the tower, exactly as it does for one lane's [`Ghash128`].
+    /// The change of basis is a field isomorphism.
+    ///
+    /// So this packing is an algebra over the tower, exactly as one lane is.
     #[inline]
     fn from(x: BinaryField128) -> Self {
         Self::broadcast(Ghash128::from(x))
@@ -481,6 +250,7 @@ impl Algebra<BinaryField128> for PackedGhash128 {}
 impl_packed_value!(PackedGhash128, Ghash128, WIDTH);
 
 // SAFETY: the transparent array satisfies the packed layout contract.
+//
 // Arithmetic acts independently on each 128-bit field element.
 unsafe impl PackedField for PackedGhash128 {
     type Scalar = Ghash128;
@@ -614,8 +384,9 @@ mod tests {
         //
         // That includes the squaring-shaped case where both operands are the same value.
         //
-        // The other lanes rotate through the corners, so a value that crosses a lane
-        // boundary lands on a different extreme and shows as a mismatch.
+        // The other lanes rotate through the corners.
+        //
+        // A value that crosses a lane boundary then lands on a different extreme and mismatches.
         for (i, &x) in SPECIAL.iter().enumerate() {
             for (j, &y) in SPECIAL.iter().enumerate() {
                 let a = core::array::from_fn(|lane| match lane {
@@ -652,16 +423,17 @@ mod tests {
         }
     }
 
-    /// The squaring shortcut must answer what the general product answers, lane by lane.
-    ///
-    /// `bool_check` is taken on every booleanity constraint an AIR states, so the register
-    /// takes the shortcut the scalar already does. The corners cover the two roots the check
-    /// exists to accept, and the patterns whose reduction is extreme.
     #[test]
     fn bool_check_matches_the_general_product_in_every_lane() {
+        // Invariant: the squaring shortcut answers what the general product answers.
+        //
+        // Every booleanity constraint an AIR states takes this shortcut.
+        //
+        // The corners cover the two roots the check accepts and the extreme reductions.
         for (index, &value) in SPECIAL.iter().enumerate() {
-            // Lane 0 carries the value under test; the rest rotate through the corners, so a
-            // result that crossed a lane boundary lands on a different extreme.
+            // Lane 0 carries the value under test.
+            //
+            // The rest rotate through the corners, so a lane-crossing result lands elsewhere.
             let lanes: [Ghash128; WIDTH] = core::array::from_fn(|lane| {
                 let pattern = if lane == 0 {
                     value

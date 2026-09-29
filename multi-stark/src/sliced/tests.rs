@@ -147,8 +147,9 @@ mod kernel_tests {
     use super::{F, S, Sliced, encoding};
     use crate::selectors::BoundaryEvals;
     use crate::sliced::{
-        LaneSums, PreparedPowers, PreparedSums, SLICED_LANES, SlicedEvaluation, SlicedFolder,
-        kernel,
+        BitLaneSums, LaneSums, MIN_BIT_CONSTRAINTS, MIN_CONSTRAINTS, PreparedPowers, PreparedSums,
+        SLICED_CELLS, SLICED_LANES, SlicedBit, SlicedEvaluation, SlicedFolder,
+        SlicedQuadraticFolder, kernel,
     };
 
     /// `powers` laid out for the kernel, however few they are.
@@ -280,6 +281,55 @@ mod kernel_tests {
         }
     }
 
+    /// One four-cell bit evaluation of `Columns(width)` against random powers and lane weights,
+    /// with the kernel and without it.
+    fn quadratic_folder_sums(
+        seed: u64,
+        width: usize,
+        whole: [bool; SLICED_CELLS],
+    ) -> (
+        SlicedEvaluation<[Ghash128; SLICED_CELLS]>,
+        SlicedEvaluation<[Ghash128; SLICED_CELLS]>,
+    ) {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let local = (0..width)
+            .map(|_| SlicedBit::<F>::new(core::array::from_fn(|_| rng.random())))
+            .collect::<Vec<_>>();
+        let weights = (0..SLICED_LANES)
+            .map(|_| rng.random())
+            .collect::<Vec<Ghash128>>();
+        let lanes = BitLaneSums::new(&weights);
+        let powers = (0..2 * width)
+            .map(|_| rng.random())
+            .collect::<Vec<Ghash128>>();
+        let prepared = prepared(&powers, Ghash128::ZERO);
+        let boundary = BoundaryEvals {
+            first: SlicedBit::default(),
+            last: SlicedBit::default(),
+            transition: SlicedBit::new([u64::MAX; SLICED_CELLS]),
+        };
+        let folder =
+            || SlicedQuadraticFolder::new(&local, &local, boundary, &[], &powers, &lanes, whole);
+        let air = Columns(width);
+        (
+            folder().with_prepared_powers(&prepared).eval_air(&air),
+            folder().eval_air(&air),
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn the_quadratic_folder_sums_all_cells_as_well_with_the_kernel(
+            seed in any::<u64>(),
+            width in 1_usize..40,
+            whole in prop::array::uniform4(any::<bool>()),
+        ) {
+            let (kernel, lanes) = quadratic_folder_sums(seed, width, whole);
+            prop_assert!(!kernel.poisoned && !lanes.poisoned);
+            prop_assert_eq!(kernel.value, lanes.value);
+        }
+    }
+
     #[test]
     #[should_panic(
         expected = "attached alpha powers must match the number of asserted constraints"
@@ -297,15 +347,54 @@ mod kernel_tests {
     }
 
     #[test]
+    #[should_panic(expected = "the prepared powers must be the attached alpha powers")]
+    fn prepared_powers_one_short_of_the_alpha_powers_fail_to_attach() {
+        let mut rng = SmallRng::seed_from_u64(5);
+        let powers = (0..25).map(|_| rng.random()).collect::<Vec<Ghash128>>();
+        let prepared = prepared(&powers[..24], Ghash128::ZERO);
+        let lanes = BitLaneSums::new(&[Ghash128::ZERO; SLICED_LANES]);
+        let boundary = BoundaryEvals {
+            first: SlicedBit::<F>::default(),
+            last: SlicedBit::default(),
+            transition: SlicedBit::default(),
+        };
+        let folder = SlicedQuadraticFolder::new(
+            &[],
+            &[],
+            boundary,
+            &[],
+            &powers,
+            &lanes,
+            [false; SLICED_CELLS],
+        );
+        let _ = folder.with_prepared_powers(&prepared);
+    }
+
+    #[test]
     fn only_an_air_asserting_enough_constraints_takes_the_kernel() {
         let mut rng = SmallRng::seed_from_u64(3);
         let mut powers = |len| (0..len).map(|_| rng.random()).collect::<Vec<Ghash128>>();
         let airs = [
-            powers(kernel::MIN_CONSTRAINTS - 1),
-            powers(kernel::MIN_CONSTRAINTS),
+            powers(MIN_CONSTRAINTS - 1),
+            powers(MIN_CONSTRAINTS),
             Vec::new(),
         ];
         let prepared = PreparedPowers::per_air(&airs, generator());
+        assert!(prepared[0].is_none());
+        assert!(prepared[1].is_some());
+        assert!(prepared[2].is_none());
+    }
+
+    #[test]
+    fn the_bit_folder_uses_its_measured_kernel_threshold() {
+        let mut rng = SmallRng::seed_from_u64(4);
+        let mut powers = |len| (0..len).map(|_| rng.random()).collect::<Vec<Ghash128>>();
+        let airs = [
+            powers(MIN_BIT_CONSTRAINTS - 1),
+            powers(MIN_BIT_CONSTRAINTS),
+            Vec::new(),
+        ];
+        let prepared = PreparedPowers::per_air_bits(&airs);
         assert!(prepared[0].is_none());
         assert!(prepared[1].is_some());
         assert!(prepared[2].is_none());

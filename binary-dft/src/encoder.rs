@@ -1,4 +1,4 @@
-//! Reed–Solomon encoder over the additive NTT domain.
+//! Reed-Solomon encoding over the additive NTT domain.
 
 use core::marker::PhantomData;
 
@@ -6,44 +6,27 @@ use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Poly64, TowerLevel,
 };
 use p3_commit::Encoder;
-use p3_matrix::Matrix;
+use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_util::log2_strict_usize;
 
 use crate::lch::LchNtt;
 use crate::poly::PolyBasisNtt;
-use crate::traits::AdditiveNtt;
+use crate::traits::{AdditiveNtt, padded_len};
 
-/// The length a message grows to once its coefficients are zero-padded to the target rate.
+/// Reed-Solomon encoding over the additive NTT domain.
 ///
-/// # Panics
-///
-/// Panics if that length does not fit the address space.
-pub(crate) fn padded_message_len(len: usize, log_inv_rate: usize) -> usize {
-    // A shift amount below the word size still leaves the value itself free to overflow.
-    // Recovering the original length from the shifted one is what proves no bits were lost.
-    u32::try_from(log_inv_rate)
-        .ok()
-        .and_then(|rate| len.checked_shl(rate))
-        .filter(|&padded| padded >> log_inv_rate == len)
-        .expect("codeword length overflows usize")
-}
-
-/// Reed–Solomon over the additive NTT domain.
-///
-/// The message holds the low-index novel-basis coefficients of each column, so the codeword is
-/// the evaluation of `f̂(Ŵ_0(x), …, Ŵ_{k−1}(x))` on `S_{k + log_inv_rate}`.
-///
-/// The transform is a type parameter, because the fastest one differs by alphabet.
-/// The default is the one the widest tower level uses.
+/// - Each column holds the low-index novel-basis coefficients of one polynomial.
+/// - Its codeword is that polynomial evaluated on the subspace `log_inv_rate` dimensions larger.
+/// - The transform is a type parameter, since the fastest one differs by alphabet.
 #[derive(Clone, Debug, Default)]
 pub struct AdditiveRsEncoder<F, Ntt = PolyBasisNtt> {
+    /// The additive NTT that evaluates the padded coefficients.
     ntt: Ntt,
     _marker: PhantomData<F>,
 }
 
 impl<F, Ntt> AdditiveRsEncoder<F, Ntt> {
-    /// Builds an encoder around the given additive NTT.
+    /// An encoder around the given additive NTT.
     pub const fn new(ntt: Ntt) -> Self {
         Self {
             ntt,
@@ -52,21 +35,20 @@ impl<F, Ntt> AdditiveRsEncoder<F, Ntt> {
     }
 }
 
-/// A tower level this crate encodes over, together with the encoder it picks for that level.
+/// A tower level this crate encodes over, with the encoder it picks for it.
 ///
-/// A caller naming a level rather than a transform reaches the right pair through this.
-/// Nothing but the implementations below decides which transform an alphabet gets.
+/// A caller naming only a level reaches the right transform through this.
 pub trait EncodableLevel: TowerLevel {
-    /// The Reed-Solomon encoder this crate uses for this level.
+    /// The Reed-Solomon encoder this crate uses for the level.
     type Encoder: Encoder<Self> + Default + Sync;
 }
 
-/// The widest level has a polynomial-basis transform.
-/// It falls back to the portable tower transform where the target has no carryless multiply.
+// The widest level runs in the polynomial basis, which falls back to the tower basis without a carryless multiply.
 impl EncodableLevel for BinaryField128 {
     type Encoder = AdditiveRsEncoder<Self, PolyBasisNtt>;
 }
 
+// Every narrower level runs the tower transform on its own elements.
 impl EncodableLevel for BinaryField64 {
     type Encoder = AdditiveRsEncoder<Self, LchNtt<Self>>;
 }
@@ -87,46 +69,23 @@ impl EncodableLevel for BinaryField8 {
     type Encoder = AdditiveRsEncoder<Self, LchNtt<Self>>;
 }
 
-/// Zero-extend each column's coefficient vector to the codeword length, then transform.
-///
-/// The rate is passed through, so a transform may skip the work the zero tail would do.
-///
-/// # Panics
-///
-/// Panics if the message height is not a power of two, or if the codeword length overflows.
-fn encode_by_padding<F, Ntt>(
-    ntt: &Ntt,
-    mut message: RowMajorMatrix<F>,
-    log_inv_rate: usize,
-) -> RowMajorMatrix<F>
-where
-    F: TowerLevel,
-    Ntt: AdditiveNtt<F> + Sync,
-{
-    if log_inv_rate == 0 {
-        return ntt.ntt_batch(message);
-    }
-
-    // Zero-padding the novel-basis coefficients extends the evaluation domain.
-    let padded_len = padded_message_len(message.values.len(), log_inv_rate);
-    let _ = log2_strict_usize(message.height());
-    message.values.resize(padded_len, F::ZERO);
-    ntt.ntt_batch_padded(message, log_inv_rate)
-}
-
-// One implementation per alphabet, each forwarding to the shared body above.
+// One implementation per alphabet.
 //
-// A blanket implementation over every level would overlap the two-adic one in `p3-commit`.
-// No downstream crate may resolve that overlap, so the alphabets are named instead.
+// A blanket implementation over every level would overlap the two-adic one in the commit crate.
 macro_rules! impl_additive_rs_encoder {
     ($($field:ty),* $(,)?) => {$(
         impl<Ntt: AdditiveNtt<$field> + Sync> Encoder<$field> for AdditiveRsEncoder<$field, Ntt> {
             fn encode_batch(
                 &self,
-                message: RowMajorMatrix<$field>,
+                mut message: RowMajorMatrix<$field>,
                 log_inv_rate: usize,
             ) -> RowMajorMatrix<$field> {
-                encode_by_padding(&self.ntt, message, log_inv_rate)
+                // Zero-padding the coefficients extends the domain without changing the polynomials.
+                //
+                // The transform is told the rate, so it can skip the work the zero tail would do.
+                let len = padded_len(message.values.len(), log_inv_rate);
+                message.values.resize(len, <$field>::ZERO);
+                self.ntt.ntt_batch_padded(message, log_inv_rate)
             }
 
             fn encode_batch_padded(
@@ -148,7 +107,6 @@ macro_rules! impl_additive_rs_encoder {
     )*};
 }
 
-// The six `impl Encoder<F> for AdditiveRsEncoder<F, _>`, one per alphabet below.
 impl_additive_rs_encoder!(
     BinaryField128,
     BinaryField64,
@@ -171,7 +129,7 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::{AdditiveRsEncoder, padded_message_len};
+    use super::AdditiveRsEncoder;
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
 
@@ -252,34 +210,6 @@ mod tests {
     fn padded_encoding_rejects_non_power_of_two_height() {
         let mat = RowMajorMatrix::new(vec![F::ZERO; 12], 4);
         let _ = AdditiveRsEncoder::<F>::default().encode_batch_padded(mat, 1);
-    }
-
-    #[test]
-    fn the_padded_length_is_the_message_length_shifted() {
-        // Fixture state: a rate of 1/8 multiplies the coefficient count by eight.
-        assert_eq!(padded_message_len(48, 3), 384);
-
-        // No added dimension leaves the message length alone.
-        assert_eq!(padded_message_len(48, 0), 48);
-
-        // An empty message stays empty at every rate.
-        assert_eq!(padded_message_len(0, 60), 0);
-    }
-
-    #[test]
-    #[should_panic = "codeword length overflows usize"]
-    fn the_padded_length_refuses_a_shift_past_the_word_size() {
-        // A shift of the whole word width has no result `usize` can hold.
-        let _ = padded_message_len(2, usize::BITS as usize);
-    }
-
-    #[test]
-    #[should_panic = "codeword length overflows usize"]
-    fn the_padded_length_refuses_a_value_that_overflows() {
-        // The shift amount fits the word, and the shifted value does not.
-        //
-        //     1 << (BITS - 1)  shifted once more drops its only set bit
-        let _ = padded_message_len(1 << (usize::BITS - 1), 1);
     }
 
     proptest! {

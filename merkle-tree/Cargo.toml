@@ -34,6 +34,7 @@ p3-goldilocks = { path = "../goldilocks" }
 p3-keccak = { path = "../keccak" }
 p3-mds = { path = "../mds" }
 p3-rescue = { path = "../rescue" }
+p3-sha256 = { path = "../sha256" }
 
 criterion.workspace = true
 proptest.workspace = true
@@ -48,6 +49,10 @@ harness = false
 
 [[bench]]
 name = "multi_matrix"
+harness = false
+
+[[bench]]
+name = "wide_rows"
 harness = false
 
 [lints]

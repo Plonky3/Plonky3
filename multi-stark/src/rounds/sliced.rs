@@ -2089,6 +2089,27 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         matches!(self.trace.cells, Planes::Low(_))
     }
 
+    /// The 64 singleton corner weights accepted by the bit-plane expansion hook.
+    #[cfg(any(
+        test,
+        all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        )
+    ))]
+    #[inline]
+    fn bit_plane_expansion_weights(&self) -> Option<[R; SLICED_LANES]> {
+        if !self.low_only() || self.corners != SLICED_LANES {
+            return None;
+        }
+        Some(core::array::from_fn(|corner| {
+            self.low_sums[corner / GROUP_CORNERS][1 << (corner % GROUP_CORNERS)]
+        }))
+    }
+
     /// The corners of one group in one plane.
     #[inline]
     fn plane_group<'b>(&self, words: &'b [u64], group: usize) -> &'b [u64] {
@@ -2203,6 +2224,24 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     fn unslice_columns(&self, block_columns: usize) -> Vec<Poly<R>> {
         let width = self.trace.width;
         let rows = self.words * SLICED_LANES;
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ))]
+        let bit_plane_weights = self.bit_plane_expansion_weights();
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ))]
+        let bit_plane_expansion = bit_plane_weights
+            .as_ref()
+            .and_then(R::prepare_bit_plane_expansion);
         (0..width.div_ceil(block_columns))
             .into_par_iter()
             .flat_map_iter(|block| {
@@ -2224,6 +2263,20 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
                     );
                     for (column, values) in values.iter_mut().enumerate() {
                         let (low, high) = self.staged_words(&low, &high, column);
+                        #[cfg(all(
+                            target_arch = "x86_64",
+                            target_feature = "gfni",
+                            target_feature = "avx512f",
+                            target_feature = "avx512bw",
+                            target_feature = "avx512vbmi"
+                        ))]
+                        if let Some(expand) = &bit_plane_expansion {
+                            let words: &[u64; SLICED_LANES] = low
+                                .try_into()
+                                .expect("a prepared bit-plane expansion has exactly 64 corners");
+                            expand(words, values);
+                            continue;
+                        }
                         values.extend(self.corner_values(low, high));
                     }
                 }

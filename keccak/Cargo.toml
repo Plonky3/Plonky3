@@ -1,6 +1,6 @@
 [package]
 name = "p3-keccak"
-description = "An optimized implementation of the Keccak-f permutation and Keccak256 hash function."
+description = "An optimized implementation of the Keccak-f permutation and the Keccak-256 and SHA3-256 hash functions."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,13 +17,15 @@ criterion.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
 
-tiny-keccak = { workspace = true, features = ["keccak"] }
+tiny-keccak = { workspace = true, features = ["keccak", "sha3"] }
 
 [dev-dependencies]
 p3-field = { path = "../field" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 
+hex-literal.workspace = true
 proptest.workspace = true
+sha3.workspace = true
 
 [[bench]]
 name = "bench_keccak"

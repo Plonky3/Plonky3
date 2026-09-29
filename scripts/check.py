@@ -180,9 +180,12 @@ def ci_plan(
         ),
         "embedded": bool(embedded),
         "wasm": "p3-goldilocks" in affected,
+        "wasm_blake3": "p3-blake3" in affected,
         "keccak": "p3-keccak" in affected,
         "sha_ni": "p3-sha256" in affected,
         "gfni": bool({"p3-binary-field", "p3-multi-stark", "p3-sumcheck"} & affected),
+        "avx512": bool({"p3-blake3", "p3-sha256"} & affected),
+        "vpclmulqdq": "p3-binary-dft" in affected,
         "toml": full or any_toml,
         "manifests": full or any_manifest,
         "scripts": full or scripts,
@@ -390,6 +393,15 @@ def wasm_commands(step: str, build_target: str, run_target: str) -> list[list[st
             "wasm_merkle_bench",
             "-p",
             "p3-goldilocks",
+        ],
+        "blake3": [
+            "cargo",
+            "test",
+            "--release",
+            "--target",
+            run_target,
+            "-p",
+            "p3-blake3",
         ],
     }
     return list(commands.values()) if step == "all" else [commands[step]]
@@ -764,7 +776,9 @@ def parser() -> argparse.ArgumentParser:
     subparsers.add_parser("bench", help="run each benchmark body once")
     wasm = subparsers.add_parser("wasm", help="build or run wasm SIMD smoke coverage")
     wasm.add_argument(
-        "--step", choices=("all", "build", "test", "smoke", "bench", "merkle"), default="all"
+        "--step",
+        choices=("all", "build", "test", "smoke", "bench", "merkle", "blake3"),
+        default="all",
     )
     wasm.add_argument("--build-target", default="wasm32-unknown-unknown")
     wasm.add_argument("--run-target", default="wasm32-wasip1")

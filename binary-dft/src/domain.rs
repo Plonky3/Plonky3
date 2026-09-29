@@ -1,21 +1,25 @@
-//! The additive NTT domain: `F_2`-linear subspaces spanned by the Cantor basis.
+//! The additive NTT domain: linear subspaces spanned by the Cantor basis.
 
 use alloc::vec::Vec;
 
 use p3_binary_field::TowerLevel;
 
-/// The `index`-th point of the additive NTT domain, `Σ_r bit_r(index) · v_r`.
+/// The point of the domain at a given index, `sum_r (bit r of index) * v_r`.
 ///
-/// The domain `S_ℓ` is the span of the first `ℓ` Cantor basis vectors, so this is well
-/// defined for any `ℓ > log2(index)` and does not depend on which level evaluates it.
+/// - The subspace `S_l` is the span of the first `l` Cantor basis vectors `v_0, v_1, ...`.
+/// - So the point is the same for every `l` above the index's bit length.
+/// - It is also the same whichever tower level evaluates it.
 ///
 /// # Panics
-/// Panics if `index` has a set bit at or above the bit width of `F`.
+///
+/// Panics if the index has a set bit at or above the bit width of the level.
 #[must_use]
 pub fn domain_point<F: TowerLevel>(index: usize) -> F {
     let mut point = F::ZERO;
     let mut remaining = index;
     let mut r = 0;
+
+    // Add the basis vector of every set bit, lowest first.
     while remaining != 0 {
         if remaining & 1 == 1 {
             point += F::cantor_basis(r);
@@ -26,17 +30,19 @@ pub fn domain_point<F: TowerLevel>(index: usize) -> F {
     point
 }
 
-/// The increments of `domain_point(index << 1)` as `index` runs upwards from zero.
+/// The steps between consecutive even domain points, one per trailing-zero count.
 ///
-/// `domain_point` is `F_2`-linear in its index and `(index − 1) ^ index` is the mask of bits
-/// `0..=k` for `k = index.trailing_zeros()`, so consecutive points differ by
-/// `steps[k] = Σ_{r ≤ k} v_{r+1}`. The `count` entries returned cover every `index` below
-/// `2^count`.
+/// - The domain point is linear in its index.
+/// - Going from index `2(b - 1)` to `2b` flips the bits `1 ..= k + 1`, where `k` counts the trailing zeros of `b`.
+/// - So the step is `sum_(r <= k) v_(r + 1)`, the entry `k` of the returned table.
+/// - The `count` entries cover every `b` below `2^count`.
 ///
 /// # Panics
-/// Panics if `count` is at least the bit width of `F`.
+///
+/// Panics if `count` is at least the bit width of the level.
 #[must_use]
 pub fn domain_point_steps<F: TowerLevel>(count: usize) -> Vec<F> {
+    // Each entry is the previous one plus the next basis vector up.
     let mut point = F::ZERO;
     (0..count)
         .map(|r| {
@@ -46,11 +52,11 @@ pub fn domain_point_steps<F: TowerLevel>(count: usize) -> Vec<F> {
         .collect()
 }
 
-/// The subspace polynomial `W_j` of `S_j`, defined by `W_0(x) = x` and
-/// `W_j(x) = W_{j−1}(x)² + W_{j−1}(x)`.
+/// The subspace polynomial `W_j` of `S_j`, evaluated at `x`.
 ///
-/// `W_j` is `F_2`-linear, vanishes exactly on `S_j`, and satisfies `W_j(v_j) = v_0 = 1`, so it
-/// is already the normalised subspace polynomial `Ŵ_j` for the Cantor basis (D8).
+/// - The recurrence is `W_0(x) = x` and `W_j(x) = W_(j-1)(x)^2 + W_(j-1)(x)`.
+/// - `W_j` is linear and vanishes exactly on `S_j`.
+/// - For the Cantor basis `W_j(v_j) = 1`, so it is already normalised.
 #[must_use]
 pub fn subspace_polynomial<F: TowerLevel>(j: usize, x: F) -> F {
     let mut value = x;
@@ -138,7 +144,7 @@ mod tests {
         }
     }
 
-    /// D8's index-shift identity: `W_j(v_i) = v_{i−j}` for `i ≥ j`.
+    /// The index-shift identity: `W_j(v_i) = v_(i - j)` for `i >= j`.
     #[test]
     fn subspace_polynomial_shifts_the_basis() {
         for j in 0..16 {

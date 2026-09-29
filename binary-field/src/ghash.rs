@@ -299,9 +299,39 @@ impl Field for Ghash128 {
     //
     // Without a packing the alias resolves to this type itself, which is why the lint is off.
     #[allow(clippy::use_self)]
-    type Packing = crate::packed::Packing;
+    type Packing = crate::packed::Ghash128Packing;
 
     const GENERATOR: Self = Self(clmul::tower_image_128(TOWER_GENERATOR));
+
+    #[inline]
+    fn prepare_bit_plane_expansion(
+        weights: &[Self; 64],
+    ) -> Option<impl Fn(&[u64; 64], &mut Vec<Self>) + Send + Sync + 'static> {
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ))]
+        {
+            let prepared = clmul::PreparedBitPlaneExpansion::new(weights.map(|weight| weight.0));
+            Some(move |words: &[u64; 64], output: &mut Vec<Self>| {
+                prepared.append(words, output);
+            })
+        }
+        #[cfg(not(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        )))]
+        {
+            let _ = weights;
+            None::<fn(&[u64; 64], &mut Vec<Self>)>
+        }
+    }
 
     /// Invert through precomputed squaring maps on carryless-multiply targets.
     /// The software backend instead uses the recursive tower norm.
@@ -563,6 +593,110 @@ mod tests {
     use super::{CANTOR_BASIS, Ghash128};
     use crate::tower::TowerLevel;
     use crate::{BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Gf2};
+
+    #[cfg(not(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi"
+    )))]
+    #[test]
+    fn bit_plane_expansion_is_disabled_without_required_gfni_features() {
+        let weights = [Ghash128::ZERO; 64];
+        assert!(Ghash128::prepare_bit_plane_expansion(&weights).is_none());
+    }
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi"
+    ))]
+    mod bit_plane_expansion_tests {
+        use super::*;
+
+        fn next_word(state: &mut u128) -> u128 {
+            *state ^= *state << 7;
+            *state ^= *state >> 9;
+            *state ^= *state << 8;
+            *state
+        }
+
+        fn scalar_expansion(weights: &[Ghash128; 64], words: &[u64; 64]) -> [Ghash128; 64] {
+            core::array::from_fn(|lane| {
+                weights
+                    .iter()
+                    .zip(words)
+                    .filter(|(_, word)| (*word >> lane) & 1 == 1)
+                    .map(|(&weight, _)| weight)
+                    .sum()
+            })
+        }
+
+        #[test]
+        fn bit_plane_expansion_preserves_every_corner_and_lane() {
+            let weights = core::array::from_fn(|corner| {
+                Ghash128::from_repr(
+                    0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835u128.wrapping_mul(corner as u128 + 1),
+                )
+            });
+            let expand = Ghash128::prepare_bit_plane_expansion(&weights)
+                .expect("the GFNI target must provide the expansion");
+
+            for corner in 0..64 {
+                for lane in 0..64 {
+                    let mut words = [0; 64];
+                    words[corner] = 1 << lane;
+                    let mut output = Vec::new();
+                    expand(&words, &mut output);
+                    assert_eq!(output.len(), 64, "corner {corner}, lane {lane}");
+                    for (index, &value) in output.iter().enumerate() {
+                        let expected = if index == lane {
+                            weights[corner]
+                        } else {
+                            Ghash128::ZERO
+                        };
+                        assert_eq!(
+                            value, expected,
+                            "corner {corner}, lane {lane}, output {index}"
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn bit_plane_expansion_matches_scalar_sums_and_appends() {
+            let mut state = 0xc011_8a8e_51ed_5eed_1234_5678_9abc_def0;
+            let weights = core::array::from_fn(|_| Ghash128::from_repr(next_word(&mut state)));
+            let expand = Ghash128::prepare_bit_plane_expansion(&weights)
+                .expect("the GFNI target must provide the expansion");
+
+            let mut cases = Vec::from([[0; 64], [u64::MAX; 64]]);
+            cases.extend((0..32).map(|_| core::array::from_fn(|_| next_word(&mut state) as u64)));
+            // Prefixes of 0 to 3 values reach every 16-byte offset into a 64-byte line.
+            for prefix_len in 0..4 {
+                let prefix = Ghash128::from_repr(0xfeed_face);
+                let mut output = vec![prefix; prefix_len];
+                for words in &cases {
+                    expand(words, &mut output);
+                }
+
+                assert!(output[..prefix_len].iter().all(|&value| value == prefix));
+                assert_eq!(output.len(), prefix_len + 64 * cases.len());
+                for (case, words) in cases.iter().enumerate() {
+                    let start = prefix_len + 64 * case;
+                    assert_eq!(
+                        &output[start..start + 64],
+                        &scalar_expansion(&weights, words),
+                        "prefix {prefix_len}, case {case}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn narrow_algebras_match_multiplication_in_the_tower() {

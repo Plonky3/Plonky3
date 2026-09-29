@@ -106,6 +106,14 @@ impl Poly64 {
         self.0
     }
 
+    /// The polynomial-basis coordinates of this element, borrowed in place.
+    #[must_use]
+    #[inline]
+    pub(crate) const fn as_bits(&self) -> &u64 {
+        // A reference lets vector kernels load the element straight from memory.
+        &self.0
+    }
+
     /// Construct a field element from its little-endian byte representation.
     ///
     /// Every byte string of this length is a valid element.
@@ -189,7 +197,11 @@ impl PrimeCharacteristicRing for Poly64 {
 }
 
 impl Field for Poly64 {
-    type Packing = Self;
+    // One element is one quadword, so a wide carryless multiply packs several of them.
+    //
+    // Without a packing the alias resolves to this type itself, which is why the lint is off.
+    #[allow(clippy::use_self)]
+    type Packing = crate::packed::Poly64Packing;
 
     const GENERATOR: Self = Self(clmul::tower_image_64(TOWER_GENERATOR));
 

@@ -5,7 +5,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
-use core::ops::Deref;
+use core::ops::{Deref, Range};
 
 use itertools::Itertools;
 use p3_field::{
@@ -204,6 +204,30 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                 .into_iter()
                 .collect_vec()
         }
+    }
+
+    /// Returns a run of rows as one slice, when the storage keeps them back to back.
+    ///
+    /// The slice holds the rows in order, one full row after another:
+    ///
+    /// ```text
+    ///     rows 2..4 of a width-3 matrix:   [ a20 a21 a22 | a30 a31 a32 ]
+    /// ```
+    ///
+    /// A consumer that reads many rows in one pass can then skip copying them first.
+    ///
+    /// Returns `None` when the range is reversed or ends past the last row.
+    ///
+    /// Also returns `None` when the rows are not adjacent in memory.
+    ///
+    /// That is the default, since only dense row-major storage can promise adjacency.
+    #[inline]
+    fn contiguous_rows(&self, rows: Range<usize>) -> Option<impl Deref<Target = [T]>> {
+        // Only storage that knows its own layout can promise adjacency.
+        let _ = rows;
+
+        // An owned buffer names the answer's type without borrowing the matrix.
+        None::<Vec<T>>
     }
 
     /// Returns an iterator over all rows in the matrix.
