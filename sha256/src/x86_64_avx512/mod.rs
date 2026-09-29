@@ -11,6 +11,9 @@
 //!
 //! Every build of x86-64 compiles this module.
 //! Each function that runs AVX-512 enables it, and the entry points run once the CPU is known to have it.
+//!
+//! A closure inside such a function carries its features, so `array::map` or `from_fn` cannot inline it.
+//! Plain loops fill the arrays instead, and inline in every build.
 
 mod rounds;
 
@@ -151,8 +154,15 @@ pub(crate) unsafe fn hash_many(input: &[u8], out: &mut [[u8; 32]], sha_ni: bool)
     );
     let len = input.len() / out.len();
 
-    // The padding expands a schedule in scalar code, so only a register pass computes it.
-    let mut padding = None;
+    // A batch too small for a register pass never reads the padding.
+    //
+    // Its shared schedule costs about as much as one short message, so such a batch skips it.
+    if let (pass @ (Pass::FourStreams | Pass::Single), _) = Pass::next(out.len(), sha_ni) {
+        // SAFETY: the passes pick four streams only when `sha_ni` holds, so the CPU has SHA-NI.
+        unsafe { hash_serial(input, out, pass == Pass::FourStreams) };
+        return;
+    }
+    let padding = Padding::new(len);
 
     // Whole groups of 32 messages.
     let (groups, _) = out.as_chunks_mut::<LANES>();
@@ -165,7 +175,7 @@ pub(crate) unsafe fn hash_many(input: &[u8], out: &mut [[u8; 32]], sha_ni: bool)
         };
         hash_group::<GROUPS>(
             &lanes,
-            padding.get_or_insert_with(|| Padding::new(len)),
+            &padding,
             digests.as_chunks_mut().0.try_into().unwrap(),
         );
     }
@@ -184,31 +194,43 @@ pub(crate) unsafe fn hash_many(input: &[u8], out: &mut [[u8; 32]], sha_ni: bool)
             count,
         };
         match pass {
-            Pass::Wide => {
-                hash_pass::<GROUPS>(
-                    &lanes,
-                    padding.get_or_insert_with(|| Padding::new(len)),
-                    digests,
-                );
-            }
-            Pass::Narrow => {
-                hash_pass::<1>(
-                    &lanes,
-                    padding.get_or_insert_with(|| Padding::new(len)),
-                    digests,
-                );
-            }
+            Pass::Wide => hash_pass::<GROUPS>(&lanes, &padding, digests),
+            Pass::Narrow => hash_pass::<1>(&lanes, &padding, digests),
             // SAFETY: the passes pick four streams only when `sha_ni` holds, so the CPU has SHA-NI.
-            Pass::FourStreams => unsafe {
-                x86_64_sha_ni::hash_many(&input[first * len..][..count * len], digests);
+            Pass::FourStreams | Pass::Single => unsafe {
+                hash_serial(
+                    &input[first * len..][..count * len],
+                    digests,
+                    pass == Pass::FourStreams,
+                );
             },
-            Pass::Single => {
-                for (message, digest) in (first..).zip(digests) {
-                    *digest = Sha256.hash_slice(&input[message * len..][..len]);
-                }
-            }
         }
         first += count;
+    }
+}
+
+/// Hash `out.len()` equal-length messages laid end to end in `messages`, without the registers.
+///
+/// Four SHA-NI streams take them when `four_streams` holds, and the scalar hasher otherwise.
+///
+/// # Safety
+///
+/// The running CPU has SHA-NI and SSE4.1 when `four_streams` holds.
+///
+/// # Panics
+///
+/// Panics if `out` is empty.
+unsafe fn hash_serial(messages: &[u8], out: &mut [[u8; 32]], four_streams: bool) {
+    if four_streams {
+        // SAFETY: the caller vouches for SHA-NI and SSE4.1.
+        unsafe { x86_64_sha_ni::hash_many(messages, out) };
+        return;
+    }
+
+    // Indexing rather than chunking also covers empty messages.
+    let len = messages.len() / out.len();
+    for (index, digest) in out.iter_mut().enumerate() {
+        *digest = Sha256.hash_slice(&messages[index * len..][..len]);
     }
 }
 

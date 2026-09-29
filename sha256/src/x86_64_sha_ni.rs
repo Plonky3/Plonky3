@@ -21,7 +21,7 @@
 //! Four interleaved streams fill them, which is why [`LANES`] is four.
 
 use core::arch::x86_64::{
-    __m128i, _mm_add_epi32, _mm_alignr_epi8, _mm_blend_epi16, _mm_loadu_si128,
+    __m128i, _mm_add_epi32, _mm_alignr_epi8, _mm_blend_epi16, _mm_loadu_si128, _mm_setzero_si128,
     _mm_sha256msg1_epu32, _mm_sha256msg2_epu32, _mm_sha256rnds2_epu32, _mm_shuffle_epi8,
     _mm_shuffle_epi32, _mm_storeu_si128,
 };
@@ -112,13 +112,13 @@ fn load_schedule(block: &[u8; BLOCK_BYTES]) -> [__m128i; SCHEDULE_VECTORS] {
     // SAFETY: `[u8; 16]` and `__m128i` are both 16 bytes and every bit pattern is valid.
     let mask = unsafe { transmute::<[u8; 16], __m128i>(REVERSE_DWORD_BYTES) };
 
-    core::array::from_fn(|vector| {
+    let mut schedule = [_mm_setzero_si128(); SCHEDULE_VECTORS];
+    for (vector, words) in schedule.iter_mut().enumerate() {
         // SAFETY: `block` is 64 bytes and `vector < 4`, so the 16-byte unaligned read is in bounds.
-        unsafe {
-            let raw = _mm_loadu_si128(block.as_ptr().add(vector * 16).cast());
-            _mm_shuffle_epi8(raw, mask)
-        }
-    })
+        let raw = unsafe { _mm_loadu_si128(block.as_ptr().add(vector * 16).cast()) };
+        *words = _mm_shuffle_epi8(raw, mask);
+    }
+    schedule
 }
 
 /// Extend the message schedule by four words.
@@ -223,8 +223,10 @@ impl FourLane for ShaNi {
 #[target_feature(enable = "sha,sse4.1")]
 fn compress_streams(state: &mut State, blocks: [&[u8; BLOCK_BYTES]; LANES]) {
     let entry = *state;
-    let mut schedule: [[__m128i; SCHEDULE_VECTORS]; LANES] =
-        core::array::from_fn(|lane| load_schedule(blocks[lane]));
+    let mut schedule = [[_mm_setzero_si128(); SCHEDULE_VECTORS]; LANES];
+    for (window, block) in schedule.iter_mut().zip(blocks) {
+        *window = load_schedule(block);
+    }
 
     for group in 0..SCHEDULE_VECTORS {
         let streams = state
