@@ -32,12 +32,14 @@ use itertools::Itertools;
 use p3_commit::Mmcs;
 use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
-use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
+use p3_symmetric::{CryptographicHasher, MerkleCap, PseudoCompressionFunction};
 use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
 use crate::MerkleTree;
-use crate::MerkleTreeError::{CapMismatch, IndexOutOfBounds, WrongBatchSize, WrongHeight};
+use crate::MerkleTreeError::{
+    CapMismatch, IndexOutOfBounds, WrongBatchSize, WrongCapSize, WrongHeight,
+};
 use crate::merkle_tree::{padded_len, select_arity_step};
 use crate::pruning::{MerkleAuthPath, PrunedMerklePaths, prune_paths, restore_paths};
 
@@ -220,6 +222,47 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         P: PackedValue,
         PW: PackedValue,
     {
+        let (mut schedule, proof_levels) = self.arity_schedule_and_proof_levels(dimensions)?;
+        schedule.truncate(proof_levels);
+        Ok(schedule)
+    }
+
+    /// Reject a commitment that does not hold exactly the roots the tree's top layers produce.
+    ///
+    /// The cap is the layer `cap_height` steps below the root.
+    /// Its length is the product of the arities above it, fixed by the dimensions alone.
+    /// Without this check, extra roots pass verification unauthenticated.
+    pub(crate) fn check_cap_size(
+        &self,
+        commit: &MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>,
+        dimensions: &[Dimensions],
+    ) -> Result<(), MerkleTreeError>
+    where
+        P: PackedValue,
+        PW: PackedValue,
+    {
+        let (schedule, proof_levels) = self.arity_schedule_and_proof_levels(dimensions)?;
+        let expected = schedule[proof_levels..].iter().product();
+        if commit.num_roots() != expected {
+            return Err(WrongCapSize {
+                expected,
+                got: commit.num_roots(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The full arity schedule, leaves to root, and how many of its levels the proof walks.
+    ///
+    /// The remaining top levels are inside the cap.
+    fn arity_schedule_and_proof_levels(
+        &self,
+        dimensions: &[Dimensions],
+    ) -> Result<(Vec<usize>, usize), MerkleTreeError>
+    where
+        P: PackedValue,
+        PW: PackedValue,
+    {
         // Geometry gate: the claimed heights must form a tree the commitment can build.
         // The tallest height also seeds the walk below.
         let max_height =
@@ -289,9 +332,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // Those layers live inside the verifier's cap, not in the proof.
         let total_levels = schedule.len();
         let effective_cap_height = self.cap_height.min(total_levels);
-        schedule.truncate(total_levels - effective_cap_height);
 
-        Ok(schedule)
+        Ok((schedule, total_levels - effective_cap_height))
     }
 
     // Amortized multi-query openings with pruned authentication paths.
@@ -881,6 +923,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         PW::Value: Eq + Clone,
         [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
     {
+        self.check_cap_size(commit, dimensions)?;
+
         // `RECORD = false`: nothing here reads the per-query paths, so the recording branch
         // compiles out and this walk is exactly the amortized verification walk.
         let frontier =
