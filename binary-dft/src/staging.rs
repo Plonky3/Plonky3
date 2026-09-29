@@ -5,6 +5,8 @@
 //! - Scattering it back then writes the matrix once for the whole group.
 
 use alloc::vec::Vec;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+use core::arch::x86_64::{__m512i, _mm_sfence, _mm512_loadu_si512, _mm512_stream_si512};
 use core::ptr;
 
 use p3_maybe_rayon::prelude::*;
@@ -15,6 +17,89 @@ const PAGE_BYTES: usize = 1 << 12;
 
 /// Bytes one prefault task sweeps: a transparent huge page, so one worker faults each.
 const PREFAULT_BYTES: usize = 1 << 21;
+
+/// How a staging pass writes each run back into the matrix.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Store {
+    /// Ordinary stores, which leave the run in the cache for the pass after this one.
+    Cached,
+    /// Streaming stores, which write the run to memory around the cache.
+    ///
+    /// For a matrix no cache holds, the next pass reads the run back from memory anyway.
+    Streamed,
+}
+
+/// An element a staging pass can write around the cache.
+pub(crate) trait Staged: Copy + Send + Sync {
+    /// Write `source` over `target`, using streaming stores where the target supports them.
+    ///
+    /// # Safety
+    ///
+    /// Before calling, the current thread must arm an unwind-safe guard that calls [`Self::fence`].
+    /// The target range must not be read or written again, and its backing allocation must not be
+    /// released, until that guard has fenced the deferred stores on this same thread.
+    unsafe fn stream(target: &mut [Self], source: &[Self]) {
+        target.copy_from_slice(source);
+    }
+
+    /// Order every streamed store this thread made before anything it writes after.
+    fn fence() {}
+}
+
+impl Staged for u128 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    unsafe fn stream(target: &mut [Self], source: &[Self]) {
+        const WORDS_PER_LINE: usize = 64 / size_of::<u128>();
+
+        assert_eq!(target.len(), source.len(), "a run is copied whole");
+        if target.is_empty() {
+            return;
+        }
+
+        // A u128 is 16-byte aligned, so at most three cached words reach a 64-byte boundary.
+        // `align_offset` cannot fail for that relationship, but cap it at the run for short tails.
+        let prefix = target.as_ptr().align_offset(64).min(target.len());
+        let (target_prefix, target) = target.split_at_mut(prefix);
+        let (source_prefix, source) = source.split_at(prefix);
+        target_prefix.copy_from_slice(source_prefix);
+
+        let body = source.len() / WORDS_PER_LINE * WORDS_PER_LINE;
+        let (source_body, source_tail) = source.split_at(body);
+        let (target_body, target_tail) = target.split_at_mut(body);
+        for offset in (0..body).step_by(WORDS_PER_LINE) {
+            // SAFETY:
+            // - The cached prefix aligns `target_body` to 64 bytes. Every offset advances by one
+            //   64-byte line, preserving the alignment `_mm512_stream_si512` requires.
+            // - `body` is a whole number of lines, so each pointer names 64 initialized bytes.
+            // - The load is explicitly unaligned, so the source needs only u128 alignment.
+            // - Each target line is inside the exclusively borrowed target body.
+            unsafe {
+                let source_line = source_body.as_ptr().add(offset).cast::<__m512i>();
+                let target_line = target_body.as_mut_ptr().add(offset).cast::<__m512i>();
+                let value = _mm512_loadu_si512(source_line);
+                _mm512_stream_si512(target_line, value);
+            }
+        }
+        target_tail.copy_from_slice(source_tail);
+    }
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    fn fence() {
+        // SAFETY: a store fence has no precondition; it orders this thread's earlier stores.
+        unsafe { _mm_sfence() };
+    }
+}
+
+/// Runs a publication fence on the current thread when its task returns or unwinds.
+struct FenceOnDrop<'a, F: Fn()> {
+    fence: &'a F,
+}
+
+impl<F: Fn()> Drop for FenceOnDrop<'_, F> {
+    fn drop(&mut self) {
+        (self.fence)();
+    }
+}
 
 /// How the tiles of one staging pass are spread over the workers.
 #[derive(Copy, Clone, Debug)]
@@ -233,6 +318,78 @@ pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
     Q: Fn(&mut [T]) + Send + Sync,
     P: Fn(&mut [T], usize, usize) + Send + Sync,
 {
+    for_each_staged_tile_into_cosets_with(
+        values,
+        source,
+        coset_len,
+        runs,
+        dispatch,
+        prepare,
+        process,
+        |target, source| target.copy_from_slice(source),
+        || {},
+    );
+}
+
+/// As [`for_each_staged_tile_into_cosets`], selecting how each transformed run is stored.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn for_each_staged_tile_into_cosets_stored<T, Q, P>(
+    values: &mut [T],
+    source: Option<&[T]>,
+    coset_len: usize,
+    runs: StagedRuns,
+    dispatch: Dispatch,
+    store: Store,
+    prepare: Q,
+    process: P,
+) where
+    T: Staged,
+    Q: Fn(&mut [T]) + Send + Sync,
+    P: Fn(&mut [T], usize, usize) + Send + Sync,
+{
+    for_each_staged_tile_into_cosets_with(
+        values,
+        source,
+        coset_len,
+        runs,
+        dispatch,
+        prepare,
+        process,
+        move |target, source| match store {
+            Store::Cached => target.copy_from_slice(source),
+            Store::Streamed => {
+                // SAFETY: the shared task body arms its same-thread `FenceOnDrop` before it can
+                // invoke this writer. No task accesses a scattered target again, and the pass
+                // cannot publish or release the matrix until every task has returned or unwound.
+                unsafe { T::stream(target, source) };
+            }
+        },
+        move || {
+            if store == Store::Streamed {
+                T::fence();
+            }
+        },
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn for_each_staged_tile_into_cosets_with<T, Q, P, W, F>(
+    values: &mut [T],
+    source: Option<&[T]>,
+    coset_len: usize,
+    runs: StagedRuns,
+    dispatch: Dispatch,
+    prepare: Q,
+    process: P,
+    write: W,
+    fence: F,
+) where
+    T: Copy + Send + Sync,
+    Q: Fn(&mut [T]) + Send + Sync,
+    P: Fn(&mut [T], usize, usize) + Send + Sync,
+    W: Fn(&mut [T], &[T]) + Send + Sync,
+    F: Fn() + Send + Sync,
+{
     let StagedRuns { run, depth, .. } = runs;
     let cosets = values.len() / coset_len;
     let rows = 1 << depth;
@@ -261,6 +418,10 @@ pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
         coset * coset_len + runs.run_index(index, k) * run
     };
     let task = move |(tile, copy): &mut (Vec<T>, Vec<T>), index: usize| {
+        // A write callback may leave non-temporal stores pending. This guard stays on their
+        // issuing thread and fences them both on normal return and while unwinding a panic.
+        let _fence = FenceOnDrop { fence: &fence };
+
         // The walk ascends, so bounding its last run bounds all of them.
         assert!(
             runs.run_index(index, rows - 1) < count,
@@ -298,7 +459,7 @@ pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
                 //
                 // Every coset has the leading coset's length, so they also stay in bounds.
                 let target = unsafe { base.slice_mut(slice_of(index, k, coset), run) };
-                target.copy_from_slice(source);
+                write(target, source);
             }
         }
     };
@@ -321,12 +482,88 @@ pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use alloc::vec::Vec;
     use alloc::{format, vec};
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use super::{
-        Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
+        Dispatch, FenceOnDrop, Staged, StagedRuns, Store, for_each_staged_tile,
+        for_each_staged_tile_into_cosets, for_each_staged_tile_into_cosets_stored,
+        for_each_staged_tile_into_cosets_with, prefault,
     };
+
+    #[test]
+    fn streamed_u128_runs_match_cached_copies_at_every_alignment_and_length() {
+        // A wrong prefix rounds the destination down and overwrites the guard; a wrong tail
+        // leaves sentinels in the copied run. Offsetting both slices also exercises unaligned
+        // source loads independently of the destination's 64-byte alignment.
+        for target_offset in 0..4 {
+            for source_offset in 0..4 {
+                for len in [0usize, 1, 3, 4, 5, 7, 8, 9, 13] {
+                    let source: Vec<u128> = (0..len + 4)
+                        .map(|i| (i as u128).wrapping_mul(0x101_0000_0001))
+                        .collect();
+                    let mut actual = vec![u128::MAX; len + 8];
+                    let mut expected = actual.clone();
+
+                    let source = &source[source_offset..source_offset + len];
+                    expected[target_offset..target_offset + len].copy_from_slice(source);
+                    {
+                        let fence = <u128 as Staged>::fence;
+                        let _fence = FenceOnDrop { fence: &fence };
+                        // SAFETY: `_fence` is armed on this thread, and `actual` is not observed
+                        // or released until the guard leaves this inner scope.
+                        unsafe {
+                            <u128 as Staged>::stream(
+                                &mut actual[target_offset..target_offset + len],
+                                source,
+                            );
+                        }
+                    }
+
+                    assert_eq!(
+                        actual, expected,
+                        "target={target_offset} source={source_offset} len={len}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_task_fences_prior_writes_while_unwinding() {
+        // Cosets run in reverse order. The later coset writes successfully, then the leading
+        // coset panics in `process`; its task must still publish the earlier write before unwind
+        // hands the matrix back to the caller.
+        let writes = AtomicUsize::new(0);
+        let fences = AtomicUsize::new(0);
+        let mut values = vec![0u8; 8];
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            for_each_staged_tile_into_cosets_with(
+                &mut values,
+                None,
+                4,
+                StagedRuns::new(4, 0, 0),
+                Dispatch::Serial,
+                |_| {},
+                |_, _, coset| assert_ne!(coset, 0, "stop after one coset was written"),
+                |target, source| {
+                    target.copy_from_slice(source);
+                    writes.fetch_add(1, Ordering::Relaxed);
+                },
+                || {
+                    fences.fetch_add(1, Ordering::Relaxed);
+                },
+            );
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(writes.load(Ordering::Relaxed), 1);
+        assert_eq!(fences.load(Ordering::Relaxed), 1);
+    }
 
     #[test]
     fn the_tiles_partition_the_runs() {
@@ -547,6 +784,45 @@ mod tests {
                     process,
                 );
                 assert_eq!(separate, in_place, "{label}");
+            }
+        }
+    }
+
+    #[test]
+    fn streamed_runs_land_where_cached_ones_do() {
+        // The streamed path must preserve the transformed tile for short runs, aligned full
+        // lines, and prefix/body/tail runs under both task schedulers.
+        let dispatches = [Dispatch::Serial, Dispatch::Parallel { min_len: 1 }];
+        for dispatch in dispatches {
+            for (run, log_runs, log_stride, depth) in
+                [(1, 6, 2, 3), (3, 5, 1, 2), (4, 7, 0, 7), (7, 6, 1, 3)]
+            {
+                let coset_len = run << log_runs;
+                let runs = StagedRuns::new(run, log_stride, depth);
+                let label = format!("{dispatch:?} run={run} log_runs={log_runs} depth={depth}");
+                let source: Vec<u128> = (0..coset_len as u128).map(|v| (v << 64) ^ 0x5a).collect();
+                let prepare = |tile: &mut [u128]| tile.iter_mut().for_each(|value| *value ^= 3);
+                let process = |tile: &mut [u128], block: usize, coset: usize| {
+                    for (k, value) in tile.iter_mut().enumerate() {
+                        *value = value.rotate_left(7) ^ (1000 * block + 100 * coset + k) as u128;
+                    }
+                };
+
+                let staged = |store| {
+                    let mut values = vec![u128::MAX; 2 * coset_len];
+                    for_each_staged_tile_into_cosets_stored(
+                        &mut values,
+                        Some(source.as_slice()),
+                        coset_len,
+                        runs,
+                        dispatch,
+                        store,
+                        prepare,
+                        process,
+                    );
+                    values
+                };
+                assert_eq!(staged(Store::Streamed), staged(Store::Cached), "{label}");
             }
         }
     }

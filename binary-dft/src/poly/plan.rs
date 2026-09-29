@@ -24,7 +24,7 @@ pub(super) const DEEP_TILE_BYTES: usize = 256 * 1024;
 ///
 /// - A `no_std` crate cannot read the cache size, so the matrix size against a fixed figure is the signal.
 /// - A smaller real cache only forgoes the deeper tiles' win, which is the safe direction.
-const SHARED_CACHE_BYTES: usize = 128 * 1024 * 1024;
+pub(super) const SHARED_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
 // The smallest matrix on the deep budget must still leave far more tiles than any machine has workers.
 const _: () = assert!(SHARED_CACHE_BYTES / DEEP_TILE_BYTES >= 256);

@@ -14,6 +14,14 @@
 //! registers; every backend is checked against portable arithmetic.
 
 mod basis;
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "gfni",
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vbmi"
+))]
+mod bit_plane;
 mod gf192;
 mod gf64;
 mod powers;
@@ -77,6 +85,14 @@ pub(crate) use basis::{
     poly_to_tower_64, poly_to_tower_128, poly_to_tower_128_slice, tower_image_64, tower_image_128,
     tower_to_poly_64, tower_to_poly_128, tower_to_poly_128_slice, try_map_tower_coordinates_into,
 };
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "gfni",
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vbmi"
+))]
+pub(crate) use bit_plane::PreparedBitPlaneExpansion;
 
 use crate::BinaryField64;
 use crate::tower::TowerLevel;
