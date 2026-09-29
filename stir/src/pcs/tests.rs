@@ -1359,11 +1359,16 @@ fn pcs_quotient_batching_reaches_the_security_target() {
         // The capacity assumption charges no further reserve.
         //
         // This is therefore the same number the derivation itself uses.
-        let batching_bits = 123. - libm::log2((32 * num_points - 1) as f64) - 8. - 2.
-            + libm::log2(config.round_configs[0].eta);
-        // Four folds have 22 error terms after adding PCS batching: ceil(log2 22)=5.
+        let initial_eta = config
+            .round_configs
+            .first()
+            .map_or(config.final_eta, |round| round.eta);
+        let batching_bits =
+            123. - libm::log2((32 * num_points - 1) as f64) - 8. - 2. + libm::log2(initial_eta);
+        // Six terms per round and three for the final stage, plus the PCS batching term.
+        let target = 100. + libm::ceil(libm::log2((6 * config.num_rounds() + 4) as f64));
         assert!(
-            batching_bits >= 105. - 1e-10,
+            batching_bits >= target - 1e-10,
             "batching only retains {batching_bits} bits"
         );
         assert!((config.initial_batching_error() - batching_bits).abs() < 1e-10);
@@ -1437,7 +1442,7 @@ fn cache_keeps_each_native_class_quotient_count() {
 #[test]
 fn early_stop_options_keep_warm_clone_caches_and_proofs_independent() {
     let (original, params) = test_pcs_and_params();
-    let shapes = [(8, None), (8, Some((2, 194)))];
+    let shapes = [(10, None), (10, Some((2, 194)))];
     for (degree, combine) in shapes {
         assert_eq!(
             original
@@ -1466,7 +1471,7 @@ fn early_stop_options_keep_warm_clone_caches_and_proofs_independent() {
         )
         .unwrap();
         let actual = early.get_or_compute_stir_config(degree, combine);
-        assert_eq!(actual.num_rounds(), 1);
+        assert_eq!(actual.num_rounds(), 2);
         assert_eq!(
             schedule_fingerprint(&actual),
             schedule_fingerprint(&expected)
