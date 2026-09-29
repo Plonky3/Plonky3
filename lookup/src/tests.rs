@@ -1552,9 +1552,9 @@ fn exclusive_query_balances_against_provider() {
     check_lookups(&[query_instance, provider_instance]);
 }
 
-/// AIR emitting one local lookup whose two query tuples each declare the maximal `u32` bound.
+/// AIR emitting one local lookup whose two query tuples each declare the largest 32-bit bound.
 ///
-/// The per-row bound of the whole lookup is their sum, `2 * u32::MAX`, which does not fit.
+/// The per-row bound of the whole lookup is their sum, 2 * (2^32 - 1), which does not fit.
 struct OverweightLocalAir;
 
 impl<F: Field> BaseAir<F> for OverweightLocalAir {
@@ -1580,8 +1580,15 @@ where
 #[test]
 #[should_panic(expected = "count_weight overflow")]
 fn local_lookup_weight_overflow_is_rejected() {
-    // Saturating at `u32::MAX` would under-report the bound by half.
-    // The height check `sum_i w_i * h_i < p` would then accept heights it must reject
-    // for any field wider than 32 bits.
+    // Invariant: a local lookup's per-row bound is exact, or construction fails.
+    //
+    // Fixture state: two tuples bounded by 2^32 - 1 each.
+    //
+    //     true bound     2 * (2^32 - 1)   does not fit 32 bits
+    //     clamped bound  2^32 - 1         half the true weight
+    //
+    // The height check sum_i w_i * h_i < p would then accept heights it must reject.
+    //
+    // Goldilocks at height 2^31 + 1: clamped sum ~2^63 passes, true sum ~2^64 exceeds p.
     let _ = Lookups::<F>::from_air::<EF, _>(&OverweightLocalAir);
 }

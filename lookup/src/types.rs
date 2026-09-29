@@ -173,7 +173,9 @@ impl<F: Field> Lookups<F> {
                 let (expr, weight) = count.clone().into_parts();
                 elements.push(fields.clone());
                 multiplicities.push(expr);
-                // Saturating would under-report the bound and let the height check pass.
+                // An overflowing sum must fail, not clamp.
+                //
+                // A clamped bound is below the true per-row weight, so the height check would pass.
                 acc.checked_add(weight)
                     .expect("count_weight overflow: local lookup weight exceeds u32::MAX")
             });
