@@ -152,26 +152,38 @@ impl Plan {
     }
 }
 
+/// The cost of one compression on one register of a full group, the unit of [`pays`].
+///
+/// A lone register costs [`Backend::LONE_REGISTER_COST`] in this unit.
+pub(super) const GROUPED_REGISTER_COST: usize = 16;
+
 /// Whether spreading `count` messages of `len` bytes beats hashing them in lockstep.
 ///
 /// Both costs count compressions of one register, the unit both strategies share.
 ///
-/// Lockstep runs every block of a message once per register of messages.
+/// - A register of a full group costs [`GROUPED_REGISTER_COST`].
+/// - A register that runs alone costs `lone`, the backend's [`Backend::LONE_REGISTER_COST`].
+///
+/// Lockstep runs every block of a message once per register of messages, each register alone.
 ///
 /// Spreading runs every chunk once per lane, then the parents level by level, then the fold.
-pub(super) fn pays<const W: usize, const G: usize>(count: usize, len: usize) -> bool {
+///
+/// The model counts compressions only, and ignores where their blocks come from.
+///
+/// Lockstep streams each message in order, while spreading reads one chunk per lane.
+///
+/// So on some cores, batches that outgrow the second-level cache run a few percent slower spread than in lockstep.
+pub(super) fn pays<const W: usize, const G: usize>(count: usize, len: usize, lone: usize) -> bool {
     let chunks = len.div_ceil(CHUNK_LEN);
     if chunks < 2 || count == 0 || count > MAX_MESSAGES {
         return false;
     }
 
-    // Registers one pass over `jobs` lanes takes: a single register, or whole padded groups.
-    let registers = |jobs: usize| {
-        if jobs <= W {
-            jobs.min(1)
-        } else {
-            jobs.div_ceil(W * G) * G
-        }
+    // Cost of one pass over `jobs` lanes: a lone register, or whole padded groups.
+    let pass = |jobs: usize| match jobs {
+        0 => 0,
+        _ if jobs <= W => lone,
+        _ => jobs.div_ceil(W * G) * G * GROUPED_REGISTER_COST,
     };
 
     // The last chunk holds 1 to 1024 bytes, and at least one block.
@@ -179,14 +191,14 @@ pub(super) fn pays<const W: usize, const G: usize>(count: usize, len: usize) -> 
     let tail_blocks = (len - head * CHUNK_LEN).div_ceil(BLOCK_LEN);
     let last_full = len.is_multiple_of(CHUNK_LEN);
 
-    // Lockstep: every block of a message, plus one parent per chunk but one.
-    let lockstep = count.div_ceil(W) * (head * CHUNK_BLOCKS + tail_blocks + head);
+    // Lockstep: every block of a message, plus one parent per chunk but one, on lone registers.
+    let lockstep = count.div_ceil(W) * (head * CHUNK_BLOCKS + tail_blocks + head) * lone;
 
     // Spreading, phase 1: the chunks of the subtrees in one pass, a short last chunk apart.
     let tree = if last_full { chunks } else { head };
-    let mut spread = registers(count * tree) * CHUNK_BLOCKS;
+    let mut spread = pass(count * tree) * CHUNK_BLOCKS;
     if !last_full {
-        spread += registers(count) * tail_blocks;
+        spread += pass(count) * tail_blocks;
     }
 
     // Phase 2: level `l` of the subtrees holds `tree >> l` parents per message.
@@ -195,12 +207,12 @@ pub(super) fn pays<const W: usize, const G: usize>(count: usize, len: usize) -> 
         if jobs == 0 {
             break;
         }
-        spread += registers(jobs);
+        spread += pass(jobs);
     }
 
     // Phase 3: one fold step per subtree but the seed, all messages together.
     let steps = tree.count_ones() as usize - usize::from(last_full);
-    spread += steps * registers(count);
+    spread += steps * pass(count);
 
     spread < lockstep
 }

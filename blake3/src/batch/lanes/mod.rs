@@ -334,6 +334,17 @@ pub(super) trait Backend<const W: usize>: Word {
     /// Whether the running CPU has this backend's target features.
     fn supported() -> bool;
 
+    /// Cost of one compression on a register that runs alone, in the unit of [`super::spread::pays`].
+    ///
+    /// One register of a full group costs [`super::spread::GROUPED_REGISTER_COST`].
+    ///
+    /// The registers of a group are independent, so their instructions overlap and hide each other's latency.
+    ///
+    /// A register alone has nothing to overlap with, so it takes longer per compression.
+    ///
+    /// Backends with a single group have nothing to gain, and use the grouped cost.
+    const LONE_REGISTER_COST: usize;
+
     /// Transpose one block from each lane into sixteen message words.
     ///
     /// - `rows[l]` is one block of lane `l`.

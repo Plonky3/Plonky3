@@ -120,7 +120,7 @@ unsafe fn hash_many_with<V: Backend<W>, const W: usize, const G: usize>(
     // The messages short of a group leave lanes idle in lockstep.
     //
     // Long enough messages fill those lanes with their own chunks instead.
-    if spread::pays::<W, G>(out.len(), len) {
+    if spread::pays::<W, G>(out.len(), len, V::LONE_REGISTER_COST) {
         // SAFETY: the caller runs this on a CPU with the features of `V`.
         unsafe { V::spread::<G>(mode, &input[full * len..], len, out) };
         return;

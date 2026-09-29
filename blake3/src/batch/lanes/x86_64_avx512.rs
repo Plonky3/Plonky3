@@ -406,6 +406,9 @@ fn store(state: &[__m512i; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
 pub(super) const KERNEL: Kernel = Kernel::new::<__m512i, WIDTH, GROUPS>("AVX-512");
 
 impl Backend<WIDTH> for __m512i {
+    /// A lone register runs about 1.1x slower per compression than one of a pair, on Zen 5.
+    const LONE_REGISTER_COST: usize = 18;
+
     #[inline]
     fn supported() -> bool {
         cpufeatures::new!(has_avx512f, "avx512f");
