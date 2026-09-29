@@ -109,7 +109,7 @@ and the axiom footprint of every theorem, which must be within
 
 ```bash
 { echo 'import P3BabyBear'; echo 'open p3_baby_bear'
-  grep -hE '^theorem ' P3BabyBear/Verification/Proofs/*.lean | awk '{print "#print axioms", $2}'
+  grep -hE '^theorem ' P3BabyBear/Verification/Proofs.lean | awk '{print "#print axioms", $2}'
 } > /tmp/ax.lean
 lake env lean /tmp/ax.lean
 ```

@@ -17,7 +17,7 @@ Measured totals (regenerate with the commands in [`SYNC.md`](SYNC.md)):
 | Pre-extraction patches (Rust source) | **3** files, **17** hunks. Hidden items are behind `cfg(hax_backend_lean)`; the cfg declaration and some redundant bounds are not |
 | Upstream tests diverging under the pre-patches | **0** (6742 run) |
 | Post-extraction patches | **3** files, **17** hunks |
-| Theorems in `P3BabyBear/Verification/Proofs/` | **27** (24 claims, 3 helpers), axiom footprint within `[propext, Classical.choice, Quot.sound]` |
+| Theorems in `P3BabyBear/Verification/Proofs.lean` | **27** (24 claims, 3 helpers), axiom footprint within `[propext, Classical.choice, Quot.sound]` |
 | **`lake build` warnings** | **0** |
 
 There is no `sorry`, no `axiom` and no `native_decide` in anything the build
@@ -196,7 +196,7 @@ certificate), `BabyBear.fieldSize_sub_one_factorization`.
 ## The theorems are not in the TCB
 
 `P3BabyBear/Verification/` is proved, not assumed. What *is* trusted there is
-that each theorem statement under `Verification/Proofs/` says what it is
+that each theorem statement in `Verification/Proofs.lean` says what it is
 meant to say; each theorem is named `<item>.<property>`, after the Rust item.
 
 * The constants, on `baby_bear.BabyBearParameters`: `PRIME.eq_fieldSize`,

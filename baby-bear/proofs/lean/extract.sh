@@ -30,11 +30,11 @@
 # write here too, one library each:
 #
 #   lean/                  <- Lake package root
-#     P3BabyBear.lean        library root: imports Extraction and Verification.ProofObligations
+#     P3BabyBear.lean        library root: imports Extraction and Verification
 #     P3BabyBear/
 #       Extraction/          <- hax, rewritten every run (gitignored)
 #       Assumptions/         <- hand-written, trusted (TCB.md, layer 3)
-#       Verification/        <- hand-written: ProofObligations, Proofs, Proofs/
+#       Verification/        <- hand-written: Proofs, ProofObligations
 #     P3Monty31/ P3Mds/      <- the same, for the scoped dependency extractions
 #     .pristine/             <- the output before post-extraction patches
 #     patches/               <- hand-written diffs, to the Rust and to Extraction/

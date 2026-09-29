@@ -33,7 +33,7 @@ library rooted here, and under each `<Lib>/` there are three tiers:
 ```
 lean/
   extract.sh                   the build: tools → tests → patch → extract → check → patch → lake build
-  P3BabyBear.lean              library root, as hax writes it: imports Extraction and Verification.ProofObligations
+  P3BabyBear.lean              library root: imports Extraction and Verification
   P3BabyBear/
     Extraction.lean            hax: imports Types and Funs
     Extraction/                hax, rewritten every run (gitignored)
@@ -47,12 +47,10 @@ lean/
       P3Monty31.lean             the p3-monty-31 items aeneas drops (new_array, …), built on P3Monty31.Extraction
       P3Poseidon1.lean  P3Poseidon2.lean   stand-ins for p3-poseidon1/2 (constructors opaque)
     Verification/              hand-written
+    Verification.lean          imports Proofs and ProofObligations
+    Verification/              hand-written
+      Proofs.lean                Lean-only specs with their proofs
       ProofObligations.lean      proofs of hax_lib contracts; empty, as the Rust has none yet. Imports Proofs
-      Proofs.lean                imports everything under Proofs/
-      Proofs/                    Lean-only specs with their proofs, one file per Rust item
-        BabyBearParameters.lean    the constants against CompPoly's BabyBear
-        BabyBear.lean              BabyBear::new, new_array, new_2d_array
-        Poseidon1.lean  Poseidon2.lean   the round-constant length assertions
   P3Monty31/                   scoped extraction of the p3-monty-31 items p3-baby-bear uses
     Extraction/                hax (gitignored)
     Assumptions/               hand-written: TypesExternal, FunsExternal, and the stand-ins they import:
@@ -93,7 +91,7 @@ Aeneas + CoreModels
         → P3BabyBear.Assumptions.P3Monty31                    hand-written (+ P3Poseidon1/2)
           → P3BabyBear.Assumptions.TypesExternal              stub (+ P3Mds.Extraction)
             → P3BabyBear.Extraction                           generated
-              → P3BabyBear.Verification.Proofs.* → Proofs → ProofObligations
+              → P3BabyBear.Verification.Proofs → ProofObligations → Verification
                 → P3BabyBear                                  the library root
 ```
 
@@ -102,10 +100,9 @@ Aeneas + CoreModels
 `Verification/` holds two kinds of theorem, which come from different places
 and change for different reasons:
 
-- **`Proofs.lean` and `Proofs/`**: properties stated directly in Lean, with
-  no Rust counterpart. Each theorem is its own specification: the statement is
-  the claim and the proof follows it. There is one file per Rust item, and
-  `Proofs.lean` is the import list. Theorems are named `<item>.<property>`
+- **`Proofs.lean`**: properties stated directly in Lean, with no Rust
+  counterpart. Each theorem is its own specification: the statement is the
+  claim and the proof follows it. Theorems are named `<item>.<property>`
   after the Rust item: `BabyBearParameters::PRIME` is
   `baby_bear.BabyBearParameters.PRIME`, so its claims are
   `baby_bear.BabyBearParameters.PRIME.eq_fieldSize`, `….is_prime`, …, and
@@ -120,8 +117,8 @@ obligations in `P3BabyBear/Extraction/ProofObligations.lean`; their proofs go
 in `Verification/ProofObligations.lean`, one `<fn>.spec.proof` each and
 nothing else, so the two files can be diffed after each extraction. It
 imports `Proofs.lean`, so contract proofs can reuse the hand-written
-theorems; nothing under `Proofs/` depends on the contracts. Nothing under
-`Proofs/` uses the three reserved names, nor `<def>.eq_<n>`, which Lean
+theorems; nothing in `Proofs.lean` depends on the contracts. Nothing in
+`Proofs.lean` uses the three reserved names, nor `<def>.eq_<n>`, which Lean
 reserves for equation lemmas.
 
 ## Navigating the extraction from the Rust
@@ -188,7 +185,7 @@ are erased; `&mut` becomes a returned updated value (see
 function).
 
 Generated constants are `@[irreducible]`: to compute with one in a proof,
-`unfold` it by name (`Verification/Proofs/Poseidon2.lean` shows how).
+`unfold` it by name (`Verification/Proofs.lean` shows how).
 
 ### Where the dependency code lives
 

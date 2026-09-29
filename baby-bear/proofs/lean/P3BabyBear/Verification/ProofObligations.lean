@@ -9,7 +9,7 @@ imports), and regenerates a `sorry` template of the obligations in
 1:1 answer to that template, one `<fn>.spec.proof` per contract, and should
 contain nothing else. hax never modifies anything under `Verification/`.
 
-Hand-written properties live in `Proofs.lean` / `Proofs/`, which this file
+Hand-written properties live in `Proofs.lean`, which this file
 imports so that contract proofs can use them. -/
 import P3BabyBear.Extraction
 import P3BabyBear.Verification.Proofs
