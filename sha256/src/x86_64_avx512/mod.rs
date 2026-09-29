@@ -216,11 +216,12 @@ pub(crate) unsafe fn hash_many(input: &[u8], out: &mut [[u8; 32]], sha_ni: bool)
 /// # Safety
 ///
 /// The running CPU has SHA-NI and SSE4.1 when `four_streams` holds.
-///
-/// # Panics
-///
-/// Panics if `out` is empty.
 unsafe fn hash_serial(messages: &[u8], out: &mut [[u8; 32]], four_streams: bool) {
+    // An empty batch has nothing to hash, and would divide by zero below.
+    if out.is_empty() {
+        return;
+    }
+
     if four_streams {
         // SAFETY: the caller vouches for SHA-NI and SSE4.1.
         unsafe { x86_64_sha_ni::hash_many(messages, out) };
