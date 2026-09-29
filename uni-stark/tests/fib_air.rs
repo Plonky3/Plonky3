@@ -639,6 +639,34 @@ fn test_degree_bits_below_circle_pcs_minimum_rejected() {
 }
 
 #[test]
+fn test_degree_bits_at_circle_pcs_maximum_rejected() {
+    // The circle PCS accepts trace heights up to 2^30, but the quotient domain of such a
+    // trace would need a point of order 2^32, which the circle group over Mersenne31 lacks.
+    // The verifier derives that domain from the claimed height, so it must refuse the claim
+    // instead of asking for the point.
+    let config = make_circle_config();
+    let air = CirclePeriodicProductAir {
+        column: vec![CircleVal::TWO, CircleVal::from_u32(3)],
+        degree: 3,
+    };
+    let trace = RowMajorMatrix::new_col((0..4).map(|i| air.column[i % 2].exp_u64(3)).collect());
+    let mut proof = prove(&config, &air, trace, &[]).unwrap();
+
+    proof.degree_bits = 30;
+    let err = verify(&config, &air, &proof, &[])
+        .expect_err("a quotient domain beyond the circle group must be rejected");
+    match err {
+        p3_uni_stark::VerificationError::InvalidProofShape(
+            InvalidProofShapeError::QuotientDomainTooLarge { air, maximum, .. },
+        ) => {
+            assert_eq!(air, None);
+            assert_eq!(maximum, 30);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+}
+
+#[test]
 fn verify_two_adic_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let (config, air, pis, _) = two_adic_compat_case();
     let proof_bytes = read_fixture(TWO_ADIC_FIXTURE)

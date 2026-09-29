@@ -178,11 +178,17 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         }
         let log_n = log2_ceil_usize(min_size);
         // Any standard position coset that is not the same size as us will be disjoint.
-        Some(Self::standard(if log_n == self.log_n {
+        let log_n = if log_n == self.log_n {
             log_n + 1
         } else {
             log_n
-        }))
+        };
+        // `standard(log_n)` needs a point of order `2^(log_n + 1)`, which the circle group may
+        // not have. The verifier sizes this domain from a claimed height, so report it.
+        if log_n >= F::CIRCLE_TWO_ADICITY {
+            return None;
+        }
+        Some(Self::standard(log_n))
     }
 
     /// Decompose a domain into disjoint twin-cosets.
@@ -392,6 +398,21 @@ mod tests {
 
     use super::*;
     use crate::CircleEvaluations;
+
+    #[test]
+    fn disjoint_domain_beyond_the_circle_group_is_none() {
+        let top = Mersenne31::CIRCLE_TWO_ADICITY;
+        // The largest standard domain still has a disjoint neighbour below it.
+        let largest = CircleDomain::<Mersenne31>::standard(top - 1);
+        assert_eq!(
+            largest.try_create_disjoint_domain(1 << (top - 2)),
+            Some(CircleDomain::standard(top - 2))
+        );
+        // A same-size or larger request needs a standard domain of size 2^top, which has no
+        // generator in the circle group.
+        assert_eq!(largest.try_create_disjoint_domain(1 << (top - 1)), None);
+        assert_eq!(largest.try_create_disjoint_domain(1 << top), None);
+    }
 
     fn assert_is_twin_coset<F: ComplexExtendable>(d: CircleDomain<F>) {
         let pts = d.points().collect_vec();

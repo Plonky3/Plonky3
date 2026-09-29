@@ -1816,6 +1816,67 @@ fn test_batch_degree_bits_below_circle_pcs_minimum_rejected() {
     }
 }
 
+#[test]
+fn test_batch_degree_bits_at_circle_pcs_maximum_rejected() {
+    // The circle PCS accepts trace heights up to 2^30, but the quotient domain of such a
+    // trace would need a point of order 2^32, which the circle group over Mersenne31 lacks.
+    // The verifier derives that domain from the claimed height, so it must refuse the claim
+    // instead of asking for the point.
+    let config = make_circle_config();
+    let airs = vec![
+        FibonacciAir {
+            log_height: 0,
+            tamper_index: None,
+        },
+        FibonacciAir {
+            log_height: 0,
+            tamper_index: None,
+        },
+    ];
+    let pis0 = vec![
+        CircleVal::from_u64(0),
+        CircleVal::from_u64(1),
+        CircleVal::from_u64(fib_n(8)),
+    ];
+    let pis1 = vec![
+        CircleVal::from_u64(0),
+        CircleVal::from_u64(1),
+        CircleVal::from_u64(fib_n(4)),
+    ];
+    let trace0 = fib_trace::<CircleVal>(0, 1, 8);
+    let trace1 = fib_trace::<CircleVal>(0, 1, 4);
+    let instances = vec![
+        StarkInstance {
+            air: &airs[0],
+            trace: &trace0,
+            public_values: pis0.clone(),
+        },
+        StarkInstance {
+            air: &airs[1],
+            trace: &trace1,
+            public_values: pis1.clone(),
+        },
+    ];
+
+    let prover_data = ProverData::empty(airs.len());
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    let public_values = vec![pis0, pis1];
+
+    proof.degree_bits[1] = 30;
+    let err = verify_batch(&config, &airs, &proof, &public_values, common)
+        .expect_err("a quotient domain beyond the circle group must be rejected");
+    match err {
+        BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+            InvalidProofShapeError::QuotientDomainTooLarge { air, maximum, .. },
+        )) => {
+            assert_eq!(air, Some(1));
+            assert_eq!(maximum, 30);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
 #[derive(Clone)]
 struct NonlinearTransitionAir {
     degree_hint: Option<usize>,
