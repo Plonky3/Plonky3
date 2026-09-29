@@ -23,12 +23,13 @@
 //!
 //! No address or branch depends on `x`, so the product stays constant time.
 
+#[cfg(target_feature = "sha3")]
+use core::arch::aarch64::veor3q_u64;
 use core::arch::aarch64::{
-    uint64x2_t, vandq_u64, vdupq_n_u64, veorq_u64, vgetq_lane_u64, vld1q_u64, vtstq_u64,
+    vandq_u64, vdupq_n_u64, veorq_u64, vgetq_lane_u64, vld1q_u64, vtstq_u64,
 };
 
 use crate::clmul::gf64::repeated_square;
-use crate::clmul::wide::Lanes64;
 
 /// Pairs of columns in the matrix.
 const PAIRS: usize = 32;
@@ -73,7 +74,9 @@ pub(crate) fn square_times<const K: usize>(x: u64) -> u64 {
     // A reference in a constant is promoted to a static, so the table is never copied.
     let columns: &'static [[u64; 2]; PAIRS] = const { &Columns::<K>::NEW.0 };
 
-    // SAFETY: this module compiles only with `aes`, which implies `neon`.
+    // SAFETY: this module compiles only with `neon`, which every intrinsic below requires.
+    //
+    // `EOR3` compiles only under `sha3`, the feature it requires.
     //
     // Every load reads one whole row of a constant table.
     unsafe {
@@ -89,7 +92,7 @@ pub(crate) fn square_times<const K: usize>(x: u64) -> u64 {
         // Four partial sums in named registers.
         //
         // An array indexed by the loop counter would live in memory instead.
-        let zero = uint64x2_t::zero();
+        let zero = vdupq_n_u64(0);
         let (mut a, mut b, mut c, mut d) = (zero, zero, zero, zero);
         for (bits, column) in BITS
             .as_chunks::<CHAINS>()
@@ -104,7 +107,10 @@ pub(crate) fn square_times<const K: usize>(x: u64) -> u64 {
         }
 
         // The even columns summed in one quadword, the odd columns in the other.
-        let sum = a.xor3(b, c).xor(d);
+        #[cfg(target_feature = "sha3")]
+        let sum = veorq_u64(veor3q_u64(a, b, c), d);
+        #[cfg(not(target_feature = "sha3"))]
+        let sum = veorq_u64(veorq_u64(a, b), veorq_u64(c, d));
         vgetq_lane_u64::<0>(sum) ^ vgetq_lane_u64::<1>(sum)
     }
 }

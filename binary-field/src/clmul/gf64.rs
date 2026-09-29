@@ -165,7 +165,7 @@ fn composed_dot_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
         all(
             target_arch = "aarch64",
             target_endian = "little",
-            target_feature = "aes"
+            target_feature = "neon"
         ),
     )),
     allow(dead_code)
@@ -197,7 +197,7 @@ const fn spread_32(v: u64) -> u64 {
         all(
             target_arch = "aarch64",
             target_endian = "little",
-            target_feature = "aes"
+            target_feature = "neon"
         ),
     )),
     allow(dead_code)
@@ -213,12 +213,22 @@ pub(super) const fn repeated_square(mut x: u64, k: usize) -> u64 {
     x
 }
 
+/// The longest run that plain `PMULL` squarings finish sooner than the bit matrix.
+///
+/// The inversion chain takes two runs of this length, and four longer ones.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "neon"
+))]
+const SHORT_RUN: usize = 3;
+
 /// Squaring repeated a fixed number of times.
 ///
 /// Squaring is `F_2`-linear, so the whole power is one fixed bit matrix.
 ///
 /// - With `GFNI`, that matrix is eight affine products.
-/// - On AArch64, it is 64 masked columns summed by exclusive or.
+/// - On AArch64, it is 64 masked columns summed by exclusive or, except for the shortest runs.
 /// - Otherwise it is `K` dependent squarings.
 #[inline]
 fn square_times<const K: usize>(x: u64) -> u64 {
@@ -237,9 +247,16 @@ fn square_times<const K: usize>(x: u64) -> u64 {
     #[cfg(all(
         target_arch = "aarch64",
         target_endian = "little",
-        target_feature = "aes"
+        target_feature = "neon"
     ))]
     {
+        // Three `PMULL` squarings finish before the matrix does.
+        //
+        // Without `aes` a squaring is software, and the matrix wins at every K.
+        if cfg!(target_feature = "aes") && K <= SHORT_RUN {
+            return (0..K).fold(x, |y, _| poly_square_64(y));
+        }
+
         // Thirty-two masked register pairs, for any K.
         super::aarch64::square_times::<K>(x)
     }
@@ -255,7 +272,7 @@ fn square_times<const K: usize>(x: u64) -> u64 {
         all(
             target_arch = "aarch64",
             target_endian = "little",
-            target_feature = "aes"
+            target_feature = "neon"
         ),
     )))]
     {

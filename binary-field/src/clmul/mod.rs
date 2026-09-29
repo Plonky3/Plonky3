@@ -113,10 +113,11 @@ pub(crate) use basis::{
 use crate::BinaryField64;
 use crate::tower::TowerLevel;
 
+// NEON alone runs the bit-matrix squaring, and `aes` adds the carryless multiply.
 #[cfg(all(
     target_arch = "aarch64",
     target_endian = "little",
-    target_feature = "aes"
+    target_feature = "neon"
 ))]
 mod aarch64;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]

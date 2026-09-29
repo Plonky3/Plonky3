@@ -1,11 +1,19 @@
-//! The `PMULL` backend, which lives under the `aes` target feature on little-endian AArch64.
+//! The NEON backend on little-endian AArch64.
+//!
+//! The bit-matrix squaring needs only `neon`.
+//!
+//! Everything built on `PMULL` lives under the `aes` target feature.
 
+#[cfg(target_feature = "aes")]
 use core::arch::aarch64::vmull_p64;
 
+#[cfg(target_feature = "aes")]
 mod ghash;
+#[cfg(target_feature = "aes")]
 mod lanes;
 mod square;
 
+#[cfg(target_feature = "aes")]
 pub(crate) use ghash::{
     SplitMultiplier, poly_add_128, poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128,
 };
@@ -26,9 +34,10 @@ const _: () = assert!(
 /// `PMULL` accumulates `b << i` for every set bit `i` of `a`.
 ///
 /// Bit `j` of the result is therefore the coefficient of `x^j`.
+#[cfg(target_feature = "aes")]
 #[inline]
 pub(super) fn clmul_64x64(a: u64, b: u64) -> u128 {
-    // SAFETY: this module is compiled only when `target_feature = "aes"` is enabled.
+    // SAFETY: this function is compiled only when `target_feature = "aes"` is enabled.
     //
     // `aes` implies `neon`, and together they are what the carryless multiply requires.
     unsafe { vmull_p64(a, b) }

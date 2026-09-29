@@ -6,7 +6,9 @@
 //!
 //! A product is two carryless multiplies per 128-bit lane, one per quadword parity.
 //!
-//! The reduction is shifts and one byte shuffle, so it never competes for the multiplier.
+//! On `x86_64` the reduction is shifts and one byte shuffle, so it never competes for the multiplier.
+//!
+//! On AArch64 it is two carryless multiplies by the modulus tail, as cheap there as an exclusive or.
 
 use core::iter::{Product, Sum};
 use core::mem::transmute;

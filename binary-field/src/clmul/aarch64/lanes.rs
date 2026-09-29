@@ -6,15 +6,14 @@
 use core::arch::aarch64::veor3q_u64;
 use core::arch::aarch64::{
     uint64x2_t, vcombine_u64, vcreate_u64, vdupq_laneq_u64, vdupq_n_u64, veorq_u64, vextq_u64,
-    vgetq_lane_u64, vld1q_dup_u64, vld1q_u8, vld1q_u64, vmull_high_p64, vmull_p64, vqtbl1q_u8,
-    vreinterpretq_p64_u64, vreinterpretq_u8_u64, vreinterpretq_u64_u8, vshlq_n_u64, vshrq_n_u64,
-    vst1q_lane_u64, vst1q_u64, vzip1q_u64, vzip2q_u64,
+    vgetq_lane_u64, vld1q_dup_u64, vld1q_u64, vmull_high_p64, vmull_p64, vreinterpretq_p64_u64,
+    vshlq_n_u64, vshrq_n_u64, vst1q_lane_u64, vst1q_u64, vzip1q_u64, vzip2q_u64,
 };
 use core::mem::transmute;
 
 use crate::clmul::register::Register128;
 use crate::clmul::wide::{
-    HIGH_BY_HIGH, HIGH_BY_LOW, LOW_BY_LOW, Lanes64, TAIL_64, TOP_NIBBLE_FOLD, reduce_by_multiply,
+    HIGH_BY_HIGH, HIGH_BY_LOW, LOW_BY_LOW, Lanes64, TAIL_64, reduce_by_multiply,
 };
 
 // SAFETY for every method below: this module is compiled only when `aes` is enabled.
@@ -84,18 +83,6 @@ impl Lanes64 for uint64x2_t {
     #[inline(always)]
     fn shr<const N: i32>(self) -> Self {
         unsafe { vshrq_n_u64::<N>(self) }
-    }
-
-    // One `TBL` where the shift form takes nine instructions.
-    #[inline(always)]
-    fn fold_top_nibble(self) -> Self {
-        // The nibble lands in the low byte of each quadword, and every other byte is zero.
-        //
-        // Entry zero of the table is zero, so those bytes look up nothing.
-        unsafe {
-            let table = vld1q_u8(TOP_NIBBLE_FOLD.as_ptr());
-            vreinterpretq_u64_u8(vqtbl1q_u8(table, vreinterpretq_u8_u64(self.shr::<60>())))
-        }
     }
 
     // Apple cores issue `PMULL` on every vector pipe, as cheaply as an exclusive or.

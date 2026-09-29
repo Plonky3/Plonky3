@@ -25,7 +25,11 @@
 //!     high     = [ hi(a_0 b_0) hi(a_1 b_1) | ... ]
 //! ```
 //!
-//! Reduction then acts on 64-bit lanes, with shifts and a byte shuffle and no multiply at all.
+//! Reduction then acts on 64-bit lanes.
+//!
+//! By default it is shifts and a byte shuffle, with no multiply at all.
+//!
+//! A backend whose multiplier is as cheap as an exclusive or folds by two multiplies instead.
 
 // The cubic kernels and the byte table serve only the packings and the byte-shuffle backends.
 //
