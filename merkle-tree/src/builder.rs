@@ -347,7 +347,7 @@ where
         //
         // One block then finishes them, cheaper than a dispatch per remaining layer.
         //
-        // Wide rows break that rule: a few blocks of them still beat one thread.
+        // Wide rows break that rule once their bytes clear the pool's own gate.
         //
         //     256 rows of 64 KiB, 32 lanes, 32 threads  ->  8 blocks, not 1
         if blocks == 1 || (blocks < threads && !self.rows_worth_splitting(lo)) {
@@ -368,17 +368,29 @@ where
     ///
     /// That rate is what the fastest vectorized byte hashes cost.
     ///
-    /// A slower hash is priced low, which errs toward keeping a small layer on one thread.
+    /// A slower hash is priced low, so it splits later than its true cost would allow.
+    ///
+    /// The gate is calibrated on flat loops, and splitting a tree costs more than their dispatch.
+    ///
+    /// Just above the gate, a split can lose on x86, as measured with BLAKE3 on 32 Zen 5 threads:
+    ///
+    /// - 128 rows of 2 KiB: 19 us on one block, 35 us on eight.
+    /// - The same eight blocks break even near 512 KiB, and win 1.3x to 2.3x from 768 KiB up.
+    ///
+    /// Graviton wins 1.7x to 3x on the same small trees, so the gate is kept rather than raised.
     fn rows_worth_splitting(&self, lo: usize) -> bool {
-        // Every row still to hash, the leaves and each later injection alike.
-        let elements: usize = self.layers[lo..]
+        // One item per byte, so the pool's own gate decides.
+        should_split(self.row_bytes(lo), 1)
+    }
+
+    /// Bytes of every row still to hash from a layer up, the leaves and each later injection alike.
+    fn row_bytes(&self, lo: usize) -> usize {
+        self.layers[lo..]
             .iter()
             .flat_map(|layer| &layer.matrices)
             .map(|m| m.height() * m.width())
-            .sum();
-
-        // One item per byte, so the pool's own gate decides.
-        should_split(elements.saturating_mul(size_of::<P::Value>()), 1)
+            .sum::<usize>()
+            .saturating_mul(size_of::<P::Value>())
     }
 
     /// Build a band of layers as independent subtree blocks, one task each.
@@ -1304,11 +1316,15 @@ mod tests {
     fn wide_rows_split_below_one_block_per_thread() {
         // Invariant: rows worth spreading get one block per full vector group, whatever the pool.
         //
-        // Invariant: narrow rows that leave a thread idle stay on one block.
+        // Invariant: rows not worth spreading, on a pool wider than the groups, stay on one block.
+        //
+        // Invariant: wider rows are never priced below narrower ones.
+        //
+        // The budget overrides move the gate, so the expected count reads the gate back.
         //
         // Fixture state: 2, 3 and 16 groups of rows, 2 MiB of them in total, or 4 bytes each.
         //
-        //     2 groups x 16 rows, 2 MiB   ->  2 blocks
+        //     2 groups x 16 rows, 2 MiB   ->  2 blocks under the default gate
         //     2 groups x 16 rows x 4 B    ->  1 block on a pool of 3 or more
         let mut rng = SmallRng::seed_from_u64(6);
         let perm = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
@@ -1324,20 +1340,66 @@ mod tests {
         for groups in [2usize, 3, BLOCKS_PER_THREAD] {
             let rows = groups * group;
 
-            // Wide rows: the leaf pass splits at every group, below the cap of 16 per thread.
-            //
-            // Two mebibytes in total clear the gate of any pool below a few hundred workers.
-            let width = (2 << 20) / size_of::<F>() / rows;
-            let wide = [RowMajorMatrix::<F>::new(vec![F::ZERO; rows * width], width)];
-            let (blocks, _) = Builder::new(&h, &c, &wide).pass_shape(0);
-            assert_eq!(blocks, groups, "{groups} groups of wide rows");
-
-            // Narrow rows: too cheap to spread, so a pool wider than the groups keeps one block.
+            // Wide rows fill 2 MiB, narrow rows hold one element each.
+            let wide_width = (2 << 20) / size_of::<F>() / rows;
+            let wide = [RowMajorMatrix::<F>::new(
+                vec![F::ZERO; rows * wide_width],
+                wide_width,
+            )];
             let narrow = [RowMajorMatrix::<F>::new(vec![F::ZERO; rows], 1)];
-            let (blocks, _) = Builder::new(&h, &c, &narrow).pass_shape(0);
-            if threads > groups {
-                assert_eq!(blocks, 1, "{groups} groups of narrow rows");
+            let wide = Builder::new(&h, &c, &wide);
+            let narrow = Builder::new(&h, &c, &narrow);
+
+            // Pricing grows with the bytes, so narrow rows worth splitting imply wide ones are.
+            if narrow.rows_worth_splitting(0) {
+                assert!(wide.rows_worth_splitting(0), "{groups} groups");
             }
+
+            // Every group is a block, unless a thread would idle over rows not worth splitting.
+            for (name, builder) in [("wide", &wide), ("narrow", &narrow)] {
+                let expected = if groups < threads && !builder.rows_worth_splitting(0) {
+                    1
+                } else {
+                    groups
+                };
+                let (blocks, _) = builder.pass_shape(0);
+                assert_eq!(blocks, expected, "{groups} groups of {name} rows");
+            }
+        }
+    }
+
+    #[test]
+    fn row_bytes_count_every_later_injection() {
+        // Invariant: a layer prices its own rows and every injection above it, in bytes.
+        //
+        // Invariant: rows injected below the layer are left out.
+        //
+        // Fixture state: leaves of height 64, injections of height 32 and 16, widths 3, 5 and 7.
+        //
+        //     from layer 0  ->  (64 * 3 + 32 * 5 + 16 * 7) * 4 bytes
+        //     from layer 1  ->  (32 * 5 + 16 * 7) * 4 bytes
+        //     from layer 2  ->  16 * 7 * 4 bytes
+        //     from layer 3  ->  0
+        let mut rng = SmallRng::seed_from_u64(7);
+        let perm = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        type Sponge = PaddingFreeSponge<Poseidon2BabyBear<16>, 16, 8, 8>;
+        type Compress = TruncatedPermutation<Poseidon2BabyBear<16>, 2, 8, 16>;
+        type Builder<'a> =
+            TreeBuilder<'a, Packed, Packed, Sponge, Compress, RowMajorMatrix<F>, 2, 8>;
+        let h = Sponge::new(perm.clone());
+        let c = Compress::new(perm);
+        let matrices = [(64, 3), (32, 5), (16, 7)]
+            .map(|(height, width)| RowMajorMatrix::<F>::new(vec![F::ZERO; height * width], width));
+        let builder = Builder::new(&h, &c, &matrices);
+
+        // Each matrix lands on its own layer, so each layer up drops one matrix.
+        let elements = [64 * 3 + 32 * 5 + 16 * 7, 32 * 5 + 16 * 7, 16 * 7, 0];
+        for (lo, elements) in elements.into_iter().enumerate() {
+            assert_eq!(
+                builder.row_bytes(lo),
+                elements * size_of::<F>(),
+                "layer {lo}"
+            );
         }
     }
 
