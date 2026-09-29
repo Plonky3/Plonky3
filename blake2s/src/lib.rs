@@ -1,6 +1,6 @@
 //! The BLAKE2s hash function of RFC 7693, with a batched path for many messages at once.
 //!
-//! One message at a time, this wraps RustCrypto's `blake2`.
+//! One message runs on the general-purpose registers, four independent G chains at a time.
 //!
 //! Many equal-length messages share their block count, byte counter and final-block flag.
 //!
@@ -29,9 +29,9 @@ mod tests;
     path = "scalar.rs"
 )]
 mod batch;
+mod params;
+mod single;
 
-use blake2::digest::consts::U32;
-use blake2::{Blake2s, Digest};
 use p3_symmetric::CryptographicHasher;
 
 /// Messages one batched compression advances at once.
@@ -53,7 +53,7 @@ impl Blake2s256 {
     /// Hash one contiguous message.
     #[inline]
     pub fn hash(message: &[u8]) -> [u8; DIGEST_BYTES] {
-        Blake2s::<U32>::digest(message).into()
+        single::hash(message)
     }
 }
 
@@ -65,20 +65,33 @@ impl CryptographicHasher<u8, [u8; DIGEST_BYTES]> for Blake2s256 {
         I: IntoIterator<Item = u8>,
     {
         const BUFLEN: usize = 512; // Tweakable parameter; determined by experiment
-        let mut hasher = Blake2s::<U32>::new();
+        let mut hasher = single::Hasher::new();
         p3_util::apply_to_chunks::<BUFLEN, _, _>(input, |buf| hasher.update(buf));
-        hasher.finalize().into()
+        hasher.finalize()
     }
 
     fn hash_iter_slices<'a, I>(&self, input: I) -> [u8; DIGEST_BYTES]
     where
         I: IntoIterator<Item = &'a [u8]>,
     {
-        let mut hasher = Blake2s::<U32>::new();
-        for slice in input {
+        // A message given in one piece skips the streaming state.
+        let mut slices = input.into_iter();
+        let Some(first) = slices.next() else {
+            return single::hash(&[]);
+        };
+        let Some(second) = slices.next() else {
+            return single::hash(first);
+        };
+
+        let mut hasher = single::Hasher::new();
+        for slice in [first, second].into_iter().chain(slices) {
             hasher.update(slice);
         }
-        hasher.finalize().into()
+        hasher.finalize()
+    }
+
+    fn hash_slice(&self, input: &[u8]) -> [u8; DIGEST_BYTES] {
+        single::hash(input)
     }
 
     /// Hash equal-length messages laid end to end, several of them per compression.

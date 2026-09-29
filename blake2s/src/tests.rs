@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use blake2::digest::consts::U32;
 use blake2::{Blake2s, Digest};
 use hex_literal::hex;
-use p3_symmetric::CryptographicHasher;
+use p3_symmetric::{CompressionFunctionFromHasher, CryptographicHasher, PseudoCompressionFunction};
 use proptest::prelude::*;
 
 use crate::{Blake2s256, DIGEST_BYTES, LANES};
@@ -179,8 +179,95 @@ fn a_ragged_batch_is_rejected() {
     Blake2s256.hash_many(&fixture(10), &mut digests);
 }
 
+/// The official unkeyed BLAKE2s-256 vectors: digest `n` is of the bytes 0, 1, ..., n - 1.
+const KAT: &str = include_str!("../testdata/blake2s-kat.txt");
+
+/// Parse one lowercase hex digest.
+fn from_hex(line: &str) -> [u8; DIGEST_BYTES] {
+    core::array::from_fn(|i| u8::from_str_radix(&line[2 * i..][..2], 16).unwrap())
+}
+
+#[test]
+fn the_official_vectors_match_on_every_path() {
+    // Invariant: every one-message path gives the reference digest of the official vectors.
+    //
+    // Fixture state: 256 vectors, messages 0 to 255 bytes long, crossing four block boundaries.
+    let digests: Vec<_> = KAT
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .map(from_hex)
+        .collect();
+    assert_eq!(digests.len(), 256);
+    for (n, expected) in digests.iter().enumerate() {
+        let message: Vec<u8> = (0..n as u8).collect();
+        assert_eq!(&Blake2s256::hash(&message), expected, "{n} bytes");
+        assert_eq!(&Blake2s256.hash_slice(&message), expected, "{n} bytes");
+        assert_eq!(
+            &Blake2s256.hash_iter(message.iter().copied()),
+            expected,
+            "{n} bytes"
+        );
+
+        // One byte per piece: the streaming state must hold back every block boundary.
+        assert_eq!(
+            &Blake2s256.hash_iter_slices(message.chunks(1)),
+            expected,
+            "{n} bytes"
+        );
+    }
+}
+
+#[test]
+fn every_length_matches_the_blake2_crate() {
+    // Invariant: the one-message path agrees with the reference at every length.
+    //
+    // Fixture state: 0 to 1100 bytes, seventeen block boundaries and every tail length.
+    for len in 0..=1100 {
+        let message = fixture(len);
+        assert_eq!(
+            Blake2s256::hash(&message),
+            reference(&message),
+            "{len} bytes"
+        );
+        assert_eq!(
+            Blake2s256.hash_iter(message.iter().copied()),
+            reference(&message),
+            "{len} bytes"
+        );
+    }
+}
+
+#[test]
+fn a_two_to_one_node_matches_the_blake2_crate() {
+    // A Merkle node: two 32-byte children hashed as one 64-byte message.
+    let compress = CompressionFunctionFromHasher::<_, 2, 32>::new(Blake2s256);
+    let message = fixture(64);
+    let children: [[u8; 32]; 2] = [
+        message[..32].try_into().unwrap(),
+        message[32..].try_into().unwrap(),
+    ];
+    assert_eq!(compress.compress(children), reference(&message));
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn any_split_of_a_message_hashes_the_same(
+        message in prop::collection::vec(any::<u8>(), 0..1100),
+        cuts in prop::collection::vec(0usize..1100, 0..8),
+    ) {
+        // Cut the message at random places, including empty pieces and cuts on block boundaries.
+        let mut cuts: Vec<usize> = cuts.into_iter().map(|c| c.min(message.len())).collect();
+        cuts.sort_unstable();
+        let mut pieces = Vec::new();
+        let mut start = 0;
+        for cut in cuts.into_iter().chain([message.len()]) {
+            pieces.push(&message[start..cut]);
+            start = cut;
+        }
+        prop_assert_eq!(Blake2s256.hash_iter_slices(pieces), reference(&message));
+    }
 
     #[test]
     fn any_message_matches_the_blake2_crate(message in prop::collection::vec(any::<u8>(), 0..300)) {
