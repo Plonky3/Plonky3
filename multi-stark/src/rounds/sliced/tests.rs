@@ -2525,6 +2525,12 @@ where
         + for<'b> Air<SlicedQuadraticFolder<'b, Tower, Ghash128>>,
 {
     let no_publics: &[Tower] = &[];
+    let kernel = cfg!(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ));
     let mut invalid = honest.clone();
     invalid.values[3] ^= 1 << 17;
     for trace in [honest, invalid] {
@@ -2535,7 +2541,14 @@ where
             &[None],
             &[&main],
             no_lookups(),
-            |state, _| assert_infinity_rounds_match(&state),
+            |state, _| {
+                assert_eq!(
+                    PreparedPowers::per_air_bits(&state.alpha_powers)[0].is_some(),
+                    kernel,
+                    "the hash AIR should take the bit kernel exactly where the target has one"
+                );
+                assert_infinity_rounds_match(&state);
+            },
         );
     }
 }

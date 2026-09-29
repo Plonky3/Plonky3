@@ -3,7 +3,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
 use core::marker::PhantomData;
-use core::ops::Deref;
+use core::ops::{Deref, Range};
 
 use p3_field::{
     ExtensionField, Field, PackedValue, par_scale_slice_in_place, scale_slice_in_place_single_core,
@@ -477,6 +477,15 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
                 .borrow()
                 .get_unchecked(r * self.width + start..r * self.width + end)
         }
+    }
+
+    #[inline]
+    fn contiguous_rows(&self, rows: Range<usize>) -> Option<impl Deref<Target = [T]>> {
+        // Row-major storage keeps every run of rows adjacent.
+        //
+        // Rows start..end sit at elements start * width .. end * width.
+        (rows.start <= rows.end && rows.end <= self.height())
+            .then(|| &self.values.borrow()[rows.start * self.width..rows.end * self.width])
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
@@ -965,6 +974,68 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
+
+    #[test]
+    fn contiguous_rows_reads_the_backing_storage() {
+        // Fixture state: 4 rows of width 3.
+        //
+        //     row 0: [ 0  1  2 ]
+        //     row 1: [ 3  4  5 ]
+        //     row 2: [ 6  7  8 ]
+        //     row 3: [ 9 10 11 ]
+        let matrix = RowMajorMatrix::new((0..12).collect::<Vec<u32>>(), 3);
+
+        // A run in the middle is the flat slice of its rows, borrowed from the storage.
+        let rows = matrix.contiguous_rows(1..3).unwrap();
+        assert_eq!(&*rows, &[3, 4, 5, 6, 7, 8]);
+        assert_eq!(rows.as_ptr(), matrix.values[3..].as_ptr());
+
+        // The full range, and empty ranges at both ends, are all in bounds.
+        assert_eq!(&*matrix.contiguous_rows(0..4).unwrap(), &matrix.values[..]);
+        assert!(matrix.contiguous_rows(0..0).unwrap().is_empty());
+        assert!(matrix.contiguous_rows(4..4).unwrap().is_empty());
+
+        // Past the last row, or reversed, there is no run to return.
+        assert!(matrix.contiguous_rows(3..5).is_none());
+        assert!(matrix.contiguous_rows(5..5).is_none());
+        #[allow(clippy::reversed_empty_ranges)]
+        let reversed = 3..1;
+        assert!(matrix.contiguous_rows(reversed).is_none());
+    }
+
+    #[test]
+    fn contiguous_rows_of_a_view_is_relative_to_the_view() {
+        // A view starting at row 2 counts its rows from there.
+        //
+        //     storage: [ r0 | r1 | r2 | r3 ]
+        //     view:              [ r2 | r3 ]
+        let matrix = RowMajorMatrix::new((0..8).collect::<Vec<u32>>(), 2);
+        let (_, bottom) = matrix.split_rows(2);
+        assert_eq!(&*bottom.contiguous_rows(0..2).unwrap(), &[4, 5, 6, 7]);
+        assert!(bottom.contiguous_rows(0..3).is_none());
+    }
+
+    #[test]
+    fn views_that_reorder_rows_report_no_run() {
+        // A reindexed view shows the same rows through an index map.
+        //
+        // Even a stride of one does not promise adjacency, so the answer stays empty.
+        let matrix = RowMajorMatrix::new((0..8).collect::<Vec<u32>>(), 2);
+        assert!(
+            matrix
+                .as_view()
+                .vertically_strided(1, 0)
+                .contiguous_rows(0..4)
+                .is_none()
+        );
+        assert!(
+            matrix
+                .as_view()
+                .vertically_strided(2, 0)
+                .contiguous_rows(0..2)
+                .is_none()
+        );
+    }
 
     #[test]
     fn test_new() {

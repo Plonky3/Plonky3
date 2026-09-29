@@ -48,7 +48,7 @@ use super::{
 };
 use crate::rounds::{AirSlot, rows_per_task};
 use crate::selectors::BoundaryEvals;
-use crate::sliced::{BitLaneSums, SLICED_CELLS, SlicedBit, SlicedQuadraticFolder};
+use crate::sliced::{BitLaneSums, PreparedPowers, SLICED_CELLS, SlicedBit, SlicedQuadraticFolder};
 
 /// Variables the tensor spans: three prefix variables, then the active variable `t`.
 const DEPTH: usize = 4;
@@ -69,6 +69,8 @@ struct InfinityTensor<'a, 'air, A, F, R> {
     public_values: &'a [&'a [F]],
     /// Descending alpha powers of each AIR, in the accumulation field.
     alpha_powers: &'a [Vec<R>],
+    /// The same powers laid out for the single-plane kernel, where the target has one.
+    prepared_powers: Vec<Option<PreparedPowers<R>>>,
     /// The corners of every prefix, in prefix-index order.
     prefixes: Vec<Vec<usize>>,
     /// Words each corner block spans.
@@ -188,7 +190,7 @@ where
             let preprocessed =
                 slot.preprocessed_offset..slot.preprocessed_offset + slot.preprocessed_width;
             let periodic = slot.periodic_offset..slot.periodic_offset + slot.periodic_width;
-            let evaluation = SlicedQuadraticFolder::new(
+            let mut folder = SlicedQuadraticFolder::new(
                 &scratch.inputs[main.clone()],
                 &scratch.zeros[main],
                 boundary,
@@ -196,13 +198,17 @@ where
                 &self.alpha_powers[slot.stage_index],
                 &self.lanes,
                 whole,
-            )
-            .with_preprocessed(
-                &scratch.inputs[preprocessed.clone()],
-                &scratch.zeros[preprocessed],
-            )
-            .with_periodic(&scratch.inputs[periodic])
-            .eval_air(slot.air);
+            );
+            if let Some(prepared) = &self.prepared_powers[slot.stage_index] {
+                folder = folder.with_prepared_powers(prepared);
+            }
+            let evaluation = folder
+                .with_preprocessed(
+                    &scratch.inputs[preprocessed.clone()],
+                    &scratch.zeros[preprocessed],
+                )
+                .with_periodic(&scratch.inputs[periodic])
+                .eval_air(slot.air);
             scratch.poisoned |= evaluation.poisoned;
             let sums = &mut scratch.sums[slot.stage_index][prefix * NODES..][..NODES];
             for (sum, &value) in sums.iter_mut().zip(&evaluation.value) {
@@ -288,6 +294,7 @@ where
             .collect::<Vec<_>>()
     };
     let word_weights = lift(word_weights.as_slice());
+    let prepared_powers = PreparedPowers::per_air_bits(alpha_powers);
 
     // The prefixes in index order, the last variable varying fastest. A variable at `0` or `1`
     // selects the low or the high half of the corners, and a variable at infinity reads both, as
@@ -309,6 +316,7 @@ where
         slots,
         public_values,
         alpha_powers,
+        prepared_powers,
         prefixes,
         words: word_weights.len(),
         lanes: BitLaneSums::new(&lift(lane_weights.as_slice())),

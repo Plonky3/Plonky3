@@ -6,7 +6,7 @@
 extern crate alloc;
 
 use p3_symmetric::{CryptographicHasher, CryptographicPermutation, Permutation};
-use tiny_keccak::{Hasher, Keccak, keccakf};
+use tiny_keccak::{Hasher, Keccak, Sha3, keccakf};
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub mod avx512;
@@ -104,13 +104,13 @@ impl Permutation<[u8; 200]> for KeccakF {
 
 impl CryptographicPermutation<[u8; 200]> for KeccakF {}
 
-/// Byte rate of the Keccak-256 sponge.
+/// Byte rate of both 256-bit sponges.
 ///
 /// Capacity is twice the 256-bit digest, taken out of the 1600-bit permutation.
 /// That leaves 1088 bits, exactly 136 bytes, absorbed per permutation.
 const RATE: usize = (1600 - 2 * 256) / 8;
 
-/// Digest length of Keccak-256 in bytes.
+/// Digest length of both 256-bit sponges in bytes.
 const DIGEST_BYTES: usize = 32;
 
 /// Index of the state word holding the last byte of the rate.
@@ -119,22 +119,40 @@ const LAST_RATE_WORD: usize = (RATE - 1) / 8;
 /// Closing padding mark, placed at the last byte of the rate.
 const CLOSING_MARK: u64 = 0x80u64 << (8 * ((RATE - 1) % 8));
 
+/// First padding byte of Keccak-256.
+///
+/// The original submission appends the `pad10*1` rule directly after the message.
+/// Its first one bit is the low bit of the byte.
+const KECCAK_DOMAIN: u8 = 0x01;
+
+/// First padding byte of SHA3-256.
+///
+/// FIPS 202 appends the two domain bits `01` before the `pad10*1` rule.
+/// Bits enter the byte from the low end, so `0 1 1` reads as `0x06`.
+const SHA3_DOMAIN: u8 = 0x06;
+
 /// Exclusive-or one whole state word, every lane at once.
 ///
 /// The permutation loads a state word as a single `VECTOR_LEN`-wide vector, and a partially
 /// written word cannot be store-to-load forwarded into that load, so every write here covers
 /// the word in full.
-#[inline]
+#[inline(always)]
 fn xor_state_word(word: &mut [u64; VECTOR_LEN], value: [u64; VECTOR_LEN]) {
-    *word = core::array::from_fn(|lane| word[lane] ^ value[lane]);
+    for (lane, value) in word.iter_mut().zip(value) {
+        *lane ^= value;
+    }
 }
 
 /// Read the eight message bytes at `offset` in every lane into one state word value.
 ///
 /// Bytes enter the state little-endian, eight to a state word, matching the Keccak convention.
-#[inline]
+#[inline(always)]
 fn gather_word(lanes: &[&[u8]; VECTOR_LEN], offset: usize) -> [u64; VECTOR_LEN] {
-    core::array::from_fn(|lane| u64::from_le_bytes(lanes[lane][offset..][..8].try_into().unwrap()))
+    let mut word = [0u64; VECTOR_LEN];
+    for (value, lane) in word.iter_mut().zip(lanes) {
+        *value = u64::from_le_bytes(lane[offset..][..8].try_into().unwrap());
+    }
+    word
 }
 
 /// Absorb a run of whole state words, one message per lane, starting at `offset` in each.
@@ -153,7 +171,7 @@ fn gather_word(lanes: &[&[u8]; VECTOR_LEN], offset: usize) -> [u64; VECTOR_LEN] 
 /// Each row is assembled across all lanes first and then stored once, so no state word is
 /// built out of partial writes. The transpose happens in registers; the messages themselves
 /// are never copied or reordered.
-#[inline]
+#[inline(always)]
 fn absorb_words(
     state: &mut [[u64; VECTOR_LEN]; 25],
     lanes: &[&[u8]; VECTOR_LEN],
@@ -167,23 +185,26 @@ fn absorb_words(
     }
 }
 
-/// Absorb the final, shorter block of every lane and close it with the Keccak padding.
+/// Absorb the final, shorter block of every lane and close it with the padding.
 ///
-/// The rule is `pad10*1` with the original Keccak domain byte, so the block becomes
+/// The first padding byte `d` carries the domain bits of the hash, then the rule's first one bit:
 ///
 /// ```text
-///     [ message bytes | 0x01 | 0x00 ... 0x00 | 0x80 ]
-///                        ^                      ^
-///                   block_len               rate - 1
+///     [ message bytes | d | 0x00 ... 0x00 | 0x80 ]
+///                       ^                   ^
+///                  block_len            rate - 1
+///
+///     Keccak-256:  d = 0x01
+///     SHA3-256:    d = 0x06
 /// ```
 ///
 /// A block ending one byte short of the rate puts both marks in the same byte.
-/// Exclusive-or makes that byte `0x81`, exactly what the rule requires.
+/// Exclusive-or makes that byte `d | 0x80`, exactly what the rule requires.
 ///
 /// The leftover bytes and the marks meet in the word value before it reaches the state,
 /// so the closing word is stored once like every other one.
-#[inline]
-fn absorb_final_block(
+#[inline(always)]
+fn absorb_final_block<const DOMAIN: u8>(
     state: &mut [[u64; VECTOR_LEN]; 25],
     lanes: &[&[u8]; VECTOR_LEN],
     offset: usize,
@@ -198,15 +219,16 @@ fn absorb_final_block(
     // The first mark sits immediately after the last message byte, in the same word as any
     // leftover bytes. The second mark joins it when that word is already the closing word of
     // the rate.
-    let mut marks = 0x01u64 << (8 * tail);
+    let mut marks = u64::from(DOMAIN) << (8 * tail);
     if words == LAST_RATE_WORD {
         marks ^= CLOSING_MARK;
     }
-    let value = core::array::from_fn(|lane| {
+    let mut value = [0u64; VECTOR_LEN];
+    for (value, lane) in value.iter_mut().zip(lanes) {
         let mut bytes = [0u8; 8];
-        bytes[..tail].copy_from_slice(&lanes[lane][offset + 8 * words..][..tail]);
-        u64::from_le_bytes(bytes) ^ marks
-    });
+        bytes[..tail].copy_from_slice(&lane[offset + 8 * words..][..tail]);
+        *value = u64::from_le_bytes(bytes) ^ marks;
+    }
     xor_state_word(&mut state[words], value);
 
     // The closing word is otherwise untouched by the message and the first mark, so it takes
@@ -217,7 +239,7 @@ fn absorb_final_block(
 }
 
 /// Read the digest of one lane out of a permuted vectorized state.
-#[inline]
+#[inline(always)]
 fn squeeze_lane(state: &[[u64; VECTOR_LEN]; 25], lane: usize) -> [u8; DIGEST_BYTES] {
     let mut digest = [0u8; DIGEST_BYTES];
 
@@ -227,6 +249,103 @@ fn squeeze_lane(state: &[[u64; VECTOR_LEN]; 25], lane: usize) -> [u8; DIGEST_BYT
     }
 
     digest
+}
+
+/// Hash a batch of equal-length messages, one message per lane per permutation.
+///
+/// The const parameter is the first padding byte, which alone tells the two 256-bit hashes apart.
+///
+/// # Panics
+///
+/// Panics if the input length is not a whole multiple of the digest count.
+#[inline(always)]
+fn hash_many_with_domain<const DOMAIN: u8>(input: &[u8], out: &mut [[u8; DIGEST_BYTES]]) {
+    // No digests requested means there is nothing to read from the input.
+    if out.is_empty() {
+        return;
+    }
+
+    // Every message has the same length, so the split is exact by contract.
+    assert!(
+        input.len().is_multiple_of(out.len()),
+        "input length ({}) must be a whole multiple of the digest count ({})",
+        input.len(),
+        out.len()
+    );
+    let len = input.len() / out.len();
+
+    // Empty messages all share one digest.
+    // One padding-only block in a single state gives it, with no message to split.
+    if len == 0 {
+        let mut state = [[0u64; VECTOR_LEN]; 25];
+        absorb_final_block::<DOMAIN>(&mut state, &[&[]; VECTOR_LEN], 0, 0);
+        KeccakF.permute_mut(&mut state);
+        out.fill(squeeze_lane(&state, 0));
+        return;
+    }
+
+    // Whole rate blocks are absorbed in lockstep, then one shorter final block.
+    // That final block carries the padding and is empty when the length divides the rate.
+    let full_blocks = len / RATE;
+    let final_block = len % RATE;
+
+    // One message per lane per permutation.
+    for (messages, digests) in input
+        .chunks(len * VECTOR_LEN)
+        .zip(out.chunks_mut(VECTOR_LEN))
+    {
+        let mut state = [[0u64; VECTOR_LEN]; 25];
+
+        // A short last group repeats its first message in the spare lanes, which keeps the
+        // lane count fixed at compile time. Those lanes are hashed alongside the requested
+        // ones and never squeezed.
+        let present = digests.len();
+        let lanes: [&[u8]; VECTOR_LEN] = core::array::from_fn(|lane| {
+            let index = if lane < present { lane } else { 0 };
+            &messages[index * len..][..len]
+        });
+
+        // Every lane contributes its block, then one permutation advances all the sponges.
+        for block in 0..full_blocks {
+            absorb_words(&mut state, &lanes, block * RATE, RATE / 8);
+            KeccakF.permute_mut(&mut state);
+        }
+
+        // The final partial block carries the padding and permutes once more.
+        absorb_final_block::<DOMAIN>(&mut state, &lanes, full_blocks * RATE, final_block);
+        KeccakF.permute_mut(&mut state);
+
+        // Squeeze one digest per requested message.
+        for (lane, digest) in digests.iter_mut().enumerate() {
+            *digest = squeeze_lane(&state, lane);
+        }
+    }
+}
+
+/// Feed a byte stream to a one-message sponge and return its 256-bit digest.
+#[inline]
+fn finalize_iter<S: Hasher>(mut sponge: S, input: impl IntoIterator<Item = u8>) -> [u8; 32] {
+    const BUFLEN: usize = 512; // Tweakable parameter; determined by experiment
+    p3_util::apply_to_chunks::<BUFLEN, _, _>(input, |buf| sponge.update(buf));
+
+    let mut output = [0u8; 32];
+    sponge.finalize(&mut output);
+    output
+}
+
+/// Feed a run of byte slices to a one-message sponge and return its 256-bit digest.
+#[inline]
+fn finalize_slices<'a, S: Hasher>(
+    mut sponge: S,
+    input: impl IntoIterator<Item = &'a [u8]>,
+) -> [u8; 32] {
+    for chunk in input {
+        sponge.update(chunk);
+    }
+
+    let mut output = [0u8; 32];
+    sponge.finalize(&mut output);
+    output
 }
 
 /// The `Keccak` hash functions defined in
@@ -241,97 +360,67 @@ impl CryptographicHasher<u8, [u8; 32]> for Keccak256Hash {
     where
         I: IntoIterator<Item = u8>,
     {
-        const BUFLEN: usize = 512; // Tweakable parameter; determined by experiment
-        let mut hasher = Keccak::v256();
-        p3_util::apply_to_chunks::<BUFLEN, _, _>(input, |buf| hasher.update(buf));
-
-        let mut output = [0u8; 32];
-        hasher.finalize(&mut output);
-        output
+        finalize_iter(Keccak::v256(), input)
     }
 
     fn hash_iter_slices<'a, I>(&self, input: I) -> [u8; 32]
     where
         I: IntoIterator<Item = &'a [u8]>,
     {
-        let mut hasher = Keccak::v256();
-        for chunk in input {
-            hasher.update(chunk);
-        }
-
-        let mut output = [0u8; 32];
-        hasher.finalize(&mut output);
-        output
+        finalize_slices(Keccak::v256(), input)
     }
 
     fn hash_many(&self, input: &[u8], out: &mut [[u8; 32]]) {
-        // No digests requested means there is nothing to read from the input.
-        if out.is_empty() {
-            return;
-        }
-
-        // Every message has the same length, so the split is exact by contract.
-        assert!(
-            input.len().is_multiple_of(out.len()),
-            "input length ({}) must be a whole multiple of the digest count ({})",
-            input.len(),
-            out.len()
-        );
-        let len = input.len() / out.len();
-
-        // Empty messages all share one digest and drive no absorb loop at all.
-        if len == 0 {
-            for digest in out.iter_mut() {
-                *digest = self.hash_iter(core::iter::empty());
-            }
-            return;
-        }
-
-        // Whole rate blocks are absorbed in lockstep, then one shorter final block.
-        // That final block carries the padding and is empty when the length divides the rate.
-        let full_blocks = len / RATE;
-        let final_block = len % RATE;
-
-        // One message per lane per permutation.
-        for (messages, digests) in input
-            .chunks(len * VECTOR_LEN)
-            .zip(out.chunks_mut(VECTOR_LEN))
-        {
-            let mut state = [[0u64; VECTOR_LEN]; 25];
-
-            // A short last group repeats its first message in the spare lanes, which keeps the
-            // lane count fixed at compile time. Those lanes are hashed alongside the requested
-            // ones and never squeezed.
-            let present = digests.len();
-            let lanes: [&[u8]; VECTOR_LEN] = core::array::from_fn(|lane| {
-                let index = if lane < present { lane } else { 0 };
-                &messages[index * len..][..len]
-            });
-
-            // Every lane contributes its block, then one permutation advances all the sponges.
-            for block in 0..full_blocks {
-                absorb_words(&mut state, &lanes, block * RATE, RATE / 8);
-                KeccakF.permute_mut(&mut state);
-            }
-
-            // The final partial block carries the padding and permutes once more.
-            absorb_final_block(&mut state, &lanes, full_blocks * RATE, final_block);
-            KeccakF.permute_mut(&mut state);
-
-            // Squeeze one digest per requested message.
-            for (lane, digest) in digests.iter_mut().enumerate() {
-                *digest = squeeze_lane(&state, lane);
-            }
-        }
+        hash_many_with_domain::<KECCAK_DOMAIN>(input, out);
     }
 }
+
+/// The SHA3-256 hash function of [FIPS 202](https://doi.org/10.6028/NIST.FIPS.202).
+///
+/// It runs the same sponge as Keccak-256, at the same cost.
+///
+/// Only the padding differs, so the two digests differ for every input:
+///
+/// ```text
+///     Keccak-256("abc") = 4e03657a ea45a94f ...
+///     SHA3-256("abc")   = 3a985da7 4fe225b2 ...
+/// ```
+#[derive(Copy, Clone, Debug)]
+pub struct Sha3_256Hash;
+
+impl CryptographicHasher<u8, [u8; 32]> for Sha3_256Hash {
+    const LANES: usize = VECTOR_LEN;
+
+    fn hash_iter<I>(&self, input: I) -> [u8; 32]
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        finalize_iter(Sha3::v256(), input)
+    }
+
+    fn hash_iter_slices<'a, I>(&self, input: I) -> [u8; 32]
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        finalize_slices(Sha3::v256(), input)
+    }
+
+    fn hash_many(&self, input: &[u8], out: &mut [[u8; 32]]) {
+        hash_many_with_domain::<SHA3_DOMAIN>(input, out);
+    }
+}
+
+#[cfg(test)]
+mod nist_tests;
 
 #[cfg(test)]
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use hex_literal::hex;
     use proptest::prelude::*;
+    use sha3::{Digest, Sha3_256};
 
     use super::*;
 
@@ -363,7 +452,10 @@ mod tests {
     ];
 
     /// Hash each message on its own, which is the behaviour the batched path must reproduce.
-    fn reference(messages: &[u8], len: usize, count: usize) -> Vec<[u8; 32]> {
+    fn reference<H>(hasher: &H, messages: &[u8], len: usize, count: usize) -> Vec<[u8; 32]>
+    where
+        H: CryptographicHasher<u8, [u8; 32]>,
+    {
         (0..count)
             .map(|k| {
                 // A zero-length message still has a digest, so slice defensively.
@@ -372,13 +464,16 @@ mod tests {
                 } else {
                     &messages[k * len..(k + 1) * len]
                 };
-                Keccak256Hash.hash_slice(message)
+                hasher.hash_slice(message)
             })
             .collect()
     }
 
-    #[test]
-    fn hash_many_matches_scalar_across_block_shapes() {
+    /// Batch every shape length at every count up to two lane groups plus one.
+    fn check_block_shapes<H>(hasher: &H)
+    where
+        H: CryptographicHasher<u8, [u8; 32]>,
+    {
         // Batch sizes below, at, and above one full lane group.
         // The final short group is then exercised at every lane count the target compiles to.
         let counts: Vec<usize> = (1..=2 * VECTOR_LEN + 1).collect();
@@ -389,15 +484,25 @@ mod tests {
                 let messages: Vec<u8> = (0..len * count).map(|i| (i * 31 + 7) as u8).collect();
 
                 let mut batched = vec![[0u8; 32]; count];
-                Keccak256Hash.hash_many(&messages, &mut batched);
+                hasher.hash_many(&messages, &mut batched);
 
                 assert_eq!(
                     batched,
-                    reference(&messages, len, count),
+                    reference(hasher, &messages, len, count),
                     "len {len}, count {count}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn keccak256_hash_many_matches_scalar_across_block_shapes() {
+        check_block_shapes(&Keccak256Hash);
+    }
+
+    #[test]
+    fn sha3_256_hash_many_matches_scalar_across_block_shapes() {
+        check_block_shapes(&Sha3_256Hash);
     }
 
     #[test]
@@ -421,31 +526,96 @@ mod tests {
         // 5 bytes cannot split into 2 equal messages.
         // The contract fails up front rather than misaligning message boundaries.
         let mut digests = [[0u8; 32]; 2];
-        Keccak256Hash.hash_many(&[1, 2, 3, 4, 5], &mut digests);
+        Sha3_256Hash.hash_many(&[1, 2, 3, 4, 5], &mut digests);
+    }
+
+    #[test]
+    fn the_two_hashes_differ_only_by_padding() {
+        // Both sponges run the same permutation at the same rate.
+        // The first padding byte alone separates them:
+        //
+        //     Keccak-256:  "abc" | 0x01 | 0x00 ... 0x00 | 0x80
+        //     SHA3-256:    "abc" | 0x06 | 0x00 ... 0x00 | 0x80
+        //
+        // Published digests of "abc" for each.
+        let keccak = hex!("4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45");
+        let sha3 = hex!("3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532");
+
+        // Scalar and batched paths agree with the published values.
+        let mut batched = [[0u8; 32]; 1];
+        Keccak256Hash.hash_many(b"abc", &mut batched);
+        assert_eq!(batched[0], keccak);
+        assert_eq!(Keccak256Hash.hash_slice(b"abc"), keccak);
+
+        Sha3_256Hash.hash_many(b"abc", &mut batched);
+        assert_eq!(batched[0], sha3);
+        assert_eq!(Sha3_256Hash.hash_slice(b"abc"), sha3);
+    }
+
+    #[test]
+    fn empty_messages_hash_to_the_published_digests() {
+        // Zero-length messages take the padding-only branch of the batched path.
+        // Three of them in one call must all get the digest of the empty string.
+        let keccak = hex!("c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
+        let sha3 = hex!("a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a");
+
+        let mut digests = [[0u8; 32]; 3];
+        Keccak256Hash.hash_many(&[], &mut digests);
+        assert_eq!(digests, [keccak; 3]);
+
+        Sha3_256Hash.hash_many(&[], &mut digests);
+        assert_eq!(digests, [sha3; 3]);
+    }
+
+    /// A cheap deterministic byte stream, so a failing case shrinks reproducibly.
+    fn stream(seed: u64, len: usize) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect()
     }
 
     proptest! {
         #[test]
-        fn hash_many_matches_scalar_on_random_batches(
+        fn keccak256_hash_many_matches_scalar_on_random_batches(
             len in 0usize..=400,
             count in 1usize..=17,
             seed in any::<u64>(),
         ) {
-            // Fixture: a cheap deterministic stream so the case shrinks reproducibly.
-            let mut x = seed | 1;
-            let messages: Vec<u8> = (0..len * count)
-                .map(|_| {
-                    x ^= x << 13;
-                    x ^= x >> 7;
-                    x ^= x << 17;
-                    x as u8
-                })
-                .collect();
+            let messages = stream(seed, len * count);
 
             let mut batched = vec![[0u8; 32]; count];
             Keccak256Hash.hash_many(&messages, &mut batched);
 
-            prop_assert_eq!(batched, reference(&messages, len, count));
+            prop_assert_eq!(batched, reference(&Keccak256Hash, &messages, len, count));
+        }
+
+        #[test]
+        fn sha3_256_matches_an_independent_implementation(
+            len in 0usize..=600,
+            count in 1usize..=2 * VECTOR_LEN + 1,
+            seed in any::<u64>(),
+        ) {
+            // Fixture: `count` random messages of `len` bytes, back to back.
+            let messages = stream(seed, len * count);
+
+            // Batched and one-message digests of this crate.
+            let mut batched = vec![[0u8; 32]; count];
+            Sha3_256Hash.hash_many(&messages, &mut batched);
+            let scalar = reference(&Sha3_256Hash, &messages, len, count);
+
+            // Digests of the RustCrypto implementation, which shares no code with this one.
+            let expected: Vec<[u8; 32]> = (0..count)
+                .map(|k| Sha3_256::digest(&messages[k * len..(k + 1) * len]).into())
+                .collect();
+
+            prop_assert_eq!(&batched, &expected);
+            prop_assert_eq!(&scalar, &expected);
         }
     }
 

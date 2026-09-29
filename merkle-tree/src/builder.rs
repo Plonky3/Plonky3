@@ -508,6 +508,12 @@ where
     /// Hash one leaf per row with a hasher that hashes several messages per call.
     ///
     /// The message of a row is that row concatenated across every matrix, in order.
+    ///
+    /// The hasher wants its messages back to back in memory.
+    ///
+    /// A single matrix with adjacent rows already has that layout, so it is hashed in place.
+    ///
+    /// Any other input is copied into a staging buffer first, one group of rows at a time.
     fn hash_rows_batched(
         &self,
         matrices: &[&M],
@@ -521,6 +527,16 @@ where
             "row range {first}..{} exceeds a matrix height",
             first + out.len()
         );
+
+        // One matrix whose rows sit back to back is already one run of equal-length messages.
+        //
+        // Hashing it in place skips a copy of every row, the dominant cost for wide rows.
+        if let [m] = matrices
+            && let Some(rows) = m.contiguous_rows(first..first + out.len())
+        {
+            self.h.hash_many(&rows, out);
+            return;
+        }
 
         let width: usize = matrices.iter().map(|m| m.width()).sum();
         let rows_per_group = rows_per_call(width * size_of::<P::Value>(), Self::HASH_LANES);
@@ -891,7 +907,9 @@ fn unpack_digests<P, const DIGEST_ELEMS: usize>(
 
 #[cfg(test)]
 mod tests {
+    use alloc::sync::Arc;
     use alloc::vec::Vec;
+    use core::ops::Range;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
@@ -904,6 +922,7 @@ mod tests {
     use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
+    use spin::Mutex;
 
     use super::*;
     use crate::MerkleTree;
@@ -1452,5 +1471,136 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A byte hasher that records where every batched call reads its messages from.
+    ///
+    /// Digests come from Keccak-256, one message at a time.
+    ///
+    /// Four lanes make every tested height leave a short final group.
+    #[derive(Clone, Debug, Default)]
+    struct AddressRecorder {
+        /// Start and end address of each batched input, in call order.
+        calls: Arc<Mutex<Vec<Range<usize>>>>,
+    }
+
+    impl CryptographicHasher<u8, [u8; 32]> for AddressRecorder {
+        const LANES: usize = 4;
+
+        fn hash_iter<I: IntoIterator<Item = u8>>(&self, input: I) -> [u8; 32] {
+            Keccak256Hash.hash_iter(input)
+        }
+
+        fn hash_many(&self, input: &[u8], out: &mut [[u8; 32]]) {
+            self.calls
+                .lock()
+                .push(input.as_ptr_range().start as usize..input.as_ptr_range().end as usize);
+            Keccak256Hash.hash_many(input, out);
+        }
+    }
+
+    /// Build one byte tree and return its layers with the address ranges its leaf hashing read.
+    fn byte_tree<M: Matrix<u8>>(leaves: Vec<M>) -> (Vec<Vec<[u8; 32]>>, Vec<Range<usize>>) {
+        let h = AddressRecorder::default();
+        let c = CompressionFunctionFromHasher::<_, 2, 32>::new(Keccak256Hash);
+        let tree = MerkleTree::<u8, u8, M, 2, 32>::new::<u8, u8, _, _>(&h, &c, leaves);
+        let calls = h.calls.lock().clone();
+        (tree.digest_layers, calls)
+    }
+
+    #[test]
+    fn adjacent_rows_are_hashed_in_place() {
+        // Invariant: one matrix with adjacent rows is hashed straight from its storage.
+        //
+        // Invariant: any other input is staged, and both paths give the same digests.
+        //
+        // Fixture state: heights not a multiple of the four lanes, widths across the Keccak rate.
+        //
+        //     dense rows      -> every batched read lies inside the matrix storage
+        //     stride-one view -> same rows, adjacency hidden -> every read lies outside it
+        let mut rng = SmallRng::seed_from_u64(11);
+        for (height, width) in [(1, 1), (3, 5), (13, 136), (64, 137), (1025, 3), (257, 1024)] {
+            let matrix = RowMajorMatrix::<u8>::rand(&mut rng, height, width);
+            let storage = matrix.values.as_ptr_range();
+            let storage = storage.start as usize..storage.end as usize;
+            let inside =
+                |call: &Range<usize>| storage.start <= call.start && call.end <= storage.end;
+
+            // In place: the dense view exposes its rows as one run.
+            let (in_place, calls) = byte_tree(vec![matrix.as_view()]);
+            assert!(!calls.is_empty(), "height {height} width {width}");
+            assert!(calls.iter().all(inside), "height {height} width {width}");
+
+            // Staged: a stride-one view reads the same rows one at a time.
+            let (staged, calls) = byte_tree(vec![matrix.as_view().vertically_strided(1, 0)]);
+            assert!(
+                calls.iter().all(|call| !inside(call)),
+                "height {height} width {width}"
+            );
+
+            assert!(in_place == staged, "height {height} width {width}");
+        }
+    }
+
+    #[test]
+    fn a_view_starting_mid_storage_is_hashed_in_place() {
+        // Invariant: a view whose first row sits deep inside a buffer still hashes its own rows.
+        //
+        // Fixture state: 40 rows of 33 bytes, the view keeps rows 7..40.
+        //
+        //     storage: [ r0 .. r6 | r7 .. r39 ]
+        //                           ^ view starts here, 7 * 33 bytes in
+        let mut rng = SmallRng::seed_from_u64(12);
+        let matrix = RowMajorMatrix::<u8>::rand(&mut rng, 40, 33);
+        let (_, bottom) = matrix.split_rows(7);
+
+        // An owned copy of the same rows is the reference.
+        let owned = RowMajorMatrix::new(bottom.values.to_vec(), 33);
+        let (from_view, calls) = byte_tree(vec![bottom]);
+        let (from_owned, _) = byte_tree(vec![owned]);
+
+        // Every read lies inside the kept rows, never in the skipped prefix.
+        let kept = bottom.values.as_ptr_range();
+        let kept = kept.start as usize..kept.end as usize;
+        assert!(
+            calls
+                .iter()
+                .all(|call| kept.start <= call.start && call.end <= kept.end)
+        );
+        assert!(from_view == from_owned);
+    }
+
+    #[test]
+    fn several_leaf_matrices_are_staged() {
+        // Invariant: a leaf spanning two matrices is not one run, so it goes through staging.
+        //
+        //     leaf i = row i of the first matrix || row i of the second
+        let mut rng = SmallRng::seed_from_u64(13);
+        let first = RowMajorMatrix::<u8>::rand(&mut rng, 21, 10);
+        let second = RowMajorMatrix::<u8>::rand(&mut rng, 21, 6);
+        let storages = [first.values.as_ptr_range(), second.values.as_ptr_range()]
+            .map(|r| r.start as usize..r.end as usize);
+
+        let (layers, calls) = byte_tree(vec![first.as_view(), second.as_view()]);
+
+        // No batched read touches either matrix directly.
+        for call in &calls {
+            for storage in &storages {
+                assert!(call.end <= storage.start || storage.end <= call.start);
+            }
+        }
+
+        // The staged leaves equal the leaves of the rows concatenated up front.
+        let joined: Vec<u8> = (0..21)
+            .flat_map(|r| {
+                [
+                    first.row_slice(r).unwrap().to_vec(),
+                    second.row_slice(r).unwrap().to_vec(),
+                ]
+                .concat()
+            })
+            .collect();
+        let (joined_layers, _) = byte_tree(vec![RowMajorMatrix::new(joined, 16)]);
+        assert!(layers == joined_layers);
     }
 }
