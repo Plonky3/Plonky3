@@ -475,7 +475,15 @@ impl Lanes<WIDTH> for Backend {
     }
 
     #[inline(always)]
-    unsafe fn squeeze(state: &State<WIDTH>, digests: &mut [[u8; DIGEST_BYTES]; WIDTH]) {
+    unsafe fn squeeze(state: &State<WIDTH>, digests: &mut [[u8; DIGEST_BYTES]]) {
+        // A short group reads its few digests one lane at a time.
+        let Some((digests, [])) = digests.split_first_chunk_mut::<WIDTH>() else {
+            for (lane, digest) in digests.iter_mut().enumerate() {
+                *digest = batch::squeeze_lane(state, lane);
+            }
+            return;
+        };
+
         // A digest is words 0..4 of one lane, so the squeeze is a 4 x 8 transpose.
         let mut w = [unsafe { _mm512_setzero_si512() }; 4];
         for (w, word) in w.iter_mut().zip(state) {

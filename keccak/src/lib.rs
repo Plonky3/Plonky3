@@ -13,9 +13,15 @@ mod batch;
 // On x86-64 every wide backend is compiled, for the batched hash to pick at run time.
 //
 // Only the one the build enables is public, as the permutation of packed states.
+//
+// A soft-float target has no SSE2 and must not enable vector features, so it skips the wide ones.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub mod avx512;
-#[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "sse2",
+    not(target_feature = "avx512f")
+))]
 mod avx512;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub use avx512::*;
@@ -26,7 +32,11 @@ pub use avx512::*;
     not(target_feature = "avx512f")
 ))]
 pub mod avx2;
-#[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "sse2",
+    not(target_feature = "avx2")
+))]
 mod avx2;
 #[cfg(all(
     target_arch = "x86_64",

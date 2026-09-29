@@ -38,10 +38,17 @@ pub(crate) const SHA3_DOMAIN: u8 = 0x06;
 /// Every backend this build compiles, widest first.
 ///
 /// The last one runs on every CPU of the target.
+///
+/// A soft-float x86-64 target has no SSE2 and must not enable vector features.
+/// It compiles only the SSE2 backend, whose driver enables no target feature.
 const KERNELS: &[Kernel] = &[
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     crate::avx512::KERNEL,
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "sse2",
+        not(target_feature = "avx512f")
+    ))]
     crate::avx2::KERNEL,
     #[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
     crate::sse2::KERNEL,
@@ -90,13 +97,17 @@ pub(crate) struct Kernel {
 impl Kernel {
     /// Describe one backend.
     ///
+    /// # Safety
+    ///
+    /// `supported` returns true only on a CPU that has every target feature `run` enables.
+    ///
     /// # Arguments
     ///
     /// - `name`: the backend's name, for diagnostics.
     /// - `lanes`: messages one permutation advances at once.
     /// - `supported`: whether the running CPU has the backend's target features.
     /// - `run`: the driver, sound to call only on such a CPU.
-    pub(crate) const fn new(
+    pub(crate) const unsafe fn new(
         name: &'static str,
         lanes: usize,
         supported: fn() -> bool,
@@ -109,7 +120,17 @@ impl Kernel {
             run,
         }
     }
+}
 
+/// A backend the running CPU was checked to support.
+///
+/// Only the CPU check in this module builds one.
+///
+/// Holding one therefore proves its driver is sound to call.
+#[derive(Clone, Copy)]
+pub(crate) struct Supported(Kernel);
+
+impl Supported {
     /// Hash equal-length messages laid end to end, one digest each.
     ///
     /// The caller guarantees that the input holds exactly one message per digest.
@@ -123,28 +144,28 @@ impl Kernel {
     ) {
         debug_assert_eq!(input.len(), len * out.len());
 
-        // SAFETY: kernels only leave this module through the filter that checks the CPU.
-        unsafe { (self.run)(domain, input, len, out) }
+        // SAFETY: a `Supported` only exists once the CPU check of its backend passed.
+        unsafe { (self.0.run)(domain, input, len, out) }
     }
 }
 
-impl fmt::Debug for Kernel {
+impl fmt::Debug for Supported {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name)
+        f.write_str(self.0.name)
     }
 }
 
 /// Every backend the running CPU supports, widest first.
-pub(crate) fn supported() -> impl Iterator<Item = Kernel> {
+pub(crate) fn supported() -> impl Iterator<Item = Supported> {
     KERNELS
         .iter()
-        .copied()
         .filter(|kernel| (kernel.supported)())
+        .map(|&kernel| Supported(kernel))
 }
 
 /// The widest backend the running CPU supports.
 #[inline]
-pub(crate) fn detect() -> Kernel {
+pub(crate) fn detect() -> Supported {
     supported()
         .next()
         .expect("the last backend runs on every CPU of the target")
@@ -200,8 +221,9 @@ macro_rules! kernel {
         }
 
         /// The batched driver on this backend.
+        // SAFETY: `supported` checks at run time for every feature the driver enables.
         pub(crate) const KERNEL: $crate::batch::Kernel =
-            $crate::batch::Kernel::new($name, $width, supported, hash_many);
+            unsafe { $crate::batch::Kernel::new($name, $width, supported, hash_many) };
     };
 }
 
@@ -243,13 +265,16 @@ pub(crate) trait Lanes<const W: usize> {
         absorb_words(state, lanes, offset);
     }
 
-    /// Write the digest of every lane.
+    /// Write the digest of the leading lanes, one per slot.
+    ///
+    /// A short last group passes fewer than `W` slots.
     ///
     /// # Safety
     ///
     /// The running CPU has the backend's target features.
     #[inline(always)]
-    unsafe fn squeeze(state: &State<W>, digests: &mut [[u8; DIGEST_BYTES]; W]) {
+    unsafe fn squeeze(state: &State<W>, digests: &mut [[u8; DIGEST_BYTES]]) {
+        debug_assert!(digests.len() <= W);
         for (lane, digest) in digests.iter_mut().enumerate() {
             *digest = squeeze_lane(state, lane);
         }
@@ -373,7 +398,7 @@ unsafe fn absorb_final_block<L: Lanes<W>, const W: usize>(
 
 /// Read the digest of one lane out of a permuted state.
 #[inline(always)]
-fn squeeze_lane<const W: usize>(state: &State<W>, lane: usize) -> [u8; DIGEST_BYTES] {
+pub(crate) fn squeeze_lane<const W: usize>(state: &State<W>, lane: usize) -> [u8; DIGEST_BYTES] {
     let mut digest = [0u8; DIGEST_BYTES];
 
     // The digest is the leading bytes of the rate portion, little-endian per state word.
@@ -453,13 +478,7 @@ pub(crate) unsafe fn hash_many_lanes<L: Lanes<W>, const W: usize>(
             L::permute(&mut state.0);
         }
 
-        // A full group squeezes every lane at once, a short one only the requested lanes.
-        if let Ok(group) = <&mut [[u8; DIGEST_BYTES]; W]>::try_from(&mut *digests) {
-            unsafe { L::squeeze(&state.0, group) };
-        } else {
-            for (lane, digest) in digests.iter_mut().enumerate() {
-                *digest = squeeze_lane(&state.0, lane);
-            }
-        }
+        // Only the requested lanes are squeezed.
+        unsafe { L::squeeze(&state.0, digests) };
     }
 }
