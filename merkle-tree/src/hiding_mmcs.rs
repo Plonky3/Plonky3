@@ -134,14 +134,21 @@ where
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
-        let mut rng = self.rng.lock();
-        let salted_inputs = inputs
-            .into_iter()
-            .map(|mat| {
-                let salts = RowMajorMatrix::rand(&mut *rng, mat.height(), SALT_ELEMS);
-                HorizontalPair::new(mat, salts)
-            })
-            .collect();
+        // Draw every salt under the lock, then release it before hashing.
+        //
+        // Why: tree building is parallel.
+        // A waiting rayon worker may run a queued commit on this same MMCS.
+        // That commit would spin forever on a lock its own thread still holds.
+        let salted_inputs = {
+            let mut rng = self.rng.lock();
+            inputs
+                .into_iter()
+                .map(|mat| {
+                    let salts = RowMajorMatrix::rand(&mut *rng, mat.height(), SALT_ELEMS);
+                    HorizontalPair::new(mat, salts)
+                })
+                .collect()
+        };
         self.inner.commit(salted_inputs)
     }
 
