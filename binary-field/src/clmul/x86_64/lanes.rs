@@ -87,9 +87,9 @@ mod zmm {
     #[cfg(target_feature = "avx512bw")]
     use core::arch::x86_64::_mm_loadu_si128;
     use core::arch::x86_64::{
-        __m512i, _mm_cvtsi64_si128, _mm512_clmulepi64_epi128, _mm512_setzero_si512,
-        _mm512_sll_epi64, _mm512_srl_epi64, _mm512_ternarylogic_epi64, _mm512_unpackhi_epi64,
-        _mm512_unpacklo_epi64, _mm512_xor_si512,
+        __m512i, _mm512_clmulepi64_epi128, _mm512_set1_epi64, _mm512_setzero_si512,
+        _mm512_sllv_epi64, _mm512_srlv_epi64, _mm512_unpackhi_epi64, _mm512_unpacklo_epi64,
+        _mm512_xor_si512,
     };
     #[cfg(target_feature = "avx512bw")]
     use core::arch::x86_64::{_mm512_broadcast_i32x4, _mm512_shuffle_epi8};
@@ -98,12 +98,13 @@ mod zmm {
     #[cfg(target_feature = "avx512bw")]
     use crate::clmul::wide::TOP_NIBBLE_FOLD;
 
-    /// The truth table of `a ^ b ^ c` for a ternary logic instruction.
-    const XOR3: i32 = 0x96;
-
     // SAFETY for every method below: this module is compiled only with `avx512f` and `vpclmulqdq`.
     //
     // The byte shuffle arm is compiled only with `avx512bw`, which it requires.
+    //
+    // Three-way sums keep the default two exclusive ors.
+    //
+    // The compiler already fuses them into one ternary logic op, and the interpreter the tests run under has no shim for it.
     impl Lanes64 for __m512i {
         #[inline(always)]
         fn zero() -> Self {
@@ -113,11 +114,6 @@ mod zmm {
         #[inline(always)]
         fn xor(self, other: Self) -> Self {
             unsafe { _mm512_xor_si512(self, other) }
-        }
-
-        #[inline(always)]
-        fn xor3(self, b: Self, c: Self) -> Self {
-            unsafe { _mm512_ternarylogic_epi64::<XOR3>(self, b, c) }
         }
 
         #[inline(always)]
@@ -138,13 +134,13 @@ mod zmm {
         #[inline(always)]
         fn shl<const N: i32>(self) -> Self {
             // A constant count lowers to the immediate form.
-            unsafe { _mm512_sll_epi64(self, _mm_cvtsi64_si128(i64::from(N))) }
+            unsafe { _mm512_sllv_epi64(self, _mm512_set1_epi64(i64::from(N))) }
         }
 
         #[inline(always)]
         fn shr<const N: i32>(self) -> Self {
             // A constant count lowers to the immediate form.
-            unsafe { _mm512_srl_epi64(self, _mm_cvtsi64_si128(i64::from(N))) }
+            unsafe { _mm512_srlv_epi64(self, _mm512_set1_epi64(i64::from(N))) }
         }
 
         #[cfg(target_feature = "avx512bw")]
