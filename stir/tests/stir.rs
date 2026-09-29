@@ -697,7 +697,7 @@ mod babybear_stir {
         for log_folding_factor in [2, 3, 4] {
             let (params, dft, challenger) = make_params(1, log_folding_factor);
             let mut rng = seeded_rng();
-            let log_degree = 8;
+            let log_degree = 12;
             let degree = 1usize << log_degree;
             let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
 
@@ -1065,7 +1065,7 @@ mod babybear_stir {
     fn shape_error_after(mutate: impl FnOnce(&mut StirProof<EF, MyMmcs, F>)) -> ProofShapeError {
         let (params, dft, challenger) = make_params(1, 2);
         let mut rng = seeded_rng();
-        let log_degree = 8;
+        let log_degree = 10;
         let poly_coeffs: Vec<EF> = (0..1usize << log_degree).map(|_| rng.random()).collect();
 
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
@@ -1172,7 +1172,7 @@ mod babybear_stir {
         // So this bound is only known once the round has run, and the rejection lands
         // mid-transcript, where the verifier has to release its completeness check first.
         let err = shape_error_after(|proof| {
-            proof.round_proofs[0].ans_polynomial.resize(22, EF::ONE);
+            proof.round_proofs[0].ans_polynomial.resize(23, EF::ONE);
         });
         assert!(
             matches!(
@@ -1180,8 +1180,8 @@ mod babybear_stir {
                 ProofShapeError::AnsPolynomialTooLong {
                     round: RoundLabel::Round(0),
                     maximum,
-                    got: 22,
-                } if maximum < 22
+                    got: 23,
+                } if maximum < 23
             ),
             "unexpected error: {err:?}"
         );
@@ -1263,8 +1263,8 @@ mod babybear_stir {
         assert_eq!(
             err,
             ProofShapeError::FinalPolynomialLength {
-                expected: 1,
-                got: 2,
+                expected: 4,
+                got: 5,
             }
         );
     }
@@ -1278,8 +1278,8 @@ mod babybear_stir {
         assert_eq!(
             err,
             ProofShapeError::FinalPolynomialLength {
-                expected: 1,
-                got: 0,
+                expected: 4,
+                got: 3,
             }
         );
     }
@@ -2124,8 +2124,8 @@ mod babybear_pcs {
             shape_of(err),
             ProofShapeError::RoundCount {
                 instance: Some(1),
-                expected: 2,
-                got: 1,
+                expected: 1,
+                got: 0,
             }
         );
     }
@@ -2584,17 +2584,17 @@ mod babybear_pcs {
                     vec![true, false],
                     vec![false, true],
                 ],
-                "52178969d7f46183455a44211f664299c5bc9707c41b0cf3fd4a5bbc697281c2",
+                "e413c01175ffc01c5828ce2d29f762c9c37f248ac139b4d5029be39bd5cb7b8b",
             ),
             (
                 1,
                 vec![vec![true, true], vec![true, false], vec![false, true]],
-                "a89d5232fdbfca3d660119f1f6b5d62c6570c4161c571368db3d392c5a002c39",
+                "d1eb3685d27ff890e16c827a421fd23d6b79d14dc06bf8831450723ab0eef7ab",
             ),
             (
                 p3_stir::DEFAULT_MAX_LOG_HEIGHT_SPREAD,
                 vec![vec![true, true]],
-                "510f022cfc5cb394490d67b6381ecb05871ec620e8e5da74d446b51da3850581",
+                "9f95a7f5eef7ea2633f3089403200d865c6d294607685310feeed3cc20e9c8c6",
             ),
         ];
 
@@ -3028,7 +3028,7 @@ mod babybear_pcs {
         let (pcs, challenger_template) = get_pcs();
         let mut rng = seeded_rng();
 
-        let log_d = 6;
+        let log_d = 8;
         let width = 3;
         let domain =
             <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
@@ -3055,7 +3055,7 @@ mod babybear_pcs {
         let round0 = stir_proof
             .round_proofs
             .first()
-            .expect("log_d = 6 has intermediate rounds");
+            .expect("log_d = 8 has intermediate rounds");
         let fibers = round0
             .query_openings
             .as_ref()
@@ -3087,7 +3087,7 @@ mod babybear_pcs {
         let (pcs, challenger_template) = get_pcs();
         let mut rng = seeded_rng();
 
-        let log_d = 6;
+        let log_d = 8;
         let domain =
             <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
         let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 3);
@@ -3344,8 +3344,8 @@ mod babybear_pcs {
             shape_of(err),
             ProofShapeError::QueryOpeningCount {
                 round: RoundLabel::Round(0),
-                expected: 22,
-                got: 21,
+                expected: 21,
+                got: 20,
             }
         );
     }
@@ -3800,7 +3800,7 @@ mod babybear_pcs {
     fn test_pcs_rejects_a_missing_or_swapped_initial_commitment() {
         let (pcs, challenger_template) = get_pcs();
         let mut rng = seeded_rng();
-        let log_d = 6;
+        let log_d = 8;
 
         let domain =
             <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
@@ -4436,7 +4436,7 @@ mod babybear_stir_multi {
     #[test]
     fn test_multi_shared_folding_pow_with_late_and_final_only_instances() {
         let (params, dft, challenger) = make_params(1, 2, 100, 16);
-        let (configs, polys) = make_instances(&params, &[10, 6, 2]);
+        let (configs, polys) = make_instances(&params, &[14, 10, 2]);
         assert!(configs[0].num_rounds() > configs[1].num_rounds());
         assert!(configs[1].num_rounds() > 0);
         assert_eq!(configs[2].num_rounds(), 0);
@@ -4601,8 +4601,8 @@ mod babybear_stir_multi {
             err,
             ProofShapeError::RoundCount {
                 instance: Some(1),
-                expected: 3,
-                got: 2,
+                expected: 2,
+                got: 1,
             }
         );
     }
