@@ -183,8 +183,11 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         } else {
             log_n
         };
-        // `standard(log_n)` needs a point of order `2^(log_n + 1)`, which the circle group may
-        // not have. The verifier sizes this domain from a claimed height, so report it.
+        // A standard domain of size 2^n is shifted by a point of order 2^(n + 1).
+        //
+        // The circle group has no such point once n reaches its two-adicity.
+        //
+        // The verifier derives this size from an untrusted trace height, so it must not panic.
         if log_n >= F::CIRCLE_TWO_ADICITY {
             return None;
         }
@@ -401,15 +404,19 @@ mod tests {
 
     #[test]
     fn disjoint_domain_beyond_the_circle_group_is_none() {
+        // Fixture state: the Mersenne31 circle group has order 2^31.
+        //
+        // The largest standard domain has size 2^30, shifted by a point of order 2^31.
         let top = Mersenne31::CIRCLE_TWO_ADICITY;
-        // The largest standard domain still has a disjoint neighbour below it.
+        // A smaller request gets a disjoint standard domain of size 2^29.
         let largest = CircleDomain::<Mersenne31>::standard(top - 1);
         assert_eq!(
             largest.try_create_disjoint_domain(1 << (top - 2)),
             Some(CircleDomain::standard(top - 2))
         );
-        // A same-size or larger request needs a standard domain of size 2^top, which has no
-        // generator in the circle group.
+        // A same-size or larger request needs a domain of size 2^31.
+        //
+        // Its shift would need order 2^32, which the group lacks.
         assert_eq!(largest.try_create_disjoint_domain(1 << (top - 1)), None);
         assert_eq!(largest.try_create_disjoint_domain(1 << top), None);
     }

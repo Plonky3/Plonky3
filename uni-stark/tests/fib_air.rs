@@ -640,10 +640,13 @@ fn test_degree_bits_below_circle_pcs_minimum_rejected() {
 
 #[test]
 fn test_degree_bits_at_circle_pcs_maximum_rejected() {
-    // The circle PCS accepts trace heights up to 2^30, but the quotient domain of such a
-    // trace would need a point of order 2^32, which the circle group over Mersenne31 lacks.
-    // The verifier derives that domain from the claimed height, so it must refuse the claim
-    // instead of asking for the point.
+    // Invariant: a claimed height whose quotient domain leaves the circle group is rejected.
+    //
+    // Fixture state: the circle PCS accepts trace heights up to 2^30.
+    //
+    // The quotient domain of such a trace has size at least 2^31.
+    //
+    // Its shift would need a point of order 2^32, which the Mersenne31 circle group lacks.
     let config = make_circle_config();
     let air = CirclePeriodicProductAir {
         column: vec![CircleVal::TWO, CircleVal::from_u32(3)],
@@ -652,6 +655,7 @@ fn test_degree_bits_at_circle_pcs_maximum_rejected() {
     let trace = RowMajorMatrix::new_col((0..4).map(|i| air.column[i % 2].exp_u64(3)).collect());
     let mut proof = prove(&config, &air, trace, &[]).unwrap();
 
+    // Mutation: claim the largest height the PCS accepts.
     proof.degree_bits = 30;
     let err = verify(&config, &air, &proof, &[])
         .expect_err("a quotient domain beyond the circle group must be rejected");

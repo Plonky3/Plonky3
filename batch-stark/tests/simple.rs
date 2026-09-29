@@ -1818,10 +1818,13 @@ fn test_batch_degree_bits_below_circle_pcs_minimum_rejected() {
 
 #[test]
 fn test_batch_degree_bits_at_circle_pcs_maximum_rejected() {
-    // The circle PCS accepts trace heights up to 2^30, but the quotient domain of such a
-    // trace would need a point of order 2^32, which the circle group over Mersenne31 lacks.
-    // The verifier derives that domain from the claimed height, so it must refuse the claim
-    // instead of asking for the point.
+    // Invariant: a claimed height whose quotient domain leaves the circle group is rejected.
+    //
+    // Fixture state: the circle PCS accepts trace heights up to 2^30.
+    //
+    // The quotient domain of such a trace has size at least 2^31.
+    //
+    // Its shift would need a point of order 2^32, which the Mersenne31 circle group lacks.
     let config = make_circle_config();
     let airs = vec![
         FibonacciAir {
@@ -1863,6 +1866,7 @@ fn test_batch_degree_bits_at_circle_pcs_maximum_rejected() {
     let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
     let public_values = vec![pis0, pis1];
 
+    // Mutation: claim the largest height the PCS accepts for the second instance.
     proof.degree_bits[1] = 30;
     let err = verify_batch(&config, &airs, &proof, &public_values, common)
         .expect_err("a quotient domain beyond the circle group must be rejected");
