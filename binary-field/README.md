@@ -74,6 +74,13 @@ The polynomial-basis fields pack wherever `vpclmulqdq` widens the multiply:
 A prover keeps one packed value per trace column, and a 512-bit `GF(2^192)` value is 192 bytes.
 Measured end to end on Zen 5, the smaller footprint beats twice the products per instruction.
 
+The multiplies can still be 512 bits wide where the work allows it.
+On a core with a full 512-bit datapath, a carryless multiply costs the same at every width.
+So with `avx512f`, sums of products pair two terms per register.
+Squares, and products by a `Poly64`, pair two of their coordinates the same way.
+A scalar `Poly192` sum packs all six Karatsuba products of a term into one register pair.
+A single `Poly192` product keeps its narrow multiplies, since the lane moves would lengthen its latency.
+
 Reductions modulo the `GF(2^64)` polynomial use shifts and one byte shuffle, never a multiply.
 Dot products at every level accumulate unreduced products and reduce the sum once.
 Without a wide carryless multiply every one of these fields is its own packing.

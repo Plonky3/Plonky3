@@ -94,12 +94,16 @@ struct Unreduced([__m128i; 3]);
 
 impl Unreduced {
     /// The empty sum.
+    // Only the narrow sums accumulate, and 512-bit registers take the sums where they exist.
+    #[cfg(not(all(target_feature = "avx512f", target_feature = "vpclmulqdq")))]
     #[inline(always)]
     fn zero() -> Self {
         Self([__m128i::zero(); 3])
     }
 
     /// Coordinate-wise sum.
+    // Only the narrow sums accumulate, as above.
+    #[cfg(not(all(target_feature = "avx512f", target_feature = "vpclmulqdq")))]
     #[inline(always)]
     fn xor(self, other: Self) -> Self {
         Self(core::array::from_fn(|i| self.0[i].xor(other.0[i])))
@@ -194,6 +198,7 @@ pub(crate) fn poly_mul_192_by_64(a: &[u64; 3], k: &u64) -> [u64; 3] {
 }
 
 /// Sum unreduced products before paying for one reduction.
+#[cfg(not(all(target_feature = "avx512f", target_feature = "vpclmulqdq")))]
 #[inline]
 pub(crate) fn poly_dot_192<'a>(
     pairs: impl Iterator<Item = (&'a [u64; 3], &'a [u64; 3])>,
@@ -207,6 +212,7 @@ pub(crate) fn poly_dot_192<'a>(
 }
 
 /// Sum coefficient-field multiples before paying for one reduction.
+#[cfg(not(all(target_feature = "avx512f", target_feature = "vpclmulqdq")))]
 #[inline]
 pub(crate) fn poly_dot_192_by_64<'a>(
     pairs: impl Iterator<Item = (&'a [u64; 3], &'a u64)>,

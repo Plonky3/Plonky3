@@ -269,6 +269,8 @@ pub(crate) fn cubic_mul<L: Lanes64>(a: [L; 3], b: [L; 3]) -> [Wide<L>; 3] {
 ///     (a_0 + a_1 y + a_2 y^2)^2  =  a_0^2 + a_1^2 y^2 + a_2^2 y^4
 ///                                =  a_0^2 + a_2^2 y + (a_1^2 + a_2^2) y^2
 /// ```
+// The 512-bit packings square through their own paired kernel.
+#[cfg(any(test, not(target_feature = "avx512f")))]
 #[inline(always)]
 pub(crate) fn cubic_square<L: Lanes64>(a: [L; 3]) -> [Wide<L>; 3] {
     // The three coordinate squares, unreduced.

@@ -612,6 +612,17 @@ mod tests {
         Poly192::new([raw[0], raw[1], raw[2]])
     }
 
+    /// The dot product of the first `N` pairs, against the plain sum of products.
+    fn check_dot_product<const N: usize>(a: &[[u64; 3]], b: &[[u64; 3]]) {
+        let a: [Poly192; N] = core::array::from_fn(|i| element(a[i]));
+        let b: [Poly192; N] = core::array::from_fn(|i| element(b[i]));
+
+        // One product per term, each reduced on its own.
+        let expected: Poly192 = a.iter().zip(&b).map(|(&x, &y)| x * y).sum();
+
+        assert_eq!(Poly192::dot_product(&a, &b), expected, "N = {N}");
+    }
+
     /// The mixed dot product of the first `N` pairs, against the plain sum of products.
     fn check_mixed_dot_product<const N: usize>(a: &[[u64; 3]], f: &[u64]) {
         let a: [Poly192; N] = core::array::from_fn(|i| element(a[i]));
@@ -782,6 +793,31 @@ mod tests {
         fn the_frobenius_is_the_power_map_it_claims_to_be(a: [u64; 3]) {
             let x = element(a);
             prop_assert_eq!(x.frobenius(), x.exp_power_of_2(64));
+        }
+
+        #[test]
+        fn the_dot_product_survives_every_reduction_spill(
+            shift in 0usize..4,
+            n in 1usize..=5,
+        ) {
+            // Invariant: the deferred sum reduces like the per-term products, even at the extremes.
+            //
+            // Fixture state: coordinates drawn from values that set the top nibble of each product.
+            //
+            //     all ones, the top bit, the top nibble
+            const CORNERS: [u64; 4] = [u64::MAX, 1 << 63, 0xf << 60, 1];
+            let raw = |i: usize| core::array::from_fn(|c| CORNERS[(shift + i + c) % CORNERS.len()]);
+            let a: [[u64; 3]; 5] = core::array::from_fn(raw);
+            let b: [[u64; 3]; 5] = core::array::from_fn(|i| raw(i + 1));
+
+            // Every length from one term to five, so both even and odd counts are covered.
+            match n {
+                1 => check_dot_product::<1>(&a, &b),
+                2 => check_dot_product::<2>(&a, &b),
+                3 => check_dot_product::<3>(&a, &b),
+                4 => check_dot_product::<4>(&a, &b),
+                _ => check_dot_product::<5>(&a, &b),
+            }
         }
 
         #[test]

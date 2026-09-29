@@ -76,3 +76,88 @@ impl Lanes64 for __m128i {
         }
     }
 }
+
+/// The 512-bit register as a backend of the same algebra.
+///
+/// On a core with a full 512-bit datapath, a carryless multiply costs the same at every width.
+///
+/// So a kernel with four products to give runs them as one instruction.
+#[cfg(all(target_feature = "avx512f", target_feature = "vpclmulqdq"))]
+mod zmm {
+    #[cfg(target_feature = "avx512bw")]
+    use core::arch::x86_64::_mm_loadu_si128;
+    use core::arch::x86_64::{
+        __m512i, _mm_cvtsi64_si128, _mm512_clmulepi64_epi128, _mm512_setzero_si512,
+        _mm512_sll_epi64, _mm512_srl_epi64, _mm512_ternarylogic_epi64, _mm512_unpackhi_epi64,
+        _mm512_unpacklo_epi64, _mm512_xor_si512,
+    };
+    #[cfg(target_feature = "avx512bw")]
+    use core::arch::x86_64::{_mm512_broadcast_i32x4, _mm512_shuffle_epi8};
+
+    use crate::clmul::wide::Lanes64;
+    #[cfg(target_feature = "avx512bw")]
+    use crate::clmul::wide::TOP_NIBBLE_FOLD;
+
+    /// The truth table of `a ^ b ^ c` for a ternary logic instruction.
+    const XOR3: i32 = 0x96;
+
+    // SAFETY for every method below: this module is compiled only with `avx512f` and `vpclmulqdq`.
+    //
+    // The byte shuffle arm is compiled only with `avx512bw`, which it requires.
+    impl Lanes64 for __m512i {
+        #[inline(always)]
+        fn zero() -> Self {
+            unsafe { _mm512_setzero_si512() }
+        }
+
+        #[inline(always)]
+        fn xor(self, other: Self) -> Self {
+            unsafe { _mm512_xor_si512(self, other) }
+        }
+
+        #[inline(always)]
+        fn xor3(self, b: Self, c: Self) -> Self {
+            unsafe { _mm512_ternarylogic_epi64::<XOR3>(self, b, c) }
+        }
+
+        #[inline(always)]
+        fn clmul<const IMM: i32>(self, other: Self) -> Self {
+            unsafe { _mm512_clmulepi64_epi128::<IMM>(self, other) }
+        }
+
+        #[inline(always)]
+        fn unpack_low(self, other: Self) -> Self {
+            unsafe { _mm512_unpacklo_epi64(self, other) }
+        }
+
+        #[inline(always)]
+        fn unpack_high(self, other: Self) -> Self {
+            unsafe { _mm512_unpackhi_epi64(self, other) }
+        }
+
+        #[inline(always)]
+        fn shl<const N: i32>(self) -> Self {
+            // A constant count lowers to the immediate form.
+            unsafe { _mm512_sll_epi64(self, _mm_cvtsi64_si128(i64::from(N))) }
+        }
+
+        #[inline(always)]
+        fn shr<const N: i32>(self) -> Self {
+            // A constant count lowers to the immediate form.
+            unsafe { _mm512_srl_epi64(self, _mm_cvtsi64_si128(i64::from(N))) }
+        }
+
+        #[cfg(target_feature = "avx512bw")]
+        #[inline(always)]
+        fn fold_top_nibble(self) -> Self {
+            // The nibble lands in the low byte of each quadword, and every other byte is zero.
+            //
+            // Entry zero of the table is zero, so those bytes look up nothing.
+            unsafe {
+                let table =
+                    _mm512_broadcast_i32x4(_mm_loadu_si128(TOP_NIBBLE_FOLD.as_ptr().cast()));
+                _mm512_shuffle_epi8(table, self.shr::<60>())
+            }
+        }
+    }
+}

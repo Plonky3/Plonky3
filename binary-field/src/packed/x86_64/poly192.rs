@@ -28,8 +28,12 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
 use super::lanes::gf64::{self as lanes, Reg, WIDTH_64};
+#[cfg(target_feature = "avx512f")]
+use super::pairs;
 use super::poly64::PackedPoly64;
-use crate::clmul::wide::{Wide, cubic_mul, cubic_mul_base, cubic_square};
+#[cfg(not(target_feature = "avx512f"))]
+use crate::clmul::wide::cubic_square;
+use crate::clmul::wide::{Wide, cubic_mul, cubic_mul_base};
 use crate::{Gf2, Poly64, Poly192};
 
 /// The number of coordinates over the coefficient field.
@@ -148,6 +152,8 @@ impl Mul for PackedPoly192 {
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         // Twelve carryless multiplies for the register, two per Karatsuba term.
+        //
+        // Pairing the terms at 512 bits halves that, but its lane moves lengthen the latency.
         Self::reduce(cubic_mul(self.to_vectors(), rhs.to_vectors()))
     }
 }
@@ -158,7 +164,12 @@ impl Mul<PackedPoly64> for PackedPoly192 {
     /// The scalar stays inside each coordinate: three products, no fold in `y`.
     #[inline]
     fn mul(self, rhs: PackedPoly64) -> Self {
-        // Six carryless multiplies for the register, two per coordinate.
+        // Four carryless multiplies, the first two coordinates sharing a 512-bit register.
+        #[cfg(target_feature = "avx512f")]
+        return Self::from_vectors(pairs::cubic_mul_base(self.to_vectors(), rhs.to_vector()));
+
+        // Otherwise six, two per coordinate.
+        #[cfg(not(target_feature = "avx512f"))]
         Self::reduce(cubic_mul_base(self.to_vectors(), rhs.to_vector()))
     }
 }
@@ -311,6 +322,13 @@ impl PrimeCharacteristicRing for PackedPoly192 {
     #[inline]
     fn square(&self) -> Self {
         // The cross terms vanish in characteristic 2, so only the coordinate squares remain.
+        //
+        // Two of them share a 512-bit register, where the target has one.
+        #[cfg(target_feature = "avx512f")]
+        return Self::from_vectors(pairs::cubic_square(self.to_vectors()));
+
+        // Otherwise all three at 256 bits.
+        #[cfg(not(target_feature = "avx512f"))]
         Self::reduce(cubic_square(self.to_vectors()))
     }
 
@@ -324,7 +342,20 @@ impl PrimeCharacteristicRing for PackedPoly192 {
     /// Reduction is linear, so the whole sum reduces its three coordinates once.
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        // Accumulate the folded, unreduced coordinates of every term.
+        // Two terms per 512-bit multiply, where the target has one.
+        #[cfg(target_feature = "avx512f")]
+        let sum = pairs::sum_of_products(
+            u,
+            v,
+            |a, b| {
+                let join = |x: &[Self; 2]| pairs::join_all(x[0].to_vectors(), x[1].to_vectors());
+                cubic_mul(join(a), join(b))
+            },
+            |a, b| cubic_mul(a.to_vectors(), b.to_vectors()),
+        );
+
+        // Otherwise accumulate the folded, unreduced coordinates of every term.
+        #[cfg(not(target_feature = "avx512f"))]
         let sum = u.iter().zip(v).fold([Wide::zero(); DEGREE], |sum, (a, b)| {
             let product = cubic_mul(a.to_vectors(), b.to_vectors());
             array::from_fn(|i| sum[i].xor(product[i]))
@@ -348,7 +379,20 @@ impl Algebra<PackedPoly64> for PackedPoly192 {
     where
         PackedPoly64: Dup,
     {
-        // Accumulate three unreduced coordinate products per term.
+        // Two terms per 512-bit multiply, where the target has one.
+        #[cfg(target_feature = "avx512f")]
+        let sum = pairs::sum_of_products(
+            a,
+            f,
+            |x, k| {
+                let x = pairs::join_all(x[0].to_vectors(), x[1].to_vectors());
+                cubic_mul_base(x, pairs::join(k[0].to_vector(), k[1].to_vector()))
+            },
+            |x, k| cubic_mul_base(x.to_vectors(), k.to_vector()),
+        );
+
+        // Otherwise accumulate three unreduced coordinate products per term.
+        #[cfg(not(target_feature = "avx512f"))]
         let sum = a.iter().zip(f).fold([Wide::zero(); DEGREE], |sum, (x, k)| {
             let product = cubic_mul_base(x.to_vectors(), k.to_vector());
             array::from_fn(|i| sum[i].xor(product[i]))
@@ -609,6 +653,30 @@ mod tests {
                     &[pk, pk],
                 )),
                 each(&|l| x[l] * scalars[l] + y[l] * scalars[l]),
+            );
+
+            // Odd counts: wide builds pair the terms, so the last one takes the narrow route.
+            //
+            //     1 term    -> no pair, one narrow product
+            //     3 terms   -> one pair,  one narrow product
+            let pb = packed(&each(&|l| broadcast * y[l]));
+            prop_assert_eq!(
+                unpacked(PackedPoly192::dot_product(&[px], &[py])),
+                each(&|l| x[l] * y[l]),
+            );
+            prop_assert_eq!(
+                unpacked(PackedPoly192::dot_product(&[px, py, pb], &[py, pb, px])),
+                each(&|l| x[l] * y[l] + y[l] * (broadcast * y[l]) + (broadcast * y[l]) * x[l]),
+            );
+            prop_assert_eq!(
+                unpacked(<PackedPoly192 as p3_field::Algebra<PackedPoly64>>::mixed_dot_product(
+                    &[px, py, pb],
+                    &[pk, pk * pk, pk],
+                )),
+                each(&|l| {
+                    let k = scalars[l];
+                    x[l] * k + y[l] * (k * k) + (broadcast * y[l]) * k
+                }),
             );
         }
     }
