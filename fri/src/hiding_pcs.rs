@@ -17,6 +17,7 @@ use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_util::log2_strict_usize;
 use rand::distr::{Distribution, StandardUniform};
+use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
 use spin::Mutex;
 use tracing::info_span;
@@ -234,6 +235,11 @@ where
         for (_, mat) in &evaluations {
             self.check_hiding_budget(mat.height(), Challenge::DIMENSION, 1)?;
         }
+        // Fork a private RNG so the shared lock is released before any parallel work.
+        //
+        // Why: a waiting rayon worker may run a queued call on this same PCS.
+        // That call would spin forever on a lock its own thread still holds.
+        let mut rng = StdRng::from_rng(&mut *self.rng.lock());
         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> =
             info_span!("randomize polys").in_scope(|| {
                 evaluations
@@ -244,10 +250,8 @@ where
                         // To generate it, we add `w + 2 * num_random_codewords` columns to the original matrix, then reshape it by setting the width to `w + num_random_codewords`.
                         // All columns are added on the right hand side so, after reshaping, this has the net effect of adding `num_random_codewords` random columns on the right and interleaving the original trace with random rows.
 
-                        let mut random_evaluation = mat.with_random_cols(
-                            mat_width + 2 * self.num_random_codewords,
-                            &mut *self.rng.lock(),
-                        );
+                        let mut random_evaluation = mat
+                            .with_random_cols(mat_width + 2 * self.num_random_codewords, &mut rng);
                         random_evaluation.width = mat_width + self.num_random_codewords;
 
                         (domain, random_evaluation)
@@ -493,10 +497,15 @@ where
             .map(|i| cis[i] * last_chunk_ci_inv)
             .collect_vec();
 
-        let mut rng = self.rng.lock();
+        // Fork a private RNG so the shared lock is released before the parallel DFTs.
+        //
+        // Why: this runs inside the batch prover's parallel loop over AIR instances.
+        // A waiting rayon worker may run another instance's call on this same PCS.
+        // That call would spin forever on a lock its own thread still holds.
+        let mut rng = StdRng::from_rng(&mut *self.rng.lock());
         let randomized_evaluations: Vec<RowMajorMatrix<Val>> = evaluations
             .into_iter()
-            .map(|mat| mat.with_random_cols(self.num_random_codewords, &mut *rng))
+            .map(|mat| mat.with_random_cols(self.num_random_codewords, &mut rng))
             .collect();
         // Add random values to the LDE evaluations as described in https://eprint.iacr.org/2024/1037.pdf.
         // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
@@ -786,7 +795,7 @@ mod tests {
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::SeedableRng;
-    use rand::rngs::{SmallRng, StdRng};
+    use rand::rngs::SmallRng;
 
     use super::*;
 
@@ -1633,7 +1642,8 @@ mod tests {
         domains: &[Domain],
         mats: &[RowMajorMatrix<Val>],
     ) -> Vec<RowMajorMatrix<Val>> {
-        let mut rng = StdRng::seed_from_u64(QUOTIENT_RNG_SEED);
+        // The prover draws its masks from a private RNG forked off the seeded one.
+        let mut rng = StdRng::from_rng(&mut StdRng::seed_from_u64(QUOTIENT_RNG_SEED));
 
         let cis = get_zp_cis(domains);
         let last_chunk = domains.len() - 1;
