@@ -147,6 +147,12 @@ pub enum WhirConfigError {
         "derived proof-of-work of {required} bits exceeds the {budget}-bit grinding budget; the field or rate is too weak for the requested security"
     )]
     PowBitsExceedBudget { required: usize, budget: usize },
+    /// A derived proof-of-work difficulty is at least the base field's bit length.
+    ///
+    /// A witness is checked by sampling `bits` bits of one base field element.
+    /// A difficulty that wide cannot be sampled, so grinding at it panics.
+    #[error("derived proof-of-work of {bits} bits does not fit a {field_bits}-bit base field")]
+    PowBitsExceedField { bits: usize, field_bits: usize },
 }
 
 /// Derived configuration for a single intermediate WHIR round.
@@ -794,6 +800,18 @@ where
             });
         }
 
+        // Invariant: every derived difficulty stays below the base field's bit length.
+        //
+        // The challenger samples a difficulty's bits from one base field element.
+        // Past the field's bit length that sample does not exist, and grinding panics.
+        let field_bits = F::bits().min(usize::BITS as usize);
+        if required >= field_bits {
+            return Err(WhirConfigError::PowBitsExceedField {
+                bits: required,
+                field_bits,
+            });
+        }
+
         Ok(config)
     }
 
@@ -1040,12 +1058,11 @@ mod tests {
         // Flooring the gap would make the sum dip below the target whenever
         // algebraic_bits is fractional.
         //
-        // Unique decoding needs no out-of-domain samples, so the 31-bit base
-        // field is feasible, and its query and combination errors are
-        // fractional -- exactly the case where floor and ceil differ.
+        // The query and combination errors are fractional, which is exactly
+        // the case where floor and ceil differ.
         //
-        // The 31-bit field forces a large grinding gap, so the budget is set
-        // wide enough to admit it; this test probes the rounding, not the cap.
+        // The budget is the widest one the 31-bit base field can grind, so
+        // every phase that falls short of the target is made up by PoW.
         //
         // The budget stays below the target, so the algebraic protocol still covers bits.
         //
@@ -1055,17 +1072,17 @@ mod tests {
         let soundness = SecurityAssumption::UniqueDecoding;
         let params = ProtocolParameters {
             security_level: 128,
-            pow_bits: 127,
+            pow_bits: 30,
             round_log_inv_rates: vec![],
             folding_factor: FoldingFactor::Constant(4),
             soundness_type: soundness,
             starting_log_inv_rate: 1,
         };
-        let config = WhirConfig::<F, F, MyChallenger>::new(20, params).unwrap();
+        let config = WhirConfig::<EF4, F, MyChallenger>::new(20, params).unwrap();
 
         // Target in bits, and the field size the combination error is taken over.
         let target = config.security_level as f64;
-        let field_bits = F::bits();
+        let field_bits = EF4::bits();
 
         // Walk the intermediate rounds, tracking the pre-fold (old) rate.
         // Queries test proximity to the code before this round's fold.
@@ -1212,6 +1229,37 @@ mod tests {
             }
         }
         assert!(checked > 0);
+    }
+
+    #[test]
+    fn new_rejects_pow_the_base_field_cannot_grind() {
+        // Invariant: a derived difficulty the challenger cannot sample is a construction error.
+        //
+        // The duplex challenger checks a witness by sampling `bits` bits of one base field element.
+        // BabyBear has 31 bits, and 2^31 exceeds its order, so 31 or more bits panic in `grind`.
+        //
+        // Fixture state: a 2^27 trace at unique decoding and 128 bits, with a 40-bit budget.
+        //
+        // The schedule fits the budget but grinds beyond the field.
+        let params = ProtocolParameters {
+            security_level: 128,
+            pow_bits: 40,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: SecurityAssumption::UniqueDecoding,
+            starting_log_inv_rate: 3,
+        };
+        let err = WhirConfig::<EF4, F, MyChallenger>::new(27, params).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                WhirConfigError::PowBitsExceedField {
+                    bits: 31..=40,
+                    field_bits: 31,
+                }
+            ),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
