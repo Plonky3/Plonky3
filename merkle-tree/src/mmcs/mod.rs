@@ -229,9 +229,11 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
     /// Reject a commitment that does not hold exactly the roots the tree's top layers produce.
     ///
-    /// The cap is the layer `cap_height` steps below the root.
+    /// The cap is the layer as many steps below the root as the configured cap height.
+    ///
     /// Its length is the product of the arities above it, fixed by the dimensions alone.
-    /// Without this check, extra roots pass verification unauthenticated.
+    ///
+    /// Openings never reach roots past that length, so nothing else would reject them.
     pub(crate) fn check_cap_size(
         &self,
         commit: &MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>,
