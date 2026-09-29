@@ -11,12 +11,16 @@ use p3_baby_bear::BabyBear;
 use p3_binary_field::{Poly64, Poly192};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{ExtensionField, Field};
+use p3_goldilocks::Goldilocks;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
+
+/// Degree-2 extension of the 64-bit prime field.
+type Gl2 = BinomialExtensionField<Goldilocks, 2>;
 
 /// Degree-4 extension of the 31-bit prime field.
 type Bb4 = BinomialExtensionField<BabyBear, 4>;
@@ -140,6 +144,10 @@ fn bench_baby_bear(c: &mut Criterion) {
     bench_field_pair::<BabyBear, Bb4>(c, "bb4");
 }
 
+fn bench_goldilocks(c: &mut Criterion) {
+    bench_field_pair::<Goldilocks, Gl2>(c, "gl2");
+}
+
 fn bench_binary(c: &mut Criterion) {
     bench_field_pair::<Poly64, Poly192>(c, "gf192");
 }
@@ -150,6 +158,6 @@ criterion_group! {
         .sample_size(20)
         .warm_up_time(core::time::Duration::from_millis(300))
         .measurement_time(core::time::Duration::from_millis(900));
-    targets = bench_baby_bear, bench_binary
+    targets = bench_baby_bear, bench_goldilocks, bench_binary
 }
 criterion_main!(benches);

@@ -24,7 +24,7 @@ mod spread;
 
 use eq::{EqMaybePacked, packed_mixed_dot};
 use itertools::Itertools;
-use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
+use p3_field::{ExtensionField, Field, PackedField, PackedFieldExtension, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use spread::SpreadWeights;
@@ -454,7 +454,12 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // An inner block that fills whole lane groups accumulates packed, then unpacks once.
         //
         // The scalar accumulator would multiply one extension lane at a time.
-        if k_inner >= log2_strict_usize(F::Packing::WIDTH) && self.eq1.is_packed() {
+        //
+        // A packing that multiplies lane by lane gains nothing from it, and pays the pack and unpack.
+        if F::Packing::MUL_LANES > 1
+            && k_inner >= log2_strict_usize(F::Packing::WIDTH)
+            && self.eq1.is_packed()
+        {
             return self.compress_prefix_to_packed(poly).unpack::<F, EF>();
         }
 
