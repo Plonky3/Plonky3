@@ -550,6 +550,84 @@ fn prove_verify_mixed_height_preprocessed_roundtrips() {
 }
 
 #[test]
+fn verify_rejects_preprocessed_tables_at_heights_the_key_was_not_set_up_for() {
+    // The preprocessed tables are stacked tallest first into one commitment. Tables of
+    // heights 256 and 128 therefore stack into the same polynomial whichever AIR owns which,
+    // so a key set up with air a at 256 and air b at 128 also opens a proof that runs air a
+    // at 128 and air b at 256. Each AIR would then read the other table's fixed column.
+    //
+    //     key:   a -> 256 rows (8 variables), b -> 128 rows (7 variables)
+    //     proof: a -> 128 rows,               b -> 256 rows
+    let (n_hi, n_lo) = (256, 128);
+    let (log_hi, log_lo) = (log2_strict_usize(n_hi), log2_strict_usize(n_lo));
+    let main_cells = MAIN_WIDTH * (n_hi + n_lo);
+    let preprocessed_cells = PREPROCESSED_WIDTH * (n_hi + n_lo);
+    let config = WhirConfigForTest {
+        pcs: pcs_for_stacked(log2_ceil_usize(main_cells)),
+        preprocessed_pcs: pcs_for_stacked(log2_ceil_usize(preprocessed_cells)),
+    };
+
+    let air_a = PreprocessedAir {
+        height: n_hi,
+        cells: &[],
+    };
+    let air_b = PreprocessedAir {
+        height: n_lo,
+        cells: &[],
+    };
+    let (_, vk) = setup(&config, &[&air_a, &air_b], &mut challenger()).unwrap();
+
+    // The prover sets up the swapped heights, which commit to the same stacked polynomial.
+    let swapped_a = PreprocessedAir {
+        height: n_lo,
+        cells: &[],
+    };
+    let swapped_b = PreprocessedAir {
+        height: n_hi,
+        cells: &[],
+    };
+    let (swapped_pk, _) = setup(&config, &[&swapped_a, &swapped_b], &mut challenger()).unwrap();
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(
+                &swapped_a,
+                Table::new(main_trace(&fixed_column(n_lo)).transpose()),
+                &swapped_pk,
+                &[],
+            ),
+            ProverInstance::new(
+                &swapped_b,
+                Table::new(main_trace(&fixed_column(n_hi)).transpose()),
+                &swapped_pk,
+                &[],
+            ),
+        ]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&air_a, &vk, log_lo, &[]),
+            VerifierInstance::new(&air_b, &vk, log_hi, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect_err("heights the key was not set up for must be rejected");
+    assert!(matches!(
+        err,
+        VerificationError::PreprocessedHeights { ref expected, ref got }
+            if *expected == [log_hi, log_lo] && *got == [log_lo, log_hi]
+    ));
+}
+
+#[test]
 fn setup_is_reusable_across_proofs() {
     // One setup commits the preprocessed trace, then two independent proofs reuse it.
     let n = 256;

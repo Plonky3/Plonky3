@@ -49,6 +49,16 @@ where
     /// The proof carries a preprocessed opening, but the verifying key expects none.
     #[error("preprocessed opening present but not expected")]
     UnexpectedPreprocessedOpening,
+    /// The instances do not have the preprocessed tables the verifying key was set up with.
+    #[error(
+        "preprocessed tables have {got:?} row variables, but the key was set up for {expected:?}"
+    )]
+    PreprocessedHeights {
+        /// Row variables of each committed table, as recorded at setup.
+        expected: Vec<usize>,
+        /// Row variables of each instance with preprocessed columns, in batch order.
+        got: Vec<usize>,
+    },
     /// A statement-level transcript step could not be replayed.
     #[error("transcript: {0}")]
     Transcript(MultiStarkTranscriptFailure),
@@ -223,6 +233,21 @@ where
     let airs = instances.airs();
     let log_heights = instances.num_variables();
     let public_values = instances.public_values();
+
+    // The preprocessed commitment binds the stacked tables, not how they split between the
+    // AIRs, so each table's height has to come from the key.
+    let preprocessed_log_heights = airs
+        .iter()
+        .zip(&log_heights)
+        .filter(|(air, _)| air.preprocessed_width() != 0)
+        .map(|(_, &log_height)| log_height)
+        .collect::<Vec<_>>();
+    if preprocessed_log_heights != verifying_key.preprocessed_log_heights {
+        return Err(VerificationError::PreprocessedHeights {
+            expected: verifying_key.preprocessed_log_heights.clone(),
+            got: preprocessed_log_heights,
+        });
+    }
 
     // Reject a malformed public boundary declaration before the transcript is touched.
     // The pins the folder injects read columns and public values by those numbers.

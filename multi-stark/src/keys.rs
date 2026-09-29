@@ -15,7 +15,9 @@ use p3_bus::BusSymbolicBuilder;
 use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
 use p3_lookup::InteractionSymbolicBuilder;
+use p3_matrix::Matrix;
 use p3_sumcheck::layout::Table;
+use p3_util::log2_strict_usize;
 
 use crate::ProvingError;
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
@@ -121,6 +123,11 @@ where
 pub struct VerifyingKey<C: MultiStarkConfig> {
     /// Batched preprocessed commitment, present only when at least one AIR declares it.
     pub(crate) preprocessed: Option<Commitment<C>>,
+    /// Row variables of each committed preprocessed table, in stacking order.
+    ///
+    /// The commitment alone does not fix them: tables of heights 2^8 and 2^7 stack into the
+    /// same polynomial as the same tables listed the other way round.
+    pub(crate) preprocessed_log_heights: Vec<usize>,
     /// Zerocheck metadata fixed by the AIRs at setup.
     pub(crate) air_profiles: Vec<AirProfile>,
 }
@@ -171,12 +178,14 @@ where
         .map(|&air| AirShape::of::<C::Val, A>(air))
         .collect::<Vec<_>>();
     let mut tables = Vec::new();
+    let mut preprocessed_log_heights = Vec::new();
 
     for air in airs.iter().filter(|air| air.preprocessed_width() != 0) {
         let trace = air
             .preprocessed_trace()
             .expect("AIR with preprocessed columns must return a preprocessed trace");
 
+        preprocessed_log_heights.push(log2_strict_usize(trace.height()));
         tables.push(Table::new(trace.transpose()));
     }
 
@@ -190,6 +199,7 @@ where
             },
             VerifyingKey {
                 preprocessed: None,
+                preprocessed_log_heights,
                 air_profiles,
             },
         ));
@@ -218,6 +228,7 @@ where
     // The verifier key keeps only the commitment; shape facts come from AIR metadata.
     let verifying = VerifyingKey {
         preprocessed: Some(commitment),
+        preprocessed_log_heights,
         air_profiles,
     };
     Ok((proving, verifying))
