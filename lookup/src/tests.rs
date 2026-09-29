@@ -1551,3 +1551,37 @@ fn exclusive_query_balances_against_provider() {
     // Balanced multiset across the two AIRs: no panic.
     check_lookups(&[query_instance, provider_instance]);
 }
+
+/// AIR emitting one local lookup whose two query tuples each declare the maximal `u32` bound.
+///
+/// The per-row bound of the whole lookup is their sum, `2 * u32::MAX`, which does not fit.
+struct OverweightLocalAir;
+
+impl<F: Field> BaseAir<F> for OverweightLocalAir {
+    fn width(&self) -> usize {
+        1
+    }
+}
+
+impl<AB> Air<AB> for OverweightLocalAir
+where
+    AB: AirBuilder<F: Field> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let x: AB::Expr = main.current_slice()[0].into();
+        builder.push_local_interaction(vec![
+            (vec![x.clone()], Count::bounded(x.clone(), u32::MAX)),
+            (vec![x.clone()], Count::bounded(x, u32::MAX)),
+        ]);
+    }
+}
+
+#[test]
+#[should_panic(expected = "count_weight overflow")]
+fn local_lookup_weight_overflow_is_rejected() {
+    // Saturating at `u32::MAX` would under-report the bound by half.
+    // The height check `sum_i w_i * h_i < p` would then accept heights it must reject
+    // for any field wider than 32 bits.
+    let _ = Lookups::<F>::from_air::<EF, _>(&OverweightLocalAir);
+}
