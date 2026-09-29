@@ -4,10 +4,10 @@ There are two kinds of patches.
 
 | | `pre-extraction/` | `post-extraction/` |
 |---|---|---|
-| Patches | Rust source (any crate in the workspace) | generated Lean (`generated/`) |
+| Patches | Rust source (any crate in the workspace) | generated Lean (each `<Lib>/Extraction/`) |
 | Applied | **before** `cargo hax` runs | **after** `cargo hax` runs |
-| Reverted | yes — unconditionally, on exit | no; the next run regenerates `generated/` and re-applies it |
-| Checked in | the `.patch` files | the `.patch` files (never `generated/`) |
+| Reverted | yes — unconditionally, on exit | no; the next run regenerates `Extraction/` and re-applies it |
+| Checked in | the `.patch` files | the `.patch` files (never `Extraction/`) |
 | Trust cost | **changes the artifact under verification** | changes only the Lean encoding of it |
 | Checked by | `test-pre-patches.py` + a `cargo check` of the extracted variant | `lake build` |
 | Currently | 3 patches, `010-`..`030-`. The hidden items are behind `cfg(hax_backend_lean)`; the cfg declaration and some redundant bounds are unconditional | 3 patches, `010-`..`030-` |
@@ -31,7 +31,7 @@ longer exactly the thing that ships. Two rules keep that cost down:
 A **post-extraction** patch says *aeneas translated this badly and we fixed
 the translation*. The Rust that ships is still exactly what was extracted, so
 the patch is a claim about the encoding. A reviewer checks it by reading the
-diff against `generated/pristine/`, the unpatched output of the last run.
+diff against `.pristine/`, the unpatched output of the last run.
 
 ## Upstream tests (`test-pre-patches.py`)
 
@@ -89,8 +89,8 @@ script.
 
 Patches apply in filename order (`010-`, `020-`, …), all-or-nothing, with
 `patch -p1 -F0` (no fuzz). Pre-extraction paths are from the **repo root**;
-post-extraction paths are from **`generated/`** (e.g.
-`p3-baby-bear/P3BabyBear/Extraction/Funs.lean`). Do not apply by hand unless
+post-extraction paths are from **this package** (e.g.
+`P3BabyBear/Extraction/Funs.lean`). Do not apply by hand unless
 debugging a reject.
 
 After any run, `git status --porcelain` must show no Rust changes. The revert
@@ -102,12 +102,12 @@ Patches are not regenerated. `./new-patch.sh` never overwrites.
 
 | Situation | Action |
 |-----------|--------|
-| New deviation | Edit the live file(s) (for post-extraction, under `generated/`), then `./new-patch.sh <phase> 040-short-slug` (number must sort last) before the next `extract.sh` run. Fill the TODO header. |
+| New deviation | Edit the live file(s) (for post-extraction, under `<Lib>/Extraction/`), then `./new-patch.sh <phase> 040-short-slug` (number must sort last) before the next `extract.sh` run. Fill the TODO header. |
 | A patch no longer applies | Edit **that** `.patch` until `./check-patches.sh` is green. `.rej` files show what moved. |
 | A patch is obsolete | Delete it. Shrinking the set is the goal. |
 
 In generated Lean: mark every edit `-- PATCHED`; keep a replaced call as a
-comment beside it. Prefer fixing `assumptions/` over adding a
+comment beside it. Prefer fixing an `Assumptions/` file over adding a
 patch. Never `sorry`. In Rust: mark every edit `PATCHED` in a comment.
 
 Header fields: `Patch`, `Phase`, `Target`, `Hunks`, `Cost` (required);

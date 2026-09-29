@@ -6,7 +6,7 @@ but fails on the body of `Poseidon2::new` (see TCB.md, layer 3). The
 structures are copied from that partial translation, so field names and order
 are aeneas's own; `new` and `ExternalLayerConstants::new` are assumed.
 -/
-import Interface.P3Field
+import P3Monty31.Assumptions.P3Field
 open CoreModels Aeneas
 open Aeneas.Std hiding namespace core alloc
 open RustM ControlFlow Error

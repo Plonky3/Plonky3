@@ -3,30 +3,30 @@
 # The Trusted Codebase
 
 Everything that, if wrong, could compromise this extraction *without* a Lean
-error to flag it. Machine output lives in `generated/` (not committed;
-`extract.sh` rewrites it); what is written by hand is `assumptions/`, `spec/`
-and `patches/`.
+error to flag it. The layout is hax's: machine output is each library's
+`Extraction/` (not committed; `extract.sh` rewrites it); what is written by hand
+is each library's `Assumptions/`, `P3BabyBear/Verification/` and `patches/`.
 
 Measured totals (regenerate with the commands in [`SYNC.md`](SYNC.md)):
 
 | Quantity | Value |
 |---|---|
-| Generated for p3-baby-bear (`generated/p3-baby-bear/…/{Types,Funs}.lean`) | **2947** lines, **0** `sorry` |
-| Generated for dependencies (`generated/p3-{monty-31,mds}/…/{Types,Funs}.lean`) | **568** lines, **0** `sorry` |
-| Hand-written assumptions (`assumptions/`) | **522** lines, **0** `sorry`, **0** `axiom`, **10** `opaque` |
+| Generated for p3-baby-bear (`P3BabyBear/Extraction/{Types,Funs}.lean`) | **2947** lines, **0** `sorry` |
+| Generated for dependencies (`P3{Monty31,Mds}/Extraction/{Types,Funs}.lean`) | **568** lines, **0** `sorry` |
+| Hand-written assumptions (`*/Assumptions/`) | **522** lines, **0** `sorry`, **0** `axiom`, **10** `opaque` |
 | Pre-extraction patches (Rust source) | **3** files, **17** hunks. Hidden items are behind `cfg(hax_backend_lean)`; the cfg declaration and some redundant bounds are not |
 | Upstream tests diverging under the pre-patches | **0** (6742 run) |
 | Post-extraction patches | **3** files, **17** hunks |
-| Theorems in `spec/` | **27**, axiom footprint `[propext, Classical.choice, Quot.sound]` |
+| Theorems in `P3BabyBear/Verification/Proofs/` | **27** (24 claims, 3 helpers), axiom footprint within `[propext, Classical.choice, Quot.sound]` |
 | **`lake build` warnings** | **0** |
 
 There is no `sorry`, no `axiom` and no `native_decide` in anything the build
 compiles. (aeneas regenerates `Extraction/FunsExternal_Template.lean` with four
 `axiom`s on every run; nothing imports it, so it is never built. The imported
-module, `assumptions/stubs/P3BabyBear/Assumptions/FunsExternal.lean`, states them as
+module, `P3BabyBear/Assumptions/FunsExternal.lean`, states them as
 `opaque`.) Every assumption is a named `opaque` constant (layer 3). No theorem
-in `spec/` depends on any of them: `#print axioms` on each shows only Lean's
-three standard axioms.
+under `Verification/` depends on any of them: `#print axioms` on each shows only
+Lean's three standard axioms.
 
 ## Layer 1 — the Lean toolchain
 
@@ -44,7 +44,7 @@ three standard axioms.
 Both are pinned to exactly what hax 0.4.1 resolves. The generated files and
 the libraries must come from the same aeneas build, and a floating `rev` would
 let them drift apart silently. Soundness rests on these modelling Rust
-faithfully. `assumptions/Interface/CoreModelsExt.lean` fills two gaps in
+faithfully. `P3Monty31/Assumptions/CoreModelsExt.lean` fills two gaps in
 `CoreModels` (below).
 
 ## Layer 3 — the dependency interface
@@ -53,7 +53,7 @@ aeneas emits only the crate it runs on. Everything p3-baby-bear's output names
 in `p3-monty-31`, `p3-mds`, `p3-field`, `p3-poseidon1` and `p3-poseidon2`
 comes from one of two places.
 
-### Extracted: `generated/p3-monty-31/`, `generated/p3-mds/` (trusted like the main extraction, not hand-written)
+### Extracted: `P3Monty31/Extraction/`, `P3Mds/Extraction/` (trusted like the main extraction, not hand-written)
 
 Scoped runs of the same pipeline over the dependency crate, rooted with
 `--start-from` at exactly the items p3-baby-bear refers to (`DEPS` in
@@ -65,33 +65,36 @@ dependency's declarations or bodies is caught, not assumed away.
 | `p3-monty-31` | the `data_traits`/`mds`/`poseidon{1,2}` parameter traits, `MontyField31::new`, its `Clone` impl | every trait declaration p3-baby-bear implements, their default constants, `MontyField31`, **`new` and `utils::to_monty` with real bodies** |
 | `p3-mds` | `util::first_row_to_first_col` | the function with its real loop |
 
-### Hand-written: `assumptions/`
+### Hand-written: each library's `Assumptions/`
+
+Each holds what that library's extraction refers to and nothing generates.
 
 | File | What | Why not extracted |
 |---|---|---|
-| `Interface/P3Field.lean` | `PrimeCharacteristicRing` (the 7 members used), `Field`, `PrimeField` (memberless), `UniformSamplingField`, `dup::Dup`; `exp_1725656503` (**opaque**) | p3-field's trait hierarchy is mutually recursive through its associated types, and a scoped run pulls in default-method bodies that fail |
-| `Interface/P3Poseidon1.lean` | `Poseidon1`, `Poseidon1Constants` (complete), the two layer-constructor traits; `FullRoundConstants`, `PartialRoundConstants` (**opaque** types); `Poseidon1::new` (**opaque**) | aeneas internal error in `core::iter` |
-| `Interface/P3Poseidon2.lean` | `Poseidon2`, `ExternalLayerConstants`, the two layer-constructor traits (copied from aeneas's partial translation); `Poseidon2::new`, `ExternalLayerConstants::new` (**opaque**) | aeneas internal error on `Poseidon2::new` |
-| `Interface/P3Monty31Missing.lean` | `new_array`, `new_2d_array` (transcribed: elementwise `new`); the `no_packing` Poseidon layer types and their four constructor impls (transcribed: one struct literal each); memberless `Field`/`PrimeField` witnesses | aeneas drops `new_array`/`new_2d_array` without a diagnostic; the rest was not rooted |
-| `Interface/CoreModelsExt.lean` | `Clone for PhantomData<T>` (identity), `AsRef<U> for &T` (delegation) | missing from hax-lean `CoreModels` |
-| `stubs/P3BabyBear/Assumptions/FunsExternal.lean` | the four `Debug::fmt` bodies (**opaque**) | charon is told to make them opaque (below) |
-| `stubs/P3BabyBear/Assumptions/TypesExternal.lean`, `stubs/P3Monty31/Assumptions/*.lean` | imports only | the generated code imports these module names; they point it at `Interface/` |
+| `P3Monty31/Assumptions/P3Field.lean` | `PrimeCharacteristicRing` (the 7 members used), `Field`, `PrimeField` (memberless), `UniformSamplingField`, `dup::Dup`; `exp_1725656503` (**opaque**) | p3-field's trait hierarchy is mutually recursive through its associated types, and a scoped run pulls in default-method bodies that fail |
+| `P3BabyBear/Assumptions/P3Poseidon1.lean` | `Poseidon1`, `Poseidon1Constants` (complete), the two layer-constructor traits; `FullRoundConstants`, `PartialRoundConstants` (**opaque** types); `Poseidon1::new` (**opaque**) | aeneas internal error in `core::iter` |
+| `P3BabyBear/Assumptions/P3Poseidon2.lean` | `Poseidon2`, `ExternalLayerConstants`, the two layer-constructor traits (copied from aeneas's partial translation); `Poseidon2::new`, `ExternalLayerConstants::new` (**opaque**) | aeneas internal error on `Poseidon2::new` |
+| `P3BabyBear/Assumptions/P3Monty31.lean` | `new_array`, `new_2d_array` (transcribed: elementwise `new`); the `no_packing` Poseidon layer types and their four constructor impls (transcribed: one struct literal each); memberless `Field`/`PrimeField` witnesses | aeneas drops `new_array`/`new_2d_array` without a diagnostic; the rest was not rooted |
+| `P3Monty31/Assumptions/CoreModelsExt.lean` | `Clone for PhantomData<T>` (identity), `AsRef<U> for &T` (delegation) | missing from hax-lean `CoreModels` |
+| `P3BabyBear/Assumptions/FunsExternal.lean` | the four `Debug::fmt` bodies (**opaque**) | charon is told to make them opaque (below) |
+| `P3BabyBear/Assumptions/TypesExternal.lean`, `P3Monty31/Assumptions/{Types,Funs}External.lean` | imports only | the generated code imports these module names; they point it at the files above |
 
-The `…/Assumptions/` files carry the module names aeneas's output imports,
-and `extract.sh` fails if a regenerated `Extraction/*External_Template.lean`
-declares different names than its hand-written counterpart.
+The `*External.lean` files carry the module names aeneas's output imports.
+hax seeds them when missing and never overwrites them; `extract.sh` fails if a
+regenerated `Extraction/*External_Template.lean` declares different names than
+its hand-written counterpart, or if one is still hax's unfilled seed.
 
 The trait structures declare only the members the generated code projects.
 Instances are passed in as parameters, so anything proved about code generic
 over, say, `PrimeCharacteristicRing` holds for every implementation. The
 opaque items are the whole of what is *assumed*:
 
-| Opaque | Reached by `spec/`? |
+| Opaque | Reached by `Verification/`? |
 |---|---|
 | `p3_field.exponentiation.exp_1725656503` | no |
 | `p3_poseidon1.Poseidon1.new`, `…FullRoundConstants`, `…PartialRoundConstants` | no |
 | `p3_poseidon2.Poseidon2.new`, `…ExternalLayerConstants.new` | no |
-| four `Debug::fmt` bodies (`assumptions/stubs/P3BabyBear/Assumptions/FunsExternal.lean`) | no |
+| four `Debug::fmt` bodies (`P3BabyBear/Assumptions/FunsExternal.lean`) | no |
 
 The `Debug::fmt` bodies are opaque by choice: `extract.sh` passes charon
 `--opaque '{impl core::fmt::Debug for _}'`, because `core::fmt` is not modelled
@@ -162,12 +165,12 @@ Each one is worked around above and worth reporting upstream.
    `N.default <inst> : RustM Usize` from p3-baby-bear's. Post-patch 020.
 4. **aeneas silently drops `MontyField31::new_array`/`new_2d_array`.** They
    are in the LLBC with bodies; no diagnostic. Hand-transcribed in
-   `assumptions/Interface/P3Monty31Missing.lean`.
+   `P3BabyBear/Assumptions/P3Monty31.lean`.
 5. **aeneas's `__N` names for anonymous consts** trip mathlib's `nameCheck`
    linter. Post-patch 030.
 6. **The seeded `Debug::fmt` signatures do not match `CoreModels`** (a
    `&mut Formatter` back-function aeneas adds but `core.fmt.Debug` lacks).
-   Fixed in the hand-written `assumptions/stubs/P3BabyBear/Assumptions/FunsExternal.lean`.
+   Fixed in the hand-written `P3BabyBear/Assumptions/FunsExternal.lean`.
 7. **charon reports 2 `Type error after transformations` in the scoped
    p3-monty-31 run.** Both are in `core`'s own slice-iterator macros
    (`library/core/src/slice/iter/macros.rs:153`), which charon translates as a
@@ -182,7 +185,7 @@ Each one is worked around above and worth reporting upstream.
    ("mixed mutually recursive definitions"). `--opaque p3_field` does not help,
    because it hides bodies, not trait declarations; p3-mds also hits 28
    unsupported lifetime constraints of its own. Hence the scoped runs, and
-   p3-field's traits in `assumptions/Interface/P3Field.lean`.
+   p3-field's traits in `P3Monty31/Assumptions/P3Field.lean`.
 
 ## Layer 6 — the specification: CompPoly and mathlib
 
@@ -192,27 +195,35 @@ certificate), `BabyBear.fieldSize_sub_one_factorization`.
 
 ## The theorems are not in the TCB
 
-`spec/P3BabyBearProofs/` is proved, not assumed:
+`P3BabyBear/Verification/` is proved, not assumed. What *is* trusted there is
+that each theorem statement under `Verification/Proofs/` says what it is
+meant to say; each theorem is named `<item>.<property>`, after the Rust item.
 
-* `Constants.lean`: seven theorems about the constants
-  (`monty_prime_eq_fieldSize`, `monty_prime_is_prime`, `two_adicity_eq_spec`,
-  `monty_bits_eq_thirtyTwo`, `monty_mu_inverse`, `coprime_seven_pred_prime`,
-  `fieldSize_sub_one_factorization`), four wiring lemmas that the trait
-  instances return those constants, and `two_adicity_maximal`
-  (`2^(TWO_ADICITY+1) ∤ p - 1`). The factorization lemma fixes the odd part by
-  hand, so on its own it does not say `TWO_ADICITY` is the *largest* such
-  exponent; `two_adicity_maximal` does.
-* `MontyField31.lean`: `new_spec`: `MontyField31::new` on BabyBear never
-  panics (it discharges the four `const assert!`s aeneas keeps as `massert`s)
-  and returns `x · 2^32 mod p`. Also `new_array_ok` and `new_2d_array_ok`,
+* The constants, on `baby_bear.BabyBearParameters`: `PRIME.eq_fieldSize`,
+  `PRIME.is_prime`, `PRIME.coprime_seven_pred`, `MONTY_BITS.val_eq_32`,
+  `MONTY_MU.inverse`, `TWO_ADICITY.eq_twoAdicity`, `TWO_ADICITY.factorization`
+  and `TWO_ADICITY.maximal` (`2^(TWO_ADICITY+1) ∤ p - 1`), plus the four
+  `*.from_instance` wiring facts that the trait instances return those
+  constants. `TWO_ADICITY.factorization` fixes the odd part by hand, so on its
+  own it does not say `TWO_ADICITY` is the *largest* such exponent;
+  `TWO_ADICITY.maximal` does.
+* `baby_bear.BabyBear.new.montgomery_form`: `MontyField31::new` on BabyBear
+  never panics (it discharges the four `const assert!`s aeneas keeps as
+  `massert`s) and returns `x · 2^32 mod p`. Also
+  `baby_bear.BabyBear.new_array.never_panics` and `…new_2d_array.never_panics`,
   about the hand-written transcriptions, and the nine
-  `poseidon{1,2}_const_check_N`. There are eleven length assertions. aeneas
-  names the first in each module `_` and the rest `__N`; patch 030 renames
-  the `__N` ones, and those nine are proved. `poseidon1._`
+  `poseidon{1,2}.const_check_N.holds`. There are eleven length assertions.
+  aeneas names the first in each module `_` and the rest `__N`; patch 030
+  renames the `__N` ones, and those nine are proved. `poseidon1._`
   (`BABYBEAR_POSEIDON1_RC_16`, `poseidon1.rs:66`) and `poseidon2._`
   (`BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL`, `poseidon2.rs:64`) are
   extracted and not proved. A single `_` does not trip `nameCheck`, which is
   why the patch does not rename them.
+* Three helper lemmas (`mu_wrapping`, `baby_bear.BabyBear.new.ok`,
+  `mapM_total`) are used by those proofs and state nothing new.
+
+`Verification/ProofObligations.lean` is empty: p3-baby-bear has no
+`hax_lib::requires`/`ensures` contracts yet.
 
 ## What is *not* established
 
@@ -221,5 +232,5 @@ certificate), `BabyBear.fieldSize_sub_one_factorization`.
   theorem is about them.
 * The two length assertions named `poseidon1._` and `poseidon2._` (above).
 * Anything about the SIMD backends (see `../README.md`).
-* That the hand-written transcriptions in `assumptions/` match upstream: read
-  each against the Rust cited in its docstring.
+* That the hand-written transcriptions in the `Assumptions/` directories match
+  upstream: read each against the Rust cited in its docstring.

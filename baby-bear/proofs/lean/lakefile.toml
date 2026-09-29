@@ -1,69 +1,24 @@
 name = "p3_baby_bear"
 version = "0.1.0"
-defaultTargets = [
-    "P3BabyBear",
-    "AssumptionStubs",
-    "Interface",
-    "P3BabyBearProofs",
-]
+defaultTargets = ["P3BabyBear"]
 
-# Two kinds of source, in two kinds of directory:
+# hax's layout: one library per extracted crate, each rooted here (this is
+# `cargo hax into lean`'s default output directory for p3-baby-bear). Under
+# each `<Lib>/`, hax rewrites `Extraction/` on every run and creates the rest
+# once; see README.md.
 #
-#   generated/    machine output, rewritten by extract.sh and never committed:
-#                 aeneas's translation of each crate, plus the post-extraction
-#                 patches. `lake build` needs it, so run ./extract.sh first.
-#   assumptions/  hand-written and trusted (TCB.md, layer 3); spec/ is
-#                 hand-written and holds the theorems.
-#
-# Each generated library is the `--output-dir` extract.sh gives hax for one
-# crate. p3-monty-31 and p3-mds are scoped: only the items p3-baby-bear's
-# output refers to (the roots in `DEPS` in extract.sh).
+# `P3BabyBear` is the crate. `P3Monty31` and `P3Mds` are scoped extractions of
+# the dependency items it refers to (`DEPS` in extract.sh). `P3BabyBear.lean`
+# imports the extraction and `P3BabyBear/Verification`, so building the
+# default target checks every proof.
 [[lean_lib]]
 name = "P3BabyBear"
-srcDir = "generated/p3-baby-bear"
 
 [[lean_lib]]
 name = "P3Monty31"
-srcDir = "generated/p3-monty-31"
 
 [[lean_lib]]
 name = "P3Mds"
-srcDir = "generated/p3-mds"
-
-# Hand-written and trusted (TCB.md, layer 3), in two libraries:
-#
-#   AssumptionStubs  assumptions/stubs/: the modules aeneas's output imports by
-#                    fixed names (`P3BabyBear.Assumptions.TypesExternal`, ...),
-#                    so each generated library's own imports resolve here,
-#                    below it. extract.sh checks them against aeneas's templates.
-#   Interface        assumptions/Interface/: stand-ins for the dependency items
-#                    aeneas cannot translate or drops. `P3Monty31Missing` builds
-#                    on the generated p3-monty-31, above it.
-[[lean_lib]]
-name = "AssumptionStubs"
-srcDir = "assumptions/stubs"
-roots = [
-    "P3BabyBear.Assumptions.TypesExternal",
-    "P3BabyBear.Assumptions.FunsExternal",
-    "P3Monty31.Assumptions.TypesExternal",
-    "P3Monty31.Assumptions.FunsExternal",
-]
-
-[[lean_lib]]
-name = "Interface"
-srcDir = "assumptions"
-roots = [
-    "Interface.CoreModelsExt",
-    "Interface.P3Field",
-    "Interface.P3Monty31Missing",
-    "Interface.P3Poseidon1",
-    "Interface.P3Poseidon2",
-]
-
-# What we assert about the extraction.
-[[lean_lib]]
-name = "P3BabyBearProofs"
-srcDir = "spec"
 
 # The two Lean libraries the generated code imports (`Aeneas`, `CoreModels`).
 # Pinned to exactly what hax 0.4.1 resolves (`cargo hax tools show`): the

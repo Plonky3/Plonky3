@@ -9,10 +9,11 @@
 # with a header skeleton to fill in, and never touches existing ones. That is
 # what lets each patch carry its own rationale (see check-patches.sh).
 #
-# post-extraction: edit the file under generated/, then run this. It rebuilds
-#   the baseline (generated/pristine/ + the patches that already exist) in a
-#   temp dir and diffs generated/ against it, so the captured delta is ONLY the
-#   new change. Capture before the next ./extract.sh, which rewrites generated/.
+# post-extraction: edit the file under <Lib>/Extraction/, then run this. It
+#   rebuilds the baseline (.pristine/ + the patches that already exist) in a
+#   temp dir and diffs the live files against it, so the captured delta is ONLY
+#   the new change. Capture before the next ./extract.sh, which rewrites
+#   every <Lib>/Extraction/.
 # pre-extraction: wraps `git diff` over the Rust tree at the repo root.
 #
 # The new number must sort after every existing patch in the phase, because the
@@ -22,10 +23,11 @@ set -eu
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="$(dirname "$HERE")"
 REPO_ROOT="$(cd "$PKG_DIR/../../.." && pwd)"
-# Post-extraction patches apply to generated/ (paths relative to it), and
-# extract.sh keeps the unmodified hax output next to them in generated/pristine/.
-GEN_DIR="$PKG_DIR/generated"
-PRISTINE="$GEN_DIR/pristine"
+# Post-extraction patch paths are relative to the package root (e.g.
+# `P3BabyBear/Extraction/Funs.lean`), and extract.sh keeps the unmodified hax
+# output, with the same relative paths, in .pristine/.
+GEN_DIR="$PKG_DIR"
+PRISTINE="$PKG_DIR/.pristine"
 
 if [ "$#" -ne 2 ]; then
     echo "usage: $0 <pre-extraction|post-extraction> <NNN-slug>" >&2

@@ -1,6 +1,6 @@
 # Patch:     010-restore-dropped-default-methods
 # Phase:     post-extraction
-# Target:    p3-monty-31/P3Monty31/Extraction/Funs.lean, p3-baby-bear/P3BabyBear/Extraction/Funs.lean
+# Target:    P3Monty31/Extraction/Funs.lean, P3BabyBear/Extraction/Funs.lean
 # Hunks:     6
 # Cost:      none. Each added field is the body of the CoreModels default
 #            method it stands for (`clone.Clone.clone_from.default`,
@@ -32,8 +32,8 @@
 # Five derived `Clone` impls (4 in p3-baby-bear, 1 in p3-monty-31) and one
 # derived `PartialEq`.
 #
---- a/p3-monty-31/P3Monty31/Extraction/Funs.lean
-+++ b/p3-monty-31/P3Monty31/Extraction/Funs.lean
+--- a/P3Monty31/Extraction/Funs.lean
++++ b/P3Monty31/Extraction/Funs.lean
 @@ -212,6 +212,8 @@
    := {
    clone := monty_31.MontyField31.Insts.CoreCloneClone.clone corecloneCloneInst
@@ -43,8 +43,8 @@
  }
  
  /-- [p3_monty_31::poseidon1::PartialRoundBaseParameters::USE_TEXTBOOK]
---- a/p3-baby-bear/P3BabyBear/Extraction/Funs.lean
-+++ b/p3-baby-bear/P3BabyBear/Extraction/Funs.lean
+--- a/P3BabyBear/Extraction/Funs.lean
++++ b/P3BabyBear/Extraction/Funs.lean
 @@ -41,6 +41,8 @@
  def baby_bear.BabyBearParameters.Insts.CoreCloneClone : core.clone.Clone
    baby_bear.BabyBearParameters := {

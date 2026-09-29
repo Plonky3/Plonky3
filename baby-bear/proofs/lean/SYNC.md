@@ -35,11 +35,11 @@ any source a pre-extraction patch applies to (`field/src`, `symmetric/src`,
 actually extracted from `monty-31/src` or `mds/src` (`DEPS` in `extract.sh`:
 the parameter traits, `MontyField31::new`, its `Clone` impl,
 `utils::to_monty`, `first_row_to_first_col`) shows up in
-`generated/p3-monty-31/` or `generated/p3-mds/`. A change to something that is
+`P3Monty31/Extraction/` or `P3Mds/Extraction/`. A change to something that is
 hand-mirrored does not: `MontyField31::new_array`, `new_2d_array` and the
-`no_packing` Poseidon layers in `assumptions/Interface/P3Monty31Missing.lean`,
-and the p3-field / p3-poseidon1 / p3-poseidon2 items in the other
-`assumptions/Interface/` files (see `TCB.md`, layer 3). Nothing detects that
+`no_packing` Poseidon layers in `P3BabyBear/Assumptions/P3Monty31.lean`, and the
+p3-field / p3-poseidon1 / p3-poseidon2 items in `P3Monty31/Assumptions/P3Field.lean`
+and `P3BabyBear/Assumptions/P3Poseidon{1,2}.lean` (see `TCB.md`, layer 3). Nothing detects that
 drift automatically: read the diff.
 
 ## Step 1 — re-extract
@@ -58,30 +58,32 @@ first failure. Steps, and what a failure at each one means:
 | 2 upstream tests | a test diverges under the pre-patches: the script writes a `# Divergence:` entry into the responsible patch's header, and fails while any entry's `class` is `TODO` | that patch's header; `patches/README.md` |
 | 3 cfg'd check | a pre-patch hid something that is still reachable | rustc's error names the use |
 | 4 extraction | charon or aeneas reports an error | the log; see the troubleshooting table below |
-| 6 stubs | a template in `generated/*/*/Extraction/*External_Template.lean` declares names the matching file in `assumptions/stubs/*/Assumptions/` does not, or the reverse | the message lists the names; step 2 below |
+| 6 stubs | a template in `<Lib>/Extraction/*External_Template.lean` declares names the matching `<Lib>/Assumptions/*External.lean` does not, or the reverse; or that file is hax's unfilled seed | the message lists the names; step 2 below |
 | 8 `lake build` | the Lean does not elaborate | step 2 below |
 
 ## Step 2 — reconcile drift
 
-Everything in `generated/` is rewritten by the next run: never fix anything
-there except by a post-extraction patch. Everything else (`assumptions/`,
-`spec/`, the patches) is hand-written.
+Every `<Lib>/Extraction/` is rewritten by the next run: never fix anything
+there except by a post-extraction patch. Everything else (each `Assumptions/`,
+`P3BabyBear/Verification/`, the patches) is hand-written.
 
 1. Read any `.rej` files and the `lake build` errors.
 2. An `Unknown identifier p3_…` is a dependency item the output newly refers
    to. Prefer adding a `--start-from` root to `DEPS` in `extract.sh`; if
-   aeneas cannot translate it, add it to the matching `assumptions/Interface/`
-   file with a docstring citing the upstream source.
+   aeneas cannot translate it, hand-write it in the `Assumptions/` of the
+   library whose extraction refers to it, with a docstring citing the upstream
+   source.
 3. A step-6 failure means aeneas now expects different external declarations.
-   Update the named `assumptions/stubs/<Lib>/Assumptions/` file, starting from the
-   template, and keep every body `opaque`.
+   Update the named `<Lib>/Assumptions/` file, starting from the template, and
+   keep every body `opaque`. If hax has just created one (a new external item
+   in a library that had none), fill in its holes the same way.
 4. Hand-edit the generated files until `lake build` is green, marking every
    edit `-- PATCHED`, then capture it before the next `extract.sh` run:
    ```bash
    ./baby-bear/proofs/lean/patches/new-patch.sh post-extraction 040-slug
    ./baby-bear/proofs/lean/patches/check-patches.sh
    ```
-   Prefer fixing `assumptions/` over a patch. Never `sorry`.
+   Prefer fixing an `Assumptions/` file over a patch. Never `sorry`.
 5. **Do not preserve a patch needlessly.** If a hunk no longer applies because
    aeneas improved, delete it.
 
@@ -89,12 +91,12 @@ there except by a post-extraction patch. Everything else (`assumptions/`,
 
 ```bash
 cd baby-bear/proofs/lean
-cat generated/p3-baby-bear/P3BabyBear/Extraction/{Types,Funs}.lean | wc -l    # generated, p3-baby-bear
-cat generated/p3-{monty-31,mds}/*/Extraction/{Types,Funs}.lean | wc -l        # generated, dependencies
-find assumptions -name '*.lean' | xargs cat | wc -l                         # hand-written, trusted
-grep -rhcE '^(noncomputable )?opaque ' assumptions | paste -sd+ - | bc       # opaque declarations
-grep -rhE '^axiom ' assumptions spec | wc -l                                # must be 0
-grep -rn 'sorry' generated/p3-*/*/Extraction assumptions spec \
+cat P3BabyBear/Extraction/{Types,Funs}.lean | wc -l                        # generated, p3-baby-bear
+cat P3{Monty31,Mds}/Extraction/{Types,Funs}.lean | wc -l                    # generated, dependencies
+cat P3*/Assumptions/*.lean | wc -l                                          # hand-written, trusted
+grep -hcE '^(noncomputable )?opaque ' P3*/Assumptions/*.lean | paste -sd+ - | bc   # opaque declarations
+grep -hE '^axiom ' P3*/Assumptions/*.lean P3BabyBear/Verification/*.lean | wc -l  # must be 0
+grep -rn 'sorry' P3*/Extraction P3*/Assumptions P3BabyBear/Verification \
     --include='*.lean' --exclude='*_Template.lean' | wc -l                  # must be 0
 for d in pre-extraction post-extraction; do
   echo "$d: $(ls patches/$d/*.patch | wc -l) files, $(cat patches/$d/*.patch | grep -c '^@@') hunks"
@@ -102,12 +104,12 @@ done
 lake build 2>&1 | grep -cE '^(warning|error)'                               # must be 0
 ```
 
-and the axiom footprint of every theorem, which must be exactly
+and the axiom footprint of every theorem, which must be within
 `[propext, Classical.choice, Quot.sound]`:
 
 ```bash
-{ echo 'import P3BabyBearProofs'; echo 'open P3BabyBearProofs'
-  grep -hE '^theorem ' spec/P3BabyBearProofs/*.lean | awk '{print "#print axioms", $2}'
+{ echo 'import P3BabyBear'; echo 'open p3_baby_bear'
+  grep -hE '^theorem ' P3BabyBear/Verification/Proofs/*.lean | awk '{print "#print axioms", $2}'
 } > /tmp/ax.lean
 lake env lean /tmp/ax.lean
 ```
@@ -119,7 +121,7 @@ lake env lean /tmp/ax.lean
 | NEON or AVX modules in the output | `--targets` did not reach charon. `-C --target` does not (TCB layer 5, bug 1) |
 | `Fields missing: clone_from` / `ne` | charon's multi-target mode dropped the default-method roots; extend post-patch 010 |
 | `GATs cannot work with the --lift-associated-types option` | a new `-> impl Trait` trait method is reachable; gate it as pre-patch 030 does |
-| `Mutually recursive trait declarations … will not type-check` | informational while those traits stay hand-written in `assumptions/Interface/` |
+| `Mutually recursive trait declarations … will not type-check` | informational while those traits stay hand-written in `P3Monty31/Assumptions/P3Field.lean` |
 | `E0514` / `can't find crate for core` from charon | stale `rustc-build-sysroot` cache: `rm -rf ~/Library/Caches/org.rust-lang.miri` |
 
 ## Maintenance: bumping hax

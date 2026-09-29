@@ -1,14 +1,12 @@
--- [p3_baby_bear]: external types.
+-- [p3_monty_31]: external types.
 -- HAND-WRITTEN, from hax's seed of Extraction/TypesExternal_Template.lean.
 -- The generated code imports it by this module name. extract.sh fails if the
 -- regenerated template declares different names than this file does.
 import Aeneas
 import CoreModels
--- The dependency interface: the scoped extractions of p3-monty-31 and p3-mds
--- (generated/), plus the hand-written rest (assumptions/Interface/). `Interface.P3Monty31Missing`
--- imports `P3Monty31.Extraction` and the p3-field/p3-poseidon{1,2} files.
-import P3Mds.Extraction
-import Interface.P3Monty31Missing
+-- The only external items this scoped extraction refers to are p3-field's
+-- traits, which are hand-written (P3Monty31/Assumptions/P3Field.lean).
+import P3Monty31.Assumptions.P3Field
 open CoreModels Aeneas
 open Aeneas.Std hiding namespace core alloc
 open RustM ControlFlow Error

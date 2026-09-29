@@ -19,83 +19,114 @@ The requirements, and how to build, are in
 
 ## Layout
 
-Everything in `generated/` is machine output; everything else is written by
-hand.
+This is hax's own layout, as `cargo hax into lean` creates it: this directory is
+its default output directory for p3-baby-bear. Each extracted crate is one Lean
+library rooted here, and under each `<Lib>/` there are three tiers:
+
+- **`Extraction/`**: rewritten by hax on every run. Not committed (gitignored);
+  `extract.sh` regenerates it.
+- **`Assumptions/`**: seeded once by hax with holes for the external items its
+  output refers to, then hand-written. Trusted: see `TCB.md`, layer 3.
+- **`Verification/`**: hand-written specifications and proofs. hax never
+  touches it.
 
 ```
 lean/
   extract.sh                   the build: tools → tests → patch → extract → check → patch → lake build
-  generated/                   MACHINE OUTPUT: gitignored, rewritten by every extract.sh run
-    p3-baby-bear/P3BabyBear/     aeneas's translation of p3-baby-bear
-      Extraction/Types.lean        the crate's four unit structs
-      Extraction/Funs.lean         everything else (consts, fns, impls)
-      Extraction/*External.lean    one-line imports of the stubs in assumptions/stubs/
-      Extraction/*External_Template.lean  what aeneas expects those stubs to declare; not built
-      Verification/ProofObligations.lean  hax emits this empty; the theorems are in spec/
-    p3-monty-31/P3Monty31/       the items of p3-monty-31 that p3-baby-bear uses (scoped extraction)
-    p3-mds/P3Mds/                the same for p3-mds
-    pristine/                    the output before post-extraction patches
-  assumptions/                 HAND-WRITTEN, TRUSTED: what the generated code needs and aeneas does not produce
-    stubs/                       modules aeneas's output imports by fixed name (below each extraction)
-      P3BabyBear/Assumptions/      FunsExternal: the 4 opaque Debug::fmt bodies;
-                                   TypesExternal: imports Interface and P3Mds
-      P3Monty31/Assumptions/       imports only (TypesExternal → P3Field,
-                                   FunsExternal → CoreModelsExt)
-    Interface/                   stand-ins for dependency code aeneas cannot translate or drops
-      P3Field.lean                 p3-field's traits (below p3-monty-31)
-      P3Monty31Missing.lean        the p3-monty-31 items aeneas dropped (above p3-monty-31)
-      P3Poseidon1.lean  P3Poseidon2.lean  CoreModelsExt.lean
-  spec/P3BabyBearProofs/       HAND-WRITTEN: the theorems
-    Constants.lean               the constants vs. CompPoly
-    MontyField31.lean            MontyField31::new, the table constructors, nine of the eleven length assertions
-  patches/                     HAND-WRITTEN diffs
+  P3BabyBear.lean              library root, as hax writes it: imports Extraction and Verification.ProofObligations
+  P3BabyBear/
+    Extraction.lean            hax: imports Types and Funs
+    Extraction/                hax, rewritten every run (gitignored)
+      Types.lean                 the crate's four unit structs
+      Funs.lean                  everything else (consts, fns, impls)
+      *External.lean             one-line imports of Assumptions/*External
+      *External_Template.lean    what aeneas expects Assumptions/*External to declare; not built
+    Assumptions/               hand-written, trusted
+      TypesExternal.lean         imports the dependency extractions and the stand-ins below
+      FunsExternal.lean          the 4 opaque Debug::fmt bodies
+      P3Monty31.lean             the p3-monty-31 items aeneas drops (new_array, …), built on P3Monty31.Extraction
+      P3Poseidon1.lean  P3Poseidon2.lean   stand-ins for p3-poseidon1/2 (constructors opaque)
+    Verification/              hand-written
+      ProofObligations.lean      proofs of hax_lib contracts; empty, as the Rust has none yet. Imports Proofs
+      Proofs.lean                imports everything under Proofs/
+      Proofs/                    Lean-only specs with their proofs, one file per Rust item
+        BabyBearParameters.lean    the constants against CompPoly's BabyBear
+        BabyBear.lean              BabyBear::new, new_array, new_2d_array
+        Poseidon1.lean  Poseidon2.lean   the round-constant length assertions
+  P3Monty31/                   scoped extraction of the p3-monty-31 items p3-baby-bear uses
+    Extraction/                hax (gitignored)
+    Assumptions/               hand-written: TypesExternal, FunsExternal, and the stand-ins they import:
+      P3Field.lean               p3-field's traits
+      CoreModelsExt.lean         two gaps in hax-lean's CoreModels
+  P3Mds/Extraction/            scoped extraction of p3-mds (hax, gitignored)
+  P3Monty31.lean  P3Mds.lean   hax's library roots for the dependencies (created by hax, gitignored)
+  .pristine/                   the output before post-extraction patches (gitignored)
+  llbc/                        charon's output, aeneas's input (gitignored, as hax's .gitignore has it)
+  patches/                     hand-written diffs
     pre-extraction/              to the Rust source; applied before hax, reverted after
-    post-extraction/             to generated/; applied after hax
+    post-extraction/             to each Extraction/; applied after hax
     check-patches.sh  new-patch.sh  test-pre-patches.py
-  lakefile.toml  lean-toolchain  lake-manifest.json
+  lakefile.toml  lean-toolchain  lake-manifest.json  .gitignore
   README.md  TCB.md  SYNC.md
 ```
 
-| Lake library | `srcDir` | Written by |
-|---|---|---|
-| `P3BabyBear`, `P3Monty31`, `P3Mds` | `generated/<crate>/` | aeneas, plus the post-extraction patches |
-| `AssumptionStubs` | `assumptions/stubs/` | by hand. Trusted: see `TCB.md`, layer 3 |
-| `Interface` | `assumptions/` (modules `Interface.*`) | by hand. Trusted: see `TCB.md`, layer 3 |
-| `P3BabyBearProofs` | `spec/` | by hand |
+hax creates `lakefile.toml`, `lean-toolchain`, `.gitignore`, the library roots,
+`Assumptions/` and `Verification/ProofObligations.lean` only when they are
+missing, so it never overwrites the hand-written versions here. `extract.sh`
+checks each `Assumptions/*External.lean` against the regenerated template: it
+must declare exactly the names the template does, and a file hax has just
+seeded (with `axiom`s for holes) is refused until it is filled in.
 
-The two kinds of hand-written file sit on opposite sides of an extraction.
-The **stubs** are imported *by* the generated code, under module names aeneas
-fixes (`P3BabyBear.Assumptions.TypesExternal`, …); they live in
-`assumptions/stubs/` under those names, as explicit roots of the
-`AssumptionStubs` library, so nothing hand-written sits in `generated/`. The
-**interface** files are what the stubs point at: p3-field's traits, and the
-parts of p3-monty-31 aeneas does not produce, which are written on top of the
-generated p3-monty-31. hax seeds a fresh copy
-of each stub in its output on every run; `extract.sh` deletes it after checking
-that the hand-written file declares exactly the names the regenerated template
-does.
+Each crate's `Assumptions/` holds what *that crate's* extraction refers to but
+nothing generates. That is why `P3Field` sits under `P3Monty31/` (p3-monty-31's
+extraction needs it first) and `P3Monty31.lean` sits under `P3BabyBear/`
+(p3-baby-bear uses those p3-monty-31 items; p3-monty-31's scoped extraction does
+not produce them).
 
 The import chain, from the bottom. An arrow means "imported by":
 
 ```
 Aeneas + CoreModels
-  → Interface.P3Field
-      → P3Monty31.Assumptions.TypesExternal                 stub
-        → P3Monty31.Extraction                              generated
-      → Interface.P3Poseidon{1,2}
-          → Interface.P3Monty31Missing                      also imports P3Monty31.Extraction
-            → P3BabyBear.Assumptions.TypesExternal          also imports P3Mds.Extraction
-              → P3BabyBear.Extraction                       generated
-                → P3BabyBearProofs                          spec/
-  → Interface.CoreModelsExt
-      → P3Monty31.Assumptions.FunsExternal                  stub
-        → P3Monty31.Extraction.Funs
+  → P3Monty31.Assumptions.{P3Field, CoreModelsExt}            hand-written
+    → P3Monty31.Assumptions.{TypesExternal, FunsExternal}     stubs
+      → P3Monty31.Extraction                                  generated
+        → P3BabyBear.Assumptions.P3Monty31                    hand-written (+ P3Poseidon1/2)
+          → P3BabyBear.Assumptions.TypesExternal              stub (+ P3Mds.Extraction)
+            → P3BabyBear.Extraction                           generated
+              → P3BabyBear.Verification.Proofs.* → Proofs → ProofObligations
+                → P3BabyBear                                  the library root
 ```
+
+### Specifications and proofs
+
+`Verification/` holds two kinds of theorem, which come from different places
+and change for different reasons:
+
+- **`Proofs.lean` and `Proofs/`**: properties stated directly in Lean, with
+  no Rust counterpart. Each theorem is its own specification: the statement is
+  the claim and the proof follows it. There is one file per Rust item, and
+  `Proofs.lean` is the import list. Theorems are named `<item>.<property>`
+  after the Rust item: `BabyBearParameters::PRIME` is
+  `baby_bear.BabyBearParameters.PRIME`, so its claims are
+  `baby_bear.BabyBearParameters.PRIME.eq_fieldSize`, `….is_prime`, …, and
+  `BabyBear::new(x)` gives `baby_bear.BabyBear.new.montgomery_form`.
+- **`ProofObligations.lean`**: the answer to hax's contracts, below.
+
+`ProofObligations.lean` is for contracts written in the Rust with
+`#[hax_lib::requires]` / `#[hax_lib::ensures]`. There are none yet. If some are
+added, hax extracts them to `<fn>.pre`, `<fn>.post` and `<fn>.spec` in
+`P3BabyBear/Extraction/Specs.lean` and regenerates a `sorry` template of the
+obligations in `P3BabyBear/Extraction/ProofObligations.lean`; their proofs go
+in `Verification/ProofObligations.lean`, one `<fn>.spec.proof` each and
+nothing else, so the two files can be diffed after each extraction. It
+imports `Proofs.lean`, so contract proofs can reuse the hand-written
+theorems; nothing under `Proofs/` depends on the contracts. Nothing under
+`Proofs/` uses the three reserved names, nor `<def>.eq_<n>`, which Lean
+reserves for equation lemmas.
 
 ## Navigating the extraction from the Rust
 
-Paths below are relative to `generated/p3-baby-bear/P3BabyBear/`, after a run
-of `extract.sh`.
+Paths below are relative to `P3BabyBear/`, after a run of `extract.sh`.
 
 ### Where a Rust item ends up
 
@@ -117,7 +148,7 @@ comment with its full Rust path and source span:
     Visibility: public -/
 ```
 
-so `grep -n "baby_bear.rs', lines 17:" generated/p3-baby-bear/P3BabyBear/Extraction/Funs.lean`
+so `grep -n "baby_bear.rs', lines 17:" P3BabyBear/Extraction/Funs.lean`
 jumps from a Rust line to its Lean.
 
 ### Naming
@@ -135,13 +166,13 @@ dotted prefix: `p3_baby_bear::poseidon2::BABYBEAR_POSEIDON2_RC_16_INTERNAL` is
 | impl of a generic trait, `impl InternalLayerBaseParameters<BabyBearParameters, 16> for …` | the generic arguments are appended to the name: `…Insts.P3_monty_31Poseidon2InternalLayerBaseParametersBabyBearParameters16` |
 | `#[derive(Clone, Default, Debug, …)]` | `…Insts.CoreCloneClone`, `…Insts.CoreDefaultDefault`, `…Insts.CoreFmtDebug`, … |
 | `fn exp_root_d<R: PrimeCharacteristicRing>(val: R) -> R` | `def …exp_root_d {R : Type} (p3_fieldfieldPrimeCharacteristicRingInst : p3_field.field.PrimeCharacteristicRing R) (val : R) : RustM R`: a trait bound becomes an explicit instance argument named `<crate><module><Trait>Inst` |
-| `const _: () = assert!(RC.len() == …);` | the first in each module is `def poseidon{1,2}._`; the rest are `def poseidon{1,2}.const_check_N` (renamed from aeneas's `__N` by post-patch 030). `spec/` proves the nine `const_check_N`, not the two `_` |
+| `const _: () = assert!(RC.len() == …);` | the first in each module is `def poseidon{1,2}._`; the rest are `def poseidon{1,2}.const_check_N` (renamed from aeneas's `__N` by post-patch 030). `Verification/` proves the nine `const_check_N`, not the two `_` |
 | a `while` loop (e.g. in `SAMPLING_BITS_M`) | `…SAMPLING_BITS_M_loop.body` (one iteration, returning `cont`/`done`) and `…SAMPLING_BITS_M_loop` (the `loop` over it) |
 
 Trait *declarations* from other crates (`MontyParameters`, `MDSUtils`, …) are
 Lean `structure`s whose fields are the trait's items, and supertraits are
-fields named `…Inst`. Those are in `generated/p3-monty-31/P3Monty31/Extraction/Types.lean`
-and `assumptions/Interface/P3Field.lean`.
+fields named `…Inst`. Those are in `P3Monty31/Extraction/Types.lean`
+and `P3Monty31/Assumptions/P3Field.lean`.
 
 ### Reading a body
 
@@ -157,18 +188,18 @@ are erased; `&mut` becomes a returned updated value (see
 function).
 
 Generated constants are `@[irreducible]`: to compute with one in a proof,
-`unfold` it by name (`spec/P3BabyBearProofs/MontyField31.lean` shows how).
+`unfold` it by name (`Verification/Proofs/Poseidon2.lean` shows how).
 
 ### Where the dependency code lives
 
 | Rust | Lean | How it got there |
 |---|---|---|
-| `p3_monty_31::data_traits::*`, `mds::MDSUtils`, `poseidon{1,2}::*Parameters` | `generated/p3-monty-31/P3Monty31/Extraction/Types.lean` | extracted (scoped) |
-| `MontyField31`, `MontyField31::new`, `utils::to_monty`, default constants (`MONTY_MASK`, `BarrettParameters::N`, …) | `generated/p3-monty-31/P3Monty31/Extraction/{Types,Funs}.lean` | extracted (scoped) |
-| `p3_mds::util::first_row_to_first_col` | `generated/p3-mds/P3Mds/Extraction/Funs.lean` | extracted (scoped) |
-| `MontyField31::new_array`, `new_2d_array`, `no_packing` Poseidon layers | `assumptions/Interface/P3Monty31Missing.lean` | hand-transcribed |
-| p3-field's traits, `exp_1725656503` | `assumptions/Interface/P3Field.lean` | hand-written; `exp_1725656503` is `opaque` |
-| `Poseidon1`, `Poseidon2`, their constructors | `assumptions/Interface/P3Poseidon{1,2}.lean` | hand-written; the constructors are `opaque` |
+| `p3_monty_31::data_traits::*`, `mds::MDSUtils`, `poseidon{1,2}::*Parameters` | `P3Monty31/Extraction/Types.lean` | extracted (scoped) |
+| `MontyField31`, `MontyField31::new`, `utils::to_monty`, default constants (`MONTY_MASK`, `BarrettParameters::N`, …) | `P3Monty31/Extraction/{Types,Funs}.lean` | extracted (scoped) |
+| `p3_mds::util::first_row_to_first_col` | `P3Mds/Extraction/Funs.lean` | extracted (scoped) |
+| `MontyField31::new_array`, `new_2d_array`, `no_packing` Poseidon layers | `P3BabyBear/Assumptions/P3Monty31.lean` | hand-transcribed |
+| p3-field's traits, `exp_1725656503` | `P3Monty31/Assumptions/P3Field.lean` | hand-written; `exp_1725656503` is `opaque` |
+| `Poseidon1`, `Poseidon2`, their constructors | `P3BabyBear/Assumptions/P3Poseidon{1,2}.lean` | hand-written; the constructors are `opaque` |
 
 Which dependency items are extracted is set by the `--start-from` roots in
 `DEPS` in `extract.sh`. Neither dependency extracts as a whole crate yet: both
@@ -183,4 +214,4 @@ Each file's header is its rationale, and `check-patches.sh` enforces that.
 | Path | Applied to | When | Reverted |
 |------|------------|------|----------|
 | `pre-extraction/` | Rust source, paths from the **repo root** | before `cargo hax` | yes, on exit |
-| `post-extraction/` | generated Lean, paths from **`generated/`** | after `cargo hax` | no (`generated/` is rewritten next run) |
+| `post-extraction/` | generated Lean, paths from **this package** (e.g. `P3BabyBear/Extraction/Funs.lean`) | after `cargo hax` | no (`Extraction/` is rewritten next run) |

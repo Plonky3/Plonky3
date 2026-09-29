@@ -1,6 +1,6 @@
 # Patch:     030-name-anonymous-const-assertions
 # Phase:     post-extraction
-# Target:    p3-baby-bear/P3BabyBear/Extraction/Funs.lean
+# Target:    P3BabyBear/Extraction/Funs.lean
 # Hunks:     9
 # Cost:      none. Renames only; the bodies are untouched.
 # Upstream:  aeneas names Rust's anonymous `const _: () = assert!(..)` items
@@ -17,8 +17,8 @@
 # do not warn, so they are left as `poseidon1._` and `poseidon2._`; spec/
 # proves the nine renamed checks and not those two.
 #
---- a/p3-baby-bear/P3BabyBear/Extraction/Funs.lean
-+++ b/p3-baby-bear/P3BabyBear/Extraction/Funs.lean
+--- a/P3BabyBear/Extraction/Funs.lean
++++ b/P3BabyBear/Extraction/Funs.lean
 @@ -1340,7 +1354,7 @@
  /-- [p3_baby_bear::poseidon1::_#1]
      Source: 'baby-bear/src/poseidon1.rs', lines 70:0-73:2 -/

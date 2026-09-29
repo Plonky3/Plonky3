@@ -22,7 +22,7 @@ What is proved:
 - `MontyField31::new` never panics on BabyBear and returns `x · 2^32 mod p`.
   `new_array` and `new_2d_array` never panic either, but those two are the
   hand-written transcriptions in
-  `lean/assumptions/Interface/P3Monty31Missing.lean`: aeneas drops the Rust
+  `lean/P3BabyBear/Assumptions/P3Monty31.lean`: aeneas drops the Rust
   functions, so the theorems are about that transcription.
 - Nine of the eleven Poseidon round-constant length assertions hold
   (`poseidon{1,2}.const_check_N`). The other two are extracted as `poseidon1._`

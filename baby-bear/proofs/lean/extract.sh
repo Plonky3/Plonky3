@@ -4,8 +4,9 @@
 # checkout: check the pinned tools, regenerate the Lean from the Rust with
 # hax's current Lean backend (charon + aeneas), and check the proofs.
 #
-# The generated Lean is not committed (generated/ is gitignored), so this script
-# is the way to build. After one run, `lake build` alone rebuilds the proofs.
+# The generated Lean is not committed (each `<Lib>/Extraction/` is gitignored),
+# so this script is the way to build. After one run, `lake build` alone
+# rebuilds the proofs.
 #
 #   0. tools: check (never install) the requirements listed in
 #      ../README.md: `cargo-hax` is the pinned release, its charon and aeneas
@@ -19,21 +20,24 @@
 #   4. run `cargo hax into lean` over the crate, and over each dependency
 #      crate scoped to exactly the items p3-baby-bear uses (see DEPS below)
 #   5. revert the pre-extraction patches (unconditionally, even on failure)
-#   6. check the hand-written stubs in assumptions/ against the templates
-#      aeneas regenerated, then snapshot the output as generated/pristine/
+#   6. check the hand-written stubs in each `<Lib>/Assumptions/` against the
+#      templates aeneas regenerated, then snapshot the output as .pristine/
 #   7. apply patches/post-extraction/*.patch (the hand-reconciliation)
 #   8. `lake build`
 #
-# Layout (see README.md):
+# Layout: hax's own (see README.md). This directory is `cargo hax into lean`'s
+# default output directory for p3-baby-bear, and the scoped dependency runs
+# write here too, one library each:
 #
-#   lean/                  <- Lake package root (lakefile, toolchain, manifest)
-#     generated/           <- MACHINE OUTPUT, gitignored, rewritten every run
-#       p3-baby-bear/        hax's --output-dir for the crate
-#       p3-monty-31/ p3-mds/ the same, for each scoped dependency extraction
-#       pristine/            the output before post-extraction patches
-#     assumptions/         <- hand-written and trusted (TCB.md, layer 3)
-#     spec/                <- hand-written theorems
-#     patches/             <- hand-written diffs, to the Rust and to generated/
+#   lean/                  <- Lake package root
+#     P3BabyBear.lean        library root: imports Extraction and Verification.ProofObligations
+#     P3BabyBear/
+#       Extraction/          <- hax, rewritten every run (gitignored)
+#       Assumptions/         <- hand-written, trusted (TCB.md, layer 3)
+#       Verification/        <- hand-written: ProofObligations, Proofs, Proofs/
+#     P3Monty31/ P3Mds/      <- the same, for the scoped dependency extractions
+#     .pristine/             <- the output before post-extraction patches
+#     patches/               <- hand-written diffs, to the Rust and to Extraction/
 #
 # `patches/pre-extraction/` is NOT empty. The Lean
 # backend cannot translate the generic associated types that rustc desugars
@@ -56,12 +60,9 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CRATE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"             # baby-bear/
 PKG_DIR="$SCRIPT_DIR"                                     # Lake package root
-GEN_DIR="$PKG_DIR/generated"
-ASSUME_DIR="$PKG_DIR/assumptions"
-STUB_DIR="$ASSUME_DIR/stubs"
 PRE_PATCH_DIR="$PKG_DIR/patches/pre-extraction"
 POST_PATCH_DIR="$PKG_DIR/patches/post-extraction"
-PRISTINE="$GEN_DIR/pristine"
+PRISTINE="$PKG_DIR/.pristine"
 # Pre-extraction patch paths are repo-root relative (-p1).
 REPO_ROOT="$(cd "$CRATE_ROOT/.." && pwd)"
 
@@ -107,12 +108,12 @@ COMMON_CHARON_ARGS="--targets $HAX_TARGET \
 # so the dependency items p3-baby-bear's output refers to have to come from
 # somewhere: these runs translate exactly those items, rooted with
 # `--start-from` (which also suppresses the default `crate` root). What they
-# cannot translate is hand-written in assumptions/Interface/. Whole-crate
-# extraction of either crate fails (p3-field's trait cycle; see TCB.md). One
-# line per crate:
-#   <crate dir>|<output dir under generated/>|<charon roots>
+# cannot translate is hand-written in the `Assumptions/` of the library that
+# needs it. Whole-crate extraction of either crate fails (p3-field's trait
+# cycle; see TCB.md). One line per crate:
+#   <crate dir>|<Lean library>|<charon roots>
 M31=p3_monty_31
-DEPS="monty-31|p3-monty-31|\
+DEPS="monty-31|P3Monty31|\
 --start-from $M31::data_traits::MontyParameters \
 --start-from $M31::data_traits::PackedMontyParameters \
 --start-from $M31::data_traits::BarrettParameters \
@@ -127,9 +128,9 @@ DEPS="monty-31|p3-monty-31|\
 --start-from $M31::poseidon2::InternalLayerParameters \
 --start-from $M31::monty_31::MontyField31::new \
 --start-from '{impl core::clone::Clone for $M31::monty_31::MontyField31<_>}'
-mds|p3-mds|--start-from p3_mds::util::first_row_to_first_col"
-# Every generated Lean library: <output dir under generated/>|<Lean library>.
-LIBS="p3-baby-bear|P3BabyBear p3-monty-31|P3Monty31 p3-mds|P3Mds"
+mds|P3Mds|--start-from p3_mds::util::first_row_to_first_col"
+# Every extracted Lean library, all rooted in this directory.
+LIBS="P3BabyBear P3Monty31 P3Mds"
 # The pre-extraction patches gate their changes on `hax_backend_lean`, the cfg
 # hax's Lean backend defines. hax passes it (as `--rustc-arg`) only to the crate
 # being extracted, but the gated items live in its dependencies (p3-field,
@@ -354,30 +355,33 @@ fi
 rm -f "$check_log"
 echo "    cargo check: ok, 0 warnings"
 
-# $1 = crate dir (repo-relative), $2 = output dir, $3 = extra charon args
+# $1 = crate dir (repo-relative), $2 = Lean library, $3 = extra hax args,
+# $4 = extra charon args
 extract() {
-    local crate="$1" out="$2" args="$3"
-    # Start from nothing: generated/ holds only what this run writes.
-    rm -rf "$out"
+    local crate="$1" lib="$2" hax_args="$3" args="$4"
+    # Only `Extraction/` is hax's to rewrite; start it from nothing so a
+    # removed item cannot linger. Everything else under this directory hax
+    # creates only when it is missing, so the hand-written files are safe.
+    rm -rf "$PKG_DIR/$lib/Extraction" "$PKG_DIR/$lib/Extraction.lean"
     (cd "$REPO_ROOT/$crate" && RUSTFLAGS="$EXTRACT_RUSTFLAGS" \
-        "$HAX_BIN" hax into --output-dir "$out" lean \
+        "$HAX_BIN" hax into $hax_args lean \
             --charon-args="$COMMON_CHARON_ARGS $args")
-    # hax scaffolds a standalone Lake package in its output dir. The package
-    # here is the one this script lives in, so drop the scaffolding and the
-    # ~30 MB intermediate LLBC.
-    rm -rf "$out/lakefile.toml" "$out/lean-toolchain" "$out/.gitignore" \
-           "$out/llbc" "$out/aeneas-error.log"
 }
 
 echo "==> 4/8 extracting with hax (backend: lean = charon + aeneas, target: $HAX_TARGET)"
 # Trust the exit status: aeneas exits non-zero on any translation error, and a
 # partial file is not worth building.
 rm -rf "$PRISTINE"
-echo "    p3-baby-bear (whole crate) -> generated/p3-baby-bear/"
-extract baby-bear "$GEN_DIR/p3-baby-bear" ""
-printf '%s\n' "$DEPS" | while IFS='|' read -r crate out roots; do
-    echo "    $crate (scoped) -> generated/$out/"
-    extract "$crate" "$GEN_DIR/$out" "$roots"
+# p3-baby-bear with hax's defaults: its default output directory is this one.
+[ "$CRATE_ROOT/proofs/lean" = "$PKG_DIR" ] || {
+    echo "error: extract.sh must live in <crate>/proofs/lean, hax's default output directory" >&2
+    exit 1
+}
+echo "    p3-baby-bear (whole crate) -> P3BabyBear/Extraction/"
+extract baby-bear P3BabyBear "" ""
+printf '%s\n' "$DEPS" | while IFS='|' read -r crate lib roots; do
+    echo "    $crate (scoped) -> $lib/Extraction/"
+    extract "$crate" "$lib" "--output-dir $PKG_DIR" "$roots"
 done
 
 # Revert now, before the Lean build, so the rest of the run sees a clean tree.
@@ -385,29 +389,28 @@ done
 echo "==> 5/8 restoring the Rust source"
 revert_pre_patches
 
-echo "==> 6/8 checking assumptions/ against the regenerated stubs; snapshotting"
+echo "==> 6/8 checking each Assumptions/ against the regenerated stubs; snapshotting"
 # aeneas emits `Extraction/<X>External_Template.lean`, the declarations the
 # generated code expects someone to supply, and hax seeds a fillable copy of it
-# as `Assumptions/<X>External.lean` in its output dir. The filled-in copies are
-# hand-written, so they live in assumptions/stubs/ (same module names; see
-# lakefile.toml). Here the seeded copies are removed, after checking that each
-# hand-written file still declares exactly the names the template does. The
-# signatures may differ on purpose (TCB.md); `lake build` checks those.
+# as `Assumptions/<X>External.lean` when that file is missing. Each filled-in
+# copy must still declare exactly the names the template does. The signatures
+# may differ on purpose (TCB.md); `lake build` checks those. A file hax has just
+# seeded is refused too: it states its holes as `axiom`s, and this package
+# states assumptions only as `opaque` constants.
 decl_names() {
     [ -f "$1" ] || return 0
     sed -nE 's/^(noncomputable )?(axiom|opaque|def|abbrev|structure|inductive|class) ([^ :({]+).*/\3/p' "$1" | sort -u
 }
 stub_fail=0
 for lib in $LIBS; do
-    out="${lib%%|*}"; name="${lib##*|}"
-    for tpl in "$GEN_DIR/$out/$name/Extraction/"*External_Template.lean; do
+    for tpl in "$PKG_DIR/$lib/Extraction/"*External_Template.lean; do
         [ -e "$tpl" ] || continue
         stub="$(basename "$tpl" _Template.lean)"
-        mine="$STUB_DIR/$name/Assumptions/$stub.lean"
-        rel_mine="assumptions/stubs/$name/Assumptions/$stub.lean"
-        if [ ! -f "$mine" ]; then
-            echo "error: the extraction needs $rel_mine, which does not exist." >&2
-            echo "       Start from hax's copy: generated/$out/$name/Assumptions/$stub.lean" >&2
+        mine="$PKG_DIR/$lib/Assumptions/$stub.lean"
+        rel_mine="$lib/Assumptions/$stub.lean"
+        if grep -qE '^axiom |^-- Seeded by hax' "$mine" 2>/dev/null; then
+            echo "error: $rel_mine is hax's unfilled seed (or states an axiom)." >&2
+            echo "       Fill it in, with each hole an \`opaque\` constant (TCB.md, layer 3)." >&2
             stub_fail=1
             continue
         fi
@@ -418,18 +421,16 @@ for lib in $LIBS; do
             stub_fail=1
         fi
     done
-    [ "$stub_fail" -ne 0 ] || rm -rf "$GEN_DIR/$out/$name/Assumptions"
 done
 [ "$stub_fail" -eq 0 ] || exit 1
 for lib in $LIBS; do
-    out="${lib%%|*}"; name="${lib##*|}"
-    mkdir -p "$PRISTINE/$out/$name/Extraction"
-    cp "$GEN_DIR/$out/$name/Extraction"/*.lean "$PRISTINE/$out/$name/Extraction"/
+    mkdir -p "$PRISTINE/$lib/Extraction"
+    cp "$PKG_DIR/$lib/Extraction"/*.lean "$PRISTINE/$lib/Extraction"/
 done
-echo "    ok; pristine output in generated/pristine/"
+echo "    ok; pristine output in .pristine/"
 
 echo "==> 7/8 applying post-extraction patches (generated Lean)"
-apply_phase "$POST_PATCH_DIR" "$GEN_DIR" ""
+apply_phase "$POST_PATCH_DIR" "$PKG_DIR" ""
 
 echo "==> 8/8 lake build"
 # Aeneas's Lean library pulls in mathlib; without the prebuilt cache this is an
@@ -440,12 +441,13 @@ if [ ! -f "$PKG_DIR/.lake/packages/mathlib/.lake/build/lib/lean/Mathlib.olean" ]
         echo "note: 'lake exe cache get' failed; mathlib may build from source" >&2
 fi
 if (cd "$PKG_DIR" && lake build); then
-    n_sorry=$(cd "$GEN_DIR" && find . -path ./pristine -prune -o -name '*.lean' ! -name '*_Template.lean' -print \
+    n_sorry=$(cd "$PKG_DIR" && find $LIBS -path '*/Extraction/*.lean' ! -name '*_Template.lean' \
                   | xargs cat | grep -c 'sorry' || true)
-    n_opaque=$(cd "$ASSUME_DIR" && find . -name '*.lean' | xargs cat | grep -cE '^(noncomputable )?(axiom|opaque) ' || true)
-    echo "    generated code contains $n_sorry 'sorry'; assumptions/ declares $n_opaque axiom/opaque constant(s)"
+    n_opaque=$(cd "$PKG_DIR" && find $LIBS -path '*/Assumptions/*.lean' | xargs cat \
+                  | grep -cE '^(noncomputable )?(axiom|opaque) ' || true)
+    echo "    generated code contains $n_sorry 'sorry'; the Assumptions/ declare $n_opaque axiom/opaque constant(s)"
 else
-    echo "WARNING: lake build failed. The patched files are in place in generated/;" >&2
+    echo "WARNING: lake build failed. The patched files are in place in each Extraction/;" >&2
     echo "         inspect for drift. Fix the failing patch (its .rej shows what" >&2
     echo "         moved), or author a new one with patches/new-patch.sh." >&2
     exit 1
@@ -458,4 +460,4 @@ else
 fi
 echo "${light_green}Done. Build passed. ✓${reset}"
 echo "${light_green}A green build means the extraction TYPE-CHECKS, meaning that"
-echo "the theorems in spec/ hold up to the assumptions; See TCB.md.${reset}"
+echo "the theorems in P3BabyBear/Verification/ hold up to the assumptions; See TCB.md.${reset}"

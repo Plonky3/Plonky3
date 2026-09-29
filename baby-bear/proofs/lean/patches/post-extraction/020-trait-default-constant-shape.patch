@@ -1,6 +1,6 @@
 # Patch:     020-trait-default-constant-shape
 # Phase:     post-extraction
-# Target:    p3-baby-bear/P3BabyBear/Extraction/Funs.lean
+# Target:    P3BabyBear/Extraction/Funs.lean
 # Hunks:     2
 # Cost:      none. The same default constant is referenced, with the
 #            arguments and monad its definition actually has.
@@ -23,8 +23,8 @@
 # the defining side's shape (`ok (… .default BabyBearParameters)` and so on).
 # The original call is kept as a comment beside each one.
 #
---- a/p3-baby-bear/P3BabyBear/Extraction/Funs.lean
-+++ b/p3-baby-bear/P3BabyBear/Extraction/Funs.lean
+--- a/P3BabyBear/Extraction/Funs.lean
++++ b/P3BabyBear/Extraction/Funs.lean
 @@ -197,14 +203,20 @@
  impl_def
    baby_bear.BabyBearParameters.Insts.P3_monty_31Data_traitsBarrettParameters :

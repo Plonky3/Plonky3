@@ -23,10 +23,11 @@ set -eu
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="$(dirname "$HERE")"
 REPO_ROOT="$(cd "$PKG_DIR/../../.." && pwd)"
-# Post-extraction patches apply to generated/ (paths relative to it), and
-# extract.sh keeps the unmodified hax output next to them in generated/pristine/.
-GEN_DIR="$PKG_DIR/generated"
-PRISTINE="$GEN_DIR/pristine"
+# Post-extraction patch paths are relative to the package root (e.g.
+# `P3BabyBear/Extraction/Funs.lean`), and extract.sh keeps the unmodified hax
+# output, with the same relative paths, in .pristine/.
+GEN_DIR="$PKG_DIR"
+PRISTINE="$PKG_DIR/.pristine"
 
 REQUIRED="Patch Phase Target Hunks Cost"
 fail=0
@@ -140,7 +141,7 @@ check_phase() {
     fi
     if [ "$phase" = "post-extraction" ]; then
         if [ ! -d "$PRISTINE" ]; then
-            echo "  SKIP: no generated/pristine/ yet; extract.sh checks again after extracting" >&2
+            echo "  SKIP: no .pristine/ yet; extract.sh checks again after extracting" >&2
             return
         fi
         cp -R "$PRISTINE"/. "$tmp"/

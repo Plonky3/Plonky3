@@ -4,10 +4,10 @@
 A scoped aeneas extraction of p3-poseidon1 fails with an internal error in
 `core::iter` (see TCB.md, layer 3), so these are written by hand after the
 Rust declarations. p3-baby-bear only *constructs* Poseidon1 instances
-(`default_babybear_poseidon1_{16,24}`), and nothing in `spec/` is about the
+(`default_babybear_poseidon1_{16,24}`), and nothing in `Verification/` is about the
 permutation, so the types keep their upstream fields but `new` is assumed.
 -/
-import Interface.P3Field
+import P3Monty31.Assumptions.P3Field
 open CoreModels Aeneas
 open Aeneas.Std hiding namespace core alloc
 open RustM ControlFlow Error

@@ -1,7 +1,7 @@
 /-
-# `p3-monty-31`: the part of the interface aeneas does not supply
+# `p3-monty-31`: what p3-baby-bear uses from it that aeneas does not supply
 
-Most of p3-monty-31 comes from the scoped extraction in `generated/p3-monty-31/`
+Most of p3-monty-31 comes from its scoped extraction, `P3Monty31/Extraction/`
 (the `data_traits`, `mds`, `poseidon1`/`poseidon2` parameter traits,
 `MontyField31` itself, `MontyField31::new`, `utils::to_monty`, the `Clone`
 impl). This file holds what that extraction does not produce:
@@ -14,12 +14,12 @@ impl). This file holds what that extraction does not produce:
   target with no SIMD these are the layers baby-bear's Poseidon instances use.
   The constructor bodies are one struct literal each and are transcribed.
 * memberless `Field` and `PrimeField` witnesses for `MontyField31`. Both
-  traits are memberless in `Interface.P3Field`, so the witnesses carry no
+  traits are memberless in `P3Monty31.Assumptions.P3Field`, so the witnesses carry no
   content.
 -/
 import P3Monty31.Extraction
-import Interface.P3Poseidon1
-import Interface.P3Poseidon2
+import P3BabyBear.Assumptions.P3Poseidon1
+import P3BabyBear.Assumptions.P3Poseidon2
 open CoreModels Aeneas
 open Aeneas.Std hiding namespace core alloc
 open RustM ControlFlow Error
