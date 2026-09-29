@@ -489,11 +489,15 @@ where
             .security_level
             .saturating_sub(whir_parameters.pow_bits);
 
-        // Bits of the extension field that every per-element error is priced against.
+        // Field size, in bits, that every per-element error is priced against.
         //
-        // `Field::bits()` is the bit length of the order, which rounds `log2(|EF|)` up.
-        // Dropping one bit gives the lower bound the security report prices with.
-        // Johnson also keeps the report's one-bit proximity-gap reserve.
+        //     BabyBear^4: |EF| < 2^124  ->  bit length 124  ->  priced at 123
+        //
+        // The bit length of the order rounds log_2(|EF|) up, so one bit less is a lower bound.
+        //
+        // Johnson drops one more bit, the reserve the security report takes off each proximity gap.
+        //
+        // Its other terms, priced one bit lower than the report needs, only gain slack.
         let field_size_bits = (EF::bits() - 1).saturating_sub(usize::from(
             whir_parameters.soundness_type == SecurityAssumption::JohnsonBound,
         ));
@@ -1101,9 +1105,9 @@ mod tests {
     fn derived_schedule_meets_every_term_the_security_report_prices() {
         // Invariant: each term the opening security report prices reaches the target on its own.
         //
-        // The report prices with `EF::bits() - 1`, a lower bound on `log2(|EF|)`.
+        // The report prices with one bit below the bit length, a lower bound on log_2(|EF|).
         // Johnson also takes a one-bit reserve off every proximity gap.
-        // A derivation priced with the rounded-up `EF::bits()` buys up to that much too little PoW.
+        // A derivation priced with the rounded-up bit length buys up to that much too little PoW.
         //
         // Fixture state: BabyBear^4, whose order has bit length 124 but is below 2^124.
         let field_bits = EF4::bits() - 1;
@@ -1192,6 +1196,12 @@ mod tests {
                     );
                     old_rate = round.log_inv_rate;
                 }
+                // The terminal queries test the last committed codeword at its own rate.
+                meets(
+                    soundness.queries_error(old_rate, config.terminal.num_queries)
+                        + config.terminal.pow_bits as f64,
+                    "terminal query",
+                );
                 if config.final_sumcheck_rounds != 0 {
                     meets(
                         field_bits as f64 - 1. + config.final_folding_pow_bits as f64,
