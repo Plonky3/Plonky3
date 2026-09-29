@@ -12,7 +12,7 @@ use p3_util::{as_base_slice, as_base_slice_mut, reconstitute_from_base};
 
 use super::{
     ExtField, HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField,
-    coordinatewise_dot_product,
+    ext_mixed_dot_product,
 };
 use crate::extension::{Binomial, BinomiallyExtendable, ExtensionAlgebra};
 use crate::field::Field;
@@ -208,10 +208,7 @@ where
 impl<F: BinomiallyExtendable<D>, const D: usize> Algebra<F> for BinomialExtensionField<F, D> {
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[F; N]) -> Self {
-        Self::new(coordinatewise_dot_product(
-            &array::from_fn(|i| a[i].value),
-            f,
-        ))
+        ext_mixed_dot_product(a, f)
     }
 }
 

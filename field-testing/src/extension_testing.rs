@@ -109,11 +109,12 @@ where
     {
         let width = F::Packing::WIDTH;
 
-        // Random inputs, then the largest canonical value everywhere.
+        // Random inputs, then the largest canonical value in every coordinate.
         //
         // The second case drives every unreduced accumulator to its maximum.
         let random: ([EF; N], [F; N]) = (rng.random(), rng.random());
-        let extreme = ([EF::NEG_ONE; N], [F::NEG_ONE; N]);
+        let max_ext = EF::from_basis_coefficients_fn(|_| F::NEG_ONE);
+        let extreme = ([max_ext; N], [F::NEG_ONE; N]);
 
         for (a, f) in [random, extreme] {
             // Scalar extension against the naive sum.
