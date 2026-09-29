@@ -2,7 +2,7 @@ use core::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use p3_field::PrimeCharacteristicRing;
-use p3_keccak::{Keccak256Hash, KeccakF, VECTOR_LEN};
+use p3_keccak::{Keccak256Hash, KeccakF, Sha3_256Hash, VECTOR_LEN};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation, SerializingHasher};
 
@@ -79,17 +79,21 @@ pub fn keccak_field_32_hash(c: &mut Criterion) {
 }
 
 pub fn keccak_hash_many(c: &mut Criterion) {
-    /// Enough messages that the per-call setup does not show up in the measurement.
-    const MESSAGES: usize = 1 << 16;
+    /// Bytes per batch, so every length does the same amount of absorbing.
+    const BATCH_BYTES: usize = 1 << 22;
 
     let mut group = c.benchmark_group("keccak hash_many");
-    for len in [1024, 128, 64] {
-        let input: Vec<u8> = (0..MESSAGES * len).map(|i| i as u8).collect();
-        let mut out = vec![[0u8; 32]; MESSAGES];
+    for len in [64, 540, 1024, 64 * 1024] {
+        let messages = BATCH_BYTES / len;
+        let input: Vec<u8> = (0..messages * len).map(|i| i as u8).collect();
+        let mut out = vec![[0u8; 32]; messages];
 
-        group.throughput(Throughput::Bytes((MESSAGES * len) as u64));
-        group.bench_function(format!("keccak hash_many {len}-byte messages"), |b| {
+        group.throughput(Throughput::Bytes((messages * len) as u64));
+        group.bench_function(format!("keccak-256 {len}-byte messages"), |b| {
             b.iter(|| Keccak256Hash.hash_many(black_box(&input), black_box(&mut out)));
+        });
+        group.bench_function(format!("sha3-256 {len}-byte messages"), |b| {
+            b.iter(|| Sha3_256Hash.hash_many(black_box(&input), black_box(&mut out)));
         });
     }
     group.finish();
