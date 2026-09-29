@@ -116,8 +116,10 @@ pub struct StirOptions {
     /// `Some(cap)` stops folding once the coefficient bound is at most `2^cap`, after at least the
     /// starting fold. `None` retains the legacy schedule. Larger bounds save intermediate
     /// rounds at the cost of sending more final coefficients. An unreachable bound is rejected.
-    /// Either way folding stops before a round whose queries and OOD samples would exceed the
-    /// next degree bound, so the final polynomial can be longer than `2^cap`.
+    ///
+    /// Either way, folding stops before a round that would check more points than its next degree.
+    ///
+    /// The final polynomial can then be longer than `2^cap`.
     pub max_log_final_poly_len: Option<usize>,
 
     /// Omit answer-polynomial coefficients from the proof and reconstruct them in the
@@ -840,11 +842,13 @@ where
         )
     }
 
-    /// Derive the schedule, optionally forcing the number of folds after the starting one.
+    /// Derive the schedule, optionally capping the number of folds after the starting one.
     ///
-    /// The schedule folds as far as the options allow, then stops before the first round that
-    /// would check more points than its next degree bound. That round becomes the final stage,
-    /// so the final polynomial can be longer than a requested cap.
+    /// Folding goes as far as the options allow.
+    ///
+    /// It stops early at the first round that would check more points than its next degree.
+    ///
+    /// That round's fold becomes the final stage, so the final polynomial can exceed a cap.
     fn try_new_with_fold_count(
         log_starting_degree: usize,
         params: StirParameters<M>,
@@ -1195,13 +1199,23 @@ where
 
             let num_queries = query_count(log_inv_rate, final_eta)?;
 
-            // STIR needs `t + s <= d_{i+1}` (Construction 5.2). With more points than that,
-            // Ans interpolates the folded function itself, the quotient is zero, and the
-            // folded degree is never checked again.
+            // Invariant: STIR needs t + s <= d_{i+1} (Construction 5.2).
+            //
+            // Why: with more points, Ans interpolates any folded function of degree below t + s.
+            //
+            //     g of degree in [d_{i+1}, t + s)  =>  Ans = g  =>  quotient = 0
+            //
+            // Every later oracle is then zero, and the excess degree is never tested again.
+            //
+            // Equality is sound: a folded function of degree at least d_{i+1} escapes Ans.
             let log_next_degree = log_degree - round_log_folding_factor;
             let num_points = num_queries + num_ood_samples;
             if num_points > 1 << log_next_degree {
-                // Stop before this round's fold: it becomes the final stage instead.
+                // Rebuild with this round's fold as the final fold.
+                //
+                // The prover then sends the folded polynomial in full instead of committing to it.
+                //
+                // The forced count strictly decreases, so the rebuild terminates.
                 return Self::try_new_with_fold_count(
                     log_starting_degree,
                     params,
@@ -1476,8 +1490,9 @@ mod tests {
     #[test]
     fn early_stop_selects_the_first_fold_within_the_requested_bound() {
         let cases = [
-            // An eighth round would check 4 queries and 2 OOD samples against 2^2 coefficients,
-            // so folding stops with a length-4 final polynomial even below a cap of 1.
+            // An eighth round would check 4 queries and 2 OOD samples against 2^2 coefficients.
+            //
+            // Folding stops there, leaving a length-4 final polynomial even under a cap of 1.
             (18, 2, 2, None, 7, 2),
             (18, 2, 2, Some(0), 7, 2),
             (18, 2, 2, Some(6), 5, 6),
@@ -1545,18 +1560,29 @@ mod tests {
         }
     }
 
-    /// A round whose queries and OOD samples outnumber the next degree bound has a zero
-    /// quotient, so a folded polynomial above that bound passes every later check. Many
-    /// small-degree and high-security schedules used to fold into such a round.
     #[test]
     fn no_round_checks_more_points_than_its_next_degree_bound() {
+        // Invariant: every round checks at most as many points as its next degree bound.
+        //
+        //     t + s <= d_{i+1}
+        //
+        // A round that breaks it has a zero quotient for any folded function of degree below t + s.
+        //
+        // A folded function above the degree bound then passes every later check.
+        //
+        // Fixture: a grid of assumptions, security targets, rates, folds, degrees and caps.
+        //
+        // Small degrees and high security targets used to fold into such a round.
         type Config = StirConfig<TestF, TestEF, TestMmcs, TestChallenger>;
         let assumptions = [
             SecurityAssumption::CapacityBound,
             SecurityAssumption::JohnsonBound,
         ];
+        // Security targets paired with their PoW budgets, from toy to production.
         let budgets = [(16, 0), (32, 0), (64, 16), (100, 20)];
+        // No cap, then caps from a constant final polynomial up to 2^6 coefficients.
         let caps = [None, Some(0), Some(2), Some(6)];
+        // Count the schedules that build, so an all-infeasible grid cannot pass vacuously.
         let mut checked = 0;
         for (soundness_type, (security_level, max_pow_bits)) in assumptions
             .into_iter()
@@ -1581,10 +1607,12 @@ mod tests {
                         max_log_final_poly_len: cap,
                         ..Default::default()
                     };
+                    // Infeasible parameters are rejected elsewhere, so skip them here.
                     let Ok(config) = Config::try_new_with_options(log_degree, params, options)
                     else {
                         continue;
                     };
+                    // Compare each round's point count against the degree it folds to.
                     for (round, rc) in config.round_configs.iter().enumerate() {
                         let log_next_degree = rc.log_degree - rc.log_folding_factor;
                         let num_points = rc.num_queries + rc.num_ood_samples;
@@ -1787,8 +1815,11 @@ mod tests {
             mmcs,
         };
 
-        // log_starting_degree=12, fold by 4 each round. A fourth round would check 22 queries
-        // and 2 OOD samples against 2^4 coefficients, so the schedule stops after three.
+        // Fixture state: starting degree 2^12, fold by 2^4 each round.
+        //
+        // A fourth round would check 22 queries and 2 OOD samples against 2^4 coefficients.
+        //
+        // The schedule therefore stops after three rounds with a final degree of 2^4.
         let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(12, params);
         assert_eq!(config.log_final_degree, 4);
         assert_eq!(config.num_rounds(), 3);
