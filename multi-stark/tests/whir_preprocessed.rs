@@ -551,10 +551,15 @@ fn prove_verify_mixed_height_preprocessed_roundtrips() {
 
 #[test]
 fn verify_rejects_preprocessed_tables_at_heights_the_key_was_not_set_up_for() {
-    // The preprocessed tables are stacked tallest first into one commitment. Tables of
-    // heights 256 and 128 therefore stack into the same polynomial whichever AIR owns which,
-    // so a key set up with air a at 256 and air b at 128 also opens a proof that runs air a
-    // at 128 and air b at 256. Each AIR would then read the other table's fixed column.
+    // Invariant: the verifier rejects preprocessed heights the key was not set up for.
+    //
+    // Preprocessed tables are stacked tallest first into one commitment.
+    //
+    // Tables of 256 and 128 rows stack into the same polynomial whichever AIR owns which.
+    //
+    // Each AIR would then read the other table's fixed column.
+    //
+    // Fixture state:
     //
     //     key:   a -> 256 rows (8 variables), b -> 128 rows (7 variables)
     //     proof: a -> 128 rows,               b -> 256 rows
@@ -575,9 +580,12 @@ fn verify_rejects_preprocessed_tables_at_heights_the_key_was_not_set_up_for() {
         height: n_lo,
         cells: &[],
     };
+    // The honest key assigns the tall table to the first AIR.
     let (_, vk) = setup(&config, &[&air_a, &air_b], &mut challenger()).unwrap();
 
-    // The prover sets up the swapped heights, which commit to the same stacked polynomial.
+    // Mutation: the prover sets up the swapped heights.
+    //
+    // They commit to the same stacked polynomial as the honest key.
     let swapped_a = PreprocessedAir {
         height: n_lo,
         cells: &[],
@@ -612,6 +620,7 @@ fn verify_rejects_preprocessed_tables_at_heights_the_key_was_not_set_up_for() {
     let err = verify(
         &config,
         VerifierInstances::new(vec![
+            // The honest key, paired with the prover's claimed heights.
             VerifierInstance::new(&air_a, &vk, log_lo, &[]),
             VerifierInstance::new(&air_b, &vk, log_hi, &[]),
         ]),

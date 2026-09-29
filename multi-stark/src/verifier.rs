@@ -234,8 +234,14 @@ where
     let log_heights = instances.num_variables();
     let public_values = instances.public_values();
 
-    // The preprocessed commitment binds the stacked tables, not how they split between the
-    // AIRs, so each table's height has to come from the key.
+    // The preprocessed commitment binds the stacked tables, not which AIR owns each one.
+    //
+    //     key:   a -> 2^8 rows, b -> 2^7 rows
+    //     claim: a -> 2^7 rows, b -> 2^8 rows    same stacked polynomial
+    //
+    // Each AIR would then be checked against the other's fixed columns.
+    //
+    // Invariant: every preprocessed height matches the one recorded at setup.
     let preprocessed_log_heights = airs
         .iter()
         .zip(&log_heights)

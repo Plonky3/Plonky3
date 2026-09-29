@@ -123,10 +123,13 @@ where
 pub struct VerifyingKey<C: MultiStarkConfig> {
     /// Batched preprocessed commitment, present only when at least one AIR declares it.
     pub(crate) preprocessed: Option<Commitment<C>>,
-    /// Row variables of each committed preprocessed table, in stacking order.
+    /// Row variables of each committed preprocessed table, in batch order.
     ///
-    /// The commitment alone does not fix them: tables of heights 2^8 and 2^7 stack into the
-    /// same polynomial as the same tables listed the other way round.
+    /// The commitment alone does not fix them.
+    ///
+    /// Stacking places tables tallest first, whichever AIR owns each one.
+    ///
+    /// Tables of 2^8 and 2^7 rows therefore commit to the same polynomial in either assignment.
     pub(crate) preprocessed_log_heights: Vec<usize>,
     /// Zerocheck metadata fixed by the AIRs at setup.
     pub(crate) air_profiles: Vec<AirProfile>,
