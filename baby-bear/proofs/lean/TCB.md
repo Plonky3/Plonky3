@@ -14,8 +14,8 @@ Measured totals (regenerate with the commands in [`SYNC.md`](SYNC.md)):
 | Generated for p3-baby-bear (`P3BabyBear/Extraction/{Types,Funs}.lean`) | **2947** lines, **0** `sorry` |
 | Generated for dependencies (`P3{Monty31,Mds}/Extraction/{Types,Funs}.lean`) | **568** lines, **0** `sorry` |
 | Hand-written assumptions (`*/Assumptions/`) | **522** lines, **0** `sorry`, **0** `axiom`, **10** `opaque` |
-| Pre-extraction patches (Rust source) | **3** files, **17** hunks. Hidden items are behind `cfg(hax_backend_lean)`; the cfg declaration and some redundant bounds are not |
-| Upstream tests diverging under the pre-patches | **0** (6742 run) |
+| Pre-extraction patches (Rust source) | **4** files, **18** hunks. Hidden items are behind `cfg(hax_backend_lean)`; the cfg declaration and some redundant bounds are not |
+| Upstream tests diverging under the pre-patches | **0** (6757 run) |
 | Post-extraction patches | **3** files, **17** hunks |
 | Theorems in `P3BabyBear/Verification/Proofs.lean` | **27** (24 claims, 3 helpers), axiom footprint within `[propext, Classical.choice, Quot.sound]` |
 | **`lake build` warnings** | **0** |
@@ -102,18 +102,20 @@ and formatting has no bearing on the arithmetic.
 
 ## Layer 4 — the patches
 
-### Pre-extraction: 3 patches
+### Pre-extraction: 4 patches
 
 | Patch | What |
 |---|---|
 | `010-declare-hax-backend-lean-cfg` | declares the cfg name to rustc's check-cfg |
 | `020-field-cfg-raw-data-serializable-supertrait` | under the cfg, `Field` stops implying `RawDataSerializable`; redundant bounds restated at 9 generic sites |
 | `030-field-cfg-rpitit-packed-methods` | under the cfg, the four `-> impl Iterator` packed-trait methods are absent (`to_ext_iter` moves to an extension trait) |
+| `040-field-cfg-rpitit-bit-plane-expansion` | under the cfg, `Field::prepare_bit_plane_expansion` (`-> Option<impl Fn>`) is absent; its only users are outside p3-baby-bear's graph |
 
-`020` and `030` exist because of one limitation: rustc turns `-> impl Trait`
+`020`, `030` and `040` exist because of one limitation: rustc turns `-> impl Trait`
 in a trait method into a hidden generic associated type, and charon/aeneas
-cannot lift GATs (charon#1266). Without those two, aeneas reports 803 errors
-and no usable output. `010` only declares the cfg name those two use, so
+cannot lift GATs (charon#1266). Without `020` and `030`, aeneas reports 803
+errors and no usable output; without `040`, it exits on `Field`. `010` only
+declares the cfg name the others use, so
 rustc's `unexpected_cfgs` lint stays quiet.
 
 **What this costs.** The extracted crate is the cfg'd variant. Its items are
@@ -123,7 +125,7 @@ differs. Two checks back that up:
 1. *The normal build is unchanged.* `test-pre-patches.py` (step 2) runs
    `cargo test --workspace` on the tree as shipped and with the patches, and
    compares per test and per test source: **0 divergences
-   (6742 tests)**. It writes the result into each patch's header (`# Tested:`
+   (6757 tests)**. It writes the result into each patch's header (`# Tested:`
    and one `# Divergence:` entry per diverging test), and fails while any
    entry is unclassified. The only unconditional edits are implied bounds and
    the cfg declaration.
@@ -131,7 +133,7 @@ differs. Two checks back that up:
    for `thumbv7em-none-eabi` under the cfg (the variant charon sees),
    warning-free.
 
-The upstream run is 6742 tests: 6688 pass in both trees and 54 are
+The upstream run is 6757 tests: 6703 pass in both trees and 54 are
 `#[ignore]`d in both.
 
 ### Charon scope flags (not patches, but they restrict what is extracted)

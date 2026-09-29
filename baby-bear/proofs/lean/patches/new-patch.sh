@@ -14,7 +14,8 @@
 #   temp dir and diffs the live files against it, so the captured delta is ONLY
 #   the new change. Capture before the next ./extract.sh, which rewrites
 #   every <Lib>/Extraction/.
-# pre-extraction: wraps `git diff` over the Rust tree at the repo root.
+# pre-extraction: wraps `git diff` over the Rust tree at the repo root,
+#   excluding baby-bear/proofs/.
 #
 # The new number must sort after every existing patch in the phase, because the
 # baseline is "all existing patches applied".
@@ -78,7 +79,9 @@ if [ "$PHASE" = "post-extraction" ]; then
         diff -u -L "a/$f" -L "b/$f" "$TMP/base/$f" "$GEN_DIR/$f" >> "$RAW" || true
     done
 else
-    ( cd "$REPO_ROOT" && git diff -- . ) > "$RAW" || true
+    # The proofs tree is not Rust under verification (and test-pre-patches.py
+    # rewrites the existing patches' headers), so it is never part of the diff.
+    ( cd "$REPO_ROOT" && git diff -- . ':(exclude)baby-bear/proofs' ) > "$RAW" || true
 fi
 
 if [ ! -s "$RAW" ]; then
