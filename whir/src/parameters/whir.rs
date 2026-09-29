@@ -489,8 +489,18 @@ where
             .security_level
             .saturating_sub(whir_parameters.pow_bits);
 
-        // Number of bits in the extension field; upper-bounds all per-element errors.
-        let field_size_bits = EF::bits();
+        // Field size, in bits, that every per-element error is priced against.
+        //
+        //     BabyBear^4: |EF| < 2^124  ->  bit length 124  ->  priced at 123
+        //
+        // The bit length of the order rounds log_2(|EF|) up, so one bit less is a lower bound.
+        //
+        // Johnson drops one more bit, the reserve the security report takes off each proximity gap.
+        //
+        // Its other terms, priced one bit lower than the report needs, only gain slack.
+        let field_size_bits = (EF::bits() - 1).saturating_sub(usize::from(
+            whir_parameters.soundness_type == SecurityAssumption::JohnsonBound,
+        ));
 
         // Mutable state that evolves as we derive per-round parameters.
         let mut log_inv_rate = whir_parameters.starting_log_inv_rate;
@@ -1089,6 +1099,119 @@ mod tests {
             "final query phase undershoots: {} + {final_error} < {target}",
             config.terminal.pow_bits
         );
+    }
+
+    #[test]
+    fn derived_schedule_meets_every_term_the_security_report_prices() {
+        // Invariant: each term the opening security report prices reaches the target on its own.
+        //
+        // The report prices with one bit below the bit length, a lower bound on log_2(|EF|).
+        // Johnson also takes a one-bit reserve off every proximity gap.
+        // A derivation priced with the rounded-up bit length buys up to that much too little PoW.
+        //
+        // Fixture state: BabyBear^4, whose order has bit length 124 but is below 2^124.
+        let field_bits = EF4::bits() - 1;
+        let mut checked = 0;
+        for soundness in [
+            SecurityAssumption::UniqueDecoding,
+            SecurityAssumption::JohnsonBound,
+            SecurityAssumption::CapacityBound,
+        ] {
+            let reserve = if soundness == SecurityAssumption::JohnsonBound {
+                1.
+            } else {
+                0.
+            };
+            for security_level in 80..=112 {
+                let params = ProtocolParameters {
+                    security_level,
+                    pow_bits: 16,
+                    round_log_inv_rates: vec![],
+                    folding_factor: FoldingFactor::Constant(4),
+                    soundness_type: soundness,
+                    starting_log_inv_rate: 1,
+                };
+                let Ok(config) = WhirConfig::<EF4, F, MyChallenger>::new(20, params) else {
+                    continue;
+                };
+                let target = security_level as f64;
+                let meets = |bits: f64, term: &str| {
+                    assert!(
+                        bits >= target,
+                        "{soundness:?} at {security_level} bits: {term} reaches only {bits}"
+                    );
+                };
+                let folds = |num_variables, rate, pow: usize, phase: &str| {
+                    let gap =
+                        soundness.prox_gaps_error(num_variables, rate, field_bits, 2) - reserve;
+                    let sumcheck = soundness.fold_sumcheck_error(field_bits, num_variables, rate);
+                    meets(gap + pow as f64, &alloc::format!("{phase} proximity gap"));
+                    meets(
+                        sumcheck + pow as f64,
+                        &alloc::format!("{phase} fold sumcheck"),
+                    );
+                };
+                let ood = |num_variables, rate, samples, phase: &str| {
+                    if soundness != SecurityAssumption::UniqueDecoding {
+                        let bits = soundness.ood_error(num_variables, rate, field_bits, samples);
+                        meets(bits, &alloc::format!("{phase} OOD"));
+                    }
+                };
+
+                ood(
+                    config.num_variables,
+                    config.starting_log_inv_rate,
+                    config.commitment_ood_samples,
+                    "commitment",
+                );
+                folds(
+                    config.num_variables,
+                    config.starting_log_inv_rate,
+                    config.starting_folding_pow_bits,
+                    "starting",
+                );
+                let mut old_rate = config.starting_log_inv_rate;
+                for round in &config.round_parameters {
+                    ood(
+                        round.num_variables,
+                        round.log_inv_rate,
+                        round.ood_samples,
+                        "round",
+                    );
+                    let query = soundness.queries_error(old_rate, round.num_queries);
+                    let combination = soundness.queries_combination_error(
+                        field_bits,
+                        round.num_variables,
+                        round.log_inv_rate,
+                        round.ood_samples,
+                        round.num_queries,
+                    );
+                    meets(query + round.pow_bits as f64, "round query");
+                    meets(combination + round.pow_bits as f64, "round combination");
+                    folds(
+                        round.num_variables,
+                        round.log_inv_rate,
+                        round.folding_pow_bits,
+                        "round",
+                    );
+                    old_rate = round.log_inv_rate;
+                }
+                // The terminal queries test the last committed codeword at its own rate.
+                meets(
+                    soundness.queries_error(old_rate, config.terminal.num_queries)
+                        + config.terminal.pow_bits as f64,
+                    "terminal query",
+                );
+                if config.final_sumcheck_rounds != 0 {
+                    meets(
+                        field_bits as f64 - 1. + config.final_folding_pow_bits as f64,
+                        "final sumcheck",
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
     }
 
     #[test]
