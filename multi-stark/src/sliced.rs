@@ -487,7 +487,20 @@ impl<R: Field> LaneSums<R> {
     }
 }
 
-/// Descending alpha powers laid out for [`SlicedFolder`] to sum constraints eight at a time.
+/// Fewest constraints for the ordinary sliced folder to take the prepared kernel.
+///
+/// Each evaluation pays the kernel a fixed cost, clearing its sums and reading them out
+/// through 128 plane sums and a 128-term product. An AIR asserting fewer constraints saves
+/// less than that over summing them one at a time.
+const MIN_CONSTRAINTS: usize = 640;
+
+/// Fewest constraints for the four-cell single-plane folder to take the prepared kernel.
+///
+/// The higher cutoff reflects its four prepared states. On the quadratic folder's measured
+/// all-quadratic path, the kernel was slower at 1,280 constraints and faster at 2,560.
+const MIN_BIT_CONSTRAINTS: usize = 2_560;
+
+/// Descending alpha powers laid out for the sliced folders to sum constraints eight at a time.
 ///
 /// Every constraint's lanes are weighted the same way, so the weights can wait until the end:
 ///
@@ -514,12 +527,21 @@ impl<R: Field> PreparedPowers<R> {
     ///
     /// # Returns
     ///
-    /// One layout per AIR, or `None` where [`SlicedFolder`] sums constraint by constraint
-    /// instead: the target has no kernel, `R`'s encoding fails the checks, or the AIR asserts
-    /// too few constraints to repay the kernel's fixed cost per evaluation.
+    /// One layout per AIR, or `None` where the folder sums constraint by constraint instead: the
+    /// target has no kernel, `R`'s encoding fails the checks, or the AIR asserts too few
+    /// constraints to repay the kernel's fixed cost per evaluation.
     #[must_use]
     pub(crate) fn per_air(alpha_powers: &[Vec<R>], generator: R) -> Vec<Option<Self>> {
-        kernel::Prepared::per_air(alpha_powers, generator)
+        kernel::Prepared::per_air(alpha_powers, generator, MIN_CONSTRAINTS)
+            .into_iter()
+            .map(|prepared| prepared.map(Self))
+            .collect()
+    }
+
+    /// Lay out powers for the single-plane folder, using its measured activation threshold.
+    #[must_use]
+    pub(crate) fn per_air_bits(alpha_powers: &[Vec<R>]) -> Vec<Option<Self>> {
+        kernel::Prepared::per_air(alpha_powers, R::ZERO, MIN_BIT_CONSTRAINTS)
             .into_iter()
             .map(|prepared| prepared.map(Self))
             .collect()
@@ -839,7 +861,9 @@ mod kernel {
     use p3_field::Field;
     use p3_maybe_rayon::prelude::*;
 
-    use super::{LaneSums, PreparedPowers, SLICED_LANES, TABLE_BITS, TABLES_PER_PLANE};
+    use super::{
+        BitLaneSums, LaneSums, PreparedPowers, SLICED_LANES, TABLE_BITS, TABLES_PER_PLANE,
+    };
 
     /// Constraints one block gathers, one per bit of a lane byte.
     const BLOCK: usize = 8;
@@ -911,13 +935,6 @@ mod kernel {
     /// See [`gather`].
     const GATHER: [i64; 8] = gather();
 
-    /// Fewest constraints an AIR asserts for its evaluations to take the kernel.
-    ///
-    /// Each evaluation pays the kernel a fixed cost, clearing its sums and reading them out
-    /// through 128 plane sums and a 128-term product. An AIR asserting fewer constraints saves
-    /// less than that over summing them one at a time.
-    pub(super) const MIN_CONSTRAINTS: usize = 640;
-
     /// Descending alpha powers as the bit matrices that add them, eight constraints a block.
     #[derive(Debug)]
     pub(super) struct Prepared<R> {
@@ -934,10 +951,14 @@ mod kernel {
 
     impl<R: Field> Prepared<R> {
         /// Lay out each AIR's powers against one basis of `R`, see [`PreparedPowers::per_air`].
-        pub(super) fn per_air(alpha_powers: &[Vec<R>], generator: R) -> Vec<Option<Self>> {
+        pub(super) fn per_air(
+            alpha_powers: &[Vec<R>],
+            generator: R,
+            min_constraints: usize,
+        ) -> Vec<Option<Self>> {
             let basis = alpha_powers
                 .iter()
-                .any(|powers| powers.len() >= MIN_CONSTRAINTS)
+                .any(|powers| powers.len() >= min_constraints)
                 .then(coordinate_basis::<R>)
                 .flatten()
                 .map(Arc::from);
@@ -945,7 +966,7 @@ mod kernel {
                 .iter()
                 .map(|powers| {
                     let basis = basis.as_ref()?;
-                    (powers.len() >= MIN_CONSTRAINTS)
+                    (powers.len() >= min_constraints)
                         .then(|| Self::new(powers, generator, Arc::clone(basis)))
                 })
                 .collect()
@@ -1163,6 +1184,24 @@ mod kernel {
             prepared: &PreparedPowers<R>,
             lanes: &LaneSums<R>,
         ) -> R {
+            self.finish_with(prepared, |plane| plane_sum(lanes, plane))
+        }
+
+        /// [`Self::finish`], for values with only a low bit plane.
+        pub(crate) fn finish_bits<R: Field>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            lanes: &BitLaneSums<R>,
+        ) -> R {
+            self.finish_with(prepared, |plane| lanes.sum(plane))
+        }
+
+        /// Finish the byte-sliced sums, contracting every coordinate plane through `plane_sum`.
+        fn finish_with<R: Field>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            plane_sum: impl FnMut(u64) -> R,
+        ) -> R {
             let prepared = &prepared.0;
             let full = prepared.len / BLOCK;
             // SAFETY: this module is compiled only where the build enables every target feature
@@ -1180,7 +1219,7 @@ mod kernel {
             }
             // SAFETY: this module is compiled only where the build enables every target feature
             // the kernel names.
-            unsafe { self.contract(lanes, &prepared.basis) }
+            unsafe { self.contract(&prepared.basis, plane_sum) }
         }
 
         /// Add block `block` to the sums through its matrices, and clear its planes.
@@ -1224,13 +1263,17 @@ mod kernel {
         ///     sum_lane w(lane) * A(lane)  =  sum_b basis[b] * (sum of w over the lanes with bit b)
         /// ```
         #[target_feature(enable = "avx512f,avx512bw")]
-        fn contract<R: Field>(&self, lanes: &LaneSums<R>, basis: &[R; COORDINATES]) -> R {
+        fn contract<R: Field>(
+            &self,
+            basis: &[R; COORDINATES],
+            mut plane_sum: impl FnMut(u64) -> R,
+        ) -> R {
             let mut sums = [R::ZERO; COORDINATES];
             for (bytes, sums) in self.sums.iter().zip(sums.as_chunks_mut::<8>().0.iter_mut()) {
                 let bytes = load(bytes);
                 for (bit, sum) in sums.iter_mut().enumerate() {
                     let plane = _mm512_test_epi8_mask(bytes, _mm512_set1_epi8((1u8 << bit) as i8));
-                    *sum = plane_sum(lanes, plane);
+                    *sum = plane_sum(plane);
                 }
             }
             R::dot_product(basis, &sums)
@@ -1298,7 +1341,7 @@ mod kernel {
 
     use p3_field::Field;
 
-    use super::{LaneSums, PreparedPowers};
+    use super::{BitLaneSums, LaneSums, PreparedPowers};
 
     /// A layout no value can take, so every constraint is summed on its own.
     #[derive(Debug)]
@@ -1309,7 +1352,11 @@ mod kernel {
     #[allow(clippy::missing_const_for_fn)]
     impl<R> Prepared<R> {
         /// Refuses every AIR, the target having no kernel to prepare for.
-        pub(super) fn per_air(alpha_powers: &[Vec<R>], _generator: R) -> Vec<Option<Self>> {
+        pub(super) fn per_air(
+            alpha_powers: &[Vec<R>],
+            _generator: R,
+            _min_constraints: usize,
+        ) -> Vec<Option<Self>> {
             alpha_powers.iter().map(|_| None).collect()
         }
 
@@ -1348,6 +1395,15 @@ mod kernel {
             &mut self,
             prepared: &PreparedPowers<R>,
             _lanes: &LaneSums<R>,
+        ) -> R {
+            match prepared.0.0 {}
+        }
+
+        /// Never called: no prepared layout exists.
+        pub(crate) fn finish_bits<R: Field>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            _lanes: &BitLaneSums<R>,
         ) -> R {
             match prepared.0.0 {}
         }
