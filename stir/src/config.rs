@@ -1176,7 +1176,7 @@ where
         // That is Lemma 5.4's err*(d_{i+1}, rho_{i+1}, delta_{i+1}, t + s) term.
         // It is drawn after round i's query grind, so only round i's query PoW protects it.
         //
-        // The capacity-bound eta floor for stage i+1 prices this term at `pow_target_bits`.
+        // The capacity-bound eta floor for stage i+1 prices this term at the PoW-assisted target.
         // That target assumes the whole grinding budget.
         // Round i only grinds what its own terms need, which can be far less.
         // Stage i+1's eta is only fixed once it is derived, so the term is charged from there.
@@ -1186,6 +1186,9 @@ where
                                         log_inv_rate: usize,
                                         eta: f64|
          -> Result<(), StirConfigError> {
+            // Only the capacity bound floors eta for this term.
+            //
+            // Johnson schedules do not price it yet, so charging them here would reject many.
             if params.soundness_type != SecurityAssumption::CapacityBound {
                 return Ok(());
             }
