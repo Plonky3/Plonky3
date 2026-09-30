@@ -54,8 +54,9 @@ pub trait BaseAir<F>: Sync {
     /// # Commitment
     ///
     /// Periodic columns are public parameters and must be committed during initialization of
-    /// the Fiat-Shamir transcript. The values returned are evaluations over a subgroup;
-    /// callers may convert to coefficient form for efficient evaluation if needed.
+    /// the Fiat-Shamir transcript; [`Self::periodic_statement`] gives the bytes to commit. The
+    /// values returned are evaluations over a subgroup; callers may convert to coefficient form
+    /// for efficient evaluation if needed.
     fn periodic_columns(&self) -> Cow<'_, [Vec<F>]>
     where
         F: Clone,
@@ -88,6 +89,27 @@ pub trait BaseAir<F>: Sync {
         EF: ExtensionField<F>,
     {
         None
+    }
+
+    /// Bytes that fix the value of every periodic column.
+    ///
+    /// A backend binds them into its transcript before the first challenge.
+    ///
+    /// The default writes each column's length, then its values.
+    ///
+    /// An override must still determine every value, for example from a sparse description.
+    fn periodic_statement(&self) -> Vec<u8>
+    where
+        F: Field,
+    {
+        let mut bytes = Vec::new();
+        for column in self.periodic_columns().iter() {
+            bytes.extend((column.len() as u64).to_le_bytes());
+            for &value in column {
+                bytes.extend(value.into_bytes());
+            }
+        }
+        bytes
     }
 
     /// Return the periodic values for the given row index.

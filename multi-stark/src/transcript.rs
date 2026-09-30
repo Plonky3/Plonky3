@@ -29,6 +29,7 @@
 //! - Shape: the instance count, every per-instance public-value count, the preprocessed presence.
 //! - Instance label: every trace arity, every main width, every preprocessed width.
 //! - Instance label: the grinding difficulty the delegated sumcheck rounds run at.
+//! - Instance label: the periodic values of every AIR that declares periodic columns.
 //! - Nothing here: the challenges, which belong entirely to the delegated sub-protocols.
 //!
 //! This transcript draws nothing.
@@ -68,6 +69,7 @@ use p3_challenger::fs::{
     Kind, Label, Length, ProverState, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample};
+use p3_field::Field;
 use thiserror::Error;
 
 /// Version byte bound into the transcript seed.
@@ -161,6 +163,8 @@ pub struct MultiStarkInstanceShape {
     pub main_next_row_columns: Vec<usize>,
     /// Preprocessed successor columns, in opening order.
     pub preprocessed_next_row_columns: Vec<usize>,
+    /// Bytes fixing this instance's periodic values, empty when its AIR declares none.
+    pub periodic_statement: Vec<u8>,
 }
 
 /// Numbers that fix the transcript of one batched multi-STARK statement.
@@ -188,12 +192,13 @@ pub struct MultiStarkShape {
 impl MultiStarkShape {
     /// Derive the shape of one batch from its AIRs and their trace arities.
     ///
-    /// Three of the four per-instance numbers are read straight off the AIR.
+    /// Everything but the arity is read straight off the AIR.
     ///
     /// ```text
     ///     main_width          air.width()
     ///     preprocessed_width  air.preprocessed_width()
     ///     num_public_values   air.num_public_values()
+    ///     periodic_statement  air.periodic_statement()
     /// ```
     ///
     /// # Arguments
@@ -215,6 +220,7 @@ impl MultiStarkShape {
         has_bus: bool,
     ) -> Self
     where
+        F: Field,
         A: BaseAir<F> + ?Sized,
     {
         assert_eq!(
@@ -234,6 +240,7 @@ impl MultiStarkShape {
                     num_public_values: air.num_public_values(),
                     main_next_row_columns: air.main_next_row_columns(),
                     preprocessed_next_row_columns: air.preprocessed_next_row_columns(),
+                    periodic_statement: air.periodic_statement(),
                 })
                 .collect(),
             pow_bits,
@@ -373,6 +380,13 @@ impl MultiStarkShape {
                 for &column in columns {
                     separator.instance(&(column as u64).to_be_bytes());
                 }
+            }
+
+            // The zerocheck reads periodic values that nothing commits, so the seed fixes them.
+            //
+            // An AIR that declares none adds nothing, and its transcript stays as it was.
+            if !instance.periodic_statement.is_empty() {
+                separator.instance(&instance.periodic_statement);
             }
         }
 
@@ -829,12 +843,13 @@ pub enum MultiStarkTranscriptFailure {
 mod tests {
     extern crate std;
 
+    use alloc::borrow::Cow;
     use alloc::vec;
     use core::ops::Range;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{PrimeCharacteristicRing, RawDataSerializable};
     use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -867,6 +882,7 @@ mod tests {
                     num_public_values: 3,
                     main_next_row_columns: vec![0, 1],
                     preprocessed_next_row_columns: vec![0],
+                    periodic_statement: vec![1, 2, 3],
                 },
                 MultiStarkInstanceShape {
                     num_variables: 6,
@@ -875,6 +891,7 @@ mod tests {
                     num_public_values: 1,
                     main_next_row_columns: vec![0],
                     preprocessed_next_row_columns: vec![],
+                    periodic_statement: vec![],
                 },
             ],
             pow_bits: 4,
@@ -961,6 +978,7 @@ mod tests {
             num_public_values,
             main_next_row_columns,
             preprocessed_next_row_columns,
+            periodic_statement,
         } = instances
             .into_iter()
             .next()
@@ -1010,6 +1028,12 @@ mod tests {
             .map(|c| c + 1)
             .collect();
         mutations.push(("instance.preprocessed_next_row_columns", shape));
+
+        // One periodic value moved is a different statement, even with every count unchanged.
+        let mut shape = base_shape();
+        shape.instances[0].periodic_statement =
+            periodic_statement.iter().map(|byte| byte ^ 1).collect();
+        mutations.push(("instance.periodic_statement", shape));
 
         mutations
     }
@@ -1135,6 +1159,7 @@ mod tests {
             width: usize,
             preprocessed_width: usize,
             num_public_values: usize,
+            periodic: Vec<Vec<F>>,
         }
 
         impl BaseAir<F> for ShapeAir {
@@ -1149,18 +1174,33 @@ mod tests {
             fn num_public_values(&self) -> usize {
                 self.num_public_values
             }
+
+            fn num_periodic_columns(&self) -> usize {
+                self.periodic.len()
+            }
+
+            fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+                Cow::Borrowed(&self.periodic)
+            }
         }
 
         let first = ShapeAir {
             width: 7,
             preprocessed_width: 3,
             num_public_values: 5,
+            periodic: vec![vec![F::from_u8(5), F::from_u8(6)]],
         };
         let second = ShapeAir {
             width: 2,
             preprocessed_width: 0,
             num_public_values: 1,
+            periodic: vec![],
         };
+
+        // The default statement is each periodic column behind its length.
+        let mut periodic_statement = 2_u64.to_le_bytes().to_vec();
+        periodic_statement.extend(F::from_u8(5).into_bytes());
+        periodic_statement.extend(F::from_u8(6).into_bytes());
 
         // The arities and the difficulty come from the caller's own configuration.
         let shape = MultiStarkShape::new::<F, _>(&[&first, &second], &[9, 4], 6, false, false);
@@ -1176,6 +1216,7 @@ mod tests {
                         num_public_values: 5,
                         main_next_row_columns: (0..7).collect(),
                         preprocessed_next_row_columns: (0..3).collect(),
+                        periodic_statement,
                     },
                     MultiStarkInstanceShape {
                         num_variables: 4,
@@ -1184,6 +1225,7 @@ mod tests {
                         num_public_values: 1,
                         main_next_row_columns: (0..2).collect(),
                         preprocessed_next_row_columns: vec![],
+                        periodic_statement: vec![],
                     },
                 ],
                 pow_bits: 6,
@@ -1484,6 +1526,7 @@ mod tests {
                     num_public_values,
                     main_next_row_columns: (0..main_width).collect(),
                     preprocessed_next_row_columns: (0..preprocessed_width).collect(),
+                    periodic_statement: vec![],
                 }
             },
         );

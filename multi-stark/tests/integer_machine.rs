@@ -729,6 +729,13 @@ impl BaseAir<F> for Chip {
             _ => None,
         }
     }
+
+    fn periodic_statement(&self) -> Vec<u8> {
+        match self {
+            Self::Boundary(air) => air.periodic_statement(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 impl<AB: BusInteractionBuilder<F = F>> Air<AB> for Chip {
