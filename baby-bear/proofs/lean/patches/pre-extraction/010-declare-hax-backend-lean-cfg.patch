@@ -13,8 +13,8 @@
 # workspace's lint table. Declaring the name is the lint's intended fix; it
 # does not allow or silence the lint.
 #
-# Tested:     test-pre-patches.py: 6703 of 6757 upstream tests pass as
-#             shipped, 6703 with the pre-patches; 0 divergences from this patch.
+# Tested:     test-pre-patches.py: 6715 of 6769 upstream tests pass as
+#             shipped, 6715 with the pre-patches; 0 divergences from this patch.
 #
 diff --git a/Cargo.toml b/Cargo.toml
 index 34c1ecf5..fff69148 100644

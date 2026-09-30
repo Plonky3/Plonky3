@@ -19,8 +19,8 @@
 # tests run against it as shipped. Under the cfg, rustc checks that nothing
 # reachable still uses it (see 020).
 #
-# Tested:     test-pre-patches.py: 6703 of 6757 upstream tests pass as
-#             shipped, 6703 with the pre-patches; 0 divergences from this patch.
+# Tested:     test-pre-patches.py: 6715 of 6769 upstream tests pass as
+#             shipped, 6715 with the pre-patches; 0 divergences from this patch.
 #
 diff --git a/field/src/field.rs b/field/src/field.rs
 index 4567ffd0..0088f0ce 100644

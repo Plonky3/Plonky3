@@ -15,7 +15,7 @@ Measured totals (regenerate with the commands in [`SYNC.md`](SYNC.md)):
 | Generated for dependencies (`P3{Monty31,Mds}/Extraction/{Types,Funs}.lean`) | **568** lines, **0** `sorry` |
 | Hand-written assumptions (`*/Assumptions/`) | **522** lines, **0** `sorry`, **0** `axiom`, **10** `opaque` |
 | Pre-extraction patches (Rust source) | **4** files, **18** hunks. Hidden items are behind `cfg(hax_backend_lean)`; the cfg declaration and some redundant bounds are not |
-| Upstream tests diverging under the pre-patches | **0** (6757 run) |
+| Upstream tests diverging under the pre-patches | **0** (6769 run) |
 | Post-extraction patches | **3** files, **17** hunks |
 | Theorems in `P3BabyBear/Verification/Proofs.lean` | **27** (24 claims, 3 helpers), axiom footprint within `[propext, Classical.choice, Quot.sound]` |
 | **`lake build` warnings** | **0** |
@@ -125,7 +125,7 @@ differs. Two checks back that up:
 1. *The normal build is unchanged.* `test-pre-patches.py` (step 2) runs
    `cargo test --workspace` on the tree as shipped and with the patches, and
    compares per test and per test source: **0 divergences
-   (6757 tests)**. It writes the result into each patch's header (`# Tested:`
+   (6769 tests)**. It writes the result into each patch's header (`# Tested:`
    and one `# Divergence:` entry per diverging test), and fails while any
    entry is unclassified. The only unconditional edits are implied bounds and
    the cfg declaration.
@@ -133,7 +133,7 @@ differs. Two checks back that up:
    for `thumbv7em-none-eabi` under the cfg (the variant charon sees),
    warning-free.
 
-The upstream run is 6757 tests: 6703 pass in both trees and 54 are
+The upstream run is 6769 tests: 6715 pass in both trees and 54 are
 `#[ignore]`d in both.
 
 ### Charon scope flags (not patches, but they restrict what is extracted)
