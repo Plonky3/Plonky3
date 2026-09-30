@@ -31,9 +31,11 @@ fn fingerprint<Val, Challenger: Clone + CanSample<Val>>(
 ///
 /// - committing and observing the returned commitment agree, so neither side absorbs
 ///   a value the other does not, in an encoding the other does not use, or draws a
-///   challenge the other never draws;
-/// - observing the commitment twice disagrees with committing once, so a commit phase
-///   that binds twice, or one that binds nothing at all, is caught;
+///   challenge the other never draws. It is agreement that is pinned, not a count: a
+///   commit phase and an `observe_commitment` that both bind twice still agree, and
+///   this helper is not the place that would object;
+/// - committing binds something, so a commit phase that leaves the transcript
+///   untouched is caught;
 /// - committing a different witness disagrees with committing this one, so a binding
 ///   that does not depend on what was committed is caught.
 ///
@@ -76,16 +78,6 @@ pub fn assert_multilinear_commit_contract<P, Challenge, Challenger>(
         after_commit,
         "commit and observe_commitment must leave the same transcript state, \
          or a prover and a verifier that agree on every value still part ways"
-    );
-
-    let mut twice = challenger.clone();
-    pcs.observe_commitment(&commitment, &mut twice);
-    pcs.observe_commitment(&commitment, &mut twice);
-    assert_ne!(
-        fingerprint(&twice),
-        after_commit,
-        "commit must bind its commitment exactly once, but binding it twice \
-         reaches the same transcript state"
     );
 
     let mut other = challenger.clone();

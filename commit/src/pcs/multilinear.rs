@@ -122,8 +122,8 @@ where
     ///
     /// `testing::assert_multilinear_commit_contract` (behind the `test-utils` feature)
     /// pins the two against each other, so an implementation that binds differently
-    /// inside its commit phase is caught rather than trusted. Every backend in the tree
-    /// runs it.
+    /// inside its commit phase is caught rather than trusted. A new backend is expected
+    /// to run it.
     ///
     /// # Arguments
     ///
