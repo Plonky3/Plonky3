@@ -147,6 +147,13 @@ pub enum WhirConfigError {
         "derived proof-of-work of {required} bits exceeds the {budget}-bit grinding budget; the field or rate is too weak for the requested security"
     )]
     PowBitsExceedBudget { required: usize, budget: usize },
+    /// A derived proof-of-work difficulty is at least the base field's bit length.
+    ///
+    /// A witness is checked by sampling that many bits of one base field element.
+    ///
+    /// A difficulty that wide cannot be sampled, so grinding at it panics.
+    #[error("derived proof-of-work of {bits} bits does not fit a {field_bits}-bit base field")]
+    PowBitsExceedField { bits: usize, field_bits: usize },
 }
 
 /// Derived configuration for a single intermediate WHIR round.
@@ -338,6 +345,22 @@ fn ceil_pow_bits(gap: f64) -> usize {
     libm::ceil(gap) as usize
 }
 
+/// Reject a proof-of-work difficulty the base field cannot grind.
+///
+/// A witness is checked by sampling that many bits of one base field element.
+///
+/// An odd prime of bit length b exceeds 2^(b - 1), so up to b - 1 bits can be sampled.
+///
+/// At b bits or more the sample does not exist, and grinding panics.
+pub(crate) fn check_grindable<F: Field>(bits: usize) -> Result<(), WhirConfigError> {
+    // The sampled bits come back as a machine word, so the word size caps the field size too.
+    let field_bits = F::bits().min(usize::BITS as usize);
+    if bits >= field_bits {
+        return Err(WhirConfigError::PowBitsExceedField { bits, field_bits });
+    }
+    Ok(())
+}
+
 impl<EF, F, Challenger> WhirConfig<EF, F, Challenger>
 where
     F: TwoAdicField,
@@ -489,8 +512,18 @@ where
             .security_level
             .saturating_sub(whir_parameters.pow_bits);
 
-        // Number of bits in the extension field; upper-bounds all per-element errors.
-        let field_size_bits = EF::bits();
+        // Field size, in bits, that every per-element error is priced against.
+        //
+        //     BabyBear^4: |EF| < 2^124  ->  bit length 124  ->  priced at 123
+        //
+        // The bit length of the order rounds log_2(|EF|) up, so one bit less is a lower bound.
+        //
+        // Johnson drops one more bit, the reserve the security report takes off each proximity gap.
+        //
+        // Its other terms, priced one bit lower than the report needs, only gain slack.
+        let field_size_bits = (EF::bits() - 1).saturating_sub(usize::from(
+            whir_parameters.soundness_type == SecurityAssumption::JohnsonBound,
+        ));
 
         // Mutable state that evolves as we derive per-round parameters.
         let mut log_inv_rate = whir_parameters.starting_log_inv_rate;
@@ -784,6 +817,11 @@ where
             });
         }
 
+        // The budget can exceed what the base field grinds, so check the largest difficulty.
+        //
+        //     BabyBear, 40-bit budget: 31 bits fits the budget, but 2^31 > p cannot be sampled
+        check_grindable::<F>(required)?;
+
         Ok(config)
     }
 
@@ -1030,12 +1068,11 @@ mod tests {
         // Flooring the gap would make the sum dip below the target whenever
         // algebraic_bits is fractional.
         //
-        // Unique decoding needs no out-of-domain samples, so the 31-bit base
-        // field is feasible, and its query and combination errors are
-        // fractional -- exactly the case where floor and ceil differ.
+        // The query and combination errors are fractional, which is exactly
+        // the case where floor and ceil differ.
         //
-        // The 31-bit field forces a large grinding gap, so the budget is set
-        // wide enough to admit it; this test probes the rounding, not the cap.
+        // The budget is the widest one the 31-bit base field can grind, so
+        // every phase that falls short of the target is made up by PoW.
         //
         // The budget stays below the target, so the algebraic protocol still covers bits.
         //
@@ -1045,17 +1082,17 @@ mod tests {
         let soundness = SecurityAssumption::UniqueDecoding;
         let params = ProtocolParameters {
             security_level: 128,
-            pow_bits: 127,
+            pow_bits: 30,
             round_log_inv_rates: vec![],
             folding_factor: FoldingFactor::Constant(4),
             soundness_type: soundness,
             starting_log_inv_rate: 1,
         };
-        let config = WhirConfig::<F, F, MyChallenger>::new(20, params).unwrap();
+        let config = WhirConfig::<EF4, F, MyChallenger>::new(20, params).unwrap();
 
         // Target in bits, and the field size the combination error is taken over.
         let target = config.security_level as f64;
-        let field_bits = F::bits();
+        let field_bits = EF4::bits();
 
         // Walk the intermediate rounds, tracking the pre-fold (old) rate.
         // Queries test proximity to the code before this round's fold.
@@ -1088,6 +1125,151 @@ mod tests {
             config.terminal.pow_bits as f64 + final_error >= target,
             "final query phase undershoots: {} + {final_error} < {target}",
             config.terminal.pow_bits
+        );
+    }
+
+    #[test]
+    fn derived_schedule_meets_every_term_the_security_report_prices() {
+        // Invariant: each term the opening security report prices reaches the target on its own.
+        //
+        // The report prices with one bit below the bit length, a lower bound on log_2(|EF|).
+        // Johnson also takes a one-bit reserve off every proximity gap.
+        // A derivation priced with the rounded-up bit length buys up to that much too little PoW.
+        //
+        // Fixture state: BabyBear^4, whose order has bit length 124 but is below 2^124.
+        let field_bits = EF4::bits() - 1;
+        let mut checked = 0;
+        for soundness in [
+            SecurityAssumption::UniqueDecoding,
+            SecurityAssumption::JohnsonBound,
+            SecurityAssumption::CapacityBound,
+        ] {
+            let reserve = if soundness == SecurityAssumption::JohnsonBound {
+                1.
+            } else {
+                0.
+            };
+            for security_level in 80..=112 {
+                let params = ProtocolParameters {
+                    security_level,
+                    pow_bits: 16,
+                    round_log_inv_rates: vec![],
+                    folding_factor: FoldingFactor::Constant(4),
+                    soundness_type: soundness,
+                    starting_log_inv_rate: 1,
+                };
+                let Ok(config) = WhirConfig::<EF4, F, MyChallenger>::new(20, params) else {
+                    continue;
+                };
+                let target = security_level as f64;
+                let meets = |bits: f64, term: &str| {
+                    assert!(
+                        bits >= target,
+                        "{soundness:?} at {security_level} bits: {term} reaches only {bits}"
+                    );
+                };
+                let folds = |num_variables, rate, pow: usize, phase: &str| {
+                    let gap =
+                        soundness.prox_gaps_error(num_variables, rate, field_bits, 2) - reserve;
+                    let sumcheck = soundness.fold_sumcheck_error(field_bits, num_variables, rate);
+                    meets(gap + pow as f64, &alloc::format!("{phase} proximity gap"));
+                    meets(
+                        sumcheck + pow as f64,
+                        &alloc::format!("{phase} fold sumcheck"),
+                    );
+                };
+                let ood = |num_variables, rate, samples, phase: &str| {
+                    if soundness != SecurityAssumption::UniqueDecoding {
+                        let bits = soundness.ood_error(num_variables, rate, field_bits, samples);
+                        meets(bits, &alloc::format!("{phase} OOD"));
+                    }
+                };
+
+                ood(
+                    config.num_variables,
+                    config.starting_log_inv_rate,
+                    config.commitment_ood_samples,
+                    "commitment",
+                );
+                folds(
+                    config.num_variables,
+                    config.starting_log_inv_rate,
+                    config.starting_folding_pow_bits,
+                    "starting",
+                );
+                let mut old_rate = config.starting_log_inv_rate;
+                for round in &config.round_parameters {
+                    ood(
+                        round.num_variables,
+                        round.log_inv_rate,
+                        round.ood_samples,
+                        "round",
+                    );
+                    let query = soundness.queries_error(old_rate, round.num_queries);
+                    let combination = soundness.queries_combination_error(
+                        field_bits,
+                        round.num_variables,
+                        round.log_inv_rate,
+                        round.ood_samples,
+                        round.num_queries,
+                    );
+                    meets(query + round.pow_bits as f64, "round query");
+                    meets(combination + round.pow_bits as f64, "round combination");
+                    folds(
+                        round.num_variables,
+                        round.log_inv_rate,
+                        round.folding_pow_bits,
+                        "round",
+                    );
+                    old_rate = round.log_inv_rate;
+                }
+                // The terminal queries test the last committed codeword at its own rate.
+                meets(
+                    soundness.queries_error(old_rate, config.terminal.num_queries)
+                        + config.terminal.pow_bits as f64,
+                    "terminal query",
+                );
+                if config.final_sumcheck_rounds != 0 {
+                    meets(
+                        field_bits as f64 - 1. + config.final_folding_pow_bits as f64,
+                        "final sumcheck",
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
+    }
+
+    #[test]
+    fn new_rejects_pow_the_base_field_cannot_grind() {
+        // Invariant: a derived difficulty the challenger cannot sample is a construction error.
+        //
+        // The duplex challenger checks a witness by sampling that many bits of one field element.
+        //
+        // BabyBear has 31 bits and 2^31 exceeds its order, so grinding 31 or more bits panics.
+        //
+        // Fixture state: a 2^27 trace at unique decoding and 128 bits, with a 40-bit budget.
+        //
+        // The schedule fits the budget but grinds beyond the field.
+        let params = ProtocolParameters {
+            security_level: 128,
+            pow_bits: 40,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: SecurityAssumption::UniqueDecoding,
+            starting_log_inv_rate: 3,
+        };
+        let err = WhirConfig::<EF4, F, MyChallenger>::new(27, params).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                WhirConfigError::PowBitsExceedField {
+                    bits: 31..=40,
+                    field_bits: 31,
+                }
+            ),
+            "unexpected error: {err:?}"
         );
     }
 

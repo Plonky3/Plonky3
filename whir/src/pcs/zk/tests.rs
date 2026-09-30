@@ -221,8 +221,8 @@ fn fresh_challenger() -> MyChallenger {
 #[test]
 fn zk_opening_budget_rejection_preserves_transcript_and_rng() {
     use p3_challenger::CanSample;
-    let mut setup = Setup::new(945).pow_bits(32);
-    setup.security_level = 100;
+    let mut setup = Setup::new(945).pow_bits(30);
+    setup.security_level = 96;
     let pcs = setup.pcs();
     let control = setup.pcs();
     let mut rng = SmallRng::seed_from_u64(946);

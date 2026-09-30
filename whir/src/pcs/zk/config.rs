@@ -12,6 +12,7 @@ use thiserror::Error;
 use super::base_case::BaseCaseZkConfig;
 use super::committer::FoldedRsCode;
 use super::mask::{MaskCodeShape, MaskGroupShape};
+use crate::parameters::whir::check_grindable;
 use crate::parameters::{
     ProtocolParameters, SecurityAssumption, TerminalBudget, WhirConfig, WhirConfigError,
 };
@@ -269,6 +270,12 @@ where
             num_queries,
             pow_bits,
         };
+        // The randomized terminal sits at a lower rate, so it can grind more than the plain one.
+        //
+        //     BabyBear, Johnson, 80 bits, 31-bit budget: plain schedule 30 bits, randomized 31
+        //
+        // Its difficulty therefore needs its own check against the base field.
+        check_grindable::<F>(pow_bits)?;
 
         // Per-oracle ZK budget.
         //
@@ -495,6 +502,39 @@ mod tests {
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         }
+    }
+
+    #[test]
+    fn new_rejects_a_randomized_terminal_the_base_field_cannot_grind() {
+        // Invariant: every difficulty the ZK opening grinds fits one base field element.
+        //
+        // Fixture state: BabyBear, Johnson, 80 bits, 31-bit budget, rate 1/8, fold 2^2, 2^8 rows.
+        //
+        //     plain schedule       -> largest difficulty 30 bits, sampleable
+        //     randomized terminal  -> lower rate, more grinding -> 31 bits
+        //
+        // BabyBear is below 2^31, so 31 bits cannot be sampled and grinding would panic.
+        let params = ProtocolParameters {
+            security_level: 80,
+            pow_bits: 31,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(2),
+            soundness_type: SecurityAssumption::JohnsonBound,
+            starting_log_inv_rate: 3,
+        };
+        // The plain schedule alone builds, so only the randomized terminal can reject it.
+        assert!(WhirConfig::<EF, F, MyChallenger>::new(8, params.clone()).is_ok());
+        let err = ZkWhirConfig::<EF, F, MyChallenger>::new(8, params, zk_params()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ZkConfigError::Whir(WhirConfigError::PowBitsExceedField {
+                    bits: 31,
+                    field_bits: 31,
+                })
+            ),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
