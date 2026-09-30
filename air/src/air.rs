@@ -98,6 +98,8 @@ pub trait BaseAir<F>: Sync {
     /// The default writes each column's length, then its values.
     ///
     /// An override must still determine every value, for example from a sparse description.
+    ///
+    /// A non-empty statement must not be exactly 8 bytes, the width of every other label chunk.
     fn periodic_statement(&self) -> Vec<u8>
     where
         F: Field,

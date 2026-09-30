@@ -96,7 +96,9 @@ impl<F: Field> PublicImage<F> {
     ///
     /// Each run is its first cell and its component count, then its components.
     ///
-    /// Like [`Self::evaluate`], this costs one entry per word, not one per cell.
+    /// Images with the same cells but different runs give different bytes.
+    ///
+    /// Like evaluation, this costs one entry per word, not one per cell.
     #[must_use]
     pub fn statement(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
