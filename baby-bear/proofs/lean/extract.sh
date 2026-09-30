@@ -11,7 +11,8 @@
 #   0. tools: check (never install) the requirements listed in
 #      ../README.md: `cargo-hax` is the pinned release, its charon and aeneas
 #      are fetched, charon's Rust toolchain is present, and lakefile.toml,
-#      lean-toolchain and SYNC.md's pin table agree
+#      lean-toolchain and SYNC.md's pin table agree; note the commits to this
+#      crate's sources on main since SYNC.md's "Last sync"
 #   1. check the patch conventions (patches/check-patches.sh)
 #   2. run upstream's tests with and without the pre-extraction patches, and
 #      record every difference in the patch headers (patches/test-pre-patches.py)
@@ -131,6 +132,17 @@ DEPS="monty-31|P3Monty31|\
 mds|P3Mds|--start-from p3_mds::util::first_row_to_first_col"
 # Every extracted Lean library, all rooted in this directory.
 LIBS="P3BabyBear P3Monty31 P3Mds"
+# The upstream sources whose changes can break this build or make the proofs
+# stale (SYNC.md, "Does an upstream change need re-extraction?"): the crate,
+# the dependencies it extracts or hand-mirrors, and the lockfile. The files
+# the pre-extraction patches touch are added from their `# Target:` headers.
+# Step 0 lists the commits to these since SYNC.md's "Last sync"; it never
+# fails on them, since the proofs going stale must not block Rust changes.
+SYNC_PATHS=(baby-bear ':(exclude)baby-bear/proofs' monty-31/src mds/src field/src
+            poseidon1/src poseidon2/src Cargo.lock)
+# The upstream branch that "Last sync" refers to (a local ref: nothing is
+# fetched, so this is as current as the last `git fetch`).
+SYNC_UPSTREAM="${SYNC_UPSTREAM:-origin/main}"
 # The pre-extraction patches gate their changes on `hax_backend_lean`, the cfg
 # hax's Lean backend defines. hax passes it (as `--rustc-arg`) only to the crate
 # being extracted, but the gated items live in its dependencies (p3-field,
@@ -248,6 +260,28 @@ if [ "$pin_fail" -ne 0 ]; then
 fi
 echo "    charon   $EXPECT_CHARON, aeneas $EXPECT_AENEAS"
 echo "    lean     $(cat "$PKG_DIR/lean-toolchain") (elan installs it on first use)"
+# How current the proofs are: SYNC.md's "Last sync" names the upstream commit
+# the last sync ran against. Only a note, like a newer hax release.
+last_sync="$(sed -n '/^## Last sync/,/^## /p' "$PKG_DIR/SYNC.md" | grep -oE '[0-9a-f]{40}' | head -1)"
+if [ -z "$last_sync" ]; then
+    echo "error: SYNC.md's \"Last sync\" section does not name a full commit SHA." >&2
+    exit 1
+fi
+if ! git -C "$REPO_ROOT" cat-file -e "$last_sync^{commit}" 2>/dev/null \
+   || ! git -C "$REPO_ROOT" rev-parse -q --verify "$SYNC_UPSTREAM" >/dev/null; then
+    echo "    synced   ${last_sync:0:8} (not checked: that commit or $SYNC_UPSTREAM is not in this clone)"
+else
+    targets=()
+    while IFS= read -r t; do [ -n "$t" ] && targets+=("$t"); done \
+        < <(sed -n 's/^# Target: *//p' "$PRE_PATCH_DIR"/*.patch | tr ', ' '\n\n' | sort -u)
+    since="$(git -C "$REPO_ROOT" log --oneline "$last_sync..$SYNC_UPSTREAM" -- "${SYNC_PATHS[@]}" ${targets[@]+"${targets[@]}"})"
+    if [ -z "$since" ]; then
+        echo "    synced   ${last_sync:0:8}; nothing on $SYNC_UPSTREAM since touches this crate's sources"
+    else
+        echo "    synced   ${last_sync:0:8}; note: $(printf '%s\n' "$since" | wc -l | tr -d ' ') commit(s) on $SYNC_UPSTREAM since touch this crate's sources (SYNC.md):"
+        printf '%s\n' "$since" | head -10 | sed 's/^/               /'
+    fi
+fi
 [ "$TOOLS_ONLY" = "0" ] || exit 0
 
 # --- the patch applier, shared by both phases ---------------------------------

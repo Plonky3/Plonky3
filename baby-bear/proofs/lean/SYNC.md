@@ -8,7 +8,7 @@ and bring the documentation in line with the result.
 
 ## Current pins
 
-Checked for a newer hax release on **2026-09-29**: 0.4.1 (released
+Checked for a newer hax release on **2026-09-30**: 0.4.1 (released
 2026-09-23) is the latest. `extract.sh` fails if this table does not state the
 pins it uses, and prints a note when a newer hax release exists.
 
@@ -26,6 +26,26 @@ How to install each tool is in the Requirements table of
 [`../README.md`](../README.md), which repeats these versions; step 0 checks it
 too.
 
+## Last sync
+
+The proofs were last synced against `main` at
+**`24c27941fc2b9a498d6bfdac99838183bac16662`** (2026-09-30): `extract.sh` was
+green, with 6715 of 6769 upstream tests passing with and without the
+pre-patches.
+
+This is how current the proofs are. They are not re-checked when the Rust
+changes, so they can fall behind `main`. `extract.sh` step 0 (also
+`./extract.sh --tools-only`) lists the commits to `main` since this one that
+touch this crate's sources (`SYNC_PATHS` in `extract.sh`, plus the files the
+pre-extraction patches touch). It is only a note: a Rust change never waits on
+the proofs. An empty list means the proofs are current, however many other
+commits have landed. The list is coarse by design: it names every commit to a
+dependency's `src`, including ones to items that are not extracted.
+
+The recorded commit is upstream `main`'s: the commit merged in before the
+sync's green run, or, once this tree is on `main`, `main`'s head when the sync
+ran. Step 4 below updates it.
+
 ## Does an upstream change need re-extraction?
 
 The generated Lean is not committed, so every `extract.sh` run re-extracts from
@@ -41,7 +61,7 @@ hand-mirrored does not: `MontyField31::new_array`, `new_2d_array` and the
 `no_packing` Poseidon layers in `P3BabyBear/Assumptions/P3Monty31.lean`, and the
 p3-field / p3-poseidon1 / p3-poseidon2 items in `P3Monty31/Assumptions/P3Field.lean`
 and `P3BabyBear/Assumptions/P3Poseidon{1,2}.lean` (see `TCB.md`, layer 3). Nothing detects that
-drift automatically: read the diff.
+drift automatically: read the diffs of the commits step 0 lists.
 
 ## Step 1 — re-extract
 
@@ -123,6 +143,7 @@ the diff of the sync (Rust, patches, `Assumptions/`, `Verification/`,
 
 | When the sync changed… | Update |
 |---|---|
+| anything (every sync) | **Last sync** above: the `main` commit the green run was on, the date, and the test counts |
 | any count from step 3 (lines, `opaque`s, hunks, tests run, theorems) | the measured-totals table at the top of `TCB.md`; the test counts in `TCB.md` layer 4; the "Currently" row in `patches/README.md` |
 | a patch: added, removed, or its hunks or targets changed | its own header (`Target`, `Hunks`, `Cost`, `Drop when`); the patch tables in `TCB.md` layer 4; this file's list of sources the pre-patches touch (above) |
 | a hand-written `Assumptions/` file, or `DEPS` in `extract.sh` | `TCB.md` layer 3 (both tables, and the opaque list); "Where the dependency code lives" in `README.md`; the hand-mirrored list in "Does an upstream change need re-extraction?" above |

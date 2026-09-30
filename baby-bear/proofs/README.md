@@ -63,5 +63,10 @@ suite on the tree with and without the patches, which takes about 10 minutes;
 the result is cached on the content of the Rust tree. After a run, `lake build`
 in `lean/` rebuilds the proofs alone.
 
+The proofs are not rebuilt when the Rust changes. [`lean/SYNC.md`](lean/SYNC.md)
+records the `main` commit they were last synced against, and
+`extract.sh --tools-only` lists the commits since then that touch this crate's
+sources.
+
 See [`lean/README.md`](lean/README.md) for the layout and how to navigate the
 extracted code, and [`lean/TCB.md`](lean/TCB.md) for what is trusted.
