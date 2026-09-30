@@ -87,16 +87,32 @@ mod zmm {
     #[cfg(target_feature = "avx512bw")]
     use core::arch::x86_64::_mm_loadu_si128;
     use core::arch::x86_64::{
-        __m512i, _mm512_clmulepi64_epi128, _mm512_set1_epi64, _mm512_setzero_si512,
-        _mm512_sllv_epi64, _mm512_srlv_epi64, _mm512_unpackhi_epi64, _mm512_unpacklo_epi64,
-        _mm512_xor_si512,
+        __m512i, _mm512_clmulepi64_epi128, _mm512_setzero_si512, _mm512_unpackhi_epi64,
+        _mm512_unpacklo_epi64, _mm512_xor_si512,
     };
     #[cfg(target_feature = "avx512bw")]
     use core::arch::x86_64::{_mm512_broadcast_i32x4, _mm512_shuffle_epi8};
+    #[cfg(not(miri))]
+    use core::arch::x86_64::{_mm512_set1_epi64, _mm512_sllv_epi64, _mm512_srlv_epi64};
+    #[cfg(miri)]
+    use core::mem::transmute;
 
     use crate::clmul::wide::Lanes64;
     #[cfg(target_feature = "avx512bw")]
     use crate::clmul::wide::TOP_NIBBLE_FOLD;
+
+    /// Applies `f` to each of the eight quadwords of `v`.
+    ///
+    /// Miri has no shim for the 512-bit per-lane shifts, so the interpreter shifts one lane at a time.
+    ///
+    /// The immediate shift would be shimmed, but it takes an unsigned count the trait's signed one cannot be cast to.
+    #[cfg(miri)]
+    #[inline(always)]
+    fn map_lanes(v: __m512i, f: impl Fn(u64) -> u64) -> __m512i {
+        // SAFETY: both types are 64 bytes of plain integer data, so every bit pattern is valid in each.
+        let lanes: [u64; 8] = unsafe { transmute(v) };
+        unsafe { transmute(lanes.map(f)) }
+    }
 
     // SAFETY for every method below: this module is compiled only with `avx512f` and `vpclmulqdq`.
     //
@@ -134,13 +150,21 @@ mod zmm {
         #[inline(always)]
         fn shl<const N: i32>(self) -> Self {
             // A constant count lowers to the immediate form.
-            unsafe { _mm512_sllv_epi64(self, _mm512_set1_epi64(i64::from(N))) }
+            #[cfg(not(miri))]
+            let out = unsafe { _mm512_sllv_epi64(self, _mm512_set1_epi64(i64::from(N))) };
+            #[cfg(miri)]
+            let out = map_lanes(self, |lane| lane << N);
+            out
         }
 
         #[inline(always)]
         fn shr<const N: i32>(self) -> Self {
             // A constant count lowers to the immediate form.
-            unsafe { _mm512_srlv_epi64(self, _mm512_set1_epi64(i64::from(N))) }
+            #[cfg(not(miri))]
+            let out = unsafe { _mm512_srlv_epi64(self, _mm512_set1_epi64(i64::from(N))) };
+            #[cfg(miri)]
+            let out = map_lanes(self, |lane| lane >> N);
+            out
         }
 
         #[cfg(target_feature = "avx512bw")]
