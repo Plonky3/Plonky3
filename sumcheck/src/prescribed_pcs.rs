@@ -145,8 +145,11 @@ impl PrescribedOpeningSecurity {
 pub trait PrescribedPointPcs<Challenge, Challenger>: MultilinearPcs<Challenge, Challenger>
 where
     Challenge: ExtensionField<Self::Val>,
+    // Each implementation pins the grinding witness itself.
+    //
+    // Pinning it here leaves the bound unprovable for recent nightly compilers.
     Challenger: FieldChallenger<Self::Val>
-        + GrindingChallenger<Witness = Self::Val>
+        + GrindingChallenger
         + CanSampleUniformBits<Self::Val>
         + CanObserve<Self::Commitment>,
 {
