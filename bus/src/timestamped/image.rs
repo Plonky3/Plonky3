@@ -92,6 +92,29 @@ impl<F: Field> PublicImage<F> {
         &self.runs
     }
 
+    /// Bytes that fix this image: its size, its word width and its runs.
+    ///
+    /// Each run is its first cell and its component count, then its components.
+    ///
+    /// Images with the same cells but different runs give different bytes.
+    ///
+    /// Like evaluation, this costs one entry per word, not one per cell.
+    #[must_use]
+    pub fn statement(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for count in [self.log_cells, self.value_width, self.runs.len()] {
+            bytes.extend((count as u64).to_le_bytes());
+        }
+        for (start, words) in &self.runs {
+            bytes.extend((*start as u64).to_le_bytes());
+            bytes.extend((words.len() as u64).to_le_bytes());
+            for &component in words {
+                bytes.extend(component.into_bytes());
+            }
+        }
+        bytes
+    }
+
     /// Every cell's starting value, one full column per word component.
     #[must_use]
     pub fn columns(&self) -> Vec<Vec<F>> {

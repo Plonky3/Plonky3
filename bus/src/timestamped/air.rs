@@ -188,6 +188,14 @@ impl<C: Field, F: ExtensionField<C>> BaseAir<F> for TimestampedBoundaryAir<C, F>
             _ => None,
         }
     }
+
+    fn periodic_statement(&self) -> Vec<u8> {
+        // The runs fix every periodic value, so the verifier never builds the dense image.
+        match &self.seed {
+            TimestampedSeed::Public(image) => image.statement(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 impl<C, F, AB> Air<AB> for TimestampedBoundaryAir<C, F>

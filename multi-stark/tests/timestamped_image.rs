@@ -2,6 +2,8 @@
 //!
 //! The image is a periodic column of the boundary table, so nothing commits it.
 //!
+//! The transcript seed fixes it instead, from the same runs.
+//!
 //! The verifier evaluates it at the zerocheck point in closed form, one term per word.
 
 use std::borrow::Cow;
@@ -13,16 +15,16 @@ use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsParams, BinaryPcsProverData, GroupedCodewordMmcs,
 };
 use p3_bus::{
-    BusInteractionBuilder, ClockGap, ClockRangeAir, PublicImage, RangeRead, TimestampedAccess,
-    TimestampedBoundaryAir, TimestampedMemory, TimestampedMemoryInteractionBuilder,
-    TimestampedSeed,
+    BusArgumentError, BusInteractionBuilder, ClockGap, ClockRangeAir, ProductGkrError, PublicImage,
+    RangeRead, TimestampedAccess, TimestampedBoundaryAir, TimestampedMemory,
+    TimestampedMemoryInteractionBuilder, TimestampedSeed,
 };
 use p3_challenger::HashChallenger;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError};
-use p3_multi_stark::zerocheck::ZerocheckError;
+use p3_multi_stark::transcript::MultiStarkShape;
 use p3_multi_stark::{
     MultiStarkProof, ProverInstance, ProverInstances, VerificationError, VerifierInstance,
     VerifierInstances, prove, setup, verify,
@@ -182,6 +184,13 @@ impl BaseAir<F> for MemoryAir {
         match self {
             Self::Boundary(air) | Self::SparseBoundary(air) => air.periodic_evaluations(point),
             _ => None,
+        }
+    }
+
+    fn periodic_statement(&self) -> Vec<u8> {
+        match self {
+            Self::Boundary(air) | Self::SparseBoundary(air) => air.periodic_statement(),
+            _ => Vec::new(),
         }
     }
 }
@@ -412,11 +421,32 @@ fn a_proof_from_a_public_image_verifies_only_against_that_image() {
     // The honest statement accepts.
     verify_against(&config, &proof, 7).unwrap();
 
-    // A statement whose image says 5 in cell 5 moves the seed's bus share, so the zerocheck fails.
+    // A statement whose image says 5 in cell 5 seeds another transcript.
+    //
+    // Every challenge moves, so the first bus product layer no longer closes.
     assert!(matches!(
         verify_against(&config, &proof, 5),
-        Err(VerificationError::Zerocheck(
-            ZerocheckError::FinalSumMismatch
-        ))
+        Err(VerificationError::BusArgument(BusArgumentError::Product(
+            ProductGkrError::LayerConsistency { .. }
+        )))
     ));
+}
+
+#[test]
+fn the_image_reaches_the_transcript_seed() {
+    // Invariant: the zerocheck reads the image, and nothing commits it, so the seed must fix it.
+    //
+    //     same image, dense or sparse  ->  same label
+    //     one word moved               ->  another label
+    //
+    // The sparse boundary panics if anything builds its image, so the label is read sparsely.
+    let label = |image: PublicImage<F>, sparse: bool| {
+        let airs = airs(image, sparse);
+        MultiStarkShape::new::<F, _>(&airs.each_ref(), &LOG_HEIGHTS, 0, false, true)
+            .domain_separator::<F>()
+            .instance_label()
+            .to_vec()
+    };
+    assert_eq!(label(image(7), false), label(image(7), true));
+    assert_ne!(label(image(7), true), label(image(5), true));
 }
