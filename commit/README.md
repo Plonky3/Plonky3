@@ -25,10 +25,12 @@ Circle, and STIR use this helper alongside their backend-specific tests.
 `testing::assert_multilinear_commit_contract` covers the multilinear side. A prover
 binds its commitment while producing it, and a verifier, which never produces one,
 binds through `observe_commitment`. The helper compares the transcript states the two
-paths reach, so a commit phase that binds something else, binds twice, binds nothing,
-or binds regardless of the witness is caught rather than trusted. Fixtures supply two
+paths reach, so a commit phase that binds something else, binds nothing, or binds
+regardless of the witness is caught rather than trusted. It pins the two sides against
+each other rather than counting absorptions: a commit phase and an `observe_commitment`
+that both bind twice agree, and the helper does not object. Fixtures supply two
 witnesses that commit to different values. `BinaryPcs`, `BooleanTraceCommitment`,
-`WhirProver` and `HidingWhirPcs` all run it.
+`MixedTraceCommitment`, `WhirProver` and `HidingWhirPcs` run it.
 
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.
 
