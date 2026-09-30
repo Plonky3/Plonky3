@@ -34,13 +34,21 @@ green, with 6715 of 6769 upstream tests passing with and without the
 pre-patches.
 
 This is how current the proofs are. They are not re-checked when the Rust
-changes, so they can fall behind `main`. `extract.sh` step 0 (also
-`./extract.sh --tools-only`) lists the commits to `main` since this one that
-touch this crate's sources (`SYNC_PATHS` in `extract.sh`, plus the files the
-pre-extraction patches touch). It is only a note: a Rust change never waits on
-the proofs. An empty list means the proofs are current, however many other
-commits have landed. The list is coarse by design: it names every commit to a
-dependency's `src`, including ones to items that are not extracted.
+changes, so they can fall behind `main`, and a Rust change never waits on them.
+The commits since this one that could affect them are:
+
+```bash
+git log --oneline <last sync>..origin/main -- baby-bear ':!baby-bear/proofs' \
+    monty-31/src mds/src field/src poseidon1/src poseidon2/src \
+    symmetric/src matrix/src Cargo.toml Cargo.lock
+```
+
+That is the crate, the dependencies it extracts or hand-mirrors, the sources
+the pre-extraction patches touch, and the manifests (see the next section). An
+empty list means the proofs are current, however many other commits have
+landed. The list is coarse by design: it names every commit to those
+directories, including ones to items that are not extracted. When a patch
+starts touching a new directory, add it here.
 
 The recorded commit is upstream `main`'s: the commit merged in before the
 sync's green run, or, once this tree is on `main`, `main`'s head when the sync
@@ -61,7 +69,7 @@ hand-mirrored does not: `MontyField31::new_array`, `new_2d_array` and the
 `no_packing` Poseidon layers in `P3BabyBear/Assumptions/P3Monty31.lean`, and the
 p3-field / p3-poseidon1 / p3-poseidon2 items in `P3Monty31/Assumptions/P3Field.lean`
 and `P3BabyBear/Assumptions/P3Poseidon{1,2}.lean` (see `TCB.md`, layer 3). Nothing detects that
-drift automatically: read the diffs of the commits step 0 lists.
+drift automatically: read the diffs of the commits **Last sync**'s command lists.
 
 ## Step 1 — re-extract
 
