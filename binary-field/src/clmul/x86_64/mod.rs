@@ -5,6 +5,9 @@ use core::arch::x86_64::{
 };
 
 mod gf192;
+// Wide multiplies are no dearer than narrow ones, so sums in the extension pack their terms into them.
+#[cfg(all(target_feature = "avx512f", target_feature = "vpclmulqdq"))]
+mod gf192_zmm;
 mod gf64;
 mod ghash;
 mod lanes;
@@ -19,9 +22,11 @@ mod lanes;
 mod gfni;
 
 pub(crate) use gf64::{poly_dot_64, poly_mul_64, poly_square_64};
-pub(crate) use gf192::{
-    poly_dot_192, poly_dot_192_by_64, poly_mul_192, poly_mul_192_by_64, poly_square_192,
-};
+#[cfg(not(all(target_feature = "avx512f", target_feature = "vpclmulqdq")))]
+pub(crate) use gf192::{poly_dot_192, poly_dot_192_by_64};
+pub(crate) use gf192::{poly_mul_192, poly_mul_192_by_64, poly_square_192};
+#[cfg(all(target_feature = "avx512f", target_feature = "vpclmulqdq"))]
+pub(crate) use gf192_zmm::{poly_dot_192, poly_dot_192_by_64};
 #[cfg(all(
     target_feature = "gfni",
     target_feature = "avx512f",

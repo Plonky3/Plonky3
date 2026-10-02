@@ -22,6 +22,8 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::lanes::gf64::{self as lanes, Reg, WIDTH_64};
+#[cfg(target_feature = "avx512f")]
+use super::pairs;
 use crate::clmul::wide::{Lanes64, Wide};
 use crate::gf2::characteristic_two_methods;
 use crate::{Gf2, Poly64};
@@ -151,7 +153,20 @@ impl PrimeCharacteristicRing for PackedPoly64 {
     /// Reduction is linear, so the whole sum reduces once.
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        // Two carryless multiplies and two exclusive ors per term, nothing else.
+        // Two terms per 512-bit multiply, where the target has one.
+        #[cfg(target_feature = "avx512f")]
+        let [sum] = pairs::sum_of_products(
+            u,
+            v,
+            |a, b| {
+                let join = |x: &[Self; 2]| pairs::join(x[0].to_vector(), x[1].to_vector());
+                [Wide::mul(join(a), join(b))]
+            },
+            |a, b| [Wide::mul(a.to_vector(), b.to_vector())],
+        );
+
+        // Otherwise two carryless multiplies and two exclusive ors per term, nothing else.
+        #[cfg(not(target_feature = "avx512f"))]
         let sum = u.iter().zip(v).fold(Wide::zero(), |sum, (a, b)| {
             sum.xor(Wide::mul(a.to_vector(), b.to_vector()))
         });
@@ -299,6 +314,15 @@ mod tests {
             //     reduce(ab + bc)  =  reduce(ab) + reduce(bc)
             lanes_agree(PackedPoly64::dot_product(&[pa, pb], &[pb, pc]), |l| {
                 lane(a, l) * lane(b, l) + lane(b, l) * lane(c, l)
+            })?;
+
+            // Odd counts: wide builds pair the terms, so the last one takes the narrow route.
+            //
+            //     1 term    -> no pair, one narrow product
+            //     3 terms   -> one pair,  one narrow product
+            lanes_agree(PackedPoly64::dot_product(&[pc], &[pa]), |l| lane(c, l) * lane(a, l))?;
+            lanes_agree(PackedPoly64::dot_product(&[pa, pb, pc], &[pb, pc, pa]), |l| {
+                lane(a, l) * lane(b, l) + lane(b, l) * lane(c, l) + lane(c, l) * lane(a, l)
             })?;
         }
     }

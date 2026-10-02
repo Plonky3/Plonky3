@@ -2,6 +2,8 @@
 
 mod ghash128;
 pub(crate) mod lanes;
+#[cfg(target_feature = "avx512f")]
+mod pairs;
 mod poly192;
 mod poly64;
 
