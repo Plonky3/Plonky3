@@ -294,12 +294,9 @@ pub trait BaseAir<F>: Sync {
     /// Such an AIR must be proven under a commitment whose alphabet is one bit per cell, such as a
     /// commitment to the trace's bits, where a cell outside `{0, 1}` is not representable.
     ///
-    /// The multi-STARK prover and verifier read it through `boolean_columns`.
+    /// The multi-STARK prover and verifier refuse such an AIR under a commitment that does not hold every column as bits.
     ///
-    /// They refuse such an AIR under a commitment that does not hold every column as bits.
-    ///
-    /// Other code that pairs an AIR with a commitment to field elements must check it and refuse
-    /// an AIR that reports `true`.
+    /// Other code that pairs it with a commitment to field elements must check the hint itself.
     ///
     /// A wrapper or enum AIR must forward this method, since the default reports no reliance.
     ///
