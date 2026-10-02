@@ -22,6 +22,7 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{
     CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger, HashChallenger,
 };
+use p3_commit::testing::assert_multilinear_commit_contract;
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::{ExtensionField, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
@@ -1228,5 +1229,30 @@ fn a_tampered_sumcheck_round_message_is_rejected() {
     assert!(
         matches!(err, BinaryPcsError::FinalCheck),
         "expected FinalCheck, got {err:?}"
+    );
+}
+
+/// The commit phase must bind the root the verifier binds, and bind it once.
+///
+/// A prover binds its root while producing it; a verifier never produces one, so it binds
+/// through `observe_commitment`. Nothing checks that the two absorb the same thing, and a
+/// mismatch does not surface as a wrong answer: both sides follow their own code correctly
+/// and the proof is rejected for no stated reason.
+#[test]
+fn commit_binds_what_the_verifier_binds() {
+    let mut rng = SmallRng::seed_from_u64(0xB1D);
+    let config =
+        BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, params(LOG_INV_RATE, POW_BITS, 40))
+            .unwrap();
+    let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
+
+    let witness = |rng: &mut SmallRng| {
+        SuffixProver::<F, F>::new_witness(vec![Table::rand(rng, 1, NUM_VARIABLES)], 0)
+    };
+    assert_multilinear_commit_contract::<_, F, _>(
+        &pcs,
+        &challenger(),
+        witness(&mut rng),
+        witness(&mut rng),
     );
 }

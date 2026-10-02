@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_binary_field::BinaryField128;
+use p3_commit::testing::assert_multilinear_commit_contract;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::poly::Poly;
@@ -316,4 +317,21 @@ fn a_dense_column_costs_a_block_not_one_reduction_per_coordinate() {
     assert_eq!(proof.opening.reduction.claims.len(), 1);
     // Both views of every committed column are opened.
     assert_eq!(proof.values.len(), 2 * 257);
+}
+
+/// The commit phase must bind the root the verifier binds.
+///
+/// This scheme hands its tables to an inner Boolean PCS, which does the binding, so the
+/// two sides meeting is a property of the wiring rather than of one written binding.
+#[test]
+fn commit_binds_what_the_verifier_binds() {
+    let shapes = [TableShape::new(6, 3)];
+    let scheme = scheme(&shapes, &[1]);
+
+    assert_multilinear_commit_contract::<_, EF, _>(
+        &scheme,
+        &challenger(),
+        vec![mixed_table(11, 6, 3, 1)],
+        vec![mixed_table(12, 6, 3, 1)],
+    );
 }
