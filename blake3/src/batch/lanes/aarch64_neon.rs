@@ -91,6 +91,9 @@ fn transpose([a, b, c, d]: [uint32x4_t; 4]) -> [uint32x4_t; 4] {
 pub(super) const KERNEL: Kernel = Kernel::new::<uint32x4_t, WIDTH, GROUPS>("NEON");
 
 impl Backend<WIDTH> for uint32x4_t {
+    /// A lone register runs about 1.6x slower per compression than one of a four-register group, on Apple M4.
+    const LONE_REGISTER_COST: usize = 26;
+
     #[inline]
     fn supported() -> bool {
         // NEON is part of the AArch64 baseline.

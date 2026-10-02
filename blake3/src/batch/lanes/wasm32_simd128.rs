@@ -115,6 +115,9 @@ fn store(state: &[v128; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
 pub(super) const KERNEL: Kernel = Kernel::new::<v128, WIDTH, GROUPS>("SIMD128");
 
 impl Backend<WIDTH> for v128 {
+    /// A single group: every register runs alone.
+    const LONE_REGISTER_COST: usize = 16;
+
     #[inline]
     fn supported() -> bool {
         // An engine without SIMD128 rejects the whole module, so a running one has it.

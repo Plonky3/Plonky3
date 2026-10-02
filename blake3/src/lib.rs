@@ -6,6 +6,8 @@
 //!
 //! So the batched path compresses them in lockstep, one vector lane per message.
 //!
+//! Fewer messages than lanes fill the spare lanes with their own chunks instead.
+//!
 //! On x86-64 the batched path picks AVX-512, AVX2 or SSE2 at run time, the widest the CPU has.
 //!
 //! Other targets pick at build time: NEON on AArch64, SIMD128 on wasm32, and one lane elsewhere.
@@ -19,14 +21,15 @@ mod tests;
 
 mod batch;
 
-use blake3::OUT_LEN;
+use blake3::{CHUNK_LEN, OUT_LEN};
 use p3_symmetric::CryptographicHasher;
 
 /// Messages the widest compiled backend advances in one batched compression.
 ///
 /// - 32 on x86-64, which is AVX-512 and a multiple of the 16 of AVX2 and the 4 of SSE2.
 /// - 16 with NEON, 4 with SIMD128, and 1 elsewhere.
-/// - Any batch size works, and a partial register costs one full register of work.
+/// - Any batch size works.
+/// - Short of a full group, messages longer than a chunk spread their chunks across the lanes.
 pub const LANES: usize = batch::LANES;
 
 /// The BLAKE3 hash function, with a 256-bit digest.
@@ -83,6 +86,16 @@ impl CryptographicHasher<u8, [u8; OUT_LEN]> for Blake3 {
         );
         let len = input.len() / out.len();
 
-        batch::hash_many(batch::Mode::HASH, input, len, out);
+        // A lone message takes one lane per chunk at best.
+        //
+        // With no more chunks than one register has lanes, most lanes would idle.
+        //
+        // The single-message path then picks a vector as narrow as those chunks.
+        let kernel = batch::detect();
+        if out.len() == 1 && len.div_ceil(CHUNK_LEN) <= kernel.width {
+            out[0] = blake3::hash(input).into();
+            return;
+        }
+        kernel.hash_many(batch::Mode::HASH, input, len, out);
     }
 }

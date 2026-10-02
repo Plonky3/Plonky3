@@ -469,7 +469,113 @@ fn hash_many_rejects_ragged_input() {
     Blake3.hash_many(&[1, 2, 3, 4, 5], &mut digests);
 }
 
+/// Hash a batch through the spreading driver of `kernel`, one digest per `len`-byte message.
+fn spread(
+    kernel: Kernel,
+    mode: Mode,
+    messages: &[u8],
+    len: usize,
+    count: usize,
+) -> Vec<[u8; OUT_LEN]> {
+    let mut digests = vec![[0u8; OUT_LEN]; count];
+    kernel.spread(mode, messages, len, &mut digests);
+    digests
+}
+
+#[test]
+fn spreading_matches_upstream_across_tree_shapes() {
+    // Every message is a last chunk plus a head of n - 1 chunks, split by the bits of n - 1.
+    //
+    // Chunk counts that change that split:
+    //
+    // - 2, 3, 4, 5: one bit, two bits, a power of two, a power of two plus one;
+    // - 7, 8, 9: all bits set, and both sides of a power of two;
+    // - 63, 64, 65: many pieces, the fold at its deepest.
+    //
+    // Each count runs with a full last chunk, a one-byte one, and one a byte short of full.
+    let chunk_counts = [2, 3, 4, 5, 7, 8, 9, 63, 64, 65];
+    for kernel in batch::supported() {
+        for n in chunk_counts {
+            for len in [n * CHUNK_LEN, (n - 1) * CHUNK_LEN + 1, n * CHUNK_LEN - 1] {
+                // One message, one register of them, and the most the driver takes.
+                for count in [1, 2, kernel.width - 1, kernel.width + 1, 31, 32] {
+                    let count = count.max(1);
+                    let messages = stream(len * count, 0x9e37_79b9_7f4a_7c15);
+                    assert_eq!(
+                        spread(kernel, Mode::HASH, &messages, len, count),
+                        upstream(&messages, len, count),
+                        "{kernel:?}, len {len}, count {count}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn spreading_matches_upstream_on_subtrees_wider_than_a_window() {
+    // A window holds 256 chunk values, and wider subtrees merge several windows.
+    //
+    // - 1282 chunks, the last short: 1024 + 256 + 1 head chunks, a window filled exactly.
+    // - 1024 full chunks: one whole tree, whose root joins two halves of two windows each.
+    // - 1536 full chunks = 1024 + 512: the fold starts from a subtree of two windows.
+    let lens = [
+        (1024 + 257 + 1) * CHUNK_LEN - 5,
+        1024 * CHUNK_LEN,
+        1536 * CHUNK_LEN,
+    ];
+    for kernel in batch::supported() {
+        for (len, count) in lens.into_iter().flat_map(|len| [(len, 1), (len, 3)]) {
+            let messages = stream(len * count, 11);
+            assert_eq!(
+                spread(kernel, Mode::HASH, &messages, len, count),
+                upstream(&messages, len, count),
+                "{kernel:?}, len {len}, count {count}"
+            );
+        }
+    }
+}
+
+#[test]
+fn spreading_keeps_the_keyed_mode() {
+    // Every chunk, parent and fold step starts from the key and carries its flag.
+    let mode = Mode {
+        key: key_words(KEY),
+        flags: KEYED_HASH,
+    };
+    for kernel in batch::supported() {
+        for v in VECTORS.iter().filter(|v| v.len > CHUNK_LEN) {
+            let input = vector_input(v.len);
+            let count = 3;
+            let digests = spread(kernel, mode, &input.repeat(count), v.len, count);
+            assert!(
+                digests.iter().all(|d| d == &v.keyed_hash),
+                "{kernel:?}, len {}",
+                v.len
+            );
+        }
+    }
+}
+
 proptest! {
+    #[test]
+    fn spreading_matches_upstream_on_random_batches(
+        len in CHUNK_LEN + 1..=40 * CHUNK_LEN,
+        count in 1usize..=32,
+        seed in any::<u64>(),
+    ) {
+        let messages = stream(len * count, seed);
+        let expected = upstream(&messages, len, count);
+        for kernel in batch::supported() {
+            prop_assert_eq!(
+                &spread(kernel, Mode::HASH, &messages, len, count),
+                &expected,
+                "{:?}",
+                kernel
+            );
+        }
+    }
+
     #[test]
     fn hash_many_matches_upstream_on_random_batches(
         len in 0usize..=5 * CHUNK_LEN,
