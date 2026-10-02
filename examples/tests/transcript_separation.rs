@@ -767,6 +767,7 @@ fn multi_stark_cases() -> Vec<Case> {
                 num_public_values: 2,
                 main_next_row_columns: vec![0, 1, 2],
                 preprocessed_next_row_columns: vec![],
+                periodic_statement: vec![],
             },
             MultiStarkInstanceShape {
                 num_variables: 6,
@@ -775,6 +776,7 @@ fn multi_stark_cases() -> Vec<Case> {
                 num_public_values: 1,
                 main_next_row_columns: vec![0, 1, 2, 3, 4],
                 preprocessed_next_row_columns: vec![0, 1],
+                periodic_statement: vec![],
             },
         ],
         pow_bits: 0,

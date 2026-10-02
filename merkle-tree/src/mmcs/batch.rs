@@ -174,7 +174,8 @@ where
             validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
 
         // Derive the arity schedule from verifier-known dimensions and the configured cap height.
-        // Rejecting a wrong-length proof here costs only integer work — no hashing yet.
+        // Rejecting a wrong-length proof or cap here costs only integer work — no hashing yet.
+        self.check_cap_size(commit, dimensions)?;
         let arity_schedule = self.proof_arity_schedule(dimensions)?;
         let expected_proof_len: usize = arity_schedule.iter().map(|step| step - 1).sum();
         if opening_proof.len() != expected_proof_len {
@@ -316,7 +317,7 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use crate::{MerkleTreeError, MerkleTreeMmcs};
+    use crate::{MerkleCap, MerkleTreeError, MerkleTreeMmcs};
 
     type F = BabyBear;
     type Packing = <F as Field>::Packing;
@@ -916,6 +917,96 @@ mod tests {
         }];
         mmcs.verify_batch(&cap, &dims, 0, BatchOpeningRef::new(&opening, &proof))
             .unwrap();
+    }
+
+    #[test]
+    fn cap_reaching_a_padded_layer_commits_and_opens() {
+        // Invariant: a cap holds a power-of-two number of roots even when the tree is not full.
+        //
+        // Fixture state: 5 rows under a binary tree.
+        //
+        //     layers: 6 leaf digests (5 rows, padded to even) -> 3 -> 2 -> 1
+        //
+        // A cap of height 3 sits at the leaf layer, where the arities call for 8 roots.
+        // The stored layer only holds 6 of them.
+        let mut rng = SmallRng::seed_from_u64(10);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 3);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 5, 4);
+        let dims = vec![mat.dimensions()];
+        let (cap, prover_data) = mmcs.commit(vec![mat]);
+        assert_eq!(cap.num_roots(), 8);
+
+        for index in 0..5 {
+            let opening = mmcs.open_batch(index, &prover_data);
+            mmcs.verify_batch(&cap, &dims, index, (&opening).into())
+                .unwrap_or_else(|e| panic!("row {index} must verify: {e:?}"));
+        }
+        let indices: Vec<usize> = (0..5).collect();
+        let (values, proof) = mmcs.open_multi_batch(&indices, &prover_data);
+        mmcs.verify_multi_batch(&cap, &dims, &indices, &values, &proof)
+            .unwrap();
+
+        // Fixture state: 9 rows under a 4-ary tree, whose cap of height 2 needs 16 roots.
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let perm_wide = PermWide::new_from_rng_128(&mut rng);
+        let mmcs4 = MyMmcs4::new(MyHash::new(perm), MyCompress4::new(perm_wide), 2);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 9, 4);
+        let dims = vec![mat.dimensions()];
+        let (cap, prover_data) = mmcs4.commit(vec![mat]);
+        assert_eq!(cap.num_roots(), 16);
+
+        for index in 0..9 {
+            let opening = mmcs4.open_batch(index, &prover_data);
+            mmcs4
+                .verify_batch(&cap, &dims, index, (&opening).into())
+                .unwrap_or_else(|e| panic!("row {index} must verify: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn verify_rejects_a_cap_with_extra_roots() {
+        // Invariant: a commitment holds exactly the roots the dimensions and cap height produce.
+        //
+        // Fixture state: 8 rows, cap height 1, so the honest cap has 2 roots.
+        //
+        // Mutation: append two more roots.
+        // Openings only land on the first two, so the new ones are never checked against anything.
+        // A proof would then carry a commitment with free, unauthenticated entries.
+        let mut rng = SmallRng::seed_from_u64(11);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 1);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let (cap, prover_data) = mmcs.commit(vec![mat]);
+        assert_eq!(cap.num_roots(), 2);
+
+        let mut roots = cap.roots().to_vec();
+        roots.extend([[F::ONE; 8], [F::TWO; 8]]);
+        let padded = MerkleCap::new(roots);
+
+        let opening = mmcs.open_batch(3, &prover_data);
+        mmcs.verify_batch(&cap, &dims, 3, (&opening).into())
+            .unwrap();
+        assert!(matches!(
+            mmcs.verify_batch(&padded, &dims, 3, (&opening).into()),
+            Err(MerkleTreeError::WrongCapSize {
+                expected: 2,
+                got: 4
+            })
+        ));
+
+        let indices = [1, 6];
+        let (values, proof) = mmcs.open_multi_batch(&indices, &prover_data);
+        mmcs.verify_multi_batch(&cap, &dims, &indices, &values, &proof)
+            .unwrap();
+        assert!(matches!(
+            mmcs.verify_multi_batch(&padded, &dims, &indices, &values, &proof),
+            Err(MerkleTreeError::WrongCapSize {
+                expected: 2,
+                got: 4
+            })
+        ));
     }
 
     #[test]

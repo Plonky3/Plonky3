@@ -69,6 +69,15 @@ pub enum MerkleTreeError {
     #[error("cap mismatch: computed digest does not match any entry in the Merkle cap")]
     CapMismatch,
 
+    /// The cap does not hold as many roots as the tree's top layers produce.
+    #[error("wrong cap size: expected {expected} roots, got {got}")]
+    WrongCapSize {
+        /// Roots the committed dimensions and cap height produce.
+        expected: usize,
+        /// Roots in the commitment.
+        got: usize,
+    },
+
     /// A pruned batch opening could not be restored or validated.
     #[error("malformed pruned proof: {0}")]
     MalformedPrunedProof(#[from] PrunedProofError),

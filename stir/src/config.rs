@@ -116,6 +116,10 @@ pub struct StirOptions {
     /// `Some(cap)` stops folding once the coefficient bound is at most `2^cap`, after at least the
     /// starting fold. `None` retains the legacy schedule. Larger bounds save intermediate
     /// rounds at the cost of sending more final coefficients. An unreachable bound is rejected.
+    ///
+    /// Either way, folding stops before a round that would check more points than its next degree.
+    ///
+    /// The final polynomial can then be longer than `2^cap`.
     pub max_log_final_poly_len: Option<usize>,
 
     /// Omit answer-polynomial coefficients from the proof and reconstruct them in the
@@ -827,6 +831,33 @@ where
         options: StirOptions,
         quotient_batches: &[(usize, usize)],
     ) -> Result<Self, StirConfigError> {
+        Self::try_new_with_fold_count(
+            log_starting_degree,
+            params,
+            combine,
+            pcs_batch,
+            options,
+            quotient_batches,
+            None,
+        )
+    }
+
+    /// Derive the schedule, optionally capping the number of folds after the starting one.
+    ///
+    /// Folding goes as far as the options allow.
+    ///
+    /// It stops early at the first round that would check more points than its next degree.
+    ///
+    /// That round's fold becomes the final stage, so the final polynomial can exceed a cap.
+    fn try_new_with_fold_count(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        combine: Option<CombineRequirement>,
+        pcs_batch: Option<PcsBatch<'_>>,
+        options: StirOptions,
+        quotient_batches: &[(usize, usize)],
+        forced_extra_folds: Option<usize>,
+    ) -> Result<Self, StirConfigError> {
         for &(class_log_degree, _) in quotient_batches {
             if class_log_degree > log_starting_degree {
                 return Err(StirConfigError::BatchDegreeExceedsStartingDegree {
@@ -931,6 +962,7 @@ where
                     .div_ceil(log_folding_factor)
             }
         };
+        let extra_folds = forced_extra_folds.map_or(extra_folds, |forced| forced.min(extra_folds));
         let total_folds = 1 + extra_folds;
 
         // Last fold produces the final polynomial; intermediate rounds = total_folds - 1.
@@ -1140,6 +1172,38 @@ where
         final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
         validate_eta(0, log_inv_rate, final_eta)?;
 
+        // Round i's degree correction batches its t + s answers into stage i+1's code.
+        // That is Lemma 5.4's err*(d_{i+1}, rho_{i+1}, delta_{i+1}, t + s) term.
+        // It is drawn after round i's query grind, so only round i's query PoW protects it.
+        //
+        // The capacity-bound eta floor for stage i+1 prices this term at the PoW-assisted target.
+        // That target assumes the whole grinding budget.
+        // Round i only grinds what its own terms need, which can be far less.
+        // Stage i+1's eta is only fixed once it is derived, so the term is charged from there.
+        let charge_degree_correction = |previous: &mut StirRoundConfig<F>,
+                                        round: usize,
+                                        log_degree: usize,
+                                        log_inv_rate: usize,
+                                        eta: f64|
+         -> Result<(), StirConfigError> {
+            // Only the capacity bound floors eta for this term.
+            //
+            // Johnson schedules do not price it yet, so charging them here would reject many.
+            if params.soundness_type != SecurityAssumption::CapacityBound {
+                return Ok(());
+            }
+            let bits = params.soundness_type.prox_gaps_error_at_log_eta(
+                log_degree,
+                log_inv_rate,
+                field_size_bits,
+                previous.num_queries + previous.num_ood_samples,
+                libm::log2(eta),
+            );
+            let pow_bits = derive_pow_bits("degree correction", Stage::Round(round), bits)?;
+            previous.pow_bits = previous.pow_bits.max(pow_bits);
+            Ok(())
+        };
+
         // Round 0 reuses the `stir_initial_eta` already computed above; every subsequent
         // round derives eta from the previous round's query count via `stir_recursive_eta`.
         let mut prev_queries = 0;
@@ -1163,9 +1227,42 @@ where
                 )?;
                 final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
                 validate_eta(round, log_inv_rate, final_eta)?;
+                let previous = round_configs
+                    .last_mut()
+                    .expect("every round after the first follows a recorded round");
+                charge_degree_correction(previous, round - 1, log_degree, log_inv_rate, final_eta)?;
             }
 
             let num_queries = query_count(log_inv_rate, final_eta)?;
+
+            // Invariant: STIR needs t + s <= d_{i+1} (Construction 5.2).
+            //
+            // Why: with more points, Ans interpolates any folded function of degree below t + s.
+            //
+            //     g of degree in [d_{i+1}, t + s)  =>  Ans = g  =>  quotient = 0
+            //
+            // Every later oracle is then zero, and the excess degree is never tested again.
+            //
+            // Equality is sound: a folded function of degree at least d_{i+1} escapes Ans.
+            let log_next_degree = log_degree - round_log_folding_factor;
+            let num_points = num_queries + num_ood_samples;
+            if num_points > 1 << log_next_degree {
+                // Rebuild with this round's fold as the final fold.
+                //
+                // The prover then sends the folded polynomial in full instead of committing to it.
+                //
+                // The forced count strictly decreases, so the rebuild terminates.
+                return Self::try_new_with_fold_count(
+                    log_starting_degree,
+                    params,
+                    combine,
+                    pcs_batch,
+                    options,
+                    quotient_batches,
+                    Some(round),
+                );
+            }
+
             cumulative_log_folding += round_log_folding_factor;
             assert_disjoint_cosets(round, log_domain_size, cumulative_log_folding)?;
 
@@ -1235,6 +1332,16 @@ where
             )?;
             final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
             validate_eta(num_rounds, log_inv_rate, final_eta)?;
+            let previous = round_configs
+                .last_mut()
+                .expect("a schedule with more than one fold records its last round");
+            charge_degree_correction(
+                previous,
+                num_rounds - 1,
+                log_degree,
+                log_inv_rate,
+                final_eta,
+            )?;
         }
         let final_queries = query_count(log_inv_rate, final_eta)?;
 
@@ -1429,8 +1536,11 @@ mod tests {
     #[test]
     fn early_stop_selects_the_first_fold_within_the_requested_bound() {
         let cases = [
-            (18, 2, 2, None, 8, 0),
-            (18, 2, 2, Some(0), 8, 0),
+            // An eighth round would check 4 queries and 2 OOD samples against 2^2 coefficients.
+            //
+            // Folding stops there, leaving a length-4 final polynomial even under a cap of 1.
+            (18, 2, 2, None, 7, 2),
+            (18, 2, 2, Some(0), 7, 2),
             (18, 2, 2, Some(6), 5, 6),
             (18, 2, 3, None, 5, 1),
             (18, 2, 3, Some(6), 4, 4),
@@ -1476,6 +1586,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn every_round_grinds_for_the_degree_correction_it_feeds() {
+        // Invariant: round i's query PoW covers the err* term of stage i+1's degree correction.
+        //
+        //     err*(d_{i+1}, rho_{i+1}, eta_{i+1}, t_i + s) + pow_bits_i >= security_level
+        //
+        // That combination is drawn after round i's query grind, so no later grind protects it.
+        // The capacity-bound eta floor for stage i+1 assumes the whole budget.
+        // Round i may grind far less.
+        type Config = StirConfig<TestF, TestEF, TestMmcs, TestChallenger>;
+        let soundness_type = SecurityAssumption::CapacityBound;
+        let field_bits = crate::pcs_budget::field_bits::<TestEF>(soundness_type);
+        let mut checked = 0;
+        for (security_level, max_pow_bits) in [(80, 0), (80, 20), (100, 10), (100, 24)] {
+            for (log_blowup, log_folding_factor) in
+                (1..=4).flat_map(|b| (2..=5).map(move |k| (b, k)))
+            {
+                for log_degree in [12, 16, 20, 24] {
+                    let params = params_with(
+                        soundness_type,
+                        security_level,
+                        max_pow_bits,
+                        log_blowup,
+                        log_folding_factor,
+                        log_folding_factor,
+                    );
+                    let Ok(config) = Config::try_new(log_degree, params) else {
+                        continue;
+                    };
+                    let rounds = &config.round_configs;
+                    let mut log_inv_rate = log_blowup;
+                    for (round, rc) in rounds.iter().enumerate() {
+                        log_inv_rate += rc.log_folding_factor - 1;
+                        let next_eta = rounds.get(round + 1).map_or(config.final_eta, |r| r.eta);
+                        let bits = soundness_type.prox_gaps_error_at_log_eta(
+                            rc.log_degree - rc.log_folding_factor,
+                            log_inv_rate,
+                            field_bits,
+                            rc.num_queries + rc.num_ood_samples,
+                            libm::log2(next_eta),
+                        ) + rc.pow_bits as f64;
+                        assert!(
+                            bits >= security_level as f64,
+                            "{soundness_type:?} sec={security_level} pow={max_pow_bits} \
+                                 blowup={log_blowup} fold={log_folding_factor} \
+                                 degree=2^{log_degree}: round {round} degree correction \
+                                 reaches {bits}"
+                        );
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 0);
+    }
+
     /// [`test_params`] with every knob the fallibility tests need to vary exposed.
     fn params_with(
         soundness_type: SecurityAssumption,
@@ -1494,6 +1660,76 @@ mod tests {
             log_starting_folding_factor,
             ..test_params(log_blowup, log_folding_factor)
         }
+    }
+
+    #[test]
+    fn no_round_checks_more_points_than_its_next_degree_bound() {
+        // Invariant: every round checks at most as many points as its next degree bound.
+        //
+        //     t + s <= d_{i+1}
+        //
+        // A round that breaks it has a zero quotient for any folded function of degree below t + s.
+        //
+        // A folded function above the degree bound then passes every later check.
+        //
+        // Fixture: a grid of assumptions, security targets, rates, folds, degrees and caps.
+        //
+        // Small degrees and high security targets used to fold into such a round.
+        type Config = StirConfig<TestF, TestEF, TestMmcs, TestChallenger>;
+        let assumptions = [
+            SecurityAssumption::CapacityBound,
+            SecurityAssumption::JohnsonBound,
+        ];
+        // Security targets paired with their PoW budgets, from toy to production.
+        let budgets = [(16, 0), (32, 0), (64, 16), (100, 20)];
+        // No cap, then caps from a constant final polynomial up to 2^6 coefficients.
+        let caps = [None, Some(0), Some(2), Some(6)];
+        // Count the schedules that build, so an all-infeasible grid cannot pass vacuously.
+        let mut checked = 0;
+        for (soundness_type, (security_level, max_pow_bits)) in assumptions
+            .into_iter()
+            .flat_map(|a| budgets.map(|b| (a, b)))
+        {
+            for (log_blowup, log_folding_factor) in
+                (1..=3).flat_map(|b| (2..=4).map(move |k| (b, k)))
+            {
+                for (log_degree, cap) in [6, 8, 10, 12, 16, 20]
+                    .into_iter()
+                    .flat_map(|d| caps.map(|c| (d, c)))
+                {
+                    let params = params_with(
+                        soundness_type,
+                        security_level,
+                        max_pow_bits,
+                        log_blowup,
+                        log_folding_factor,
+                        log_folding_factor,
+                    );
+                    let options = StirOptions {
+                        max_log_final_poly_len: cap,
+                        ..Default::default()
+                    };
+                    // Infeasible parameters are rejected elsewhere, so skip them here.
+                    let Ok(config) = Config::try_new_with_options(log_degree, params, options)
+                    else {
+                        continue;
+                    };
+                    // Compare each round's point count against the degree it folds to.
+                    for (round, rc) in config.round_configs.iter().enumerate() {
+                        let log_next_degree = rc.log_degree - rc.log_folding_factor;
+                        let num_points = rc.num_queries + rc.num_ood_samples;
+                        assert!(
+                            num_points <= 1 << log_next_degree,
+                            "{soundness_type:?} sec={security_level} blowup={log_blowup} \
+                             fold={log_folding_factor} degree=2^{log_degree} cap={cap:?}: \
+                             round {round} checks {num_points} points against 2^{log_next_degree}"
+                        );
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 0);
     }
 
     proptest! {
@@ -1681,15 +1917,19 @@ mod tests {
             mmcs,
         };
 
-        // log_starting_degree=8, fold by 4 each round -> 4 folds total, 3 intermediate rounds.
-        let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(8, params);
-        assert_eq!(config.log_final_degree, 0);
+        // Fixture state: starting degree 2^12, fold by 2^4 each round.
+        //
+        // A fourth round would check 22 queries and 2 OOD samples against 2^4 coefficients.
+        //
+        // The schedule therefore stops after three rounds with a final degree of 2^4.
+        let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(12, params);
+        assert_eq!(config.log_final_degree, 4);
         assert_eq!(config.num_rounds(), 3);
         // Per-round PoW is derived from the algebraic gap, capped at max_pow_bits=20.
         assert!(config.final_pow_bits <= 20);
         assert!(config.final_folding_pow_bits <= 20);
 
-        let initial_log_domain = 8 + 1; // log_starting_degree + log_blowup
+        let initial_log_domain = 12 + 1; // log_starting_degree + log_blowup
         for (i, rc) in config.round_configs.iter().enumerate() {
             assert_eq!(
                 rc.log_domain_size,
