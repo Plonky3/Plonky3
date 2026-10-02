@@ -375,7 +375,8 @@ macro_rules! shared_kernel {
 /// Advance `G` groups by one block each, for `G` of one or two.
 ///
 /// `block[g][w]` holds message word `w` of every lane of group `g`.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f")]
 pub(super) fn compress_blocks<const G: usize>(
     state: &mut [[__m512i; STATE_WORDS]; G],
     block: &[[__m512i; BLOCK_WORDS]; G],
@@ -395,7 +396,7 @@ pub(super) fn compress_blocks<const G: usize>(
     }
 
     // SAFETY:
-    // - this module only compiles when the target enables AVX-512F;
+    // - the function enables AVX-512F, which every instruction below needs;
     // - `state` is `G` times 512 bytes, read and then written in place;
     // - `w` is 8192 bytes: the block's slots written above, and the rest written before any read;
     // - `K` is 256 bytes, only read;
@@ -426,7 +427,8 @@ pub(super) fn compress_blocks<const G: usize>(
 /// Advance `G` groups by one block that every lane shares, for `G` of one or two.
 ///
 /// `kw[t]` holds `K_t + W_t`, so the kernel computes no schedule.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f")]
 pub(super) fn compress_shared<const G: usize>(
     state: &mut [[__m512i; STATE_WORDS]; G],
     kw: &[u32; ROUNDS],
@@ -434,7 +436,7 @@ pub(super) fn compress_shared<const G: usize>(
     const { assert!(G == 1 || G == 2) };
 
     // SAFETY:
-    // - this module only compiles when the target enables AVX-512F;
+    // - the function enables AVX-512F, which every instruction below needs;
     // - `state` is `G` times 512 bytes, read and then written in place;
     // - `kw` is 256 bytes, only read;
     // - every vector register is declared clobbered, and the stack is never touched.
