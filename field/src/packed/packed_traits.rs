@@ -532,7 +532,6 @@ pub trait PackedFieldExtension<
     /// Convert an iterator of packed extension field elements to an iterator of
     /// extension field elements (flat — one `ExtField` per lane per packed value).
     #[inline]
-    #[must_use]
     fn to_ext_iter(iter: impl IntoIterator<Item = Self>) -> impl Iterator<Item = ExtField> {
         iter.into_iter()
             .flat_map(|x| (0..BaseField::Packing::WIDTH).map(move |lane| x.extract(lane)))
@@ -607,7 +606,6 @@ pub trait PackedFieldExtension<
     /// Note that the length of the returned iterator will be `unpacked_len / WIDTH` and
     /// not `len` as the iterator is over packed extension field elements. If `unpacked_len`
     /// is not divisible by `WIDTH`, `unpacked_len` will be rounded up to the next multiple of `WIDTH`.
-    #[must_use]
     fn packed_ext_powers_capped(base: ExtField, unpacked_len: usize) -> impl Iterator<Item = Self> {
         Self::packed_ext_powers(base).take(unpacked_len.div_ceil(BaseField::Packing::WIDTH))
     }

@@ -91,6 +91,16 @@ where
         /// What is wrong with the declaration.
         error: BoundaryIoError,
     },
+    /// An AIR leaves bits to the commitment that the commitment does not hold as bits.
+    #[error("instance {instance} assumes {assumed} bit columns, the commitment holds {committed}")]
+    UncommittedBits {
+        /// Index of the offending instance in verifier-instance order.
+        instance: usize,
+        /// Leading main columns the AIR assumes hold bits.
+        assumed: usize,
+        /// Leading main columns the commitment holds one bit per cell.
+        committed: usize,
+    },
 }
 
 /// Verify only when the verifier's statement meets the requested security target.
@@ -264,6 +274,26 @@ where
             air.num_public_values(),
         )
         .map_err(|error| VerificationError::BoundaryIo { instance, error })?;
+    }
+
+    // An AIR may drop the booleanity of its leading columns and leave it to the commitment.
+    //
+    // A scheme that commits field elements there accepts any value, and no constraint refuses it.
+    //
+    // Invariant: every column an AIR assumes holds a bit is one the scheme commits as a bit.
+    for (instance, air) in airs.iter().enumerate() {
+        let assumed = air.boolean_columns();
+        if assumed == 0 {
+            continue;
+        }
+        let committed = config.pcs().bit_region(instance, air.width());
+        if assumed > committed {
+            return Err(VerificationError::UncommittedBits {
+                instance,
+                assumed,
+                committed,
+            });
+        }
     }
 
     // Indexed lookups change the described sequence, so the plan is settled first.

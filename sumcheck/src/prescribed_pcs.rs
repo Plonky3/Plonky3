@@ -175,6 +175,22 @@ where
         None
     }
 
+    /// Leading columns of one committed table that this scheme commits one bit per cell.
+    ///
+    /// A cell in this bit region cannot hold anything but a bit, whatever the prover sends.
+    ///
+    /// An AIR that leaves its booleanity to the commitment is sound only inside it.
+    ///
+    /// The default suits a scheme that commits field elements, so it reports an empty region.
+    ///
+    /// # Arguments
+    ///
+    /// - `table`: position of the table in commitment order.
+    /// - `width`: number of columns the table has.
+    fn bit_region(&self, _table: usize, _width: usize) -> usize {
+        0
+    }
+
     /// Open the committed columns at caller-prescribed points instead of sampled ones.
     ///
     /// # Arguments
