@@ -1,0 +1,45 @@
+name = "p3_baby_bear"
+version = "0.1.0"
+defaultTargets = ["P3BabyBear"]
+
+# hax's layout: one library per extracted crate, each rooted here (this is
+# `cargo hax into lean`'s default output directory for p3-baby-bear). Under
+# each `<Lib>/`, hax rewrites `Extraction/` on every run and creates the rest
+# once; see README.md.
+#
+# `P3BabyBear` is the crate. `P3Monty31` and `P3Mds` are scoped extractions of
+# the dependency items it refers to (`DEPS` in extract.sh). `P3BabyBear.lean`
+# imports the extraction and `P3BabyBear/Verification`, so building the
+# default target checks every proof.
+[[lean_lib]]
+name = "P3BabyBear"
+
+[[lean_lib]]
+name = "P3Monty31"
+
+[[lean_lib]]
+name = "P3Mds"
+
+# The two Lean libraries the generated code imports (`Aeneas`, `CoreModels`).
+# Pinned to exactly what hax 0.4.1 resolves (`cargo hax tools show`): the
+# generated files and the libraries must come from the same aeneas build, and
+# a floating `rev` would let them drift apart silently.
+[[require]]
+name = "aeneas"
+git = "https://github.com/cryspen/aeneas"
+rev = "build-183e4f0"
+subDir = "backends/lean"
+
+[[require]]
+name = "hax"
+git = "https://github.com/cryspen/hax-lean"
+rev = "v0.3.27"
+
+# Mathematical specification of the BabyBear field (fieldSize, twoAdicity,
+# primality). The theorems in `P3BabyBearProofs` relate the extracted constants
+# to these. `v4.31.0` pins the same mathlib (`fabf563`) as aeneas above, so the
+# two share one mathlib.
+[[require]]
+name = "CompPoly"
+git = "https://github.com/Verified-zkEVM/CompPoly"
+rev = "v4.31.0"

@@ -1,0 +1,102 @@
+# Patch:     030-name-anonymous-const-assertions
+# Phase:     post-extraction
+# Target:    P3BabyBear/Extraction/Funs.lean
+# Hunks:     9
+# Cost:      none. Renames only; the bodies are untouched.
+# Upstream:  aeneas names Rust's anonymous `const _: () = assert!(..)` items
+#            `__1`, `__2`, …, which mathlib's `linter.style.nameCheck`
+#            rejects (one warning each).
+# Drop when: aeneas generates a name without a double underscore.
+#
+# baby-bear's Poseidon tables carry their length invariants as anonymous
+# const assertions (eleven of them: two in poseidon1.rs, nine in poseidon2.rs).
+# aeneas names the first in each module `_` and the rest `__1`, `__2`, ….
+# This patch renames the nine `__N` definitions to `const_check_N`. A `__`
+# name is valid Lean, but mathlib's `nameCheck` warns on each one, and the
+# build must stay warning-clean without switching linters off. The `_` names
+# do not warn, so they are left as `poseidon1._` and `poseidon2._`; spec/
+# proves the nine renamed checks and not those two.
+#
+--- a/P3BabyBear/Extraction/Funs.lean
++++ b/P3BabyBear/Extraction/Funs.lean
+@@ -1340,7 +1354,7 @@
+ /-- [p3_baby_bear::poseidon1::_#1]
+     Source: 'baby-bear/src/poseidon1.rs', lines 70:0-73:2 -/
+ @[global_simps, irreducible]
+-def poseidon1.__1 : RustM Unit := do
++def poseidon1.const_check_1 : RustM Unit := do -- PATCHED: aeneas emitted `poseidon1.__1`
+   let a ← poseidon1.BABYBEAR_POSEIDON1_RC_24
+   let s ← lift (Array.to_slice a)
+   let i ← core.slice.Slice.len s
+@@ -1653,7 +1671,7 @@
+ /-- [p3_baby_bear::poseidon2::_#1]
+     Source: 'baby-bear/src/poseidon2.rs', lines 66:0-67:98 -/
+ @[global_simps, irreducible]
+-def poseidon2.__1 : RustM Unit := do
++def poseidon2.const_check_1 : RustM Unit := do -- PATCHED: aeneas emitted `poseidon2.__1`
+   let a ← poseidon2.BABYBEAR_POSEIDON2_RC_16_EXTERNAL_FINAL
+   let s ← lift (Array.to_slice a)
+   let i ← core.slice.Slice.len s
+@@ -1679,7 +1697,7 @@
+ /-- [p3_baby_bear::poseidon2::_#2]
+     Source: 'baby-bear/src/poseidon2.rs', lines 68:0-69:93 -/
+ @[global_simps, irreducible]
+-def poseidon2.__2 : RustM Unit := do
++def poseidon2.const_check_2 : RustM Unit := do -- PATCHED: aeneas emitted `poseidon2.__2`
+   let a ← poseidon2.BABYBEAR_POSEIDON2_RC_16_INTERNAL
+   let s ← lift (Array.to_slice a)
+   let i ← core.slice.Slice.len s
+@@ -1734,7 +1752,7 @@
+ /-- [p3_baby_bear::poseidon2::_#3]
+     Source: 'baby-bear/src/poseidon2.rs', lines 70:0-71:100 -/
+ @[global_simps, irreducible]
+-def poseidon2.__3 : RustM Unit := do
++def poseidon2.const_check_3 : RustM Unit := do -- PATCHED: aeneas emitted `poseidon2.__3`
+   let a ← poseidon2.BABYBEAR_POSEIDON2_RC_24_EXTERNAL_INITIAL
+   let s ← lift (Array.to_slice a)
+   let i ← core.slice.Slice.len s
+@@ -1789,7 +1807,7 @@
+ /-- [p3_baby_bear::poseidon2::_#4]
+     Source: 'baby-bear/src/poseidon2.rs', lines 72:0-73:98 -/
+ @[global_simps, irreducible]
+-def poseidon2.__4 : RustM Unit := do
++def poseidon2.const_check_4 : RustM Unit := do -- PATCHED: aeneas emitted `poseidon2.__4`
+   let a ← poseidon2.BABYBEAR_POSEIDON2_RC_24_EXTERNAL_FINAL
+   let s ← lift (Array.to_slice a)
+   let i ← core.slice.Slice.len s
+@@ -1818,7 +1836,7 @@
+ /-- [p3_baby_bear::poseidon2::_#5]
+     Source: 'baby-bear/src/poseidon2.rs', lines 74:0-75:93 -/
+ @[global_simps, irreducible]
+-def poseidon2.__5 : RustM Unit := do
++def poseidon2.const_check_5 : RustM Unit := do -- PATCHED: aeneas emitted `poseidon2.__5`
+   let a ← poseidon2.BABYBEAR_POSEIDON2_RC_24_INTERNAL
+   let s ← lift (Array.to_slice a)
+   let i ← core.slice.Slice.len s
+@@ -1881,7 +1899,7 @@
+ /-- [p3_baby_bear::poseidon2::_#6]
+     Source: 'baby-bear/src/poseidon2.rs', lines 76:0-77:100 -/
+ @[global_simps, irreducible]
+-def poseidon2.__6 : RustM Unit := do
++def poseidon2.const_check_6 : RustM Unit := do -- PATCHED: aeneas emitted `poseidon2.__6`
+   let a ← poseidon2.BABYBEAR_POSEIDON2_RC_32_EXTERNAL_INITIAL
+   let s ← lift (Array.to_slice a)
+   let i ← core.slice.Slice.len s
+@@ -1944,7 +1962,7 @@
+ /-- [p3_baby_bear::poseidon2::_#7]
+     Source: 'baby-bear/src/poseidon2.rs', lines 78:0-79:98 -/
+ @[global_simps, irreducible]
+-def poseidon2.__7 : RustM Unit := do
++def poseidon2.const_check_7 : RustM Unit := do -- PATCHED: aeneas emitted `poseidon2.__7`
+   let a ← poseidon2.BABYBEAR_POSEIDON2_RC_32_EXTERNAL_FINAL
+   let s ← lift (Array.to_slice a)
+   let i ← core.slice.Slice.len s
+@@ -1975,7 +1993,7 @@
+ /-- [p3_baby_bear::poseidon2::_#8]
+     Source: 'baby-bear/src/poseidon2.rs', lines 80:0-81:93 -/
+ @[global_simps, irreducible]
+-def poseidon2.__8 : RustM Unit := do
++def poseidon2.const_check_8 : RustM Unit := do -- PATCHED: aeneas emitted `poseidon2.__8`
+   let a ← poseidon2.BABYBEAR_POSEIDON2_RC_32_INTERNAL
+   let s ← lift (Array.to_slice a)
+   let i ← core.slice.Slice.len s

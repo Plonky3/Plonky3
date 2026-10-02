@@ -1,0 +1,36 @@
+# Patch:     040-field-cfg-rpitit-bit-plane-expansion
+# Phase:     pre-extraction
+# Target:    field/src/field.rs
+# Hunks:     1
+# Cost:      none in a normal build: the change is behind
+#            cfg(hax_backend_lean). In the extracted variant,
+#            `Field::prepare_bit_plane_expansion` is absent.
+# Upstream:  charon#1266 (same root cause as 020 and 030).
+# Drop when: as for 020.
+#
+# `Field::prepare_bit_plane_expansion` returns
+# `Option<impl Fn(&[u64; 64], &mut Vec<Self>) + Send + Sync + 'static>`, so,
+# like the methods 030 hides, it adds a hidden GAT to `Field`, which charon
+# cannot lift and aeneas then rejects (it exits with code 2). Its only callers
+# and overrides are in p3-binary-field and p3-multi-stark, neither of which is
+# in p3-baby-bear's graph, so under the cfg it is absent rather than moved.
+#
+# In a normal build the method is where it was, unchanged, and those crates'
+# tests run against it as shipped. Under the cfg, rustc checks that nothing
+# reachable still uses it (see 020).
+#
+# Tested:     test-pre-patches.py: 6715 of 6769 upstream tests pass as
+#             shipped, 6715 with the pre-patches; 0 divergences from this patch.
+#
+diff --git a/field/src/field.rs b/field/src/field.rs
+index 4567ffd0..0088f0ce 100644
+--- a/field/src/field.rs
++++ b/field/src/field.rs
+@@ -1081,6 +1081,7 @@ pub trait Field:
+     /// For lane `l`, the prepared operation appends the sum of `weights[c]` for every corner
+     /// `c` whose word has bit `l` set. Unsupported fields and targets return `None` so callers
+     /// retain their portable path.
++    #[cfg(not(hax_backend_lean))] // PATCHED: `-> Option<impl Fn>`, a hidden GAT for aeneas
+     #[must_use]
+     fn prepare_bit_plane_expansion(
+         weights: &[Self; 64],
