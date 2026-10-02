@@ -481,6 +481,27 @@ class CiPlanTests(unittest.TestCase):
             plan = check.ci_plan(metadata, ["sumcheck/src/lib.rs"])
         self.assertTrue(plan["gfni"])
 
+    def test_binary_field_change_selects_the_aarch64_fallback_job(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            metadata = {
+                "workspace_root": temp,
+                "workspace_members": ["p3-binary-field"],
+                "packages": [{
+                    "id": "p3-binary-field",
+                    "name": "p3-binary-field",
+                    "manifest_path": str(Path(temp) / "binary-field" / "Cargo.toml"),
+                    "dependencies": [],
+                    "targets": [{"kind": ["lib"]}],
+                    "metadata": {},
+                    "features": {},
+                }],
+            }
+            plan = check.ci_plan(metadata, ["binary-field/src/lib.rs"])
+        self.assertTrue(plan["binary_field"])
+        self.assertTrue(plan["gfni"])
+
     def test_multi_stark_change_selects_gfni_jobs(self):
         import check  # noqa: PLC0415
 

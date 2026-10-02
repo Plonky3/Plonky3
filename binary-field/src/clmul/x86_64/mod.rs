@@ -4,8 +4,6 @@ use core::arch::x86_64::{
     _mm_clmulepi64_si128, _mm_cvtsi128_si64, _mm_set_epi64x, _mm_unpackhi_epi64,
 };
 
-mod gf192;
-mod gf64;
 mod ghash;
 mod lanes;
 
@@ -18,10 +16,6 @@ mod lanes;
 ))]
 mod gfni;
 
-pub(crate) use gf64::{poly_dot_64, poly_mul_64, poly_square_64};
-pub(crate) use gf192::{
-    poly_dot_192, poly_dot_192_by_64, poly_mul_192, poly_mul_192_by_64, poly_square_192,
-};
 #[cfg(all(
     target_feature = "gfni",
     target_feature = "avx512f",
