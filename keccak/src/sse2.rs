@@ -7,6 +7,7 @@ use core::mem::transmute;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 
 use crate::KeccakF;
+use crate::batch::{self, Lanes, State};
 
 pub const VECTOR_LEN: usize = 2;
 
@@ -320,6 +321,23 @@ fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
     }
     *buf = unsafe { transmute::<[__m128i; 25], [[u64; VECTOR_LEN]; 25]>(state) };
 }
+
+/// Every CPU of a build that compiles this backend has it.
+const fn supported() -> bool {
+    true
+}
+
+/// The steps of the batched sponge on this backend.
+struct Backend;
+
+impl Lanes<VECTOR_LEN> for Backend {
+    #[inline(always)]
+    unsafe fn permute(state: &mut State<VECTOR_LEN>) {
+        keccak_perm(state);
+    }
+}
+
+batch::kernel!("SSE2", Backend, VECTOR_LEN);
 
 impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
     fn permute_mut(&self, state: &mut [[u64; VECTOR_LEN]; 25]) {

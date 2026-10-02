@@ -1,14 +1,24 @@
 use core::arch::x86_64::{
-    __m256i, _mm256_add_epi64, _mm256_andnot_si256, _mm256_or_si256, _mm256_shuffle_epi8,
-    _mm256_slli_epi64, _mm256_srli_epi64, _mm256_xor_si256,
+    __m256i, _mm256_add_epi64, _mm256_andnot_si256, _mm256_loadu_si256, _mm256_or_si256,
+    _mm256_permute2x128_si256, _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_slli_epi64,
+    _mm256_srli_epi64, _mm256_storeu_si256, _mm256_unpackhi_epi64, _mm256_unpacklo_epi64,
+    _mm256_xor_si256,
 };
 use core::mem::transmute;
 
+#[cfg(target_feature = "avx2")]
 use p3_symmetric::{CryptographicPermutation, Permutation};
 
+#[cfg(target_feature = "avx2")]
 use crate::KeccakF;
+use crate::batch::{self, Lanes, State};
 
-pub const VECTOR_LEN: usize = 4;
+/// Keccak states interleaved in one register, one per 64-bit lane.
+const WIDTH: usize = 4;
+
+/// Keccak states the packed permutation advances at once.
+#[cfg(target_feature = "avx2")]
+pub const VECTOR_LEN: usize = WIDTH;
 
 const RC: [__m256i; 24] = unsafe {
     transmute([
@@ -39,6 +49,7 @@ const RC: [__m256i; 24] = unsafe {
     ])
 };
 
+// SAFETY (every intrinsic below): the permutation runs only on a CPU with AVX2.
 #[inline(always)]
 fn form_matrix(buf: [__m256i; 25]) -> [[__m256i; 5]; 5] {
     unsafe { transmute(buf) }
@@ -301,20 +312,104 @@ fn round(i: usize, state: [__m256i; 25]) -> [__m256i; 25] {
     flatten(state)
 }
 
-fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
+/// Permute four interleaved Keccak states.
+///
+/// # Safety
+///
+/// The running CPU has AVX2.
+#[inline(always)]
+unsafe fn keccak_perm(buf: &mut [[u64; WIDTH]; 25]) {
     let mut state: [__m256i; 25] = unsafe { transmute(*buf) };
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = unsafe { transmute::<[__m256i; 25], [[u64; VECTOR_LEN]; 25]>(state) };
+    *buf = unsafe { transmute::<[__m256i; 25], [[u64; WIDTH]; 25]>(state) };
 }
 
-impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
-    fn permute_mut(&self, state: &mut [[u64; VECTOR_LEN]; 25]) {
-        keccak_perm(state);
+/// Whether the running CPU has AVX2.
+fn supported() -> bool {
+    cpufeatures::new!(has_avx2, "avx2");
+    has_avx2::get()
+}
+
+/// Transpose a 4 x 4 matrix of 64-bit words held one row per register.
+///
+/// ```text
+///     t_0 = [ r_0[0] r_1[0] | r_0[2] r_1[2] ]      t_1 = [ r_0[1] r_1[1] | r_0[3] r_1[3] ]
+///     t_2 = [ r_2[0] r_3[0] | r_2[2] r_3[2] ]      t_3 = [ r_2[1] r_3[1] | r_2[3] r_3[3] ]
+///
+///     column 0 = [ low half of t_0 | low half of t_2 ]      column 2: the high halves
+///     column 1 = [ low half of t_1 | low half of t_3 ]      column 3: the high halves
+/// ```
+#[inline(always)]
+fn transpose(r: [__m256i; 4]) -> [__m256i; 4] {
+    unsafe {
+        // Interleave 64-bit words of neighbouring rows.
+        let t0 = _mm256_unpacklo_epi64(r[0], r[1]);
+        let t1 = _mm256_unpackhi_epi64(r[0], r[1]);
+        let t2 = _mm256_unpacklo_epi64(r[2], r[3]);
+        let t3 = _mm256_unpackhi_epi64(r[2], r[3]);
+
+        // Join the matching 128-bit halves.
+        [
+            _mm256_permute2x128_si256::<0x20>(t0, t2),
+            _mm256_permute2x128_si256::<0x20>(t1, t3),
+            _mm256_permute2x128_si256::<0x31>(t0, t2),
+            _mm256_permute2x128_si256::<0x31>(t1, t3),
+        ]
     }
 }
 
+/// The steps of the batched sponge on this backend.
+///
+/// Messages enter through register transposes instead of word-by-word loads.
+struct Backend;
+
+impl Lanes<WIDTH> for Backend {
+    #[inline(always)]
+    unsafe fn permute(state: &mut State<WIDTH>) {
+        // SAFETY: the caller runs this on a CPU with AVX2.
+        unsafe { keccak_perm(state) };
+    }
+
+    #[inline(always)]
+    unsafe fn absorb_words(state: &mut [[u64; WIDTH]], lanes: &[&[u8]; WIDTH], offset: usize) {
+        // Four words at a time: one 32-byte load per lane, then a transpose.
+        let (groups, rest) = state.as_chunks_mut::<4>();
+        for (g, group) in groups.iter_mut().enumerate() {
+            let at = offset + 32 * g;
+            let mut rows = [unsafe { _mm256_setzero_si256() }; 4];
+            for (row, lane) in rows.iter_mut().zip(lanes) {
+                let bytes: &[u8; 32] = lane[at..][..32].try_into().unwrap();
+                // SAFETY: the load reads exactly the 32 bytes just bounds-checked.
+                *row = unsafe { _mm256_loadu_si256(bytes.as_ptr().cast()) };
+            }
+            for (word, column) in group.iter_mut().zip(transpose(rows)) {
+                let word = word.as_mut_ptr().cast();
+                // SAFETY: a state word is 32 bytes, and unaligned access is allowed.
+                unsafe {
+                    let sum = _mm256_xor_si256(_mm256_loadu_si256(word), column);
+                    _mm256_storeu_si256(word, sum);
+                }
+            }
+        }
+
+        // Fewer than four words left: one word at a time.
+        batch::absorb_words(rest, lanes, offset + 32 * groups.len());
+    }
+}
+
+batch::kernel!("AVX2", Backend, WIDTH, "avx2");
+
+#[cfg(target_feature = "avx2")]
+impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
+    fn permute_mut(&self, state: &mut [[u64; VECTOR_LEN]; 25]) {
+        // SAFETY: the build enables AVX2.
+        unsafe { keccak_perm(state) };
+    }
+}
+
+#[cfg(target_feature = "avx2")]
 impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
@@ -440,7 +535,8 @@ mod tests {
             *packed_res = [STATES[0][i], STATES[1][i], STATES[2][i], STATES[3][i]];
         }
 
-        keccak_perm(&mut packed_result);
+        // SAFETY: the test runs only on a CPU with this backend.
+        unsafe { keccak_perm(&mut packed_result) };
 
         let mut result = [[0; 25]; 4];
         for (i, packed_res) in packed_result.iter_mut().enumerate() {
@@ -463,6 +559,11 @@ mod tests {
 
     #[test]
     fn test_vs_tiny_keccak() {
+        // Every x86-64 build compiles this backend, but only a CPU with AVX2 runs it.
+        if !supported() {
+            return;
+        }
+
         let expected = tiny_keccak_res();
         let computed = our_res();
         assert_eq!(expected, computed);
