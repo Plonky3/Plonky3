@@ -1,8 +1,8 @@
-use core::iter;
 use core::marker::PhantomData;
+use core::{array, iter};
 
 use crate::field::Field;
-use crate::{Algebra, ExtensionField, PackedField};
+use crate::{Algebra, Dup, ExtensionField, PackedField, PrimeCharacteristicRing};
 
 mod binomial_extension;
 mod complex;
@@ -248,6 +248,15 @@ where
 
 /// Algebra over `F` that supports degree-`D` extension arithmetic with a given reducer `Shape`.
 pub trait ExtensionAlgebra<F: Field, const D: usize, Shape: ExtensionShape>: Algebra<F> {
+    /// Whether scalar extension-by-base dot products reduce once per coordinate.
+    ///
+    /// When `true`, each coordinate goes through the base [`PrimeCharacteristicRing::dot_product`].
+    ///
+    /// When `false`, each term goes through [`ext_base_mul`](Self::ext_base_mul) and the terms sum through [`ext_add`](Self::ext_add).
+    ///
+    /// Set it to `false` where those vectorized kernels beat the delayed reduction.
+    const DELAYED_MIXED_DOT_PRODUCT: bool = true;
+
     /// Multiplication in the algebra extension ring.
     fn ext_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D]);
 
@@ -419,4 +428,59 @@ pub trait HasTwoAdicQuinticExtension: QuinticTrinomialExtendable {
     /// Panics if `bits > EXT_TWO_ADICITY`.
     #[must_use]
     fn ext_two_adic_generator(bits: usize) -> [Self; 5];
+}
+
+/// Scalar extension-by-base dot product, shared by every scalar extension shape.
+///
+/// Picks the strategy set by [`ExtensionAlgebra::DELAYED_MIXED_DOT_PRODUCT`] at compile time.
+///
+/// Both strategies compute the same value:
+///
+/// ```text
+///     sum_i a_i * f_i
+/// ```
+#[inline]
+pub(crate) fn ext_mixed_dot_product<F, const D: usize, Shape, const N: usize>(
+    a: &[ExtField<F, D, Shape>; N],
+    f: &[F; N],
+) -> ExtField<F, D, Shape>
+where
+    F: Field + ExtensionAlgebra<F, D, Shape>,
+    Shape: ExtensionShape,
+    ExtField<F, D, Shape>: Algebra<F>,
+{
+    if F::DELAYED_MIXED_DOT_PRODUCT {
+        // One delayed reduction per coordinate.
+        ExtField::new(coordinatewise_dot_product(
+            &array::from_fn(|i| a[i].value),
+            f,
+        ))
+    } else {
+        // One extension-by-base product per term, then a balanced tree sum.
+        let products: [ExtField<F, D, Shape>; N] = array::from_fn(|i| a[i].dup() * f[i]);
+        ExtField::sum_array::<N>(&products)
+    }
+}
+
+/// Dot product of extension elements, given by their coordinates, with base scalars.
+///
+/// A base scalar scales every coordinate on its own:
+///
+/// ```text
+///     (sum_i a_i * f_i)[k] = sum_i a_i[k] * f_i
+/// ```
+///
+/// So the result is `D` base dot products of length `N`.
+///
+/// Each one keeps its products unreduced and reduces once, where the base ring allows it.
+#[inline]
+pub(crate) fn coordinatewise_dot_product<R, const D: usize, const N: usize>(
+    a: &[[R; D]; N],
+    f: &[R; N],
+) -> [R; D]
+where
+    R: PrimeCharacteristicRing + Copy,
+{
+    // Gather coordinate k of every input, then dot it with the scalars.
+    array::from_fn(|k| R::dot_product::<N>(&array::from_fn(|i| a[i][k]), f))
 }

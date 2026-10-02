@@ -1393,11 +1393,9 @@ where
                         // Note we just checked batch proofs to ensure mat_opening is correct.
                         // x, z were sent by the verifier.
                         // ps_at_z was sent to the verifier and we are using fri to prove it is correct.
-                        let sum_at_x: Challenge = dot_product(
-                            alpha_powers[offset..offset + mat_opening.len()]
-                                .iter()
-                                .copied(),
-                            mat_opening.iter().copied(),
+                        let sum_at_x = Challenge::batched_linear_combination(
+                            &alpha_powers[offset..offset + mat_opening.len()],
+                            mat_opening,
                         );
                         *ro += (sum_at_z - sum_at_x) * quotient;
                     }

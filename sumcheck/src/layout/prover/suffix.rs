@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{Algebra, ExtensionField, Field, dot_product};
+use p3_field::{Algebra, ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -1135,11 +1135,7 @@ fn weighted_sum_chunk<F: Field, EF: Field + Algebra<F>>(weights: &[EF], values: 
             sum += weight;
         } else if value != F::ZERO {
             // Rows before this one are all bits; every row from here pays one product.
-            return sum
-                + dot_product::<EF, _, _>(
-                    weights[row..].iter().copied(),
-                    values[row..].iter().copied(),
-                );
+            return sum + EF::batched_linear_combination(&weights[row..], &values[row..]);
         }
     }
     sum

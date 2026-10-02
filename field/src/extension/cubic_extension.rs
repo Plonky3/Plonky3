@@ -15,7 +15,7 @@ use num_bigint::BigUint;
 use p3_util::{as_base_slice, as_base_slice_mut, reconstitute_from_base};
 
 use super::packed_cubic_extension::PackedCubicTrinomialExtensionField;
-use super::{ExtField, HasFrobenius, HasTwoAdicCubicExtension};
+use super::{ExtField, HasFrobenius, HasTwoAdicCubicExtension, ext_mixed_dot_product};
 use crate::extension::{CubicTrinomial, CubicTrinomialExtendable, ExtensionAlgebra};
 use crate::field::Field;
 use crate::{
@@ -177,7 +177,12 @@ where
     }
 }
 
-impl<F: CubicTrinomialExtendable> Algebra<F> for CubicTrinomialExtensionField<F> {}
+impl<F: CubicTrinomialExtendable> Algebra<F> for CubicTrinomialExtensionField<F> {
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[F; N]) -> Self {
+        ext_mixed_dot_product(a, f)
+    }
+}
 
 impl<F: CubicTrinomialExtendable> RawDataSerializable for CubicTrinomialExtensionField<F> {
     const NUM_BYTES: usize = F::NUM_BYTES * 3;

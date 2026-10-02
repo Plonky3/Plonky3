@@ -10,7 +10,10 @@ use itertools::Itertools;
 use num_bigint::BigUint;
 use p3_util::{as_base_slice, as_base_slice_mut, reconstitute_from_base};
 
-use super::{ExtField, HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField};
+use super::{
+    ExtField, HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField,
+    ext_mixed_dot_product,
+};
 use crate::extension::{Binomial, BinomiallyExtendable, ExtensionAlgebra};
 use crate::field::Field;
 use crate::{
@@ -202,7 +205,12 @@ where
     }
 }
 
-impl<F: BinomiallyExtendable<D>, const D: usize> Algebra<F> for BinomialExtensionField<F, D> {}
+impl<F: BinomiallyExtendable<D>, const D: usize> Algebra<F> for BinomialExtensionField<F, D> {
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[F; N]) -> Self {
+        ext_mixed_dot_product(a, f)
+    }
+}
 
 impl<F: BinomiallyExtendable<D>, const D: usize> RawDataSerializable
     for BinomialExtensionField<F, D>

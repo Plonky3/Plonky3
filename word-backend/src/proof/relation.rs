@@ -201,11 +201,24 @@ fn batched<F: Field>(
 ) -> F {
     let [linear, left, right, output, a, b, low, high] = *operands;
     let [low_bit, left_claim, right_claim, limb_claim] = *weights;
-    equality * (linear + powers[1] * (left * right - output))
-        + powers[2] * low_bit * (a * b - low)
-        + powers[3] * left_claim * a
-        + powers[4] * right_claim * b
-        + limb_claim * (powers[5] * low + powers[6] * high)
+    // The five outer terms share one reduction, and so do the two limbs.
+    let limbs = F::dot_product::<2>(&[powers[5], powers[6]], &[low, high]);
+    F::dot_product::<5>(
+        &[
+            equality,
+            powers[2] * low_bit,
+            powers[3] * left_claim,
+            powers[4] * right_claim,
+            limb_claim,
+        ],
+        &[
+            linear + powers[1] * (left * right - output),
+            a * b - low,
+            a,
+            b,
+            limbs,
+        ],
+    )
 }
 
 /// Returns the sum the batched check must reach, fixed by the multiplication claims.
@@ -213,7 +226,7 @@ fn batched<F: Field>(
 /// The local terms vanish on the cube, and each claim term sums to its claimed value.
 pub(super) fn claimed_sum<F: Field>(claims: &[F; 4], batching: F) -> F {
     let powers = batching_powers(batching);
-    powers[3] * claims[0] + powers[4] * claims[1] + powers[5] * claims[2] + powers[6] * claims[3]
+    F::dot_product::<4>(&[powers[3], powers[4], powers[5], powers[6]], claims)
 }
 
 /// Closes the vanishing check against the operand evaluations the prover supplied.

@@ -11,7 +11,10 @@ use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
 
 use super::cubic_extension::{cubic_square, trinomial_cubic_mul};
-use super::{CubicTrinomialExtensionField, PackedExtField, vector_add, vector_sub};
+use super::{
+    CubicTrinomialExtensionField, PackedExtField, coordinatewise_dot_product, vector_add,
+    vector_sub,
+};
 use crate::extension::{CubicTrinomial, CubicTrinomialExtendable};
 use crate::{
     Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
@@ -68,6 +71,13 @@ impl<F: CubicTrinomialExtendable, PF: PackedField<Scalar = F>>
 impl<F: CubicTrinomialExtendable, PF: PackedField<Scalar = F>> Algebra<PF>
     for PackedCubicTrinomialExtensionField<F, PF>
 {
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[PF; N]) -> Self {
+        Self::new(coordinatewise_dot_product(
+            &array::from_fn(|i| a[i].value),
+            f,
+        ))
+    }
 }
 
 impl<F, PF> PrimeCharacteristicRing for PackedCubicTrinomialExtensionField<F, PF>
