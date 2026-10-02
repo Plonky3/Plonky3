@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
 use p3_field::{ExtensionField, Field};
+use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 mod error;
@@ -99,8 +100,16 @@ impl BusPlan {
         }
 
         // Shared-root encoding is a statement, so reject a false witness explicitly.
-        let push_root = pushes.iter().copied().product::<EF>();
-        let pull_root = pulls.iter().copied().product::<EF>();
+        let push_root = pushes
+            .par_iter()
+            .with_min_task::<EF>()
+            .copied()
+            .product::<EF>();
+        let pull_root = pulls
+            .par_iter()
+            .with_min_task::<EF>()
+            .copied()
+            .product::<EF>();
         if push_root != pull_root {
             transcript.abort();
             return Err(BusArgumentError::UnbalancedProducts);
