@@ -142,6 +142,11 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         P: PackedValue<Value = T>,
         T: Clone + 'a,
     {
+        // The inner matrix only rejects an index the map sends past its own height. A map is
+        // free to send an out-of-range row back into range, so the visible bound has to be
+        // checked here, as the generic implementation does. It is also what `map_row_index`
+        // asks for: it documents `r >= height()` as undefined behaviour.
+        assert!(r < self.height(), "Row index out of bounds.");
         self.inner
             .horizontally_packed_row(self.index_map.map_row_index(r))
     }
@@ -154,6 +159,9 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         P: PackedValue<Value = T>,
         T: Clone + Default + 'a,
     {
+        // As above: the map may send an out-of-range row back into range, so the inner matrix
+        // cannot reject it on its own.
+        assert!(r < self.height(), "Row index out of bounds.");
         self.inner
             .padded_horizontally_packed_row(self.index_map.map_row_index(r))
     }
@@ -431,6 +439,57 @@ mod tests {
                 BabyBear::new(0),
             ])]
         );
+    }
+
+    /// A view of one row, over an inner matrix of one row, whose map sends every row to
+    /// inner row 0.
+    ///
+    /// The map is the interesting part: it sends row 1, which the view does not have, to an
+    /// inner row that exists, so only the view's own bound check can reject it.
+    fn constant_view() -> RowIndexMappedView<ConstantMap, RowMajorMatrix<BabyBear>> {
+        RowIndexMappedView {
+            index_map: ConstantMap,
+            inner: RowMajorMatrix::new(vec![BabyBear::new(1), BabyBear::new(2)], 2),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn mapped_horizontally_packed_row_rejects_out_of_bounds_row() {
+        let mapped_view = constant_view();
+        assert_eq!(mapped_view.height(), 1);
+
+        // Row 1 is past the view's height, although `ConstantMap` maps it to inner row 0.
+        let _ = mapped_view.horizontally_packed_row::<FieldArray<BabyBear, 2>>(1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn mapped_padded_horizontally_packed_row_rejects_out_of_bounds_row() {
+        let mapped_view = constant_view();
+        assert_eq!(mapped_view.height(), 1);
+
+        let _ = mapped_view
+            .padded_horizontally_packed_row::<FieldArray<BabyBear, 3>>(1)
+            .collect::<Vec<_>>();
+    }
+
+    /// A bit-reversed view keeps every row index inside the inner matrix, since reversing the
+    /// low `log_height` bits lands in `0..height` whatever the input.
+    ///
+    /// So an out-of-range row reads a real row rather than panicking, unless the view checks
+    /// its own bound first.
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn bit_reversed_horizontally_packed_row_rejects_out_of_bounds_row() {
+        // Four rows of width 2, bit-reversed: visible row 1 is inner row 2.
+        let inner = RowMajorMatrix::new((0..8).map(BabyBear::new).collect::<Vec<_>>(), 2);
+        let mapped_view = inner.bit_reverse_rows();
+        assert_eq!(mapped_view.height(), 4);
+
+        // Row 5 is past the view's height, but 5 = 0b101 reverses to 0b010 = 2, which the
+        // inner matrix has. Without the check this returns inner row 2.
+        let _ = mapped_view.horizontally_packed_row::<FieldArray<BabyBear, 2>>(5);
     }
 
     #[test]

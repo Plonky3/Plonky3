@@ -508,6 +508,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         P: PackedValue<Value = T>,
         T: Clone + 'a,
     {
+        // Slicing alone rejects an out-of-range `r` only while the width is nonzero. A
+        // zero-width matrix has no rows, and every index collapses the range to `0..0`, so
+        // the bound has to be checked here, as the generic implementation does.
+        assert!(r < self.height(), "Row index out of bounds.");
         let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
         let (packed, sfx) = P::pack_slice_with_suffix(buf);
         (packed.iter().copied(), sfx.iter().cloned())
@@ -522,6 +526,8 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         P: PackedValue<Value = T>,
         T: Clone + Default + 'a,
     {
+        // As above: a zero-width matrix has no rows, and slicing would accept any index.
+        assert!(r < self.height(), "Row index out of bounds.");
         let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
         let (packed, sfx) = P::pack_slice_with_suffix(buf);
         packed.iter().copied().chain(
@@ -1063,6 +1069,52 @@ mod tests {
     fn test_height_with_zero_width() {
         let matrix: DenseMatrix<i32> = RowMajorMatrix::new(vec![], 0);
         assert_eq!(matrix.height(), 0);
+    }
+
+    /// A zero-width matrix has no rows, so every row index is out of bounds.
+    ///
+    /// Slicing cannot reject one on its own here: the range collapses to `0..0`, which the
+    /// backing storage accepts whatever `r` is.
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_horizontally_packed_row_with_zero_width() {
+        let matrix: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![], 0);
+        assert_eq!(matrix.height(), 0);
+
+        let _ = matrix.horizontally_packed_row::<BabyBear>(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_padded_horizontally_packed_row_with_zero_width() {
+        let matrix: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![], 0);
+        assert_eq!(matrix.height(), 0);
+
+        let _ = matrix
+            .padded_horizontally_packed_row::<BabyBear>(0)
+            .collect::<Vec<_>>();
+    }
+
+    /// An out-of-range row is rejected with the message the generic implementation uses, and
+    /// not with the one slicing happens to produce.
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_horizontally_packed_row_out_of_bounds() {
+        let matrix = RowMajorMatrix::new((0..6).map(BabyBear::new).collect::<Vec<_>>(), 2);
+        assert_eq!(matrix.height(), 3);
+
+        let _ = matrix.horizontally_packed_row::<FieldArray<BabyBear, 2>>(3);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_padded_horizontally_packed_row_out_of_bounds() {
+        let matrix = RowMajorMatrix::new((0..6).map(BabyBear::new).collect::<Vec<_>>(), 2);
+        assert_eq!(matrix.height(), 3);
+
+        let _ = matrix
+            .padded_horizontally_packed_row::<FieldArray<BabyBear, 2>>(3)
+            .collect::<Vec<_>>();
     }
 
     #[test]
