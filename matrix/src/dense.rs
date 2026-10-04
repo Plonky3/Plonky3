@@ -508,6 +508,11 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         P: PackedValue<Value = T>,
         T: Clone + 'a,
     {
+        // Why: slicing alone cannot enforce the row bound.
+        //
+        // - A zero-width matrix has no rows, yet every index slices to the empty range.
+        // - A huge index can wrap the offset back inside the storage.
+        assert!(r < self.height(), "Row index out of bounds.");
         let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
         let (packed, sfx) = P::pack_slice_with_suffix(buf);
         (packed.iter().copied(), sfx.iter().cloned())
@@ -522,6 +527,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         P: PackedValue<Value = T>,
         T: Clone + Default + 'a,
     {
+        // Why: slicing alone cannot enforce the row bound.
+        //
+        // A zero-width matrix has no rows, yet every index slices to the empty range.
+        assert!(r < self.height(), "Row index out of bounds.");
         let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
         let (packed, sfx) = P::pack_slice_with_suffix(buf);
         packed.iter().copied().chain(
@@ -1063,6 +1072,56 @@ mod tests {
     fn test_height_with_zero_width() {
         let matrix: DenseMatrix<i32> = RowMajorMatrix::new(vec![], 0);
         assert_eq!(matrix.height(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_horizontally_packed_row_with_zero_width() {
+        // Fixture state: width 0 → height 0 → every row index is out of bounds.
+        let matrix: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![], 0);
+        assert_eq!(matrix.height(), 0);
+
+        // Row 0 slices to the empty range 0..0, which the storage would accept.
+        let _ = matrix.horizontally_packed_row::<BabyBear>(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_padded_horizontally_packed_row_with_zero_width() {
+        // Fixture state: width 0 → height 0 → every row index is out of bounds.
+        let matrix: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![], 0);
+        assert_eq!(matrix.height(), 0);
+
+        // Row 0 slices to the empty range 0..0, which the storage would accept.
+        let _ = matrix
+            .padded_horizontally_packed_row::<BabyBear>(0)
+            .collect::<Vec<_>>();
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_horizontally_packed_row_out_of_bounds() {
+        // Fixture state: 6 elements, width 2 → rows 0, 1, 2.
+        let matrix = RowMajorMatrix::new((0..6).map(BabyBear::new).collect::<Vec<_>>(), 2);
+        assert_eq!(matrix.height(), 3);
+
+        // Row 3 is one past the last row.
+        //
+        // The panic carries the same message as every other row accessor.
+        let _ = matrix.horizontally_packed_row::<FieldArray<BabyBear, 2>>(3);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_padded_horizontally_packed_row_out_of_bounds() {
+        // Fixture state: 6 elements, width 2 → rows 0, 1, 2.
+        let matrix = RowMajorMatrix::new((0..6).map(BabyBear::new).collect::<Vec<_>>(), 2);
+        assert_eq!(matrix.height(), 3);
+
+        // Row 3 is one past the last row.
+        let _ = matrix
+            .padded_horizontally_packed_row::<FieldArray<BabyBear, 2>>(3)
+            .collect::<Vec<_>>();
     }
 
     #[test]

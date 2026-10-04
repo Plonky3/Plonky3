@@ -142,6 +142,11 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         P: PackedValue<Value = T>,
         T: Clone + 'a,
     {
+        // Why: the inner matrix only sees the remapped index.
+        //
+        // - A remapping may send a row past the view back inside the inner matrix.
+        // - Remapping a row past the view is undefined by contract.
+        assert!(r < self.height(), "Row index out of bounds.");
         self.inner
             .horizontally_packed_row(self.index_map.map_row_index(r))
     }
@@ -154,6 +159,10 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         P: PackedValue<Value = T>,
         T: Clone + Default + 'a,
     {
+        // Why: the inner matrix only sees the remapped index.
+        //
+        // A remapping may send a row past the view back inside the inner matrix.
+        assert!(r < self.height(), "Row index out of bounds.");
         self.inner
             .padded_horizontally_packed_row(self.index_map.map_row_index(r))
     }
@@ -431,6 +440,58 @@ mod tests {
                 BabyBear::new(0),
             ])]
         );
+    }
+
+    /// A one-row view over a one-row matrix that sends every row index to row 0.
+    ///
+    /// Row 1 lies past the view but lands on a real inner row.
+    fn constant_view() -> RowIndexMappedView<ConstantMap, RowMajorMatrix<BabyBear>> {
+        RowIndexMappedView {
+            index_map: ConstantMap,
+            inner: RowMajorMatrix::new(vec![BabyBear::new(1), BabyBear::new(2)], 2),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_horizontally_packed_row_rejects_out_of_bounds_row() {
+        // Fixture state: the view exposes one row.
+        let mapped_view = constant_view();
+        assert_eq!(mapped_view.height(), 1);
+
+        // Row 1 is past the view, although it remaps to inner row 0.
+        let _ = mapped_view.horizontally_packed_row::<FieldArray<BabyBear, 2>>(1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_padded_horizontally_packed_row_rejects_out_of_bounds_row() {
+        // Fixture state: the view exposes one row.
+        let mapped_view = constant_view();
+        assert_eq!(mapped_view.height(), 1);
+
+        // Row 1 is past the view, although it remaps to inner row 0.
+        let _ = mapped_view
+            .padded_horizontally_packed_row::<FieldArray<BabyBear, 3>>(1)
+            .collect::<Vec<_>>();
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_bit_reversed_horizontally_packed_row_rejects_out_of_bounds_row() {
+        // Invariant: bit reversal only keeps the low log_2(height) bits.
+        //
+        // Every index therefore lands on a real inner row, in range or not.
+        //
+        // Fixture state: 4 rows of width 2, so 2 bits are reversed.
+        let inner = RowMajorMatrix::new((0..8).map(BabyBear::new).collect::<Vec<_>>(), 2);
+        let mapped_view = inner.bit_reverse_rows();
+        assert_eq!(mapped_view.height(), 4);
+
+        // Row 5 is past the view, yet its low bits remap to a real row:
+        //
+        //     5 = 0b101 → low bits 0b01 → reversed 0b10 = inner row 2
+        let _ = mapped_view.horizontally_packed_row::<FieldArray<BabyBear, 2>>(5);
     }
 
     #[test]
