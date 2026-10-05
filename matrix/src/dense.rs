@@ -162,11 +162,12 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     /// Returns a slice of the given row.
     ///
     /// # Panics
-    /// Panics if `r` larger than self.height().
+    /// Panics if `r` is greater than or equal to `self.height()`.
     pub fn row_mut(&mut self, r: usize) -> &mut [T]
     where
         S: BorrowMut<[T]>,
     {
+        assert!(r < self.height(), "Row index out of bounds.");
         &mut self.values.borrow_mut()[r * self.width..(r + 1) * self.width]
     }
 
@@ -202,7 +203,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     /// Scale the given row by the given value.
     ///
     /// # Panics
-    /// Panics if `r` larger than `self.height()`.
+    /// Panics if `r` is greater than or equal to `self.height()`.
     pub fn scale_row(&mut self, r: usize, scale: T)
     where
         T: Field,
@@ -218,7 +219,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     /// [`Self::scale_row`] when the width is small.
     ///
     /// # Panics
-    /// Panics if `r` larger than `self.height()`.
+    /// Panics if `r` is greater than or equal to `self.height()`.
     pub fn par_scale_row(&mut self, r: usize, scale: T)
     where
         T: Field,
@@ -239,8 +240,9 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     /// Split the matrix into two matrix views, one with the first `r` rows and one with the remaining rows.
     ///
     /// # Panics
-    /// Panics if `r` larger than `self.height()`.
+    /// Panics if `r` is greater than `self.height()`.
     pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<'_, T>, RowMajorMatrixView<'_, T>) {
+        assert!(r <= self.height(), "Row index out of bounds.");
         let (lo, hi) = self.values.borrow().split_at(r * self.width);
         (
             DenseMatrix::new(lo, self.width),
@@ -251,7 +253,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     /// Split the matrix into two mutable matrix views, one with the first `r` rows and one with the remaining rows.
     ///
     /// # Panics
-    /// Panics if `r` larger than `self.height()`.
+    /// Panics if `r` is greater than `self.height()`.
     pub fn split_rows_mut(
         &mut self,
         r: usize,
@@ -259,6 +261,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     where
         S: BorrowMut<[T]>,
     {
+        assert!(r <= self.height(), "Row index out of bounds.");
         let (lo, hi) = self.values.borrow_mut().split_at_mut(r * self.width);
         (
             DenseMatrix::new(lo, self.width),
@@ -1215,10 +1218,34 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_split_rows_rejects_overflowing_row_index() {
+        let matrix = RowMajorMatrix::new(vec![1, 2], 2);
+        let r = 1usize << (usize::BITS - 1);
+        let _ = matrix.split_rows(r);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_split_rows_mut_rejects_overflowing_row_index() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2], 2);
+        let r = 1usize << (usize::BITS - 1);
+        let _ = matrix.split_rows_mut(r);
+    }
+
+    #[test]
     fn test_row_mut() {
         let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
         matrix.row_mut(1)[0] = 10;
         assert_eq!(matrix.values, vec![1, 2, 10, 4, 5, 6]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_row_mut_rejects_overflowing_row_index() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2], 2);
+        let r = 1usize << (usize::BITS - 1);
+        let _ = matrix.row_mut(r);
     }
 
     #[test]
