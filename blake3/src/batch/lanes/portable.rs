@@ -59,6 +59,9 @@ impl Word for u32 {
 pub(super) const KERNEL: Kernel = Kernel::new::<u32, WIDTH, GROUPS>("portable");
 
 impl Backend<WIDTH> for u32 {
+    /// A single group: every register runs alone.
+    const LONE_REGISTER_COST: usize = 16;
+
     #[inline]
     fn supported() -> bool {
         true

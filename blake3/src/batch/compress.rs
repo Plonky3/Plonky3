@@ -98,8 +98,48 @@ pub(super) fn compress<V: Word, const G: usize>(
     if V::compress_scheduled(h, m, &params) {
         return;
     }
+    let v = working_vector(h, &params);
+    rounds(h, v, m);
+}
+
+/// Advance every lane of every group by one block, each lane with its own counter.
+///
+/// Lanes that hash different chunks of one message differ only in the counter.
+///
+/// - `counters[g][0]` holds the low counter word of every lane of group `g`.
+/// - `counters[g][1]` holds the high word.
+///
+/// The block length and the flags stay shared.
+#[inline(always)]
+pub(super) fn compress_counters<V: Word, const G: usize>(
+    h: &mut [[V; STATE_WORDS]; G],
+    m: &[[V; BLOCK_WORDS]; G],
+    counters: &[[V; 2]; G],
+    block_len: u32,
+    flags: u32,
+) {
+    // The counter slots are overwritten per lane, so they start at zero here.
+    let params = [IV[0], IV[1], IV[2], IV[3], 0, 0, block_len, flags];
+    if V::compress_scheduled_counters(h, m, &params, counters) {
+        return;
+    }
     let mut v = working_vector(h, &params);
 
+    // Words 12 and 13 of the working vector are the counter, low word first.
+    for (v, counter) in v.iter_mut().zip(counters) {
+        v[12] = counter[0];
+        v[13] = counter[1];
+    }
+    rounds(h, v, m);
+}
+
+/// Run the seven rounds on the working vector, then fold it into the chaining value.
+#[inline(always)]
+fn rounds<V: Word, const G: usize>(
+    h: &mut [[V; STATE_WORDS]; G],
+    mut v: [[V; BLOCK_WORDS]; G],
+    m: &[[V; BLOCK_WORDS]; G],
+) {
     // Seven literal rounds, so every schedule index is a constant.
     //
     // Constant indices keep the working vector in registers instead of memory.
@@ -274,12 +314,81 @@ mod tests {
         Ok(())
     }
 
+    /// Check that backend `V` gives each lane its own counter, as a shared counter would.
+    fn check_counters<V: Backend<W>, const W: usize>(
+        h: &Words<STATE_WORDS>,
+        m: &Words<BLOCK_WORDS>,
+        counters: &[[u64; MAX_WIDTH]; 2],
+        block_len: u32,
+        flags: u32,
+    ) -> Result<(), TestCaseError> {
+        // The running CPU may lack this backend.
+        if !V::supported() {
+            return Ok(());
+        }
+
+        // Each backend reads the first `W` lanes of every word.
+        let vector =
+            |lanes: &[u32; MAX_WIDTH]| from_lanes::<V, W>(core::array::from_fn(|l| lanes[l]));
+        let h: [[V; STATE_WORDS]; 2] = h.each_ref().map(|group| group.each_ref().map(vector));
+        let m: [[V; BLOCK_WORDS]; 2] = m.each_ref().map(|group| group.each_ref().map(vector));
+
+        // The low and the high word of every lane's counter, both of them random.
+        let words: [[V; 2]; 2] = counters.map(|group| {
+            [
+                vector(&group.map(|c| c as u32)),
+                vector(&group.map(|c| (c >> 32) as u32)),
+            ]
+        });
+
+        // Two groups may take a hand-scheduled kernel, and one group never does.
+        let mut pair = h;
+        compress_counters(&mut pair, &m, &words, block_len, flags);
+
+        for g in 0..2 {
+            let mut single = [h[g]];
+            compress_counters(&mut single, &[m[g]], &[words[g]], block_len, flags);
+
+            for (l, &counter) in counters[g][..W].iter().enumerate() {
+                // The reference: the whole group with lane l's counter shared, read at lane l.
+                let mut shared = [h[g]];
+                compress(&mut shared, &[m[g]], counter, block_len, flags);
+                let expected = shared[0].map(|word| to_lanes::<V, W>(word)[l]);
+
+                let lane = |state: &[V; STATE_WORDS]| state.map(|word| to_lanes::<V, W>(word)[l]);
+                prop_assert_eq!(lane(&pair[g]), expected, "pair, group {}, lane {}", g, l);
+                prop_assert_eq!(
+                    lane(&single[0]),
+                    expected,
+                    "single, group {}, lane {}",
+                    g,
+                    l
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Run every check on backend `V`.
+    fn check<V: Backend<W>, const W: usize>(
+        h: &Words<STATE_WORDS>,
+        m: &Words<BLOCK_WORDS>,
+        counter: u64,
+        counters: &[[u64; MAX_WIDTH]; 2],
+        block_len: u32,
+        flags: u32,
+    ) -> Result<(), TestCaseError> {
+        check_pair::<V, W>(h, m, counter, block_len, flags)?;
+        check_counters::<V, W>(h, m, counters, block_len, flags)
+    }
+
     proptest! {
         #[test]
-        fn two_groups_match_one_group_at_a_time(
+        fn grouped_and_per_lane_kernels_match_the_generic_rounds(
             h in prop::array::uniform2(prop::array::uniform8(any::<[u32; MAX_WIDTH]>())),
             m in prop::array::uniform2(prop::array::uniform16(any::<[u32; MAX_WIDTH]>())),
             counter in any::<u64>(),
+            counters in prop::array::uniform2(any::<[u64; MAX_WIDTH]>()),
             block_len in 0u32..=64,
             flags in any::<u8>(),
         ) {
@@ -287,18 +396,18 @@ mod tests {
 
             // Every backend this build compiles, each on the CPUs that have it.
             #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
-            check_pair::<__m512i, 16>(&h, &m, counter, block_len, flags)?;
+            check::<__m512i, 16>(&h, &m, counter, &counters, block_len, flags)?;
             #[cfg(all(target_arch = "x86_64", target_feature = "sse2", not(target_feature = "avx512f")))]
-            check_pair::<__m256i, 8>(&h, &m, counter, block_len, flags)?;
+            check::<__m256i, 8>(&h, &m, counter, &counters, block_len, flags)?;
             #[cfg(all(target_arch = "x86_64", target_feature = "sse2", not(target_feature = "avx2")))]
-            check_pair::<__m128i, 4>(&h, &m, counter, block_len, flags)?;
+            check::<__m128i, 4>(&h, &m, counter, &counters, block_len, flags)?;
             #[cfg(all(target_arch = "aarch64", target_feature = "neon", target_endian = "little"))]
-            check_pair::<uint32x4_t, 4>(&h, &m, counter, block_len, flags)?;
+            check::<uint32x4_t, 4>(&h, &m, counter, &counters, block_len, flags)?;
             #[cfg(all(
                 target_arch = "wasm32",
                 any(target_feature = "simd128", feature = "wasm32-simd")
             ))]
-            check_pair::<v128, 4>(&h, &m, counter, block_len, flags)?;
+            check::<v128, 4>(&h, &m, counter, &counters, block_len, flags)?;
             #[cfg(not(any(
                 all(target_arch = "x86_64", target_feature = "sse2"),
                 all(target_arch = "aarch64", target_feature = "neon", target_endian = "little"),
@@ -307,7 +416,7 @@ mod tests {
                     any(target_feature = "simd128", feature = "wasm32-simd")
                 )
             )))]
-            check_pair::<u32, 1>(&h, &m, counter, block_len, flags)?;
+            check::<u32, 1>(&h, &m, counter, &counters, block_len, flags)?;
         }
     }
 }

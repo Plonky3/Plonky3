@@ -91,6 +91,9 @@ fn transpose([a, b, c, d]: [__m128i; 4]) -> [__m128i; 4] {
 pub(super) const KERNEL: Kernel = Kernel::new::<__m128i, WIDTH, GROUPS>("SSE2");
 
 impl Backend<WIDTH> for __m128i {
+    /// A single group: every register runs alone.
+    const LONE_REGISTER_COST: usize = 16;
+
     #[inline]
     fn supported() -> bool {
         // SSE2 is part of the x86-64 baseline.

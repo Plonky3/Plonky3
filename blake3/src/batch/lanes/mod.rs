@@ -53,6 +53,32 @@ macro_rules! out_of_line_steps {
             $crate::batch::chunk::<Self, $w, G>(mode, lanes, len, index, root)
         }
 
+        $(#[target_feature(enable = $feature)])?
+        unsafe fn spread<const G: usize>(
+            mode: $crate::batch::Mode,
+            input: &[u8],
+            len: usize,
+            out: &mut [[u8; blake3::OUT_LEN]],
+        ) {
+            // SAFETY: the caller runs this on a CPU with the backend's features.
+            unsafe { $crate::batch::spread::hash::<Self, $w, G>(mode, input, len, out) }
+        }
+
+        #[inline(never)]
+        $(#[target_feature(enable = $feature)])?
+        unsafe fn pass<P: $crate::batch::spread::Pass<Self, $w>, const G: usize>(
+            pass: &P,
+            lanes: &$crate::batch::Lanes<'_, $w, G>,
+            counters: &[[u64; $w]; G],
+            out: &mut [[[u8; blake3::OUT_LEN]; $w]; G],
+        ) {
+            // The chaining value of every lane, written out as its digest bytes.
+            let state = pass.run(lanes, counters);
+            for (state, out) in state.iter().zip(out) {
+                <Self as Backend<$w>>::store_digests(state, out);
+            }
+        }
+
         #[inline(never)]
         $(#[target_feature(enable = $feature)])?
         unsafe fn parent<const G: usize>(
@@ -170,7 +196,6 @@ pub(crate) struct Kernel {
     /// The backend's name, for diagnostics.
     name: &'static str,
     /// Lanes in one register.
-    #[cfg(test)]
     pub(crate) width: usize,
     /// Messages one batched compression advances at once.
     pub(crate) lanes: usize,
@@ -178,6 +203,9 @@ pub(crate) struct Kernel {
     supported: fn() -> bool,
     /// The driver compiled for the backend, sound to call only when `supported` holds.
     run: unsafe fn(Mode, &[u8], usize, &mut [[u8; OUT_LEN]]),
+    /// The spreading driver alone, so tests reach it whatever the cost model picks.
+    #[cfg(test)]
+    spread: unsafe fn(Mode, &[u8], usize, &mut [[u8; OUT_LEN]]),
 }
 
 impl Kernel {
@@ -185,11 +213,12 @@ impl Kernel {
     const fn new<V: Backend<W>, const W: usize, const G: usize>(name: &'static str) -> Self {
         Self {
             name,
-            #[cfg(test)]
             width: W,
             lanes: W * G,
             supported: V::supported,
             run: super::hash_many_with::<V, W, G>,
+            #[cfg(test)]
+            spread: V::spread::<G>,
         }
     }
 
@@ -200,6 +229,19 @@ impl Kernel {
     pub(crate) fn hash_many(self, mode: Mode, input: &[u8], len: usize, out: &mut [[u8; OUT_LEN]]) {
         // SAFETY: kernels only leave this module through `supported`, which checks the CPU.
         unsafe { (self.run)(mode, input, len, out) }
+    }
+
+    /// Hash through the spreading driver, whatever the cost model would pick.
+    ///
+    /// The caller guarantees:
+    ///
+    /// - `input.len() == len * out.len()`;
+    /// - every message spans at least two chunks;
+    /// - there are at most 32 messages.
+    #[cfg(test)]
+    pub(crate) fn spread(self, mode: Mode, input: &[u8], len: usize, out: &mut [[u8; OUT_LEN]]) {
+        // SAFETY: kernels only leave this module through `supported`, which checks the CPU.
+        unsafe { (self.spread)(mode, input, len, out) }
     }
 }
 
@@ -264,6 +306,23 @@ pub(super) trait Word: Copy {
     ) -> bool {
         false
     }
+
+    /// The hand-scheduled kernel of this backend with a counter per lane, if it has one.
+    ///
+    /// `counters[g]` holds the low and then the high counter word of every lane of group `g`.
+    ///
+    /// The counter slots of `params` are ignored.
+    ///
+    /// Returns false when there is none, and the generic rounds run instead.
+    #[inline(always)]
+    fn compress_scheduled_counters<const G: usize>(
+        _h: &mut [[Self; STATE_WORDS]; G],
+        _m: &[[Self; BLOCK_WORDS]; G],
+        _params: &[u32; STATE_WORDS],
+        _counters: &[[Self; 2]; G],
+    ) -> bool {
+        false
+    }
 }
 
 /// A register of `W` lanes, with the out-of-line steps of the driver compiled for it.
@@ -274,6 +333,17 @@ pub(super) trait Word: Copy {
 pub(super) trait Backend<const W: usize>: Word {
     /// Whether the running CPU has this backend's target features.
     fn supported() -> bool;
+
+    /// Cost of one compression on a register that runs alone, in the unit of [`super::spread::pays`].
+    ///
+    /// One register of a full group costs [`super::spread::GROUPED_REGISTER_COST`].
+    ///
+    /// The registers of a group are independent, so their instructions overlap and hide each other's latency.
+    ///
+    /// A register alone has nothing to overlap with, so it takes longer per compression.
+    ///
+    /// Backends with a single group have nothing to gain, and use the grouped cost.
+    const LONE_REGISTER_COST: usize;
 
     /// Transpose one block from each lane into sixteen message words.
     ///
@@ -323,6 +393,32 @@ pub(super) trait Backend<const W: usize>: Word {
         root: u32,
     ) -> State<Self, G>;
 
+    /// [`super::spread::hash`], compiled with this backend's target features.
+    ///
+    /// # Safety
+    ///
+    /// The running CPU has this backend's target features.
+    unsafe fn spread<const G: usize>(
+        mode: Mode,
+        input: &[u8],
+        len: usize,
+        out: &mut [[u8; OUT_LEN]],
+    );
+
+    /// One pass of the spreading driver, kept out of line like [`Backend::leaf`].
+    ///
+    /// Writes the digest of every lane of every group to `out`.
+    ///
+    /// # Safety
+    ///
+    /// The running CPU has this backend's target features.
+    unsafe fn pass<P: super::spread::Pass<Self, W>, const G: usize>(
+        pass: &P,
+        lanes: &Lanes<'_, W, G>,
+        counters: &[[u64; W]; G],
+        out: &mut [[[u8; OUT_LEN]; W]; G],
+    );
+
     /// A parent node, kept out of line like [`Backend::leaf`].
     ///
     /// # Safety
@@ -345,7 +441,6 @@ pub(super) const fn to_lanes<V: Backend<W>, const W: usize>(vector: V) -> [u32; 
 }
 
 /// One vector holding the given lanes, in lane order.
-#[cfg(test)]
 pub(super) const fn from_lanes<V: Backend<W>, const W: usize>(lanes: [u32; W]) -> V {
     const { assert!(size_of::<V>() == size_of::<[u32; W]>()) };
     // SAFETY: a vector is exactly its lanes, packed from lane 0 at the lowest address.
