@@ -9,6 +9,9 @@
 //!
 //! Padding and batching live in [`crate::four_lane`]; this module supplies the vector core.
 //!
+//! Every build of x86-64 compiles it.
+//! Only the two entry points below enable SHA-NI, and they run once the CPU is known to have it.
+//!
 //! # Performance
 //!
 //! `sha256rnds2` advances a single state.
@@ -18,17 +21,33 @@
 //! Four interleaved streams fill them, which is why [`LANES`] is four.
 
 use core::arch::x86_64::{
-    __m128i, _mm_add_epi32, _mm_alignr_epi8, _mm_blend_epi16, _mm_loadu_si128,
+    __m128i, _mm_add_epi32, _mm_alignr_epi8, _mm_blend_epi16, _mm_loadu_si128, _mm_setzero_si128,
     _mm_sha256msg1_epu32, _mm_sha256msg2_epu32, _mm_sha256rnds2_epu32, _mm_shuffle_epi8,
     _mm_shuffle_epi32, _mm_storeu_si128,
 };
 use core::mem::transmute;
 
 use crate::H256_256;
-use crate::four_lane::{BLOCK_BYTES, FourLane, LANES, ROUND_CONSTANTS};
+use crate::four_lane::{self, BLOCK_BYTES, FourLane, LANES, ROUND_CONSTANTS};
 
 /// The four-lane SHA-NI backend.
 pub(crate) struct ShaNi;
+
+/// Hash equal-length messages laid end to end, four at a time.
+///
+/// The caller checks that the running CPU has SHA-NI and SSE4.1.
+#[target_feature(enable = "sha,sse4.1")]
+pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; 32]]) {
+    four_lane::hash_many::<ShaNi>(input, out);
+}
+
+/// Compress each 64-byte pair from the initial hash value, four at a time.
+///
+/// The caller checks that the running CPU has SHA-NI and SSE4.1.
+#[target_feature(enable = "sha,sse4.1")]
+pub(crate) fn compress_many(inputs: &[[[u8; 32]; 2]], out: &mut [[u8; 32]]) {
+    four_lane::compress_many::<ShaNi>(inputs, out);
+}
 
 /// Words of message schedule held in one vector.
 ///
@@ -88,18 +107,18 @@ pub(crate) struct State {
 
 /// The first sixteen message words of one block, four to a vector.
 #[inline]
+#[target_feature(enable = "sha,sse4.1")]
 fn load_schedule(block: &[u8; BLOCK_BYTES]) -> [__m128i; SCHEDULE_VECTORS] {
     // SAFETY: `[u8; 16]` and `__m128i` are both 16 bytes and every bit pattern is valid.
     let mask = unsafe { transmute::<[u8; 16], __m128i>(REVERSE_DWORD_BYTES) };
 
-    core::array::from_fn(|vector| {
+    let mut schedule = [_mm_setzero_si128(); SCHEDULE_VECTORS];
+    for (vector, words) in schedule.iter_mut().enumerate() {
         // SAFETY: `block` is 64 bytes and `vector < 4`, so the 16-byte unaligned read is in bounds.
-        // The module compiles only with `ssse3` (implied by `sse4.1`), which `pshufb` requires.
-        unsafe {
-            let raw = _mm_loadu_si128(block.as_ptr().add(vector * 16).cast());
-            _mm_shuffle_epi8(raw, mask)
-        }
-    })
+        let raw = unsafe { _mm_loadu_si128(block.as_ptr().add(vector * 16).cast()) };
+        *words = _mm_shuffle_epi8(raw, mask);
+    }
+    schedule
 }
 
 /// Extend the message schedule by four words.
@@ -117,19 +136,16 @@ fn load_schedule(block: &[u8; BLOCK_BYTES]) -> [__m128i; SCHEDULE_VECTORS] {
 ///
 /// The vector `W[i..i+4]`.
 #[inline]
+#[target_feature(enable = "sha,sse4.1")]
 fn extend_schedule(oldest: __m128i, older: __m128i, recent: __m128i, newest: __m128i) -> __m128i {
-    // SAFETY: the module compiles only when `sha` and `sse4.1` are enabled for the crate.
-    // `sha256msg1` and `sha256msg2` need `sha`, and `palignr` needs `ssse3`, implied by `sse4.1`.
-    unsafe {
-        // `sha256msg1` folds sigma0 over the four words fifteen positions back.
-        let sigma0 = _mm_sha256msg1_epu32(oldest, older);
+    // `sha256msg1` folds sigma0 over the four words fifteen positions back.
+    let sigma0 = _mm_sha256msg1_epu32(oldest, older);
 
-        // The recurrence also adds W[i-7..i-3], which straddles `recent` and `newest`.
-        let carried = _mm_alignr_epi8::<4>(newest, recent);
+    // The recurrence also adds W[i-7..i-3], which straddles `recent` and `newest`.
+    let carried = _mm_alignr_epi8::<4>(newest, recent);
 
-        // `sha256msg2` supplies sigma1 of the two previous words, including its own feedback.
-        _mm_sha256msg2_epu32(_mm_add_epi32(sigma0, carried), newest)
-    }
+    // `sha256msg2` supplies sigma1 of the two previous words, including its own feedback.
+    _mm_sha256msg2_epu32(_mm_add_epi32(sigma0, carried), newest)
 }
 
 /// Advance one stream by four rounds.
@@ -144,24 +160,21 @@ fn extend_schedule(oldest: __m128i, older: __m128i, recent: __m128i, newest: __m
 /// Panics if `group` is not a valid round group. The two call sites below range over
 /// `0..ROUND_GROUPS`, so the bound check folds away once this is inlined into them.
 #[inline]
+#[target_feature(enable = "sha,sse4.1")]
 fn round_group(abef: &mut __m128i, cdgh: &mut __m128i, schedule: __m128i, group: usize) {
     let constants = ROUND_CONSTANTS.as_chunks::<WORDS_PER_VECTOR>().0[group];
 
     // SAFETY: `__m128i` and `[u32; 4]` are both 16 bytes and every bit pattern is valid.
     let constants = unsafe { transmute::<[u32; WORDS_PER_VECTOR], __m128i>(constants) };
 
-    // SAFETY: the module compiles only when `sha` is enabled, which the round instruction needs.
-    // The addition and the shuffle are `sse2`, always present on x86-64.
-    unsafe {
-        let round_input = _mm_add_epi32(schedule, constants);
+    let round_input = _mm_add_epi32(schedule, constants);
 
-        // The instruction consumes two rounds from the low half and returns the new `abef`.
-        *cdgh = _mm_sha256rnds2_epu32(*cdgh, *abef, round_input);
+    // The instruction consumes two rounds from the low half and returns the new `abef`.
+    *cdgh = _mm_sha256rnds2_epu32(*cdgh, *abef, round_input);
 
-        // Rotating the halves feeds it the remaining two rounds.
-        let upper = _mm_shuffle_epi32::<HIGH_HALF_TO_LOW>(round_input);
-        *abef = _mm_sha256rnds2_epu32(*abef, *cdgh, upper);
-    }
+    // Rotating the halves feeds it the remaining two rounds.
+    let upper = _mm_shuffle_epi32::<HIGH_HALF_TO_LOW>(round_input);
+    *abef = _mm_sha256rnds2_epu32(*abef, *cdgh, upper);
 }
 
 impl FourLane for ShaNi {
@@ -185,86 +198,97 @@ impl FourLane for ShaNi {
         }
     }
 
-    /// Compress one block into each of the four states.
-    ///
-    /// The first four round groups read the block directly. The remaining twelve overwrite the
-    /// oldest schedule vector in place.
-    ///
-    /// ```text
-    ///     slot g % 4 holds W[4g-16 .. 4g-12] on entry to group g
-    /// ```
-    #[inline]
+    #[inline(always)]
     fn compress(state: &mut Self::State, blocks: [&[u8; BLOCK_BYTES]; LANES]) {
-        let entry = *state;
-        let mut schedule: [[__m128i; SCHEDULE_VECTORS]; LANES] =
-            core::array::from_fn(|lane| load_schedule(blocks[lane]));
+        // SAFETY: this backend is only driven from the two entry points above, and the caller of those checked the CPU.
+        unsafe { compress_streams(state, blocks) }
+    }
 
-        for group in 0..SCHEDULE_VECTORS {
-            let streams = state
-                .abef
-                .iter_mut()
-                .zip(state.cdgh.iter_mut())
-                .zip(schedule.iter());
-            for ((abef, cdgh), window) in streams {
-                round_group(abef, cdgh, window[group], group);
-            }
-        }
+    #[inline(always)]
+    fn write_digests(state: &Self::State, out: &mut [[u8; 32]; LANES]) {
+        // SAFETY: as above.
+        unsafe { write_streams(state, out) }
+    }
+}
 
-        for group in SCHEDULE_VECTORS..ROUND_GROUPS {
-            let streams = state
-                .abef
-                .iter_mut()
-                .zip(state.cdgh.iter_mut())
-                .zip(schedule.iter_mut());
-            for ((abef, cdgh), window) in streams {
-                let next = extend_schedule(
-                    window[group % SCHEDULE_VECTORS],
-                    window[(group + 1) % SCHEDULE_VECTORS],
-                    window[(group + 2) % SCHEDULE_VECTORS],
-                    window[(group + 3) % SCHEDULE_VECTORS],
-                );
-                window[group % SCHEDULE_VECTORS] = next;
-                round_group(abef, cdgh, next, group);
-            }
-        }
+/// Compress one block into each of the four states.
+///
+/// The first four round groups read the block directly. The remaining twelve overwrite the
+/// oldest schedule vector in place.
+///
+/// ```text
+///     slot g % 4 holds W[4g-16 .. 4g-12] on entry to group g
+/// ```
+#[inline]
+#[target_feature(enable = "sha,sse4.1")]
+fn compress_streams(state: &mut State, blocks: [&[u8; BLOCK_BYTES]; LANES]) {
+    let entry = *state;
+    let mut schedule = [[_mm_setzero_si128(); SCHEDULE_VECTORS]; LANES];
+    for (window, block) in schedule.iter_mut().zip(blocks) {
+        *window = load_schedule(block);
+    }
 
-        // SAFETY: `paddd` is `sse2`, always available on x86-64.
-        unsafe {
-            for (abef, saved) in state.abef.iter_mut().zip(entry.abef) {
-                *abef = _mm_add_epi32(*abef, saved);
-            }
-            for (cdgh, saved) in state.cdgh.iter_mut().zip(entry.cdgh) {
-                *cdgh = _mm_add_epi32(*cdgh, saved);
-            }
+    for group in 0..SCHEDULE_VECTORS {
+        let streams = state
+            .abef
+            .iter_mut()
+            .zip(state.cdgh.iter_mut())
+            .zip(schedule.iter());
+        for ((abef, cdgh), window) in streams {
+            round_group(abef, cdgh, window[group], group);
         }
     }
 
-    #[inline]
-    fn write_digests(state: &Self::State, out: &mut [[u8; 32]; LANES]) {
-        // SAFETY: `[u8; 16]` and `__m128i` are both 16 bytes and every bit pattern is valid.
-        let mask = unsafe { transmute::<[u8; 16], __m128i>(REVERSE_DWORD_BYTES) };
+    for group in SCHEDULE_VECTORS..ROUND_GROUPS {
+        let streams = state
+            .abef
+            .iter_mut()
+            .zip(state.cdgh.iter_mut())
+            .zip(schedule.iter_mut());
+        for ((abef, cdgh), window) in streams {
+            let next = extend_schedule(
+                window[group % SCHEDULE_VECTORS],
+                window[(group + 1) % SCHEDULE_VECTORS],
+                window[(group + 2) % SCHEDULE_VECTORS],
+                window[(group + 3) % SCHEDULE_VECTORS],
+            );
+            window[group % SCHEDULE_VECTORS] = next;
+            round_group(abef, cdgh, next, group);
+        }
+    }
 
-        let streams = out.iter_mut().zip(&state.abef).zip(&state.cdgh);
-        for ((digest, &packed_abef), &packed_cdgh) in streams {
-            // SAFETY: the blend needs `sse4.1` and the align needs `ssse3`.
-            //
-            // Both are guaranteed by the module's `sse4.1` gate.
-            //
-            // The two stores write sixteen bytes each into the halves of a 32-byte array.
-            unsafe {
-                // Undo the SHA-NI packing. Every name here reads from the top lane down, as
-                // `State` does, so `feba` is the reversal of `abef`.
-                let feba = _mm_shuffle_epi32::<REVERSE_LANES>(packed_abef);
-                let dchg = _mm_shuffle_epi32::<SWAP_LANE_PAIRS>(packed_cdgh);
+    // The feed-forward adds the entry state back in.
+    for (abef, saved) in state.abef.iter_mut().zip(entry.abef) {
+        *abef = _mm_add_epi32(*abef, saved);
+    }
+    for (cdgh, saved) in state.cdgh.iter_mut().zip(entry.cdgh) {
+        *cdgh = _mm_add_epi32(*cdgh, saved);
+    }
+}
 
-                // Recombining them gives the state words in their natural order.
-                let dcba = _mm_blend_epi16::<TAKE_UPPER_LANES>(feba, dchg);
-                let hgfe = _mm_alignr_epi8::<8>(dchg, feba);
+/// Serialize the four states as big-endian digests.
+#[inline]
+#[target_feature(enable = "sha,sse4.1")]
+fn write_streams(state: &State, out: &mut [[u8; 32]; LANES]) {
+    // SAFETY: `[u8; 16]` and `__m128i` are both 16 bytes and every bit pattern is valid.
+    let mask = unsafe { transmute::<[u8; 16], __m128i>(REVERSE_DWORD_BYTES) };
 
-                let bytes = digest.as_mut_ptr();
-                _mm_storeu_si128(bytes.cast(), _mm_shuffle_epi8(dcba, mask));
-                _mm_storeu_si128(bytes.add(16).cast(), _mm_shuffle_epi8(hgfe, mask));
-            }
+    let streams = out.iter_mut().zip(&state.abef).zip(&state.cdgh);
+    for ((digest, &packed_abef), &packed_cdgh) in streams {
+        // SAFETY: the two stores write sixteen bytes each into the halves of a 32-byte array.
+        unsafe {
+            // Undo the SHA-NI packing. Every name here reads from the top lane down, as
+            // `State` does, so `feba` is the reversal of `abef`.
+            let feba = _mm_shuffle_epi32::<REVERSE_LANES>(packed_abef);
+            let dchg = _mm_shuffle_epi32::<SWAP_LANE_PAIRS>(packed_cdgh);
+
+            // Recombining them gives the state words in their natural order.
+            let dcba = _mm_blend_epi16::<TAKE_UPPER_LANES>(feba, dchg);
+            let hgfe = _mm_alignr_epi8::<8>(dchg, feba);
+
+            let bytes = digest.as_mut_ptr();
+            _mm_storeu_si128(bytes.cast(), _mm_shuffle_epi8(dcba, mask));
+            _mm_storeu_si128(bytes.add(16).cast(), _mm_shuffle_epi8(hgfe, mask));
         }
     }
 }

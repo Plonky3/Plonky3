@@ -7,7 +7,13 @@
 //! So every lane runs the same rounds, and a block of padding only is the same in every lane.
 //!
 //! The end of a batch rarely fills 32 lanes.
-//! It takes one group of sixteen, or four SHA-NI streams when the build has SHA-NI.
+//! It takes one group of sixteen, or four SHA-NI streams when the CPU has SHA-NI.
+//!
+//! Every build of x86-64 compiles this module.
+//! Each function that runs AVX-512 enables it, and the entry points run once the CPU is known to have it.
+//!
+//! A closure inside such a function carries its features, so `array::map` or `from_fn` cannot inline it.
+//! Plain loops fill the arrays instead, and inline in every build.
 
 mod rounds;
 
@@ -16,9 +22,7 @@ use core::arch::x86_64::*;
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 
 use self::rounds::{K, compress_blocks, compress_shared};
-use crate::{H256_256, Sha256, Sha256Compress};
-#[cfg(all(target_feature = "sha", target_feature = "sse4.1"))]
-use crate::{four_lane, x86_64_sha_ni::ShaNi};
+use crate::{H256_256, Sha256, Sha256Compress, x86_64_sha_ni};
 
 /// Lanes in one register.
 const WIDTH: usize = 16;
@@ -44,9 +48,6 @@ const ROUNDS: usize = 64;
 /// Bytes the message length takes at the end of the last block.
 const LENGTH_BYTES: usize = 8;
 
-/// Whether this build also has four-stream SHA-NI for the last few messages of a batch.
-const FOUR_STREAMS: bool = cfg!(all(target_feature = "sha", target_feature = "sse4.1"));
-
 /// Byte permutation reversing each 32-bit word of a 128-bit block.
 ///
 /// SHA-256 reads words big-endian, while a vector load is little-endian.
@@ -65,6 +66,36 @@ type Digests<const G: usize> = [[[u8; 32]; WIDTH]; G];
 
 /// One block per lane of `G` groups.
 type Rows<'a, const G: usize> = [[&'a [u8; BLOCK_BYTES]; WIDTH]; G];
+
+/// How a CPU with AVX-512 shares a batch with SHA-NI, by the crossovers measured on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Streams {
+    /// The CPU has no SHA-NI, so the register passes and the scalar hasher take every message.
+    Off,
+    /// Four SHA-NI streams take three to eight leftover messages, as on Zen 5.
+    FromThree,
+    /// Four SHA-NI streams take four to eight leftover messages, as on Intel.
+    ///
+    /// Three messages leave one stream empty, and three scalar calls beat that there.
+    FromFour,
+    /// The crossovers of Zen 4, which runs each 512-bit operation as two 256-bit halves.
+    ///
+    /// - Messages of at least [`ZEN4_STREAMS_FROM_LEN`] bytes all go to the streams.
+    /// - Shorter ones keep the register passes for whole groups, and the streams take most leftovers.
+    Zen4,
+}
+
+/// Message length from which four SHA-NI streams beat whole register groups on Zen 4.
+///
+/// The two tie at 2 KiB, and the streams pull ahead on longer messages.
+const ZEN4_STREAMS_FROM_LEN: usize = 2048;
+
+impl Streams {
+    /// Whether the CPU runs SHA-NI.
+    const fn sha_ni(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
 
 /// A way to hash the next few messages of a batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,25 +116,37 @@ impl Pass {
     /// A register pass costs the same however many of its lanes hold a message.
     /// So a pass is picked by the messages it can fill:
     ///
-    /// ```text
-    ///     left        with SHA-NI            without SHA-NI
-    ///     >= 21       Wide                   Wide
-    ///     18..=20     Narrow, 16 of them     Wide
-    ///     17          Narrow, 16 of them     Narrow, 16 of them
-    ///     9..=16      Narrow                 Narrow
-    ///     3..=8       FourStreams            Narrow
-    ///     2           Single                 Narrow
-    ///     1           Single                 Single
-    /// ```
+    /// | left   | `Off`        | `FromThree`  | `FromFour`   | `Zen4`       |
+    /// |--------|--------------|--------------|--------------|--------------|
+    /// | 25..   | Wide         | Wide         | Wide         | Wide         |
+    /// | 21..=24| Wide         | Wide         | Wide         | FourStreams  |
+    /// | 18..=20| Wide         | Narrow (16)  | Narrow (16)  | Narrow (16)  |
+    /// | 17     | Narrow (16)  | Narrow (16)  | Narrow (16)  | Narrow (16)  |
+    /// | 14..=16| Narrow       | Narrow       | Narrow       | Narrow       |
+    /// | 9..=13 | Narrow       | Narrow       | Narrow       | FourStreams  |
+    /// | 4..=8  | Narrow       | FourStreams  | FourStreams  | FourStreams  |
+    /// | 3      | Narrow       | FourStreams  | Single       | FourStreams  |
+    /// | 2      | Narrow       | Single       | Single       | Single       |
+    /// | 1      | Single       | Single       | Single       | Single       |
     ///
     /// - A lone register group costs well under two, and about half on long messages.
     /// - Four SHA-NI streams beat a register group while they need at most two calls.
     /// - Two passes over a few leftover messages beat one mostly empty wide pass.
-    const fn next(left: usize, four_streams: bool) -> (Self, usize) {
+    /// - Zen 4 splits each 512-bit operation in two, so a register pass gains less there.
+    const fn next(left: usize, streams: Streams) -> (Self, usize) {
         // The widest pass fills most of its lanes.
-        let wide_from = if four_streams { 21 } else { 18 };
+        let wide_from = match streams {
+            Streams::Off => 18,
+            Streams::FromThree | Streams::FromFour => 21,
+            Streams::Zen4 => 25,
+        };
         if left >= wide_from {
             return (Self::Wide, if left < LANES { left } else { LANES });
+        }
+
+        // On Zen 4, the streams beat a wide pass with up to a quarter of its lanes empty.
+        if matches!(streams, Streams::Zen4) && left > 20 {
+            return (Self::FourStreams, left);
         }
 
         // One group takes sixteen, and the few left over take the cheaper passes below.
@@ -112,7 +155,11 @@ impl Pass {
         }
 
         // One group holds all the rest.
-        let narrow_from = if four_streams { 9 } else { 2 };
+        let narrow_from = match streams {
+            Streams::Off => 2,
+            Streams::FromThree | Streams::FromFour => 9,
+            Streams::Zen4 => 14,
+        };
         if left >= narrow_from {
             return (Self::Narrow, left);
         }
@@ -120,20 +167,42 @@ impl Pass {
         // Too few messages to fill a register group.
         //
         // One or two messages run no faster as streams of one call than as calls of their own.
-        if four_streams && left >= 3 {
+        let streams_from = match streams {
+            Streams::FromFour => 4,
+            _ => 3,
+        };
+        if streams.sha_ni() && left >= streams_from {
             (Self::FourStreams, left)
         } else {
             (Self::Single, left)
+        }
+    }
+
+    /// The pass for a whole batch of `count` messages of `len` bytes, if a single one takes it all.
+    ///
+    /// Such a batch never reads the padding, so it skips computing it.
+    const fn whole(count: usize, len: usize, streams: Streams) -> Option<Self> {
+        if matches!(streams, Streams::Zen4) && len >= ZEN4_STREAMS_FROM_LEN {
+            return Some(Self::FourStreams);
+        }
+        match Self::next(count, streams) {
+            (pass @ (Self::FourStreams | Self::Single), _) => Some(pass),
+            _ => None,
         }
     }
 }
 
 /// Hash `out.len()` equal-length messages laid end to end in `input`.
 ///
+/// # Safety
+///
+/// The running CPU has AVX-512F and AVX-512BW, and SHA-NI with SSE4.1 unless `streams` is [`Streams::Off`].
+///
 /// # Panics
 ///
 /// Panics if the input length is not a whole multiple of the digest count.
-pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; 32]]) {
+#[target_feature(enable = "avx512f,avx512bw")]
+pub(crate) unsafe fn hash_many(input: &[u8], out: &mut [[u8; 32]], streams: Streams) {
     // No digests requested means there is nothing to read from the input.
     if out.is_empty() {
         return;
@@ -148,8 +217,15 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; 32]]) {
     );
     let len = input.len() / out.len();
 
-    // The padding expands a schedule in scalar code, so only a register pass computes it.
-    let mut padding = None;
+    // A batch that no register pass touches never reads the padding.
+    //
+    // Its shared schedule costs about as much as one short message, so such a batch skips it.
+    if let Some(pass) = Pass::whole(out.len(), len, streams) {
+        // SAFETY: the passes pick four streams only when `streams` has SHA-NI, so the CPU has it.
+        unsafe { hash_serial(input, out, pass == Pass::FourStreams) };
+        return;
+    }
+    let padding = Padding::new(len);
 
     // Whole groups of 32 messages.
     let (groups, _) = out.as_chunks_mut::<LANES>();
@@ -162,7 +238,7 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; 32]]) {
         };
         hash_group::<GROUPS>(
             &lanes,
-            padding.get_or_insert_with(|| Padding::new(len)),
+            &padding,
             digests.as_chunks_mut().0.try_into().unwrap(),
         );
     }
@@ -172,7 +248,7 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; 32]]) {
     //     40 messages:  one group takes 32, then FourStreams takes the last 8
     let mut first = groups.len() * LANES;
     while first < out.len() {
-        let (pass, count) = Pass::next(out.len() - first, FOUR_STREAMS);
+        let (pass, count) = Pass::next(out.len() - first, streams);
         let digests = &mut out[first..first + count];
         let lanes = Lanes {
             input,
@@ -181,35 +257,44 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; 32]]) {
             count,
         };
         match pass {
-            Pass::Wide => {
-                hash_pass::<GROUPS>(
-                    &lanes,
-                    padding.get_or_insert_with(|| Padding::new(len)),
+            Pass::Wide => hash_pass::<GROUPS>(&lanes, &padding, digests),
+            Pass::Narrow => hash_pass::<1>(&lanes, &padding, digests),
+            // SAFETY: the passes pick four streams only when `streams` has SHA-NI, so the CPU has it.
+            Pass::FourStreams | Pass::Single => unsafe {
+                hash_serial(
+                    &input[first * len..][..count * len],
                     digests,
+                    pass == Pass::FourStreams,
                 );
-            }
-            Pass::Narrow => {
-                hash_pass::<1>(
-                    &lanes,
-                    padding.get_or_insert_with(|| Padding::new(len)),
-                    digests,
-                );
-            }
-            #[cfg(all(target_feature = "sha", target_feature = "sse4.1"))]
-            Pass::FourStreams => {
-                four_lane::hash_many::<ShaNi>(&input[first * len..][..count * len], digests);
-            }
-            #[cfg(not(all(target_feature = "sha", target_feature = "sse4.1")))]
-            Pass::FourStreams => {
-                unreachable!("four streams are only picked when the build has SHA-NI")
-            }
-            Pass::Single => {
-                for (message, digest) in (first..).zip(digests) {
-                    *digest = Sha256.hash_slice(&input[message * len..][..len]);
-                }
-            }
+            },
         }
         first += count;
+    }
+}
+
+/// Hash `out.len()` equal-length messages laid end to end in `messages`, without the registers.
+///
+/// Four SHA-NI streams take them when `four_streams` holds, and the scalar hasher otherwise.
+///
+/// # Safety
+///
+/// The running CPU has SHA-NI and SSE4.1 when `four_streams` holds.
+unsafe fn hash_serial(messages: &[u8], out: &mut [[u8; 32]], four_streams: bool) {
+    // An empty batch has nothing to hash, and would divide by zero below.
+    if out.is_empty() {
+        return;
+    }
+
+    if four_streams {
+        // SAFETY: the caller vouches for SHA-NI and SSE4.1.
+        unsafe { x86_64_sha_ni::hash_many(messages, out) };
+        return;
+    }
+
+    // Indexing rather than chunking also covers empty messages.
+    let len = messages.len() / out.len();
+    for (index, digest) in out.iter_mut().enumerate() {
+        *digest = Sha256.hash_slice(&messages[index * len..][..len]);
     }
 }
 
@@ -219,6 +304,7 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; 32]]) {
 ///
 /// Kept out of line so its stack buffers only cost a call that has messages left over.
 #[inline(never)]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn hash_pass<const G: usize>(lanes: &Lanes<'_>, padding: &Padding, out: &mut [[u8; 32]]) {
     let mut digests = [[[0u8; 32]; WIDTH]; G];
     hash_group::<G>(lanes, padding, &mut digests);
@@ -227,10 +313,19 @@ fn hash_pass<const G: usize>(lanes: &Lanes<'_>, padding: &Padding, out: &mut [[u
 
 /// Compress each 64-byte pair from the initial hash value, without padding.
 ///
+/// # Safety
+///
+/// The running CPU has AVX-512F and AVX-512BW, and SHA-NI with SSE4.1 unless `streams` is [`Streams::Off`].
+///
 /// # Panics
 ///
 /// Panics if the input and output counts differ.
-pub(crate) fn compress_many(inputs: &[[[u8; 32]; 2]], out: &mut [[u8; 32]]) {
+#[target_feature(enable = "avx512f,avx512bw")]
+pub(crate) unsafe fn compress_many(
+    inputs: &[[[u8; 32]; 2]],
+    out: &mut [[u8; 32]],
+    streams: Streams,
+) {
     assert_eq!(
         inputs.len(),
         out.len(),
@@ -259,20 +354,16 @@ pub(crate) fn compress_many(inputs: &[[[u8; 32]; 2]], out: &mut [[u8; 32]]) {
     // The blocks left over, in the same passes as the hash.
     let mut first = groups.len() * LANES;
     while first < out.len() {
-        let (pass, count) = Pass::next(out.len() - first, FOUR_STREAMS);
+        let (pass, count) = Pass::next(out.len() - first, streams);
         let digests = &mut out[first..first + count];
         let blocks = &blocks[first..first + count];
         match pass {
             Pass::Wide => compress_pass::<GROUPS>(blocks, digests),
             Pass::Narrow => compress_pass::<1>(blocks, digests),
-            #[cfg(all(target_feature = "sha", target_feature = "sse4.1"))]
-            Pass::FourStreams => {
-                four_lane::compress_many::<ShaNi>(&inputs[first..first + count], digests);
-            }
-            #[cfg(not(all(target_feature = "sha", target_feature = "sse4.1")))]
-            Pass::FourStreams => {
-                unreachable!("four streams are only picked when the build has SHA-NI")
-            }
+            // SAFETY: as in the hash, four streams mean the CPU has SHA-NI.
+            Pass::FourStreams => unsafe {
+                x86_64_sha_ni::compress_many(&inputs[first..first + count], digests);
+            },
             Pass::Single => {
                 for (input, digest) in inputs[first..first + count].iter().zip(digests) {
                     *digest = Sha256Compress.compress(*input);
@@ -289,6 +380,7 @@ pub(crate) fn compress_many(inputs: &[[[u8; 32]; 2]], out: &mut [[u8; 32]]) {
 ///
 /// Kept out of line so its stack buffers only cost a call that has blocks left over.
 #[inline(never)]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn compress_pass<const G: usize>(blocks: &[[u8; BLOCK_BYTES]], out: &mut [[u8; 32]]) {
     let last = blocks.len() - 1;
     let mut rows: Rows<'_, G> = [[&blocks[last]; WIDTH]; G];
@@ -302,6 +394,7 @@ fn compress_pass<const G: usize>(blocks: &[[u8; BLOCK_BYTES]], out: &mut [[u8; 3
 
 /// One block per lane of `G` groups, from the initial hash value.
 #[inline]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn compress_group<const G: usize>(rows: &Rows<'_, G>, out: &mut Digests<G>) {
     // No padding: the digest is the chaining value after this single block.
     let mut state = initial_state::<G>();
@@ -412,6 +505,7 @@ impl Lanes<'_> {
 }
 
 /// Hash the message of every lane of `G` groups.
+#[target_feature(enable = "avx512f,avx512bw")]
 fn hash_group<const G: usize>(lanes: &Lanes<'_>, padding: &Padding, out: &mut Digests<G>) {
     let mut state = initial_state::<G>();
 
@@ -451,6 +545,7 @@ fn hash_group<const G: usize>(lanes: &Lanes<'_>, padding: &Padding, out: &mut Di
 /// The lanes' offsets are found once, before the loop.
 /// So every load address is ready early, and more loads are in flight from memory.
 #[inline(never)]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn compress_whole_blocks<const G: usize>(lanes: &Lanes<'_>, state: &mut State<G>, blocks: usize) {
     let mut starts = [[0; WIDTH]; G];
     for (lane, start) in starts.as_flattened_mut().iter_mut().enumerate() {
@@ -474,6 +569,7 @@ fn compress_whole_blocks<const G: usize>(lanes: &Lanes<'_>, state: &mut State<G>
 
 /// The padded last block of every lane of `G` groups, holding its final `padding.tail` message bytes.
 #[inline(never)]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn last_block<const G: usize>(lanes: &Lanes<'_>, offset: usize, padding: &Padding) -> Block<G> {
     let tail = padding.tail;
 
@@ -488,9 +584,7 @@ fn last_block<const G: usize>(lanes: &Lanes<'_>, offset: usize, padding: &Paddin
     for (g, words) in block.iter_mut().enumerate() {
         let mut rows = [zero(); WIDTH];
         for (l, row) in rows.iter_mut().enumerate() {
-            // SAFETY:
-            // - the module's gate enables AVX-512BW, which byte-masked loads need;
-            // - the `tail` enabled bytes lie inside the batch, by the assertion above.
+            // SAFETY: the `tail` enabled bytes lie inside the batch, by the assertion above.
             *row = unsafe {
                 let start = lanes
                     .input
@@ -509,8 +603,7 @@ fn last_block<const G: usize>(lanes: &Lanes<'_>, offset: usize, padding: &Paddin
     //     tail = 6:  word 0 holds 4 message bytes, word 1 holds 2 and then 0x80
     let marker = splat(0x8000_0000 >> (8 * (tail % 4)));
     for group in &mut block {
-        // SAFETY: this module only compiles when the target enables AVX-512F.
-        group[tail / 4] = unsafe { _mm512_or_si512(group[tail / 4], marker) };
+        group[tail / 4] = _mm512_or_si512(group[tail / 4], marker);
 
         // The length joins this block only when eight bytes are left after the marker.
         if padding.shared.is_none() {
@@ -522,7 +615,8 @@ fn last_block<const G: usize>(lanes: &Lanes<'_>, offset: usize, padding: &Paddin
 }
 
 /// The initial hash value of FIPS 180-4 section 5.3.3, in every lane of `G` groups.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn initial_state<const G: usize>() -> State<G> {
     // Every lane of every group starts from the same eight words.
     let mut state = [[zero(); STATE_WORDS]; G];
@@ -535,57 +629,55 @@ fn initial_state<const G: usize>() -> State<G> {
 }
 
 /// The zero word in every lane.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn zero() -> __m512i {
-    // SAFETY: this module only compiles when the target enables AVX-512F.
-    unsafe { _mm512_setzero_si512() }
+    _mm512_setzero_si512()
 }
 
 /// The same word in every lane.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn splat(word: u32) -> __m512i {
-    // SAFETY: this module only compiles when the target enables AVX-512F.
-    unsafe { _mm512_set1_epi32(word as i32) }
+    _mm512_set1_epi32(word as i32)
 }
 
 /// Reverse the bytes of every 32-bit word.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn byte_swap(x: __m512i) -> __m512i {
     // SAFETY: `[u8; 16]` and `__m128i` are both 16 bytes and every bit pattern is valid.
-    //
-    // `vpshufb` on 512 bits needs AVX-512BW, which the module's gate requires.
-    unsafe {
-        let mask = core::mem::transmute::<[u8; 16], __m128i>(REVERSE_WORD_BYTES);
-        _mm512_shuffle_epi8(x, _mm512_broadcast_i32x4(mask))
-    }
+    let mask = unsafe { core::mem::transmute::<[u8; 16], __m128i>(REVERSE_WORD_BYTES) };
+
+    // `vpshufb` on 512 bits is what needs AVX-512BW.
+    _mm512_shuffle_epi8(x, _mm512_broadcast_i32x4(mask))
 }
 
 /// A 4 x 4 transpose inside every 128-bit block of four rows.
 ///
 /// Block `k` of output `j` holds word `4k + j` of rows `a`, `b`, `c` and `d`, in that order.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn transpose_blocks(a: __m512i, b: __m512i, c: __m512i, d: __m512i) -> [__m512i; 4] {
-    // SAFETY: this module only compiles when the target enables AVX-512F.
-    unsafe {
-        // Interleave 32-bit words of row pairs, then 64-bit pairs of those.
-        let ab_lo = _mm512_unpacklo_epi32(a, b);
-        let ab_hi = _mm512_unpackhi_epi32(a, b);
-        let cd_lo = _mm512_unpacklo_epi32(c, d);
-        let cd_hi = _mm512_unpackhi_epi32(c, d);
-        [
-            _mm512_unpacklo_epi64(ab_lo, cd_lo),
-            _mm512_unpackhi_epi64(ab_lo, cd_lo),
-            _mm512_unpacklo_epi64(ab_hi, cd_hi),
-            _mm512_unpackhi_epi64(ab_hi, cd_hi),
-        ]
-    }
+    // Interleave 32-bit words of row pairs, then 64-bit pairs of those.
+    let ab_lo = _mm512_unpacklo_epi32(a, b);
+    let ab_hi = _mm512_unpackhi_epi32(a, b);
+    let cd_lo = _mm512_unpacklo_epi32(c, d);
+    let cd_hi = _mm512_unpackhi_epi32(c, d);
+    [
+        _mm512_unpacklo_epi64(ab_lo, cd_lo),
+        _mm512_unpackhi_epi64(ab_lo, cd_lo),
+        _mm512_unpacklo_epi64(ab_hi, cd_hi),
+        _mm512_unpackhi_epi64(ab_hi, cd_hi),
+    ]
 }
 
 /// Load one block from each lane as the big-endian message words of `G` groups.
 ///
 /// - Row `l` of group `g` is one block of the message in lane `16g + l`.
 /// - Word `w` of group `g` holds word `w` of the messages in lanes `16g` to `16g + 15`.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn load_block<const G: usize>(rows: &Rows<'_, G>) -> Block<G> {
     let mut block = [[zero(); BLOCK_WORDS]; G];
     for (words, rows) in block.iter_mut().zip(rows) {
@@ -602,7 +694,8 @@ fn load_block<const G: usize>(rows: &Rows<'_, G>) -> Block<G> {
 /// Turn sixteen rows of one block each into sixteen big-endian message words.
 ///
 /// Word `w` of the result holds word `w` of every row, row `l` in lane `l`.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn transpose_rows(rows: [__m512i; WIDTH]) -> [__m512i; BLOCK_WORDS] {
     let mut r = rows;
     for row in &mut r {
@@ -618,20 +711,17 @@ fn transpose_rows(rows: [__m512i; WIDTH]) -> [__m512i; BLOCK_WORDS] {
     // Phase 2: word 4k + j gathers block k of u[0][j] to u[3][j], in row order.
     let mut words = [r[0]; BLOCK_WORDS];
     for j in 0..4 {
-        // SAFETY: this module only compiles when the target enables AVX-512F.
-        unsafe {
-            // Blocks 0 and 1, then blocks 2 and 3, of each pair of quads.
-            let q01_lo = _mm512_shuffle_i32x4::<0x44>(u[0][j], u[1][j]);
-            let q01_hi = _mm512_shuffle_i32x4::<0xEE>(u[0][j], u[1][j]);
-            let q23_lo = _mm512_shuffle_i32x4::<0x44>(u[2][j], u[3][j]);
-            let q23_hi = _mm512_shuffle_i32x4::<0xEE>(u[2][j], u[3][j]);
+        // Blocks 0 and 1, then blocks 2 and 3, of each pair of quads.
+        let q01_lo = _mm512_shuffle_i32x4::<0x44>(u[0][j], u[1][j]);
+        let q01_hi = _mm512_shuffle_i32x4::<0xEE>(u[0][j], u[1][j]);
+        let q23_lo = _mm512_shuffle_i32x4::<0x44>(u[2][j], u[3][j]);
+        let q23_hi = _mm512_shuffle_i32x4::<0xEE>(u[2][j], u[3][j]);
 
-            // Even blocks, then odd blocks, of each half.
-            words[j] = _mm512_shuffle_i32x4::<0x88>(q01_lo, q23_lo);
-            words[4 + j] = _mm512_shuffle_i32x4::<0xDD>(q01_lo, q23_lo);
-            words[8 + j] = _mm512_shuffle_i32x4::<0x88>(q01_hi, q23_hi);
-            words[12 + j] = _mm512_shuffle_i32x4::<0xDD>(q01_hi, q23_hi);
-        }
+        // Even blocks, then odd blocks, of each half.
+        words[j] = _mm512_shuffle_i32x4::<0x88>(q01_lo, q23_lo);
+        words[4 + j] = _mm512_shuffle_i32x4::<0xDD>(q01_lo, q23_lo);
+        words[8 + j] = _mm512_shuffle_i32x4::<0x88>(q01_hi, q23_hi);
+        words[12 + j] = _mm512_shuffle_i32x4::<0xDD>(q01_hi, q23_hi);
     }
     words
 }
@@ -639,7 +729,8 @@ fn transpose_rows(rows: [__m512i; WIDTH]) -> [__m512i; BLOCK_WORDS] {
 /// Write the big-endian digest of every lane of `G` groups.
 ///
 /// Two adjacent digests fill one 64-byte store, so eight stores cover a group.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f,avx512bw")]
 fn store_digests<const G: usize>(state: &State<G>, out: &mut Digests<G>) {
     for (state, out) in state.iter().zip(out) {
         let mut s = *state;
@@ -652,7 +743,7 @@ fn store_digests<const G: usize>(state: &State<G>, out: &mut Digests<G>) {
         let hi = transpose_blocks(s[4], s[5], s[6], s[7]);
 
         for j in [0, 2] {
-            // SAFETY: this module only compiles when the target enables AVX-512F.
+            // SAFETY: each store writes the 64 bytes of two adjacent digests of `out`.
             unsafe {
                 // Blocks 0 and 1 of each half, then blocks 2 and 3.
                 let pairs = [
@@ -687,6 +778,17 @@ mod tests {
 
     use super::*;
     use crate::tests::spec_compress;
+
+    // The kernel tests run AVX-512, so they skip a CPU without it.
+    cpufeatures::new!(cpu_avx512, "avx512f", "avx512bw");
+
+    /// Every policy, in the column order of the table in `Pass::next`.
+    const ALL_STREAMS: [Streams; 4] = [
+        Streams::Off,
+        Streams::FromThree,
+        Streams::FromFour,
+        Streams::Zen4,
+    ];
 
     /// A deterministic stream of words, so a failing case reproduces exactly.
     fn words(mut seed: u64) -> impl Iterator<Item = u32> {
@@ -728,6 +830,7 @@ mod tests {
     }
 
     /// The block kernel of `G` groups against the specification, from random chaining values.
+    #[target_feature(enable = "avx512f,avx512bw")]
     fn check_block_kernel<const G: usize>(seed: u64) -> Result<(), TestCaseError> {
         // Random chaining values and blocks, different in every lane.
         let mut stream = words(seed | 1);
@@ -760,6 +863,7 @@ mod tests {
     }
 
     /// The shared-block kernel of `G` groups against the specification, from random chaining values.
+    #[target_feature(enable = "avx512f,avx512bw")]
     fn check_shared_kernel<const G: usize>(seed: u64) -> Result<(), TestCaseError> {
         // Random chaining values in every lane, and one random block for all of them.
         let mut stream = words(seed | 1);
@@ -788,13 +892,13 @@ mod tests {
 
     #[test]
     fn every_pass_fits_its_lanes_and_the_passes_cover_the_batch() {
-        for four_streams in [false, true] {
+        for streams in ALL_STREAMS {
             for count in 1..=4 * LANES {
                 // Walk a batch of `count` messages the way the drivers do.
                 let mut left = count;
                 let mut passes = Vec::new();
                 while left > 0 {
-                    let (pass, take) = Pass::next(left, four_streams);
+                    let (pass, take) = Pass::next(left, streams);
 
                     // A pass takes at least one message, and no more than its lanes hold.
                     let capacity = match pass {
@@ -811,23 +915,91 @@ mod tests {
                 let wide = passes.iter().filter(|&&pass| pass == Pass::Wide).count();
                 assert!(wide >= count / LANES, "{count} messages");
 
-                // Only a build with SHA-NI uses four streams.
-                assert!(four_streams || !passes.contains(&Pass::FourStreams));
+                // Only a CPU with SHA-NI uses four streams.
+                assert!(streams.sha_ni() || !passes.contains(&Pass::FourStreams));
             }
         }
+    }
+
+    #[test]
+    fn each_cpu_takes_its_measured_crossovers() {
+        use Pass::{FourStreams as S, Narrow as N, Single as One, Wide as W};
+
+        // The first pass and its take for each leftover count, one column per policy.
+        //
+        // Rows sit on each side of every crossover in the table of `Pass::next`.
+        let table: [(usize, [(Pass, usize); 4]); 16] = [
+            (1, [(One, 1), (One, 1), (One, 1), (One, 1)]),
+            (2, [(N, 2), (One, 2), (One, 2), (One, 2)]),
+            (3, [(N, 3), (S, 3), (One, 3), (S, 3)]),
+            (4, [(N, 4), (S, 4), (S, 4), (S, 4)]),
+            (8, [(N, 8), (S, 8), (S, 8), (S, 8)]),
+            (9, [(N, 9), (N, 9), (N, 9), (S, 9)]),
+            (13, [(N, 13), (N, 13), (N, 13), (S, 13)]),
+            (14, [(N, 14), (N, 14), (N, 14), (N, 14)]),
+            (17, [(N, 16), (N, 16), (N, 16), (N, 16)]),
+            (18, [(W, 18), (N, 16), (N, 16), (N, 16)]),
+            (20, [(W, 20), (N, 16), (N, 16), (N, 16)]),
+            (21, [(W, 21), (W, 21), (W, 21), (S, 21)]),
+            (24, [(W, 24), (W, 24), (W, 24), (S, 24)]),
+            (25, [(W, 25), (W, 25), (W, 25), (W, 25)]),
+            (32, [(W, 32), (W, 32), (W, 32), (W, 32)]),
+            (33, [(W, 32), (W, 32), (W, 32), (W, 32)]),
+        ];
+        for (left, expected) in table {
+            for (streams, expected) in ALL_STREAMS.into_iter().zip(expected) {
+                assert_eq!(
+                    Pass::next(left, streams),
+                    expected,
+                    "{streams:?}, {left} left"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_zen4_sends_long_messages_to_the_streams() {
+        // A full batch of long messages is all streams on Zen 4, and register passes elsewhere.
+        let full = |len, streams| Pass::whole(4 * LANES, len, streams);
+        assert_eq!(
+            full(ZEN4_STREAMS_FROM_LEN, Streams::Zen4),
+            Some(Pass::FourStreams)
+        );
+        assert_eq!(full(ZEN4_STREAMS_FROM_LEN - 1, Streams::Zen4), None);
+        assert_eq!(full(ZEN4_STREAMS_FROM_LEN, Streams::FromThree), None);
+        assert_eq!(full(ZEN4_STREAMS_FROM_LEN, Streams::FromFour), None);
+        assert_eq!(full(ZEN4_STREAMS_FROM_LEN, Streams::Off), None);
+
+        // A batch too small for a register pass skips the padding, and a CPU without SHA-NI has none.
+        assert_eq!(Pass::whole(1, 64, Streams::Zen4), Some(Pass::Single));
+        assert_eq!(
+            Pass::whole(5, 64, Streams::FromThree),
+            Some(Pass::FourStreams)
+        );
+        assert_eq!(Pass::whole(5, 64, Streams::Off), None);
     }
 
     proptest! {
         #[test]
         fn the_block_kernel_matches_the_specification_from_any_chaining_value(seed in any::<u64>()) {
-            check_block_kernel::<1>(seed)?;
-            check_block_kernel::<GROUPS>(seed)?;
+            if cpu_avx512::get() {
+                // SAFETY: the CPU has AVX-512F and AVX-512BW.
+                unsafe {
+                    check_block_kernel::<1>(seed)?;
+                    check_block_kernel::<GROUPS>(seed)?;
+                }
+            }
         }
 
         #[test]
         fn the_shared_kernel_matches_the_specification_from_any_chaining_value(seed in any::<u64>()) {
-            check_shared_kernel::<1>(seed)?;
-            check_shared_kernel::<GROUPS>(seed)?;
+            if cpu_avx512::get() {
+                // SAFETY: the CPU has AVX-512F and AVX-512BW.
+                unsafe {
+                    check_shared_kernel::<1>(seed)?;
+                    check_shared_kernel::<GROUPS>(seed)?;
+                }
+            }
         }
     }
 }

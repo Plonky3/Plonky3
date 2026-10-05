@@ -55,11 +55,12 @@ fn bench_short_batches(c: &mut Criterion) {
 
     // Batches that do not fill whole groups of 32.
     //
+    // - 1 is a lone message, which no batched pass helps.
     // - 3, 8 and 16 fit one short pass.
     // - 20 takes sixteen in one pass, then four.
     // - 40 takes 32 in one pass, then eight.
     for len in [64, 4096] {
-        for count in [3, 8, 16, 20, 40] {
+        for count in [1, 3, 8, 16, 20, 40] {
             let input = random_bytes(len * count, 0x452821e6_38d01377 ^ (len * count) as u64);
             let mut out = vec![[0u8; 32]; count];
 
