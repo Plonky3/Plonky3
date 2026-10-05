@@ -84,6 +84,19 @@ fn the_official_unkeyed_vectors_match() {
     for (input, digest) in official_vectors(include_str!("test_vectors/unkeyed.txt")) {
         let len = input.len();
         assert_eq!(Blake2s256::hash(&input), digest, "{len} bytes");
+        assert_eq!(Blake2s256.hash_slice(&input), digest, "{len} bytes");
+        assert_eq!(
+            Blake2s256.hash_iter(input.iter().copied()),
+            digest,
+            "{len} bytes, iterator"
+        );
+
+        // One byte per piece: the streaming state must hold back every block boundary.
+        assert_eq!(
+            Blake2s256.hash_iter_slices(input.chunks(1)),
+            digest,
+            "{len} bytes, one byte per piece"
+        );
 
         // One full lane group plus one spare, so both the full and the padded group run.
         let count = LANES + 1;
@@ -177,44 +190,6 @@ fn an_empty_batch_reads_nothing() {
 fn a_ragged_batch_is_rejected() {
     let mut digests = vec![[0u8; DIGEST_BYTES]; 3];
     Blake2s256.hash_many(&fixture(10), &mut digests);
-}
-
-/// The official unkeyed BLAKE2s-256 vectors: digest `n` is of the bytes 0, 1, ..., n - 1.
-const KAT: &str = include_str!("../testdata/blake2s-kat.txt");
-
-/// Parse one lowercase hex digest.
-fn from_hex(line: &str) -> [u8; DIGEST_BYTES] {
-    core::array::from_fn(|i| u8::from_str_radix(&line[2 * i..][..2], 16).unwrap())
-}
-
-#[test]
-fn the_official_vectors_match_on_every_path() {
-    // Invariant: every one-message path gives the reference digest of the official vectors.
-    //
-    // Fixture state: 256 vectors, messages 0 to 255 bytes long, crossing four block boundaries.
-    let digests: Vec<_> = KAT
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .map(from_hex)
-        .collect();
-    assert_eq!(digests.len(), 256);
-    for (n, expected) in digests.iter().enumerate() {
-        let message: Vec<u8> = (0..n as u8).collect();
-        assert_eq!(&Blake2s256::hash(&message), expected, "{n} bytes");
-        assert_eq!(&Blake2s256.hash_slice(&message), expected, "{n} bytes");
-        assert_eq!(
-            &Blake2s256.hash_iter(message.iter().copied()),
-            expected,
-            "{n} bytes"
-        );
-
-        // One byte per piece: the streaming state must hold back every block boundary.
-        assert_eq!(
-            &Blake2s256.hash_iter_slices(message.chunks(1)),
-            expected,
-            "{n} bytes"
-        );
-    }
 }
 
 #[test]

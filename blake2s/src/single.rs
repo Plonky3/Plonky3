@@ -8,7 +8,9 @@
 //!
 //! Left alone, the compiler packs those four G into one vector register on some targets.
 //!
-//! That puts lane shuffles and extracts on the chain, so this code keeps the state scalar on every target.
+//! That puts lane shuffles and extracts on the chain, so on x86-64 this code keeps the state scalar.
+//!
+//! AArch64 keeps the state scalar without help.
 
 use crate::DIGEST_BYTES;
 use crate::params::{IV, PARAM_BLOCK_0, SIGMA};
@@ -198,7 +200,7 @@ fn g(v: &mut [u32; 16], [a, b, c, d]: [usize; 4], x: u32, y: u32) {
 /// Without BMI2, one `ror` is written out; with it, the compiler already emits the flag-free `rorx`.
 #[inline(always)]
 fn rotr<const N: u32>(x: u32) -> u32 {
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
+    #[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2"), not(miri)))]
     {
         let mut x = x;
         // SAFETY: one register rotate, which touches no memory and no stack.
@@ -207,7 +209,7 @@ fn rotr<const N: u32>(x: u32) -> u32 {
         }
         x
     }
-    #[cfg(not(all(target_arch = "x86_64", not(target_feature = "bmi2"))))]
+    #[cfg(not(all(target_arch = "x86_64", not(target_feature = "bmi2"), not(miri))))]
     x.rotate_right(N)
 }
 
@@ -216,10 +218,18 @@ fn rotr<const N: u32>(x: u32) -> u32 {
 /// The empty assembly emits no instruction.
 ///
 /// It only stops the vectoriser from moving the state into vector registers.
+///
+/// Only x86-64 needs it, since no AArch64 core measured gains from it.
+///
+/// Miri cannot run assembly, so it takes the plain path.
 #[inline(always)]
+#[cfg_attr(
+    not(all(target_arch = "x86_64", not(miri))),
+    allow(clippy::missing_const_for_fn)
+)]
 fn pin(v: &mut [u32; 16], [a, b, c, d]: [usize; 4]) {
     // SAFETY: the assembly is empty and names only these four registers.
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(miri)))]
     unsafe {
         core::arch::asm!(
             "/* {0:e} {1:e} {2:e} {3:e} */",
@@ -230,19 +240,7 @@ fn pin(v: &mut [u32; 16], [a, b, c, d]: [usize; 4]) {
             options(pure, nomem, nostack, preserves_flags),
         );
     }
-    // SAFETY: the assembly is empty and names only these four registers.
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        core::arch::asm!(
-            "/* {0:w} {1:w} {2:w} {3:w} */",
-            inout(reg) v[a],
-            inout(reg) v[b],
-            inout(reg) v[c],
-            inout(reg) v[d],
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(not(all(target_arch = "x86_64", not(miri))))]
     let _ = (v, a, b, c, d);
 }
 
