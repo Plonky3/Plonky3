@@ -526,12 +526,14 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
         // Blocks of 8 go through the extension-by-base dot product on stack arrays.
         const BLOCK: usize = 8;
 
-        // On NEON without a full block, one scalar sum per lane is cheaper than broadcasting.
+        // On NEON with at most 4 points, one scalar sum per lane is cheaper than broadcasting.
         //
         //     out[k] = sum_i scalars[i] * final_packed_evals[i][k]
         //
+        // Past 4 points, the broadcast path catches up on NEON too, even without a full block.
+        //
         // AVX2 and AVX-512 keep the broadcast path, which is faster there at every batch size.
-        if cfg!(target_arch = "aarch64") && scalars.len() < BLOCK {
+        if cfg!(target_arch = "aarch64") && scalars.len() <= 4 {
             for (k, out_val) in out.iter_mut().enumerate() {
                 let lane_sum = scalars
                     .iter()
@@ -1401,6 +1403,8 @@ mod tests {
         // The packed leaf sums the points in blocks of 8, then sweeps a tail.
         //
         //     num_points = 1  -> no full block
+        //     num_points = 4  -> no full block, largest batch of the NEON per-lane loop
+        //     num_points = 5  -> no full block, smallest batch of the NEON broadcast path
         //     num_points = 7  -> no full block, largest tail
         //     num_points = 8  -> one full block, no tail
         //     num_points = 9  -> one full block, tail of 1
@@ -1411,7 +1415,7 @@ mod tests {
         let num_variables = packing_width.ilog2() as usize + 2 + log_num_threads;
         let mut rng = SmallRng::seed_from_u64(0xB10C);
 
-        for num_points in [1, 7, 8, 9, 23] {
+        for num_points in [1, 4, 5, 7, 8, 9, 23] {
             let eval_points: Vec<Vec<F>> = (0..num_points)
                 .map(|_| (0..num_variables).map(|_| rng.random()).collect())
                 .collect();
