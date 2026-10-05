@@ -1896,7 +1896,7 @@ mod tests {
                 draws: draws.clone(),
             },
         ));
-        probe.arm(&pcs, |pcs| pcs.rng.try_lock().is_some());
+        probe.arm(&pcs, |pcs| !pcs.rng.is_locked());
         (pcs, probe, draws)
     }
 

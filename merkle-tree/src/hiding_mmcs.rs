@@ -459,7 +459,7 @@ mod tests {
             0,
             StdRng::seed_from_u64(0),
         ));
-        probe.arm(&mmcs, |mmcs| mmcs.rng.try_lock().is_some());
+        probe.arm(&mmcs, |mmcs| !mmcs.rng.is_locked());
 
         // Tall enough that the build hashes rows across several rayon tasks.
         let mat = RowMajorMatrix::<F>::rand(&mut rng, 1 << 10, 8);
