@@ -13,7 +13,8 @@ use alloc::vec::Vec;
 
 use p3_symmetric::CryptographicHasher;
 
-use crate::{Sha3_256Hash, VECTOR_LEN};
+use crate::Sha3_256Hash;
+use crate::batch::{LANES, SHA3_DOMAIN, supported};
 
 /// One known-answer vector: a message and its expected digest.
 struct Vector {
@@ -78,11 +79,12 @@ fn check(vector: &Vector) {
     Sha3_256Hash.hash_many(&vector.msg, &mut one);
     assert_eq!(one[0], vector.md, "len {len}, batch of 1");
 
-    // A batch one message past a full lane group fills every lane, then leaves a short group.
+    // A batch one message past a full group of the widest backend fills every lane.
+    // It then leaves a short group:
     //
     //     lanes:  [ m | m | ... | m ]  [ m | pad ... ]
-    //              VECTOR_LEN            1
-    let count = VECTOR_LEN + 1;
+    //              LANES                 1
+    let count = LANES + 1;
     let batch = vector.msg.repeat(count);
     let mut digests = vec![[0u8; 32]; count];
     Sha3_256Hash.hash_many(&batch, &mut digests);
@@ -90,6 +92,16 @@ fn check(vector: &Vector) {
         digests.iter().all(|d| *d == vector.md),
         "len {len}, batch of {count}"
     );
+
+    // The same batch on every backend the CPU supports.
+    for kernel in supported() {
+        let mut digests = vec![[0u8; 32]; count];
+        kernel.hash_many(SHA3_DOMAIN, &batch, len, &mut digests);
+        assert!(
+            digests.iter().all(|d| *d == vector.md),
+            "{kernel:?}, len {len}, batch of {count}"
+        );
+    }
 }
 
 #[test]
