@@ -173,12 +173,28 @@ where
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
         let corr = (log_h - log_num_par_rows) % LAYERS_PER_GROUP;
-        let extra_layers: Vec<&[DitButterfly<F>]> = root_table
-            [log_num_par_rows..log_num_par_rows + corr]
-            .iter()
-            .map(|slice| unsafe { as_base_slice::<DitButterfly<F>, F>(slice) }) // Safe as DitButterfly is #[repr(transparent)]
-            .collect();
-        dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dit);
+        match corr {
+            0 => {}
+            1 => {
+                let extra_layers =
+                    [
+                        unsafe {
+                            as_base_slice::<DitButterfly<F>, F>(&root_table[log_num_par_rows])
+                        },
+                    ]; // Safe as DitButterfly is #[repr(transparent)]
+                dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dit);
+            }
+            2 => {
+                let extra_layers = [
+                    unsafe { as_base_slice::<DitButterfly<F>, F>(&root_table[log_num_par_rows]) }, // Safe as DitButterfly is #[repr(transparent)]
+                    unsafe {
+                        as_base_slice::<DitButterfly<F>, F>(&root_table[log_num_par_rows + 1])
+                    }, // Safe as DitButterfly is #[repr(transparent)]
+                ];
+                dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dit);
+            }
+            _ => unreachable!("The number of extra layers must be 0, 1 or 2"),
+        }
 
         // Once the blocks are small enough, we can split the matrix
         // into chunks of size `chunk_size` and process them in parallel.
@@ -235,12 +251,28 @@ where
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the initial layers separately.
         let corr = (log_h - log_num_par_rows) % LAYERS_PER_GROUP;
-        let extra_layers: Vec<&[DifButterfly<F>]> = root_table
-            [log_num_par_rows..log_num_par_rows + corr]
-            .iter()
-            .map(|slice| unsafe { as_base_slice::<DifButterfly<F>, F>(slice) }) // Safe as DifButterfly is #[repr(transparent)]
-            .collect();
-        dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dif);
+        match corr {
+            0 => {}
+            1 => {
+                let extra_layers =
+                    [
+                        unsafe {
+                            as_base_slice::<DifButterfly<F>, F>(&root_table[log_num_par_rows])
+                        },
+                    ]; // Safe as DifButterfly is #[repr(transparent)]
+                dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dif);
+            }
+            2 => {
+                let extra_layers = [
+                    unsafe { as_base_slice::<DifButterfly<F>, F>(&root_table[log_num_par_rows]) }, // Safe as DifButterfly is #[repr(transparent)]
+                    unsafe {
+                        as_base_slice::<DifButterfly<F>, F>(&root_table[log_num_par_rows + 1])
+                    }, // Safe as DifButterfly is #[repr(transparent)]
+                ];
+                dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dif);
+            }
+            _ => unreachable!("The number of extra layers must be 0, 1 or 2"),
+        }
 
         // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
@@ -320,12 +352,29 @@ where
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
         let corr = (log_h - num_inner_dit_layers) % LAYERS_PER_GROUP;
-        let extra_layers: Vec<&[DitButterfly<F>]> = inv_root_table
-            [num_inner_dit_layers..num_inner_dit_layers + corr]
-            .iter()
-            .map(|slice| unsafe { as_base_slice::<DitButterfly<F>, F>(slice) }) // Safe as DitButterfly is #[repr(transparent)]
-            .collect();
-        dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dit);
+        match corr {
+            0 => {}
+            1 => {
+                let extra_layers = [unsafe {
+                    as_base_slice::<DitButterfly<F>, F>(&inv_root_table[num_inner_dit_layers])
+                }]; // Safe as DitButterfly is #[repr(transparent)]
+                dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dit);
+            }
+            2 => {
+                let extra_layers = [
+                    unsafe {
+                        as_base_slice::<DitButterfly<F>, F>(&inv_root_table[num_inner_dit_layers])
+                    }, // Safe as DitButterfly is #[repr(transparent)]
+                    unsafe {
+                        as_base_slice::<DitButterfly<F>, F>(
+                            &inv_root_table[num_inner_dit_layers + 1],
+                        )
+                    }, // Safe as DitButterfly is #[repr(transparent)]
+                ];
+                dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dit);
+            }
+            _ => unreachable!("The number of extra layers must be 0, 1 or 2"),
+        }
 
         // Now do all the inner layers at once. This does the final `log_num_par_rows` of
         // the initial transformation, then copies the values of mat to output, scales then
@@ -345,12 +394,27 @@ where
 
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
-        let extra_layers: Vec<&[DifButterfly<F>]> = root_table
-            [num_inner_dif_layers..num_inner_dif_layers + corr]
-            .iter()
-            .map(|slice| unsafe { as_base_slice::<DifButterfly<F>, F>(slice) }) // Safe as DifButterfly is #[repr(transparent)]
-            .collect();
-        dft_layer_par_extra_layers(&mut out.as_view_mut(), &extra_layers, multi_layer_dif);
+        match corr {
+            0 => {}
+            1 => {
+                let extra_layers = [unsafe {
+                    as_base_slice::<DifButterfly<F>, F>(&root_table[num_inner_dif_layers])
+                }]; // Safe as DifButterfly is #[repr(transparent)]
+                dft_layer_par_extra_layers(&mut out.as_view_mut(), &extra_layers, multi_layer_dif);
+            }
+            2 => {
+                let extra_layers = [
+                    unsafe {
+                        as_base_slice::<DifButterfly<F>, F>(&root_table[num_inner_dif_layers])
+                    }, // Safe as DifButterfly is #[repr(transparent)]
+                    unsafe {
+                        as_base_slice::<DifButterfly<F>, F>(&root_table[num_inner_dif_layers + 1])
+                    }, // Safe as DifButterfly is #[repr(transparent)]
+                ];
+                dft_layer_par_extra_layers(&mut out.as_view_mut(), &extra_layers, multi_layer_dif);
+            }
+            _ => unreachable!("The number of extra layers must be 0, 1 or 2"),
+        }
 
         // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
@@ -623,16 +687,23 @@ fn dft_layer_par_double<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
         .for_each(|(ind, block)| {
             // Split each block into four quarters. Each quarter will be further split into
             // sub-chunks processed in parallel.
-            let chunk_par_iters_0 = block
-                .chunks_exact_mut(quarter_outer_block_size)
-                .map(|chunk| chunk.par_chunks_mut(inner_chunk_size))
-                .collect::<Vec<_>>();
-            let chunk_par_iters_1 = zip_par_iter_vec(chunk_par_iters_0);
-            chunk_par_iters_1.into_iter().tuples().for_each(|(hi, lo)| {
-                hi.zip(lo).for_each(|chunks| {
-                    multi_butterfly.apply_2_layers(chunks, ind, twiddles_small, twiddles_large);
+            let (chunk_0, rest) = block.split_at_mut(quarter_outer_block_size);
+            let (chunk_1, rest) = rest.split_at_mut(quarter_outer_block_size);
+            let (chunk_2, chunk_3) = rest.split_at_mut(quarter_outer_block_size);
+
+            chunk_0
+                .par_chunks_mut(inner_chunk_size)
+                .zip(chunk_1.par_chunks_mut(inner_chunk_size))
+                .zip(chunk_2.par_chunks_mut(inner_chunk_size))
+                .zip(chunk_3.par_chunks_mut(inner_chunk_size))
+                .for_each(|(((chunk_0, chunk_1), chunk_2), chunk_3)| {
+                    multi_butterfly.apply_2_layers(
+                        ((chunk_0, chunk_1), (chunk_2, chunk_3)),
+                        ind,
+                        twiddles_small,
+                        twiddles_large,
+                    );
                 });
-            });
         });
 }
 
@@ -677,23 +748,40 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
         .for_each(|(ind, block)| {
             // Split each block into eight equal parts. Each part will be further split into
             // sub-chunks processed in parallel.
-            let chunk_par_iters_0 = block
-                .chunks_exact_mut(eighth_outer_block_size)
-                .map(|chunk| chunk.par_chunks_mut(inner_chunk_size))
-                .collect::<Vec<_>>();
-            let chunk_par_iters_1 = zip_par_iter_vec(chunk_par_iters_0);
-            let chunk_par_iters_2 = zip_par_iter_vec(chunk_par_iters_1);
-            chunk_par_iters_2.into_iter().tuples().for_each(|(hi, lo)| {
-                hi.zip(lo).for_each(|chunks| {
-                    multi_butterfly.apply_3_layers(
-                        chunks,
-                        ind,
-                        twiddles_small,
-                        twiddles_med,
-                        twiddles_large,
-                    );
-                });
-            });
+            let (chunk_0, rest) = block.split_at_mut(eighth_outer_block_size);
+            let (chunk_1, rest) = rest.split_at_mut(eighth_outer_block_size);
+            let (chunk_2, rest) = rest.split_at_mut(eighth_outer_block_size);
+            let (chunk_3, rest) = rest.split_at_mut(eighth_outer_block_size);
+            let (chunk_4, rest) = rest.split_at_mut(eighth_outer_block_size);
+            let (chunk_5, rest) = rest.split_at_mut(eighth_outer_block_size);
+            let (chunk_6, chunk_7) = rest.split_at_mut(eighth_outer_block_size);
+
+            chunk_0
+                .par_chunks_mut(inner_chunk_size)
+                .zip(chunk_1.par_chunks_mut(inner_chunk_size))
+                .zip(chunk_2.par_chunks_mut(inner_chunk_size))
+                .zip(chunk_3.par_chunks_mut(inner_chunk_size))
+                .zip(chunk_4.par_chunks_mut(inner_chunk_size))
+                .zip(chunk_5.par_chunks_mut(inner_chunk_size))
+                .zip(chunk_6.par_chunks_mut(inner_chunk_size))
+                .zip(chunk_7.par_chunks_mut(inner_chunk_size))
+                .for_each(
+                    |(
+                        ((((((chunk_0, chunk_1), chunk_2), chunk_3), chunk_4), chunk_5), chunk_6),
+                        chunk_7,
+                    )| {
+                        multi_butterfly.apply_3_layers(
+                            (
+                                ((chunk_0, chunk_1), (chunk_2, chunk_3)),
+                                ((chunk_4, chunk_5), (chunk_6, chunk_7)),
+                            ),
+                            ind,
+                            twiddles_small,
+                            twiddles_med,
+                            twiddles_large,
+                        );
+                    },
+                );
         });
 }
 
@@ -869,23 +957,6 @@ fn estimate_num_rows_in_l1<T: Sized>(height: usize, width: usize) -> usize {
     (workload_size::<T>() / width)
         .next_power_of_two()
         .min(height) // Ensure we don't exceed the height of the matrix.
-}
-
-/// Given a vector of parallel iterators, zip all pairs together.
-///
-/// This lets us simulate the izip!() macro but for our possibly parallel iterators.
-///
-/// This function assumes that the input vector has an even number of elements. If
-/// it is given an odd number of elements, the last element will be ignored.
-#[inline]
-fn zip_par_iter_vec<I: IndexedParallelIterator>(
-    in_vec: Vec<I>,
-) -> Vec<impl IndexedParallelIterator<Item = (I::Item, I::Item)>> {
-    in_vec
-        .into_iter()
-        .tuples()
-        .map(|(hi, lo)| hi.zip(lo))
-        .collect::<Vec<_>>()
 }
 
 trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
