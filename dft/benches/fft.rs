@@ -22,6 +22,7 @@ fn bench_fft(c: &mut Criterion) {
     const BATCH_SIZE: usize = 256;
     type BBExt = BinomialExtensionField<BabyBear, 5>;
 
+    fft_small_batch_widths(c);
     fft::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
@@ -63,6 +64,29 @@ fn bench_fft(c: &mut Criterion) {
     fft_algebra::<BabyBear, BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+}
+
+fn fft_small_batch_widths(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fft_small_batch_widths/babybear/radix2_dft_small_batch");
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(1);
+    let dft = Radix2DFTSmallBatch::<BabyBear>::default();
+    let n = 1 << 16;
+    for width in [1, 2, 4, 8, 16] {
+        let messages = RowMajorMatrix::rand(&mut rng, n, width);
+        group.bench_with_input(
+            BenchmarkId::new(format!("width={width}"), n),
+            &messages,
+            |b, messages| {
+                b.iter_batched(
+                    || messages.clone(),
+                    |m| dft.dft_batch(m),
+                    BatchSize::LargeInput,
+                );
+            },
+        );
+    }
 }
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
