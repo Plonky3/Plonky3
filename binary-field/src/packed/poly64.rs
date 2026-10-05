@@ -26,6 +26,8 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::gf64::{self as lanes, Reg, WIDTH_64};
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+use super::x86_64::pairs;
 use crate::clmul::wide::{Lanes64, Wide};
 use crate::gf2::characteristic_two_methods;
 use crate::{Gf2, Poly64};
@@ -155,7 +157,20 @@ impl PrimeCharacteristicRing for PackedPoly64 {
     /// Reduction is linear, so the whole sum reduces once.
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        // Two carryless multiplies and two exclusive ors per term, nothing else.
+        // Two terms per 512-bit multiply, where the target has one.
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+        let [sum] = pairs::sum_of_products(
+            u,
+            v,
+            |a, b| {
+                let join = |x: &[Self; 2]| pairs::join(x[0].to_vector(), x[1].to_vector());
+                [Wide::mul(join(a), join(b))]
+            },
+            |a, b| [Wide::mul(a.to_vector(), b.to_vector())],
+        );
+
+        // Otherwise two carryless multiplies and two exclusive ors per term, nothing else.
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
         let sum = u.iter().zip(v).fold(Wide::zero(), |sum, (a, b)| {
             sum.xor(Wide::mul(a.to_vector(), b.to_vector()))
         });
@@ -279,6 +294,43 @@ mod tests {
                 lanes_agree(pa.square(), |l| lane(a, l).square()).unwrap();
             }
         }
+    }
+
+    /// The dot product of the first `N` corner terms, lane by lane against the scalar sum.
+    fn check_dot_product<const N: usize>() {
+        // Term t holds corner (t + l) in lane l, its partner corner (2t + l + 1).
+        //
+        // So every term, and every lane of a term, differs from its neighbours.
+        let term = |t: usize, step: usize, offset: usize| {
+            PackedValue::from_fn(|l| Poly64::new(SPECIAL[(step * t + l + offset) % SPECIAL.len()]))
+        };
+        let u: [PackedPoly64; N] = core::array::from_fn(|t| term(t, 1, 0));
+        let v: [PackedPoly64; N] = core::array::from_fn(|t| term(t, 2, 1));
+
+        // One product per term, each reduced on its own.
+        let expected = |l: usize| {
+            u.iter()
+                .zip(&v)
+                .map(|(a, b)| a.as_slice()[l] * b.as_slice()[l])
+                .sum()
+        };
+        lanes_agree(PackedPoly64::dot_product(&u, &v), expected).unwrap();
+    }
+
+    #[test]
+    fn every_dot_product_length_matches_the_sum_of_products() {
+        // Wide builds pair the terms, so the lengths cover every split:
+        //
+        // - 0: the empty sum;
+        // - 1: no pair, only the leftover term;
+        // - 2 and 4: pairs only;
+        // - 3 and 5: pairs and a leftover term.
+        check_dot_product::<0>();
+        check_dot_product::<1>();
+        check_dot_product::<2>();
+        check_dot_product::<3>();
+        check_dot_product::<4>();
+        check_dot_product::<5>();
     }
 
     proptest! {

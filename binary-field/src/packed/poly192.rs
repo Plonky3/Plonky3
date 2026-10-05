@@ -29,6 +29,8 @@ use rand::distr::{Distribution, StandardUniform};
 
 use super::gf64::{self as lanes, Reg, WIDTH_64};
 use super::poly64::PackedPoly64;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+use super::x86_64::pairs;
 use crate::clmul::wide::{Lanes64, Wide, cubic_mul, cubic_mul_base, cubic_square};
 use crate::clmul::{poly_dot_192_by_64, raw_product_64, reduce_64};
 use crate::{Gf2, Poly64, Poly192, Poly192Unreduced};
@@ -573,7 +575,20 @@ impl PrimeCharacteristicRing for PackedPoly192 {
     /// Reduction is linear, so the whole sum reduces its three coordinates once.
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        // Accumulate the folded, unreduced coordinates of every term.
+        // Two terms per 512-bit multiply, where the target has one.
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+        let sum = pairs::sum_of_products(
+            u,
+            v,
+            |a, b| {
+                let join = |x: &[Self; 2]| pairs::join_all(x[0].to_vectors(), x[1].to_vectors());
+                cubic_mul(join(a), join(b))
+            },
+            |a, b| cubic_mul(a.to_vectors(), b.to_vectors()),
+        );
+
+        // Otherwise accumulate the folded, unreduced coordinates of every term.
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
         let sum = u.iter().zip(v).fold([Wide::zero(); DEGREE], |sum, (a, b)| {
             let product = cubic_mul(a.to_vectors(), b.to_vectors());
             array::from_fn(|i| sum[i].xor(product[i]))
@@ -597,7 +612,20 @@ impl Algebra<PackedPoly64> for PackedPoly192 {
     where
         PackedPoly64: Dup,
     {
-        // Accumulate three unreduced coordinate products per term.
+        // Two terms per 512-bit multiply, where the target has one.
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+        let sum = pairs::sum_of_products(
+            a,
+            f,
+            |x, k| {
+                let x = pairs::join_all(x[0].to_vectors(), x[1].to_vectors());
+                cubic_mul_base(x, pairs::join(k[0].to_vector(), k[1].to_vector()))
+            },
+            |x, k| cubic_mul_base(x.to_vectors(), k.to_vector()),
+        );
+
+        // Otherwise accumulate three unreduced coordinate products per term.
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
         let sum = a.iter().zip(f).fold([Wide::zero(); DEGREE], |sum, (x, k)| {
             let product = cubic_mul_base(x.to_vectors(), k.to_vector());
             array::from_fn(|i| sum[i].xor(product[i]))
@@ -774,6 +802,70 @@ mod tests {
                     .collect::<Vec<_>>()
             );
         }
+    }
+
+    /// Both dot products of the first `N` corner terms, lane by lane against the scalar sums.
+    fn check_dot_products<const N: usize>() {
+        // Term t takes corner (step t + lane + 2i + offset) in coordinate i.
+        //
+        // So every term, every lane and every coordinate differs from its neighbours.
+        let corner = |t: usize, step: usize, offset: usize, lane: usize, i: usize| {
+            CORNERS[(step * t + lane + 2 * i + offset) % CORNERS.len()]
+        };
+        let term = |t: usize, step: usize, offset: usize| {
+            elements(core::array::from_fn(|lane| {
+                core::array::from_fn(|i| corner(t, step, offset, lane, i))
+            }))
+        };
+        let x: [Vec<Poly192>; N] = core::array::from_fn(|t| term(t, 1, 0));
+        let y: [Vec<Poly192>; N] = core::array::from_fn(|t| term(t, 2, 1));
+        let k: [Vec<Poly64>; N] = core::array::from_fn(|t| {
+            (0..WIDTH_64)
+                .map(|lane| Poly64::new(corner(t, 3, 2, lane, 0)))
+                .collect()
+        });
+
+        let px: [PackedPoly192; N] = core::array::from_fn(|t| packed(&x[t]));
+        let py: [PackedPoly192; N] = core::array::from_fn(|t| packed(&y[t]));
+        let pk: [PackedPoly64; N] =
+            core::array::from_fn(|t| *<PackedPoly64 as p3_field::PackedValue>::from_slice(&k[t]));
+
+        // One product per term, each reduced on its own, lane by lane.
+        let dot: Vec<Poly192> = (0..WIDTH_64)
+            .map(|l| (0..N).map(|t| x[t][l] * y[t][l]).sum())
+            .collect();
+        let mixed: Vec<Poly192> = (0..WIDTH_64)
+            .map(|l| (0..N).map(|t| x[t][l] * k[t][l]).sum())
+            .collect();
+
+        assert_eq!(
+            unpacked(PackedPoly192::dot_product(&px, &py)),
+            dot,
+            "N = {N}"
+        );
+        assert_eq!(
+            unpacked(
+                <PackedPoly192 as p3_field::Algebra<PackedPoly64>>::mixed_dot_product(&px, &pk)
+            ),
+            mixed,
+            "N = {N}"
+        );
+    }
+
+    #[test]
+    fn every_dot_product_length_matches_the_sum_of_products() {
+        // Wide builds pair the terms, so the lengths cover every split:
+        //
+        // - 0: the empty sum;
+        // - 1: no pair, only the leftover term;
+        // - 2 and 4: pairs only;
+        // - 3 and 5: pairs and a leftover term.
+        check_dot_products::<0>();
+        check_dot_products::<1>();
+        check_dot_products::<2>();
+        check_dot_products::<3>();
+        check_dot_products::<4>();
+        check_dot_products::<5>();
     }
 
     #[test]
