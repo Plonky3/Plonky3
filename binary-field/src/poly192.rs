@@ -25,10 +25,17 @@ use p3_field::{
     Algebra, AlgebraIdentity, BasedVectorSpace, ExtensionField, Field, Packable,
     PrimeCharacteristicRing, RawDataSerializable,
 };
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    any(target_feature = "avx2", target_feature = "avx512f")
+#[cfg(not(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 )))]
 use p3_field::{PackedFieldExtension, Powers};
 use rand::Rng;
@@ -494,10 +501,17 @@ impl ExtensionField<Poly64> for Poly192 {
 
 /// One element per vector, so every lane index is zero.
 // Only where no register widens the coefficient field's multiply.
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    any(target_feature = "avx2", target_feature = "avx512f")
+#[cfg(not(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 )))]
 impl PackedFieldExtension<Poly64, Self> for Poly192 {
     #[inline]

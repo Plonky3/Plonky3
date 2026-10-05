@@ -1,10 +1,14 @@
-//! The packing of `GF(2^64)`, one element per quadword of a wide register.
+//! The packing of `GF(2^64)`, one element per quadword of a register.
 //!
-//! Four elements per 256-bit register, with or without `AVX-512`.
+//! Four elements per 256-bit register on `x86_64`, with or without `AVX-512`.
 //!
-//! A product is two carryless multiplies for the whole register, one per quadword parity.
+//! Two elements per 128-bit register on AArch64.
 //!
-//! The reduction is shifts and one byte shuffle, so it never competes for the multiplier.
+//! A product is two carryless multiplies per 128-bit lane, one per quadword parity.
+//!
+//! On `x86_64` the reduction is shifts and one byte shuffle, so it never competes for the multiplier.
+//!
+//! On AArch64 it is two carryless multiplies by the modulus tail, as cheap there as an exclusive or.
 
 use core::iter::{Product, Sum};
 use core::mem::transmute;
@@ -21,7 +25,7 @@ use p3_field::{
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
-use super::lanes::gf64::{self as lanes, Reg, WIDTH_64};
+use super::gf64::{self as lanes, Reg, WIDTH_64};
 use crate::clmul::wide::{Lanes64, Wide};
 use crate::gf2::characteristic_two_methods;
 use crate::{Gf2, Poly64};
@@ -31,12 +35,12 @@ use crate::{Gf2, Poly64};
 // Needed to make the transmutes below sound.
 #[repr(transparent)]
 #[must_use]
-pub struct PackedPoly64(pub(super) [Poly64; WIDTH_64]);
+pub struct PackedPoly64([Poly64; WIDTH_64]);
 
 impl PackedPoly64 {
     /// The register holding these elements.
     #[inline(always)]
-    pub(super) fn to_vector(self) -> Reg {
+    pub(crate) fn to_vector(self) -> Reg {
         // SAFETY: an element is `repr(transparent)` over `u64`.
         //
         // The array is then one register's worth of contiguous quadwords, its own layout.
@@ -47,7 +51,7 @@ impl PackedPoly64 {
 
     /// The elements held in a register.
     #[inline(always)]
-    pub(super) fn from_vector(vector: Reg) -> Self {
+    pub(crate) fn from_vector(vector: Reg) -> Self {
         // SAFETY: the inverse of the transmute above.
         //
         // Every bit pattern is a valid element, so no value can be out of range.
@@ -199,13 +203,13 @@ unsafe impl PackedField for PackedPoly64 {
     type Scalar = Poly64;
 }
 
-// SAFETY: the width is four, a power of two.
+// SAFETY: the width is a power of two.
 unsafe impl PackedFieldPow2 for PackedPoly64 {
     /// # Panics
     /// Panics if the block length does not divide the width.
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        // Blocks of one, two or four quadwords swap between the two registers.
+        // Blocks of any power-of-two number of quadwords swap between the two registers.
         let (a, b) = lanes::interleave_64(self.to_vector(), other.to_vector(), block_len);
         (Self::from_vector(a), Self::from_vector(b))
     }
@@ -217,7 +221,7 @@ mod tests {
     use p3_field_testing::test_packed_binary_field;
     use proptest::prelude::*;
 
-    use super::super::lanes::gf64::WIDTH_64;
+    use crate::packed::gf64::WIDTH_64;
     use crate::{PackedPoly64, Poly64};
 
     /// The bit patterns a random search is unlikely to reach.

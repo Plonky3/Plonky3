@@ -11,12 +11,26 @@ use super::{clmul_64x64, reduce_64};
 #[inline]
 pub(crate) fn poly_mul_192(a: &[u64; 3], b: &[u64; 3]) -> [u64; 3] {
     // Two coordinates per vector register, where the carryless multiply is an instruction.
-    #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+    #[cfg(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ))]
     {
-        super::x86_64::poly_mul_192(a, b)
+        super::register::poly_mul_192::<super::Register>(a, b)
     }
     // Otherwise six 64-bit products from the target's own carryless multiply.
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    )))]
     {
         composed_mul_192(a, b)
     }
@@ -27,11 +41,25 @@ pub(crate) fn poly_mul_192(a: &[u64; 3], b: &[u64; 3]) -> [u64; 3] {
 #[inline]
 pub(crate) fn poly_square_192(a: &[u64; 3]) -> [u64; 3] {
     // Same split between the vector backend and the composed route as the product.
-    #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+    #[cfg(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ))]
     {
-        super::x86_64::poly_square_192(a)
+        super::register::poly_square_192::<super::Register>(a)
     }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    )))]
     {
         composed_square_192(a)
     }
@@ -42,11 +70,25 @@ pub(crate) fn poly_square_192(a: &[u64; 3]) -> [u64; 3] {
 #[inline]
 pub(crate) fn poly_mul_192_by_64(a: &[u64; 3], k: &u64) -> [u64; 3] {
     // Same split between the vector backend and the composed route as the product.
-    #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+    #[cfg(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ))]
     {
-        super::x86_64::poly_mul_192_by_64(a, k)
+        super::register::poly_mul_192_by_64::<super::Register>(a, k)
     }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    )))]
     {
         composed_mul_192_by_64(a, k)
     }
@@ -58,11 +100,25 @@ pub(crate) fn poly_dot_192<'a>(
     pairs: impl Iterator<Item = (&'a [u64; 3], &'a [u64; 3])>,
 ) -> [u64; 3] {
     // Same split between the vector backend and the composed route as the product.
-    #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+    #[cfg(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ))]
     {
-        super::x86_64::poly_dot_192(pairs)
+        super::register::poly_dot_192::<super::Register>(pairs)
     }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    )))]
     {
         composed_dot_192(pairs)
     }
@@ -76,11 +132,25 @@ pub(crate) fn poly_dot_192_by_64<'a>(
     pairs: impl Iterator<Item = (&'a [u64; 3], &'a u64)>,
 ) -> [u64; 3] {
     // Same split between the vector backend and the composed route as the product.
-    #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+    #[cfg(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ))]
     {
-        super::x86_64::poly_dot_192_by_64(pairs)
+        super::register::poly_dot_192_by_64::<super::Register>(pairs)
     }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    )))]
     {
         composed_dot_192_by_64(pairs)
     }
@@ -119,7 +189,14 @@ fn mul_unreduced(&[a0, a1, a2]: &[u64; 3], &[b0, b1, b2]: &[u64; 3]) -> [u128; 3
 ///
 /// Compiled everywhere, so its tests run even where a backend supersedes it.
 #[cfg_attr(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ),
     allow(dead_code)
 )]
 #[inline]
@@ -130,7 +207,14 @@ fn composed_mul_192(a: &[u64; 3], b: &[u64; 3]) -> [u64; 3] {
 
 /// Squaring assembled the same way.
 #[cfg_attr(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ),
     allow(dead_code)
 )]
 #[inline]
@@ -150,7 +234,14 @@ fn composed_square_192(&[a0, a1, a2]: &[u64; 3]) -> [u64; 3] {
 
 /// Scaling by a coefficient assembled the same way.
 #[cfg_attr(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ),
     allow(dead_code)
 )]
 #[inline]
@@ -161,7 +252,14 @@ fn composed_mul_192_by_64(a: &[u64; 3], &k: &u64) -> [u64; 3] {
 
 /// A dot product assembled the same way.
 #[cfg_attr(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ),
     allow(dead_code)
 )]
 #[inline]
@@ -178,7 +276,14 @@ fn composed_dot_192<'a>(pairs: impl Iterator<Item = (&'a [u64; 3], &'a [u64; 3])
 
 /// A mixed dot product assembled the same way.
 #[cfg_attr(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ),
     allow(dead_code)
 )]
 #[inline]

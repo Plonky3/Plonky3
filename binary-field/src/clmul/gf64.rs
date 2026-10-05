@@ -14,11 +14,25 @@ const ROOT_X: u64 = 0xffff_ffff_0000_000a;
 #[allow(clippy::missing_const_for_fn)]
 #[inline]
 pub(crate) fn poly_mul_64(a: u64, b: u64) -> u64 {
-    #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+    #[cfg(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ))]
     {
-        super::x86_64::poly_mul_64(a, b)
+        super::register::poly_mul_64::<super::Register>(a, b)
     }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    )))]
     {
         composed_mul_64(a, b)
     }
@@ -28,11 +42,25 @@ pub(crate) fn poly_mul_64(a: u64, b: u64) -> u64 {
 #[allow(clippy::missing_const_for_fn)]
 #[inline]
 pub(crate) fn poly_square_64(a: u64) -> u64 {
-    #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+    #[cfg(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ))]
     {
-        super::x86_64::poly_square_64(a)
+        super::register::poly_square_64::<super::Register>(a)
     }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    )))]
     {
         composed_square_64(a)
     }
@@ -41,11 +69,25 @@ pub(crate) fn poly_square_64(a: u64) -> u64 {
 /// Sum unreduced products before paying for one reduction.
 #[inline]
 pub(crate) fn poly_dot_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
-    #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+    #[cfg(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ))]
     {
-        super::x86_64::poly_dot_64(pairs)
+        super::register::poly_dot_64::<super::Register>(pairs)
     }
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    )))]
     {
         composed_dot_64(pairs)
     }
@@ -58,7 +100,14 @@ pub(crate) fn poly_dot_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
 // Only one carryless-product backend is `const`, so the signature stays uniform.
 #[allow(clippy::missing_const_for_fn)]
 #[cfg_attr(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ),
     allow(dead_code)
 )]
 #[inline]
@@ -69,7 +118,14 @@ fn composed_mul_64(a: u64, b: u64) -> u64 {
 /// Squaring assembled the same way.
 #[allow(clippy::missing_const_for_fn)]
 #[cfg_attr(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ),
     allow(dead_code)
 )]
 #[inline]
@@ -79,7 +135,14 @@ fn composed_square_64(a: u64) -> u64 {
 
 /// A dot product assembled the same way.
 #[cfg_attr(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
+    ),
     allow(dead_code)
 )]
 #[inline]
@@ -88,11 +151,85 @@ fn composed_dot_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
     reduce_64(pairs.fold(0, |sum, (a, b)| sum ^ clmul_64x64(a, b)))
 }
 
+/// Bits `0 .. 32` of `v`, each moved to twice its position: the carryless square of `v`.
+#[cfg_attr(
+    not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "pclmulqdq",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "neon"
+        ),
+    )),
+    allow(dead_code)
+)]
+const fn spread_32(v: u64) -> u64 {
+    let mut out = 0;
+    let mut i = 0;
+    while i < 32 {
+        // Bit i of v becomes the coefficient of x^(2i), since (x^i)^2 = x^(2i).
+        out |= ((v >> i) & 1) << (2 * i);
+        i += 1;
+    }
+    out
+}
+
+/// `x^(2^k)`, one squaring at a time, evaluated at compile time.
+///
+/// The bit-matrix backends build their columns from it.
+#[cfg_attr(
+    not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "pclmulqdq",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "neon"
+        ),
+    )),
+    allow(dead_code)
+)]
+pub(super) const fn repeated_square(mut x: u64, k: usize) -> u64 {
+    let mut i = 0;
+    while i < k {
+        // The carryless square of a 64-bit value is its two halves, each spread.
+        let square = (spread_32(x >> 32) as u128) << 64 | spread_32(x) as u128;
+        x = reduce_64(square);
+        i += 1;
+    }
+    x
+}
+
+/// The longest run that plain `PMULL` squarings finish sooner than the bit matrix.
+///
+/// The inversion chain takes two runs of this length, and four longer ones.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "neon"
+))]
+const SHORT_RUN: usize = 3;
+
 /// Squaring repeated a fixed number of times.
 ///
-/// With `GFNI` the whole power is one bit-matrix product, whatever the count.
+/// Squaring is `F_2`-linear, so the whole power is one fixed bit matrix.
 ///
-/// Otherwise it is `K` dependent squarings.
+/// - With `GFNI`, that matrix is eight affine products.
+/// - On AArch64, it is 64 masked columns summed by exclusive or, except for the shortest runs.
+/// - Otherwise it is `K` dependent squarings.
 #[inline]
 fn square_times<const K: usize>(x: u64) -> u64 {
     #[cfg(all(
@@ -107,13 +244,36 @@ fn square_times<const K: usize>(x: u64) -> u64 {
         // One broadcast, eight affine products and a byte permute, for any K.
         super::x86_64::square_times::<K>(x)
     }
-    #[cfg(not(all(
-        target_arch = "x86_64",
-        target_feature = "pclmulqdq",
-        target_feature = "gfni",
-        target_feature = "avx512f",
-        target_feature = "avx512bw",
-        target_feature = "avx512vbmi"
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "neon"
+    ))]
+    {
+        // Three `PMULL` squarings finish before the matrix does.
+        //
+        // Without `aes` a squaring is software, and the matrix wins at every K.
+        if cfg!(target_feature = "aes") && K <= SHORT_RUN {
+            return (0..K).fold(x, |y, _| poly_square_64(y));
+        }
+
+        // Thirty-two masked register pairs, for any K.
+        super::aarch64::square_times::<K>(x)
+    }
+    #[cfg(not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "pclmulqdq",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "neon"
+        ),
     )))]
     {
         // K dependent squarings, each one carryless product and one fold.
@@ -147,7 +307,7 @@ pub(crate) fn poly_sqrt_64(a: u64) -> u64 {
 ///
 /// Nine exponents is eight steps, so eight products and sixty-three squarings.
 ///
-/// With `GFNI`, each run of squarings is one bit-matrix product instead.
+/// Where the target allows, each run of squarings is one bit-matrix product instead.
 ///
 /// None of them is indexed by the operand.
 #[inline]

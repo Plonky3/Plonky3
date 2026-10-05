@@ -42,13 +42,45 @@ const XOR3: i32 = 0x96;
 
 /// The 256-bit register the `GF(2^64)` packings use, on every build.
 pub(crate) mod gf64 {
-    pub(crate) use super::avx2::{Reg, deinterleave_3, interleave_3, interleave_64, load, store};
+    use core::array;
 
-    /// 128-bit lanes per register.
-    pub(crate) const WIDTH: usize = super::avx2::WIDTH;
+    pub(crate) use super::avx2::{Reg, interleave_64};
+    use super::avx2::{WIDTH, deinterleave_3, interleave_3, load, store};
 
     /// 64-bit elements per register.
     pub(crate) const WIDTH_64: usize = 2 * WIDTH;
+
+    /// Three registers of consecutive three-quadword elements, as three coordinate registers.
+    ///
+    /// # Safety
+    ///
+    /// The address must be readable for three registers of quadwords.
+    ///
+    /// No alignment is required.
+    #[inline(always)]
+    pub(crate) unsafe fn gather_3(from: *const u64) -> [Reg; 3] {
+        // SAFETY: the readability of the three registers is the caller's obligation.
+        let rows = unsafe { array::from_fn(|r| load(from.add(r * WIDTH_64).cast())) };
+
+        // Six blends and three permutes gather each coordinate into its own register.
+        deinterleave_3(rows)
+    }
+
+    /// Three coordinate registers, written back as consecutive three-quadword elements.
+    ///
+    /// # Safety
+    ///
+    /// The address must be writable for three registers of quadwords.
+    ///
+    /// No alignment is required.
+    #[inline(always)]
+    pub(crate) unsafe fn scatter_3(to: *mut u64, coordinates: [Reg; 3]) {
+        // The same instructions as the gather, in the opposite order.
+        for (r, row) in interleave_3(coordinates).into_iter().enumerate() {
+            // SAFETY: the writability of the three registers is the caller's obligation.
+            unsafe { store(to.add(r * WIDTH_64).cast(), row) };
+        }
+    }
 }
 
 // The register is the production backend of the shared split-multiplier algebra.

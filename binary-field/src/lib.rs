@@ -45,10 +45,17 @@ pub use ghash::Ghash128;
     )
 ))]
 pub use packed::PackedGhash128;
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    any(target_feature = "avx2", target_feature = "avx512f")
+#[cfg(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 ))]
 pub use packed::{PackedPoly64, PackedPoly192};
 pub use poly64::Poly64;
