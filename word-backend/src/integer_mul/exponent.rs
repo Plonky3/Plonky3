@@ -50,12 +50,7 @@ pub(super) fn result_weights<F: Field>(width: usize) -> Vec<F> {
 pub(super) fn evaluate<F: Field>(table: &[F], point: &[F]) -> F {
     // The first coordinate addresses the most significant index bit.
     debug_assert_eq!(table.len(), 1 << point.len());
-    Point::new(point)
-        .equality_weights_msb()
-        .into_iter()
-        .zip(table)
-        .map(|(weight, &value)| weight * value)
-        .sum()
+    F::batched_linear_combination(&Point::new(point).equality_weights_msb(), table)
 }
 
 #[cfg(test)]

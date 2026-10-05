@@ -1976,6 +1976,10 @@ macro_rules! test_extension_field {
             fn test_packed_extension() {
                 $crate::test_packed_extension::<$field, $ef>();
             }
+            #[test]
+            fn test_mixed_dot_product_ext() {
+                $crate::test_mixed_dot_product_ext::<$field, $ef>();
+            }
         }
     };
 }

@@ -15,7 +15,7 @@
 //! Evaluating eq(z, .) over all x in {0,1}^k produces a table of 2^k values.
 
 use itertools::Itertools;
-use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
+use p3_field::{Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_util::log2_strict_usize;
 
 use super::packed_kernel::{compress_hi_dot_packed, compress_prefix_to_packed_packed};
@@ -136,14 +136,16 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// and reduces the SIMD lanes via horizontal sum at the end.
     pub(super) fn dot_with_base(&self, chunk: &[F]) -> EF {
         match &self.0 {
-            // Scalar path: direct element-wise dot product.
-            PolyMaybePacked::Scalar(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
+            // Scalar path: extension-by-base dot product, one reduction per coordinate per block.
+            PolyMaybePacked::Scalar(eq1) => {
+                <EF as Algebra<F>>::batched_linear_combination(eq1.as_slice(), chunk)
+            }
             PolyMaybePacked::Packed(eq1) => {
                 // Reinterpret the flat scalar slice as packed SIMD elements.
                 // Compute packed dot product, then reduce lanes to a single scalar.
-                let sum = dot_product(
-                    eq1.iter().copied(),
-                    F::Packing::pack_slice(chunk).iter().copied(),
+                let sum = <EF::ExtensionPacking as Algebra<F::Packing>>::batched_linear_combination(
+                    eq1.as_slice(),
+                    F::Packing::pack_slice(chunk),
                 );
                 // Horizontal reduction: sum the W lanes of each packed result element.
                 EF::ExtensionPacking::to_ext_iter([sum]).sum()
@@ -368,7 +370,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                     .chunks(eq1.num_evals())
                     .zip_eq(eq0.iter())
                     .map(|(chunk, &w0)| {
-                        dot_product::<EF, _, _>(eq1.iter().copied(), chunk.iter().copied()) * w0
+                        <EF as Algebra<F>>::batched_linear_combination(eq1.as_slice(), chunk) * w0
                     })
                     .sum::<EF>()
             }
@@ -497,9 +499,10 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 
         match &self.0 {
             // Scalar storage: dot the chunk against the matching leading weights.
-            PolyMaybePacked::Scalar(eq1) => {
-                dot_product(eq1.iter().take(chunk.len()).copied(), chunk.iter().copied())
-            }
+            PolyMaybePacked::Scalar(eq1) => <EF as Algebra<F>>::batched_linear_combination(
+                &eq1.as_slice()[..chunk.len()],
+                chunk,
+            ),
             // SIMD-packed storage: split the chunk into full lanes plus a tail.
             PolyMaybePacked::Packed(eq1) => {
                 let (packed, suffix) = F::Packing::pack_slice_with_suffix(chunk);
@@ -507,7 +510,11 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                 // Lane-parallel part: dot the packed weights with the packed chunk,
                 // then reduce the resulting packed value across its lanes.
                 if !packed.is_empty() {
-                    let packed_sum = dot_product(eq1.iter().copied(), packed.iter().copied());
+                    let packed_sum =
+                        <EF::ExtensionPacking as Algebra<F::Packing>>::batched_linear_combination(
+                            &eq1.as_slice()[..packed.len()],
+                            packed,
+                        );
                     sum += EF::ExtensionPacking::to_ext_iter([packed_sum]).sum::<EF>();
                 }
 

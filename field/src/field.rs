@@ -914,7 +914,29 @@ pub fn chunked_linear_combination<const CHUNK: usize, A: Algebra<F> + Dup, F: Du
     }
 
     debug_assert_eq!(val_rem.len(), coeff_rem.len());
-    for (v, c) in zip(val_rem, coeff_rem) {
+    if !val_rem.is_empty() {
+        acc = linear_combination_tail(acc, val_rem, coeff_rem);
+    }
+    acc
+}
+
+/// Add `sum_i values[i] * coeffs[i]` to `acc`, one pair at a time.
+///
+/// It sums the fewer than `CHUNK` pairs left after the blocks.
+///
+/// On AArch64 it stays out of line so that its loop does not disturb the block loop.
+///
+/// Inlined there, it makes a 1024-term `Poly192 x Poly64` combination 3.7x slower.
+///
+/// Elsewhere it is inlined, which saves the call on short slices.
+#[cfg_attr(target_arch = "aarch64", inline(never))]
+#[cfg_attr(not(target_arch = "aarch64"), inline)]
+fn linear_combination_tail<A: Algebra<F> + Dup, F: Dup>(
+    mut acc: A,
+    values: &[A],
+    coeffs: &[F],
+) -> A {
+    for (v, c) in zip(values, coeffs) {
         acc += v.dup() * c.dup();
     }
     acc

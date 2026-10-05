@@ -23,6 +23,9 @@ impl<const WIDTH: usize, FP> ExtensionAlgebra<Self, WIDTH, Binomial<Self>> for M
 where
     FP: BinomialExtensionData<WIDTH> + FieldParameters,
 {
+    // On NEON the vectorized `ext_base_mul` and `ext_add` beat one delayed reduction per coordinate.
+    const DELAYED_MIXED_DOT_PRODUCT: bool = !cfg!(target_arch = "aarch64");
+
     #[inline(always)]
     fn ext_mul(a: &[Self; WIDTH], b: &[Self; WIDTH], res: &mut [Self; WIDTH]) {
         match WIDTH {
@@ -113,6 +116,9 @@ impl<FP> ExtensionAlgebra<Self, 5, QuinticTrinomial> for MontyField31<FP>
 where
     FP: TrinomialQuinticData + FieldParameters,
 {
+    // On NEON the vectorized `ext_base_mul` and `ext_add` beat one delayed reduction per coordinate.
+    const DELAYED_MIXED_DOT_PRODUCT: bool = !cfg!(target_arch = "aarch64");
+
     #[inline(always)]
     fn ext_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
         quintic_mul_packed_trinomial(a, b, res);

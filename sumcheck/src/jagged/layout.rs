@@ -223,11 +223,7 @@ impl JaggedLayout {
         // On Boolean dense indices this selector maps the contiguous representation back to rows.
         // Only the live prefix contributes, and a base-field cell scales a weight without a full extension product.
         let selector = selector.table(point);
-        let witness_value = dense_witness
-            .iter()
-            .zip(&selector)
-            .map(|(&cell, &weight)| weight * cell)
-            .sum::<EF>();
+        let witness_value = EF::batched_linear_combination(&selector, dense_witness);
 
         // A reduction that invented its own statement could not be composed with the claim it was called to discharge.
         if witness_value != claimed_value {

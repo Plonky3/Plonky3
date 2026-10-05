@@ -78,7 +78,7 @@ use core::mem::MaybeUninit;
 use itertools::Itertools;
 use p3_field::{
     Algebra, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing, dot_product,
+    PrimeCharacteristicRing,
 };
 
 /// SIMD kernel for the packed high-eq dot product.
@@ -170,9 +170,8 @@ where
         .chunks_exact(n)
         .zip_eq(eq0)
         .map(|(piece, &w0)| {
-            dot_product::<EF::ExtensionPacking, _, _>(
-                eq1_packed.iter().copied(),
-                piece.iter().copied(),
+            <EF::ExtensionPacking as Algebra<F::Packing>>::batched_linear_combination(
+                eq1_packed, piece,
             ) * w0
         })
         .sum();
