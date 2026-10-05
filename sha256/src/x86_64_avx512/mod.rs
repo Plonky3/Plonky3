@@ -67,6 +67,36 @@ type Digests<const G: usize> = [[[u8; 32]; WIDTH]; G];
 /// One block per lane of `G` groups.
 type Rows<'a, const G: usize> = [[&'a [u8; BLOCK_BYTES]; WIDTH]; G];
 
+/// How a CPU with AVX-512 shares a batch with SHA-NI, by the crossovers measured on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Streams {
+    /// The CPU has no SHA-NI, so the register passes and the scalar hasher take every message.
+    Off,
+    /// Four SHA-NI streams take three to eight leftover messages, as on Zen 5.
+    FromThree,
+    /// Four SHA-NI streams take four to eight leftover messages, as on Intel.
+    ///
+    /// Three messages leave one stream empty, and three scalar calls beat that there.
+    FromFour,
+    /// The crossovers of Zen 4, which runs each 512-bit operation as two 256-bit halves.
+    ///
+    /// - Messages of at least [`ZEN4_STREAMS_FROM_LEN`] bytes all go to the streams.
+    /// - Shorter ones keep the register passes for whole groups, and the streams take most leftovers.
+    Zen4,
+}
+
+/// Message length from which four SHA-NI streams beat whole register groups on Zen 4.
+///
+/// The two tie at 2 KiB, and the streams pull ahead on longer messages.
+const ZEN4_STREAMS_FROM_LEN: usize = 2048;
+
+impl Streams {
+    /// Whether the CPU runs SHA-NI.
+    const fn sha_ni(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
 /// A way to hash the next few messages of a batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Pass {
@@ -86,25 +116,37 @@ impl Pass {
     /// A register pass costs the same however many of its lanes hold a message.
     /// So a pass is picked by the messages it can fill:
     ///
-    /// ```text
-    ///     left        with SHA-NI            without SHA-NI
-    ///     >= 21       Wide                   Wide
-    ///     18..=20     Narrow, 16 of them     Wide
-    ///     17          Narrow, 16 of them     Narrow, 16 of them
-    ///     9..=16      Narrow                 Narrow
-    ///     3..=8       FourStreams            Narrow
-    ///     2           Single                 Narrow
-    ///     1           Single                 Single
-    /// ```
+    /// | left   | `Off`        | `FromThree`  | `FromFour`   | `Zen4`       |
+    /// |--------|--------------|--------------|--------------|--------------|
+    /// | 25..   | Wide         | Wide         | Wide         | Wide         |
+    /// | 21..=24| Wide         | Wide         | Wide         | FourStreams  |
+    /// | 18..=20| Wide         | Narrow (16)  | Narrow (16)  | Narrow (16)  |
+    /// | 17     | Narrow (16)  | Narrow (16)  | Narrow (16)  | Narrow (16)  |
+    /// | 14..=16| Narrow       | Narrow       | Narrow       | Narrow       |
+    /// | 9..=13 | Narrow       | Narrow       | Narrow       | FourStreams  |
+    /// | 4..=8  | Narrow       | FourStreams  | FourStreams  | FourStreams  |
+    /// | 3      | Narrow       | FourStreams  | Single       | FourStreams  |
+    /// | 2      | Narrow       | Single       | Single       | Single       |
+    /// | 1      | Single       | Single       | Single       | Single       |
     ///
     /// - A lone register group costs well under two, and about half on long messages.
     /// - Four SHA-NI streams beat a register group while they need at most two calls.
     /// - Two passes over a few leftover messages beat one mostly empty wide pass.
-    const fn next(left: usize, four_streams: bool) -> (Self, usize) {
+    /// - Zen 4 splits each 512-bit operation in two, so a register pass gains less there.
+    const fn next(left: usize, streams: Streams) -> (Self, usize) {
         // The widest pass fills most of its lanes.
-        let wide_from = if four_streams { 21 } else { 18 };
+        let wide_from = match streams {
+            Streams::Off => 18,
+            Streams::FromThree | Streams::FromFour => 21,
+            Streams::Zen4 => 25,
+        };
         if left >= wide_from {
             return (Self::Wide, if left < LANES { left } else { LANES });
+        }
+
+        // On Zen 4, the streams beat a wide pass with up to a quarter of its lanes empty.
+        if matches!(streams, Streams::Zen4) && left > 20 {
+            return (Self::FourStreams, left);
         }
 
         // One group takes sixteen, and the few left over take the cheaper passes below.
@@ -113,7 +155,11 @@ impl Pass {
         }
 
         // One group holds all the rest.
-        let narrow_from = if four_streams { 9 } else { 2 };
+        let narrow_from = match streams {
+            Streams::Off => 2,
+            Streams::FromThree | Streams::FromFour => 9,
+            Streams::Zen4 => 14,
+        };
         if left >= narrow_from {
             return (Self::Narrow, left);
         }
@@ -121,10 +167,27 @@ impl Pass {
         // Too few messages to fill a register group.
         //
         // One or two messages run no faster as streams of one call than as calls of their own.
-        if four_streams && left >= 3 {
+        let streams_from = match streams {
+            Streams::FromFour => 4,
+            _ => 3,
+        };
+        if streams.sha_ni() && left >= streams_from {
             (Self::FourStreams, left)
         } else {
             (Self::Single, left)
+        }
+    }
+
+    /// The pass for a whole batch of `count` messages of `len` bytes, if a single one takes it all.
+    ///
+    /// Such a batch never reads the padding, so it skips computing it.
+    const fn whole(count: usize, len: usize, streams: Streams) -> Option<Self> {
+        if matches!(streams, Streams::Zen4) && len >= ZEN4_STREAMS_FROM_LEN {
+            return Some(Self::FourStreams);
+        }
+        match Self::next(count, streams) {
+            (pass @ (Self::FourStreams | Self::Single), _) => Some(pass),
+            _ => None,
         }
     }
 }
@@ -133,13 +196,13 @@ impl Pass {
 ///
 /// # Safety
 ///
-/// The running CPU has AVX-512F and AVX-512BW, and SHA-NI with SSE4.1 when `sha_ni` holds.
+/// The running CPU has AVX-512F and AVX-512BW, and SHA-NI with SSE4.1 unless `streams` is [`Streams::Off`].
 ///
 /// # Panics
 ///
 /// Panics if the input length is not a whole multiple of the digest count.
 #[target_feature(enable = "avx512f,avx512bw")]
-pub(crate) unsafe fn hash_many(input: &[u8], out: &mut [[u8; 32]], sha_ni: bool) {
+pub(crate) unsafe fn hash_many(input: &[u8], out: &mut [[u8; 32]], streams: Streams) {
     // No digests requested means there is nothing to read from the input.
     if out.is_empty() {
         return;
@@ -154,11 +217,11 @@ pub(crate) unsafe fn hash_many(input: &[u8], out: &mut [[u8; 32]], sha_ni: bool)
     );
     let len = input.len() / out.len();
 
-    // A batch too small for a register pass never reads the padding.
+    // A batch that no register pass touches never reads the padding.
     //
     // Its shared schedule costs about as much as one short message, so such a batch skips it.
-    if let (pass @ (Pass::FourStreams | Pass::Single), _) = Pass::next(out.len(), sha_ni) {
-        // SAFETY: the passes pick four streams only when `sha_ni` holds, so the CPU has SHA-NI.
+    if let Some(pass) = Pass::whole(out.len(), len, streams) {
+        // SAFETY: the passes pick four streams only when `streams` has SHA-NI, so the CPU has it.
         unsafe { hash_serial(input, out, pass == Pass::FourStreams) };
         return;
     }
@@ -185,7 +248,7 @@ pub(crate) unsafe fn hash_many(input: &[u8], out: &mut [[u8; 32]], sha_ni: bool)
     //     40 messages:  one group takes 32, then FourStreams takes the last 8
     let mut first = groups.len() * LANES;
     while first < out.len() {
-        let (pass, count) = Pass::next(out.len() - first, sha_ni);
+        let (pass, count) = Pass::next(out.len() - first, streams);
         let digests = &mut out[first..first + count];
         let lanes = Lanes {
             input,
@@ -196,7 +259,7 @@ pub(crate) unsafe fn hash_many(input: &[u8], out: &mut [[u8; 32]], sha_ni: bool)
         match pass {
             Pass::Wide => hash_pass::<GROUPS>(&lanes, &padding, digests),
             Pass::Narrow => hash_pass::<1>(&lanes, &padding, digests),
-            // SAFETY: the passes pick four streams only when `sha_ni` holds, so the CPU has SHA-NI.
+            // SAFETY: the passes pick four streams only when `streams` has SHA-NI, so the CPU has it.
             Pass::FourStreams | Pass::Single => unsafe {
                 hash_serial(
                     &input[first * len..][..count * len],
@@ -252,13 +315,17 @@ fn hash_pass<const G: usize>(lanes: &Lanes<'_>, padding: &Padding, out: &mut [[u
 ///
 /// # Safety
 ///
-/// The running CPU has AVX-512F and AVX-512BW, and SHA-NI with SSE4.1 when `sha_ni` holds.
+/// The running CPU has AVX-512F and AVX-512BW, and SHA-NI with SSE4.1 unless `streams` is [`Streams::Off`].
 ///
 /// # Panics
 ///
 /// Panics if the input and output counts differ.
 #[target_feature(enable = "avx512f,avx512bw")]
-pub(crate) unsafe fn compress_many(inputs: &[[[u8; 32]; 2]], out: &mut [[u8; 32]], sha_ni: bool) {
+pub(crate) unsafe fn compress_many(
+    inputs: &[[[u8; 32]; 2]],
+    out: &mut [[u8; 32]],
+    streams: Streams,
+) {
     assert_eq!(
         inputs.len(),
         out.len(),
@@ -287,7 +354,7 @@ pub(crate) unsafe fn compress_many(inputs: &[[[u8; 32]; 2]], out: &mut [[u8; 32]
     // The blocks left over, in the same passes as the hash.
     let mut first = groups.len() * LANES;
     while first < out.len() {
-        let (pass, count) = Pass::next(out.len() - first, sha_ni);
+        let (pass, count) = Pass::next(out.len() - first, streams);
         let digests = &mut out[first..first + count];
         let blocks = &blocks[first..first + count];
         match pass {
@@ -715,6 +782,14 @@ mod tests {
     // The kernel tests run AVX-512, so they skip a CPU without it.
     cpufeatures::new!(cpu_avx512, "avx512f", "avx512bw");
 
+    /// Every policy, in the column order of the table in `Pass::next`.
+    const ALL_STREAMS: [Streams; 4] = [
+        Streams::Off,
+        Streams::FromThree,
+        Streams::FromFour,
+        Streams::Zen4,
+    ];
+
     /// A deterministic stream of words, so a failing case reproduces exactly.
     fn words(mut seed: u64) -> impl Iterator<Item = u32> {
         core::iter::repeat_with(move || {
@@ -817,13 +892,13 @@ mod tests {
 
     #[test]
     fn every_pass_fits_its_lanes_and_the_passes_cover_the_batch() {
-        for four_streams in [false, true] {
+        for streams in ALL_STREAMS {
             for count in 1..=4 * LANES {
                 // Walk a batch of `count` messages the way the drivers do.
                 let mut left = count;
                 let mut passes = Vec::new();
                 while left > 0 {
-                    let (pass, take) = Pass::next(left, four_streams);
+                    let (pass, take) = Pass::next(left, streams);
 
                     // A pass takes at least one message, and no more than its lanes hold.
                     let capacity = match pass {
@@ -841,9 +916,67 @@ mod tests {
                 assert!(wide >= count / LANES, "{count} messages");
 
                 // Only a CPU with SHA-NI uses four streams.
-                assert!(four_streams || !passes.contains(&Pass::FourStreams));
+                assert!(streams.sha_ni() || !passes.contains(&Pass::FourStreams));
             }
         }
+    }
+
+    #[test]
+    fn each_cpu_takes_its_measured_crossovers() {
+        use Pass::{FourStreams as S, Narrow as N, Single as One, Wide as W};
+
+        // The first pass and its take for each leftover count, one column per policy.
+        //
+        // Rows sit on each side of every crossover in the table of `Pass::next`.
+        let table: [(usize, [(Pass, usize); 4]); 16] = [
+            (1, [(One, 1), (One, 1), (One, 1), (One, 1)]),
+            (2, [(N, 2), (One, 2), (One, 2), (One, 2)]),
+            (3, [(N, 3), (S, 3), (One, 3), (S, 3)]),
+            (4, [(N, 4), (S, 4), (S, 4), (S, 4)]),
+            (8, [(N, 8), (S, 8), (S, 8), (S, 8)]),
+            (9, [(N, 9), (N, 9), (N, 9), (S, 9)]),
+            (13, [(N, 13), (N, 13), (N, 13), (S, 13)]),
+            (14, [(N, 14), (N, 14), (N, 14), (N, 14)]),
+            (17, [(N, 16), (N, 16), (N, 16), (N, 16)]),
+            (18, [(W, 18), (N, 16), (N, 16), (N, 16)]),
+            (20, [(W, 20), (N, 16), (N, 16), (N, 16)]),
+            (21, [(W, 21), (W, 21), (W, 21), (S, 21)]),
+            (24, [(W, 24), (W, 24), (W, 24), (S, 24)]),
+            (25, [(W, 25), (W, 25), (W, 25), (W, 25)]),
+            (32, [(W, 32), (W, 32), (W, 32), (W, 32)]),
+            (33, [(W, 32), (W, 32), (W, 32), (W, 32)]),
+        ];
+        for (left, expected) in table {
+            for (streams, expected) in ALL_STREAMS.into_iter().zip(expected) {
+                assert_eq!(
+                    Pass::next(left, streams),
+                    expected,
+                    "{streams:?}, {left} left"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_zen4_sends_long_messages_to_the_streams() {
+        // A full batch of long messages is all streams on Zen 4, and register passes elsewhere.
+        let full = |len, streams| Pass::whole(4 * LANES, len, streams);
+        assert_eq!(
+            full(ZEN4_STREAMS_FROM_LEN, Streams::Zen4),
+            Some(Pass::FourStreams)
+        );
+        assert_eq!(full(ZEN4_STREAMS_FROM_LEN - 1, Streams::Zen4), None);
+        assert_eq!(full(ZEN4_STREAMS_FROM_LEN, Streams::FromThree), None);
+        assert_eq!(full(ZEN4_STREAMS_FROM_LEN, Streams::FromFour), None);
+        assert_eq!(full(ZEN4_STREAMS_FROM_LEN, Streams::Off), None);
+
+        // A batch too small for a register pass skips the padding, and a CPU without SHA-NI has none.
+        assert_eq!(Pass::whole(1, 64, Streams::Zen4), Some(Pass::Single));
+        assert_eq!(
+            Pass::whole(5, 64, Streams::FromThree),
+            Some(Pass::FourStreams)
+        );
+        assert_eq!(Pass::whole(5, 64, Streams::Off), None);
     }
 
     proptest! {
