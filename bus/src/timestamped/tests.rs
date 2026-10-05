@@ -868,3 +868,121 @@ proptest! {
         prop_assert_eq!(image.evaluate(&point), dense);
     }
 }
+
+#[test]
+fn a_second_boundary_over_an_image_cell_lets_a_read_skip_the_image_word() {
+    // Invariant: every bus balances, so only the boundary check refuses two blocks over one cell.
+    //
+    //     image block     seed (a, g^0, image word)    close (a, g^0, image word)   untouched
+    //     private block   seed (a, g^0, forged word)   close (a, last, final)       carries the run
+    //
+    // Two blocks seed the same eight cells: the public image, and a private region the prover fills.
+    let public = TimestampedSeed::Public(image());
+    let private = TimestampedSeed::Private(PrivateRegion::new(0, 3).unwrap());
+    let image_starts = image().columns().remove(0);
+
+    // The private starts copy the image except cell 5, which holds 5 where the image says 7.
+    let mut forged = image_starts.clone();
+    forged[5] = value(5);
+    let witness = run_from(&forged, &IMAGE_PROGRAM);
+    assert_eq!(witness.rows[0].slots[0].old, value(5));
+
+    // The private block carries the run, and the image block closes every cell untouched at `g^0`.
+    let run = traces(&witness, &private);
+    let untouched = Witness {
+        rows: witness.rows,
+        starts: image_starts.clone(),
+        closes: image_starts.iter().map(|&start| (time(0), start)).collect(),
+    };
+    let shadow = traces(&untouched, &public);
+    let machine = MachineAir { memory: memory() };
+    let public_air = TimestampedBoundaryAir::new(memory(), public).unwrap();
+    let private_air = TimestampedBoundaryAir::new(memory(), private).unwrap();
+    let range = ClockRangeAir::new(memory());
+
+    // Every table holds its constraints and every bus balances, so only the boundary check is left.
+    check_constraints(&machine, &run.machine, &[]);
+    check_constraints(&private_air, &run.boundary, &[]);
+    check_constraints(&public_air, &shadow.boundary, &[]);
+    check_constraints(&range, &run.range, &[]);
+    let profiles = [
+        profile(&machine),
+        profile(&public_air),
+        profile(&private_air),
+        profile(&range),
+    ];
+    let tables = [
+        table(&run.machine),
+        table(&shadow.boundary),
+        table(&run.boundary),
+        table(&run.range),
+    ];
+    let periodic = public_air.periodic_columns();
+    let values = (0..CELLS)
+        .flat_map(|row| periodic.iter().map(move |column| column[row]))
+        .collect();
+    let periodic = table(&RowMajorMatrix::new(values, periodic.len()));
+    let mut instances = tables
+        .iter()
+        .zip(&profiles)
+        .map(|(table, profile)| BusDebugInstance::new(table, None, &[], profile).unwrap())
+        .collect::<Vec<_>>();
+    instances[1] = instances[1].with_periodic(&periodic);
+    assert!(BusDebugReport::check(&instances).unwrap().buses.is_empty());
+
+    let log_cells = CELLS.trailing_zeros() as usize;
+    assert_eq!(
+        memory().check_boundaries(&[(&public_air, log_cells), (&private_air, log_cells)]),
+        Err(TimestampedMemoryError::OverlappingBoundaries { cell: 0 })
+    );
+}
+
+#[test]
+fn the_boundary_check_accepts_disjoint_blocks_and_names_the_first_shared_cell() {
+    // Invariant: blocks pass exactly when their cell spans are disjoint.
+    //
+    //     image 0..=7      region 8..=11    ->  disjoint   ->  accepted
+    //     zero  0..=3      region 4..=7     ->  disjoint   ->  accepted
+    //     zero  0..=7      region 4..=7     ->  cell 4     ->  refused
+    //     image 0..=7      region 4..=7     ->  cell 4     ->  refused
+    let block = |seed| TimestampedBoundaryAir::new(memory(), seed).unwrap();
+    let image = block(TimestampedSeed::Public(image()));
+    let zero = block(TimestampedSeed::Zero);
+    let above = block(TimestampedSeed::Private(PrivateRegion::new(8, 2).unwrap()));
+    let inside = block(TimestampedSeed::Private(PrivateRegion::new(4, 2).unwrap()));
+
+    // The image covers cells 0 to 7, so a region from cell 8 on is disjoint from it.
+    assert_eq!(
+        memory().check_boundaries(&[(&image, 3), (&above, 2)]),
+        Ok(())
+    );
+    assert_eq!(
+        memory().check_boundaries(&[(&above, 2), (&image, 3)]),
+        Ok(())
+    );
+
+    // A zero seed covers one cell per row, so its height decides where it ends.
+    assert_eq!(
+        memory().check_boundaries(&[(&zero, 2), (&inside, 2)]),
+        Ok(())
+    );
+    assert_eq!(
+        memory().check_boundaries(&[(&zero, 3), (&inside, 2)]),
+        Err(TimestampedMemoryError::OverlappingBoundaries { cell: 4 })
+    );
+    assert_eq!(
+        memory().check_boundaries(&[(&image, 3), (&inside, 2)]),
+        Err(TimestampedMemoryError::OverlappingBoundaries { cell: 4 })
+    );
+}
+
+#[test]
+fn the_boundary_check_refuses_a_block_of_another_memory() {
+    // Invariant: a block counts only toward the memory it seeds.
+    let other = Memory::new("tm-other", LOW, HIGH, 1).unwrap();
+    let foreign = TimestampedBoundaryAir::new(other, TimestampedSeed::Zero).unwrap();
+    assert_eq!(
+        memory().check_boundaries(&[(&foreign, 3)]),
+        Err(TimestampedMemoryError::ForeignBoundary { block: 0 })
+    );
+}

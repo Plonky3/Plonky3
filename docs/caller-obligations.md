@@ -96,6 +96,10 @@ a sound reduction of whatever sum the prover picked.
 Packing checks one AIR, but a bus balances in the cross-AIR sum, so two tuples alias without
 ever sharing a column.
 
+**Run the boundary check over every boundary block of a timestamped memory.**
+Each block names its cells once, but two blocks over one cell seed it twice, and the first
+access may then read whichever seed the prover picks, a public image word included.
+
 ## Properties of the committed witness
 
 A reduction sees field elements.

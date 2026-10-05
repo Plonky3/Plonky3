@@ -108,6 +108,18 @@ pub enum TimestampedMemoryError {
         /// Cells the image covers.
         cells: usize,
     },
+    /// A boundary block belongs to another memory.
+    #[error("timestamped memory boundary block {block} seeds another memory")]
+    ForeignBoundary {
+        /// Position of the block.
+        block: usize,
+    },
+    /// Two boundary blocks seed one cell, so a read could start from either seed.
+    #[error("timestamped memory cell {cell} is seeded by two boundary blocks")]
+    OverlappingBoundaries {
+        /// First cell the two blocks share.
+        cell: usize,
+    },
     /// The transcript's challenge field has no room for a challenge.
     #[error("timestamped memory needs a challenge field larger than one element")]
     TrivialChallengeField,
