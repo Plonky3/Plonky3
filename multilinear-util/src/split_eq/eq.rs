@@ -584,10 +584,11 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 /// - a Goldilocks packing on x86 delays the reduction over at most six terms, so it takes four,
 /// - a binary packing XORs eight carry-less products and reduces once.
 ///
+/// A block length other than 1, 2, 4, 8 or 16 fails to compile.
+///
 /// # Panics
 ///
-/// - Panics if the two slices differ in length.
-/// - Panics if the block length is not one of 1, 2, 4, 8 or 16.
+/// Panics if the two slices differ in length.
 #[inline]
 pub(crate) fn packed_mixed_dot<F, EF>(
     weights: &[EF::ExtensionPacking],
@@ -597,6 +598,12 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
+    const {
+        assert!(
+            matches!(F::Packing::DOT_PRODUCT_BLOCK, 1 | 2 | 4 | 8 | 16),
+            "DOT_PRODUCT_BLOCK must be one of 1, 2, 4, 8 or 16"
+        );
+    }
     // The block length is a constant of the packing, so the match folds away.
     match F::Packing::DOT_PRODUCT_BLOCK {
         1 => blocked_mixed_dot::<F, EF, 1>(weights, values),
@@ -604,7 +611,7 @@ where
         4 => blocked_mixed_dot::<F, EF, 4>(weights, values),
         8 => blocked_mixed_dot::<F, EF, 8>(weights, values),
         16 => blocked_mixed_dot::<F, EF, 16>(weights, values),
-        _ => panic!("DOT_PRODUCT_BLOCK must be one of 1, 2, 4, 8 or 16"),
+        _ => unreachable!(),
     }
 }
 

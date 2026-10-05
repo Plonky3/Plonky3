@@ -36,11 +36,13 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
+use p3_field::{ExtensionField, Field, PackedField, PackedValue, PrimeCharacteristicRing};
 
 /// Packed vectors each unreduced block of a spread dot product accumulates.
 ///
 /// Eight terms keep the block inside the widest unrolled base dot product a packing ships.
+///
+/// A packing whose `DOT_PRODUCT_BLOCK` is shorter reduces more than once per block, so the kernel declines it.
 const BLOCK: usize = 8;
 
 /// Largest extension degree the spread kernel keeps accumulators for on the stack.
@@ -65,6 +67,7 @@ impl<F: Field, EF: ExtensionField<F>> SpreadWeights<F, EF> {
     /// Spreads a weight table, or returns `None` when its shape does not fit the kernel.
     ///
     /// The kernel needs:
+    /// - one reduction per block: `DOT_PRODUCT_BLOCK >= BLOCK`,
     /// - whole extension elements per vector: `W % D == 0`,
     /// - whole blocks of vectors: `(len * D) % (W * BLOCK) == 0`,
     /// - stack accumulators: `D <= MAX_DIMENSION`.
@@ -72,7 +75,8 @@ impl<F: Field, EF: ExtensionField<F>> SpreadWeights<F, EF> {
         let width = F::Packing::WIDTH;
         let dim = EF::DIMENSION;
         let per_vector = width / dim;
-        let fits = width.is_multiple_of(dim)
+        let fits = F::Packing::DOT_PRODUCT_BLOCK >= BLOCK
+            && width.is_multiple_of(dim)
             && dim <= MAX_DIMENSION
             && (weights.len() * dim).is_multiple_of(width * BLOCK);
         if !fits {
@@ -152,6 +156,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::dot_product;
     use p3_field::extension::{BinomialExtensionField, Complex};
+    use p3_goldilocks::Goldilocks;
     use p3_mersenne_31::Mersenne31;
     use proptest::prelude::*;
     use rand::distr::{Distribution, StandardUniform};
@@ -224,6 +229,17 @@ mod tests {
         if !width.is_multiple_of(4) {
             let long = alloc::vec![EF::ONE; 1 << 12];
             assert!(SpreadWeights::<F, EF>::new(&long).is_none());
+        }
+
+        // A packing that reduces more than once per block never fits, whatever the length.
+        //
+        // Goldilocks on x86 delays its reduction over four terms only.
+        if <Goldilocks as Field>::Packing::DOT_PRODUCT_BLOCK < BLOCK {
+            let long = alloc::vec![BinomialExtensionField::<Goldilocks, 2>::ONE; 1 << 12];
+            assert!(
+                SpreadWeights::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>::new(&long)
+                    .is_none()
+            );
         }
     }
 }
