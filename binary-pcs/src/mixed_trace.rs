@@ -456,6 +456,11 @@ where
         + CanSampleUniformBits<EF>
         + CanObserve<B::Commitment>,
 {
+    fn bit_region(&self, table: usize, _width: usize) -> usize {
+        // A table this scheme was not sized for has no bit region.
+        self.boolean_columns.get(table).copied().unwrap_or(0)
+    }
+
     fn prescribed_security(&self, protocol: &OpeningProtocol) -> Option<PrescribedOpeningSecurity> {
         // The recombination draws nothing, so the committed protocol's evidence is the whole.
         self.check_regions::<B::Error>(&protocol.table_shapes())

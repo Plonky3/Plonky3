@@ -290,6 +290,20 @@ where
         .unwrap_or_else(|error| panic!("instance {instance} boundary IO: {error}"));
     }
 
+    // A column an AIR assumes holds a bit must be one the scheme commits as a bit.
+    // The verifier refuses the proof otherwise, so refuse it before anything is committed.
+    for (instance, air) in airs.iter().enumerate() {
+        let assumed = air.boolean_columns();
+        if assumed == 0 {
+            continue;
+        }
+        let committed = config.pcs().bit_region(instance, air.width());
+        assert!(
+            assumed <= committed,
+            "instance {instance} assumes {assumed} bit columns, the commitment holds {committed}"
+        );
+    }
+
     // Indexed lookups change the described sequence, so the plan is settled first.
     //
     // Setup already read every AIR's declarations off its one symbolic pass.
@@ -2257,5 +2271,98 @@ mod tests {
             &mut challenger(),
         )
         .unwrap();
+    }
+
+    /// AIR asserting `x * y = z`, an AND gate only while every cell is a bit.
+    struct AndAir {
+        /// Whether the AIR leaves the booleanity of its cells to the commitment.
+        assumes_bits: bool,
+    }
+
+    impl BaseAir<F> for AndAir {
+        fn width(&self) -> usize {
+            3
+        }
+
+        fn assumes_boolean_trace(&self) -> bool {
+            self.assumes_bits
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for AndAir {
+        fn eval(&self, builder: &mut AB) {
+            let row = builder.main().current_slice().to_vec();
+            builder.assert_eq(row[0] * row[1], row[2]);
+        }
+    }
+
+    #[test]
+    fn an_air_assuming_bits_is_refused_under_a_field_element_commitment() {
+        // Invariant: a column an AIR assumes holds a bit is one the commitment holds as a bit.
+        //
+        // `2 * (1/2) = 1` satisfies the product on every row, and no cell of it is a bit.
+        //
+        // This scheme commits field elements, so only the verifier's own check refuses it.
+        let product = AndAir {
+            assumes_bits: false,
+        };
+        // Twelve cells stack into four variables.
+        let config = config(4, FOLDING);
+        let (pk, vk) = setup(&config, &[&product], &mut challenger()).unwrap();
+        let half = F::TWO.inverse();
+        let columns = [[F::TWO; 4], [half; 4], [F::ONE; 4]].concat();
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &product,
+                Table::new(RowMajorMatrix::new(columns, 4)),
+                &pk,
+                &[],
+            )]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        let verify_as = |air: &AndAir| {
+            verify(
+                &config,
+                VerifierInstances::new(vec![VerifierInstance::new(air, &vk, FOLDING, &[])]),
+                &proof,
+                0,
+                &mut challenger(),
+            )
+        };
+
+        // The AIR that asserts only the product accepts the witness, as it should.
+        verify_as(&product).unwrap();
+
+        // The AIR that reads the product as an AND gate is refused before the proof is read.
+        assert!(matches!(
+            verify_as(&AndAir { assumes_bits: true }),
+            Err(VerificationError::UncommittedBits {
+                instance: 0,
+                assumed: 3,
+                committed: 0,
+            })
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "instance 0 assumes 3 bit columns, the commitment holds 0")]
+    fn proving_an_air_assuming_bits_under_a_field_element_commitment_panics() {
+        let air = AndAir { assumes_bits: true };
+        let config = config(4, FOLDING);
+        let (pk, _) = setup(&config, &[&air], &mut challenger()).unwrap();
+        let _ = prove(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &air,
+                Table::new(RowMajorMatrix::new(F::zero_vec(12), 4)),
+                &pk,
+                &[],
+            )]),
+            0,
+            &mut challenger(),
+        );
     }
 }

@@ -513,6 +513,11 @@ where
         + CanSampleUniformBits<B::Val>
         + CanObserve<B::Commitment>,
 {
+    fn bit_region(&self, _table: usize, width: usize) -> usize {
+        // Every cell of every table is committed as a bit.
+        width
+    }
+
     fn prescribed_security(&self, protocol: &OpeningProtocol) -> Option<PrescribedOpeningSecurity> {
         // A protocol this scheme would refuse gets no assessment, so a caller fails closed.
         let shapes = protocol.table_shapes();

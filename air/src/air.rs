@@ -294,8 +294,9 @@ pub trait BaseAir<F>: Sync {
     /// Such an AIR must be proven under a commitment whose alphabet is one bit per cell, such as a
     /// commitment to the trace's bits, where a cell outside `{0, 1}` is not representable.
     ///
-    /// The hint is advisory: no prover or verifier consults it. Code that pairs an AIR with a
-    /// commitment to field elements must check it and refuse an AIR that reports `true`.
+    /// The multi-STARK prover and verifier refuse such an AIR under a commitment that does not hold every column as bits.
+    ///
+    /// Other code that pairs it with a commitment to field elements must check the hint itself.
     ///
     /// A wrapper or enum AIR must forward this method, since the default reports no reliance.
     ///
@@ -312,7 +313,9 @@ pub trait BaseAir<F>: Sync {
     ///
     /// Both regions share one height, so one row reads both.
     ///
-    /// A backend that commits every cell as a field element ignores the split.
+    /// The AIR may leave the booleanity of the bit region to the commitment.
+    ///
+    /// The multi-STARK prover and verifier refuse a commitment whose own bit region is narrower.
     ///
     /// A wrapper or enum AIR must forward this method along with [`Self::width`].
     ///

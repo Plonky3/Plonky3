@@ -33,8 +33,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::contract::HeightRange;
 use p3_multi_stark::{
-    ProverInstance, ProverInstances, TableDeclaration, VerifierInstance, VerifierInstances,
-    prove_with_security, setup, verify_with_security,
+    ProverInstance, ProverInstances, TableDeclaration, VerificationError, VerifierInstance,
+    VerifierInstances, prove_with_security, setup, verify, verify_with_security,
 };
 use p3_sumcheck::TableShape;
 use p3_sumcheck::layout::{Table, plan_stacked_layout};
@@ -227,7 +227,7 @@ struct MixedConfig {
 impl MixedConfig {
     /// Split every table where its declaration says, and size the bit witness for them.
     fn new(airs: &[AdderAir], log_height: usize) -> Self {
-        let bits: Vec<usize> = airs
+        let bits = airs
             .iter()
             .map(|air| {
                 TableDeclaration::from_constraints::<F, F, _>(
@@ -238,6 +238,11 @@ impl MixedConfig {
                 .boolean
             })
             .collect();
+        Self::with_bit_regions(airs, log_height, bits)
+    }
+
+    /// Split every table where `bits` says, whatever its declaration says.
+    fn with_bit_regions(airs: &[AdderAir], log_height: usize, bits: Vec<usize>) -> Self {
         let shapes: Vec<TableShape> = airs
             .iter()
             .map(|air| TableShape::new(log_height, air.width()))
@@ -532,6 +537,52 @@ fn an_honest_mixed_table_proves() {
 fn a_forged_word_view_is_rejected() {
     // The consumer's word for row 3 is one off the word its bits read as.
     assert_eq!(verdicts(2, 8, 4, Forgery::BusWord, 3), (false, false));
+}
+
+#[test]
+fn a_bit_region_narrower_than_the_declaration_is_refused() {
+    // Invariant: every column the adder declares a bit is one the commitment holds as a bit.
+    //
+    // The adder never constrains a bit column, so only the commitment keeps it in `{0, 1}`.
+    let (word, log_height) = (4, 3);
+    let airs = mixed_airs(word);
+    let refs: Vec<&AdderAir> = airs.iter().collect();
+    let (tables, _) = traces(&Rows::random(3, word, log_height), Forgery::Honest, 0);
+    let declared = MixedConfig::new(&airs, log_height);
+    let (pk, vk) = setup(&declared, &refs, &mut challenger()).unwrap();
+    let instances = ProverInstances::new(
+        airs.iter()
+            .zip(tables)
+            .map(|(air, table)| ProverInstance::new(air, table, &pk, &[]))
+            .collect(),
+    );
+    let proof =
+        prove_with_security(&declared, instances, 0, SECURITY_BITS, &mut challenger()).unwrap();
+    let verify_under = |config: &MixedConfig| {
+        verify(
+            config,
+            VerifierInstances::new(
+                airs.iter()
+                    .map(|air| VerifierInstance::new(air, &vk, log_height, &[]))
+                    .collect(),
+            ),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+    };
+
+    // The commitment the declaration describes accepts the proof.
+    verify_under(&declared).unwrap();
+
+    // A commitment one bit column short of the declaration is refused before the proof is read.
+    let bits = row_bits(word);
+    let narrowed = MixedConfig::with_bit_regions(&airs, log_height, vec![bits - 1, 0]);
+    assert!(matches!(
+        verify_under(&narrowed),
+        Err(VerificationError::UncommittedBits { instance: 0, assumed, committed })
+            if assumed == bits && committed == bits - 1
+    ));
 }
 
 proptest! {

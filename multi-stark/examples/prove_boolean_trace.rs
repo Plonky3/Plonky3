@@ -1100,6 +1100,10 @@ mod tests {
     }
 
     impl PrescribedPointPcs<F, Challenger> for EvaluatingPcs {
+        fn bit_region(&self, table: usize, width: usize) -> usize {
+            PrescribedPointPcs::<F, Challenger>::bit_region(&self.0, table, width)
+        }
+
         fn prescribed_security(
             &self,
             protocol: &OpeningProtocol,
