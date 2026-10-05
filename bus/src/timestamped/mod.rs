@@ -67,6 +67,10 @@
 //!
 //! Its tuples sit at time zero and can only cancel other padding tuples.
 //!
+//! Each real cell has one seed and one close, which the boundary check confirms across blocks.
+//!
+//! A second seed could close at `g^0` untouched, so the first access would read whichever seed the prover picks.
+//!
 //! On a real cell, balance chains the seed, the accesses and the close into one path.
 //!
 //! Along that path every step raises the clock exponent by `1` to `2^32`.
@@ -264,6 +268,48 @@ impl<C: Field, F: ExtensionField<C>> TimestampedMemory<C, F> {
         Ok(())
     }
 
+    /// Checks that the boundary blocks of this memory seed disjoint cells.
+    ///
+    /// Each block comes with the base-two logarithm of its height, which a zero seed leaves to the caller.
+    ///
+    /// One block never names a cell twice, but nothing inside a block sees the others.
+    ///
+    /// Two blocks over one cell seed it twice, and its first access may then pull either seed.
+    ///
+    /// # Errors
+    ///
+    /// - A block of another memory.
+    /// - Two blocks that seed one cell.
+    pub fn check_boundaries(
+        &self,
+        blocks: &[(&TimestampedBoundaryAir<C, F>, usize)],
+    ) -> Result<(), TimestampedMemoryError> {
+        let mut spans = Vec::with_capacity(blocks.len());
+        for (block, (boundary, log_height)) in blocks.iter().enumerate() {
+            if boundary.memory() != self {
+                return Err(TimestampedMemoryError::ForeignBoundary { block });
+            }
+
+            // A seeded block pins its last cell; a zero seed covers one cell per row from cell zero.
+            let last = boundary.last_cell().unwrap_or_else(|| {
+                u32::try_from(*log_height)
+                    .ok()
+                    .and_then(|bits| 1usize.checked_shl(bits))
+                    .map_or(usize::MAX, |rows| rows - 1)
+            });
+            spans.push((boundary.first_cell(), last));
+        }
+
+        // Sorted by first cell, two spans share a cell exactly when one starts before the previous one ends.
+        spans.sort_unstable();
+        for pair in spans.windows(2) {
+            if pair[1].0 <= pair[0].1 {
+                return Err(TimestampedMemoryError::OverlappingBoundaries { cell: pair[1].0 });
+            }
+        }
+        Ok(())
+    }
+
     /// Soundness of this memory's claims, at the field the transcript samples from.
     ///
     /// The range lookups and memory tuples are declarations on the plan.
@@ -388,7 +434,9 @@ where
     ///
     /// This is the hook every seed source goes through.
     ///
-    /// The caller owes distinct cell addresses across all boundary rows.
+    /// Every boundary row of one memory must name a distinct cell.
+    ///
+    /// The boundary check of the memory confirms that across blocks.
     ///
     /// # Panics
     ///
