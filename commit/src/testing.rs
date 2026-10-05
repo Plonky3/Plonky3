@@ -1,8 +1,10 @@
+mod multilinear;
 mod pcs;
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+pub use multilinear::assert_multilinear_commit_contract;
 use p3_challenger::CanSample;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
