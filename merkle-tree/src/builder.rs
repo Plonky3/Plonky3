@@ -1322,6 +1322,8 @@ mod tests {
         //
         // The budget overrides move the gate, so the expected count reads the gate back.
         //
+        // The gate itself is pinned to the pool's splitting rule on the leaf bytes.
+        //
         // Fixture state: 2, 3 and 16 groups of rows, 2 MiB of them in total, or 4 bytes each.
         //
         //     2 groups x 16 rows, 2 MiB   ->  2 blocks under the default gate
@@ -1357,6 +1359,13 @@ mod tests {
 
             // Every group is a block, unless a thread would idle over rows not worth splitting.
             for (name, builder) in [("wide", &wide), ("narrow", &narrow)] {
+                // The gate is the pool's own, fed the bytes of every row from the leaves up.
+                assert_eq!(
+                    builder.rows_worth_splitting(0),
+                    should_split(builder.row_bytes(0), 1),
+                    "{groups} groups of {name} rows"
+                );
+
                 let expected = if groups < threads && !builder.rows_worth_splitting(0) {
                     1
                 } else {
