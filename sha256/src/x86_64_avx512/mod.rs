@@ -5,6 +5,9 @@
 //!
 //! Equal-length messages share their block count and their padding.
 //! So every lane runs the same rounds, and a block of padding only is the same in every lane.
+//!
+//! The end of a batch rarely fills 32 lanes.
+//! It takes one group of sixteen, or four SHA-NI streams when the build has SHA-NI.
 
 mod rounds;
 
@@ -14,11 +17,13 @@ use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 
 use self::rounds::{K, compress_blocks, compress_shared};
 use crate::{H256_256, Sha256, Sha256Compress};
+#[cfg(all(target_feature = "sha", target_feature = "sse4.1"))]
+use crate::{four_lane, x86_64_sha_ni::ShaNi};
 
 /// Lanes in one register.
 const WIDTH: usize = 16;
 
-/// Register groups advanced together.
+/// Register groups the widest pass advances together.
 const GROUPS: usize = 2;
 
 /// Messages one compression advances at once.
@@ -39,15 +44,8 @@ const ROUNDS: usize = 64;
 /// Bytes the message length takes at the end of the last block.
 const LENGTH_BYTES: usize = 8;
 
-/// A short final group of fewer messages than this hashes them one at a time instead.
-///
-/// With SHA-NI in the build, one message costs a small fraction of a full group.
-/// Without it, one message costs about as much as a whole group.
-const ONE_AT_A_TIME_BELOW: usize = if cfg!(target_feature = "sha") {
-    LANES / 2
-} else {
-    2
-};
+/// Whether this build also has four-stream SHA-NI for the last few messages of a batch.
+const FOUR_STREAMS: bool = cfg!(all(target_feature = "sha", target_feature = "sse4.1"));
 
 /// Byte permutation reversing each 32-bit word of a 128-bit block.
 ///
@@ -56,11 +54,79 @@ const ONE_AT_A_TIME_BELOW: usize = if cfg!(target_feature = "sha") {
 /// The permutation is its own inverse, so it serves loads and stores.
 const REVERSE_WORD_BYTES: [u8; 16] = [3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12];
 
-/// Chaining values of every lane of both groups.
-type State = [[__m512i; STATE_WORDS]; GROUPS];
+/// Chaining values of every lane of `G` groups.
+type State<const G: usize> = [[__m512i; STATE_WORDS]; G];
 
-/// Message words of every lane of both groups.
-type Block = [[__m512i; BLOCK_WORDS]; GROUPS];
+/// Message words of every lane of `G` groups.
+type Block<const G: usize> = [[__m512i; BLOCK_WORDS]; G];
+
+/// One digest per lane of `G` groups.
+type Digests<const G: usize> = [[[u8; 32]; WIDTH]; G];
+
+/// One block per lane of `G` groups.
+type Rows<'a, const G: usize> = [[&'a [u8; BLOCK_BYTES]; WIDTH]; G];
+
+/// A way to hash the next few messages of a batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pass {
+    /// Both register groups, up to 32 messages.
+    Wide,
+    /// One register group, up to 16 messages.
+    Narrow,
+    /// Four interleaved SHA-NI streams.
+    FourStreams,
+    /// The scalar hasher, one message at a time.
+    Single,
+}
+
+impl Pass {
+    /// The pass for the next `left` messages, and how many of them it takes.
+    ///
+    /// A register pass costs the same however many of its lanes hold a message.
+    /// So a pass is picked by the messages it can fill:
+    ///
+    /// ```text
+    ///     left        with SHA-NI            without SHA-NI
+    ///     >= 21       Wide                   Wide
+    ///     18..=20     Narrow, 16 of them     Wide
+    ///     17          Narrow, 16 of them     Narrow, 16 of them
+    ///     9..=16      Narrow                 Narrow
+    ///     3..=8       FourStreams            Narrow
+    ///     2           Single                 Narrow
+    ///     1           Single                 Single
+    /// ```
+    ///
+    /// - A lone register group costs well under two, and about half on long messages.
+    /// - Four SHA-NI streams beat a register group while they need at most two calls.
+    /// - Two passes over a few leftover messages beat one mostly empty wide pass.
+    const fn next(left: usize, four_streams: bool) -> (Self, usize) {
+        // The widest pass fills most of its lanes.
+        let wide_from = if four_streams { 21 } else { 18 };
+        if left >= wide_from {
+            return (Self::Wide, if left < LANES { left } else { LANES });
+        }
+
+        // One group takes sixteen, and the few left over take the cheaper passes below.
+        if left > WIDTH {
+            return (Self::Narrow, WIDTH);
+        }
+
+        // One group holds all the rest.
+        let narrow_from = if four_streams { 9 } else { 2 };
+        if left >= narrow_from {
+            return (Self::Narrow, left);
+        }
+
+        // Too few messages to fill a register group.
+        //
+        // One or two messages run no faster as streams of one call than as calls of their own.
+        if four_streams && left >= 3 {
+            (Self::FourStreams, left)
+        } else {
+            (Self::Single, left)
+        }
+    }
+}
 
 /// Hash `out.len()` equal-length messages laid end to end in `input`.
 ///
@@ -81,10 +147,12 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; 32]]) {
         out.len()
     );
     let len = input.len() / out.len();
-    let padding = Padding::new(len);
+
+    // The padding expands a schedule in scalar code, so only a register pass computes it.
+    let mut padding = None;
 
     // Whole groups of 32 messages.
-    let (groups, rest) = out.as_chunks_mut::<LANES>();
+    let (groups, _) = out.as_chunks_mut::<LANES>();
     for (index, digests) in groups.iter_mut().enumerate() {
         let lanes = Lanes {
             input,
@@ -92,27 +160,69 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; 32]]) {
             first: index * LANES,
             count: LANES,
         };
-        hash_group(&lanes, &padding, digests);
+        hash_group::<GROUPS>(
+            &lanes,
+            padding.get_or_insert_with(|| Padding::new(len)),
+            digests.as_chunks_mut().0.try_into().unwrap(),
+        );
     }
 
-    // A short final group costs a full compression per block, however few messages it holds.
-    let first = groups.len() * LANES;
-    if rest.len() < ONE_AT_A_TIME_BELOW {
-        for (message, digest) in (first..).zip(&mut *rest) {
-            *digest = Sha256.hash_slice(&input[message * len..][..len]);
-        }
-    } else {
-        // The spare lanes repeat the last message, and their digests are never written out.
+    // The messages left over, pass by pass.
+    //
+    //     40 messages:  one group takes 32, then FourStreams takes the last 8
+    let mut first = groups.len() * LANES;
+    while first < out.len() {
+        let (pass, count) = Pass::next(out.len() - first, FOUR_STREAMS);
+        let digests = &mut out[first..first + count];
         let lanes = Lanes {
             input,
             len,
             first,
-            count: rest.len(),
+            count,
         };
-        let mut digests = [[0u8; 32]; LANES];
-        hash_group(&lanes, &padding, &mut digests);
-        rest.copy_from_slice(&digests[..rest.len()]);
+        match pass {
+            Pass::Wide => {
+                hash_pass::<GROUPS>(
+                    &lanes,
+                    padding.get_or_insert_with(|| Padding::new(len)),
+                    digests,
+                );
+            }
+            Pass::Narrow => {
+                hash_pass::<1>(
+                    &lanes,
+                    padding.get_or_insert_with(|| Padding::new(len)),
+                    digests,
+                );
+            }
+            #[cfg(all(target_feature = "sha", target_feature = "sse4.1"))]
+            Pass::FourStreams => {
+                four_lane::hash_many::<ShaNi>(&input[first * len..][..count * len], digests);
+            }
+            #[cfg(not(all(target_feature = "sha", target_feature = "sse4.1")))]
+            Pass::FourStreams => {
+                unreachable!("four streams are only picked when the build has SHA-NI")
+            }
+            Pass::Single => {
+                for (message, digest) in (first..).zip(digests) {
+                    *digest = Sha256.hash_slice(&input[message * len..][..len]);
+                }
+            }
+        }
+        first += count;
     }
+}
+
+/// Hash the messages of one register pass of `G` groups into `out`.
+///
+/// The spare lanes repeat the last message, and their digests are never written out.
+///
+/// Kept out of line so its stack buffers only cost a call that has messages left over.
+#[inline(never)]
+fn hash_pass<const G: usize>(lanes: &Lanes<'_>, padding: &Padding, out: &mut [[u8; 32]]) {
+    let mut digests = [[[0u8; 32]; WIDTH]; G];
+    hash_group::<G>(lanes, padding, &mut digests);
+    out.copy_from_slice(&digests.as_flattened()[..out.len()]);
 }
 
 /// Compress each 64-byte pair from the initial hash value, without padding.
@@ -136,32 +246,65 @@ pub(crate) fn compress_many(inputs: &[[[u8; 32]; 2]], out: &mut [[u8; 32]]) {
         .as_chunks::<BLOCK_BYTES>();
 
     // Whole groups of 32 blocks.
-    let (groups, rest) = out.as_chunks_mut::<LANES>();
+    let (groups, _) = out.as_chunks_mut::<LANES>();
     for (index, digests) in groups.iter_mut().enumerate() {
-        let rows = core::array::from_fn(|lane| &blocks[index * LANES + lane]);
-        compress_group(&rows, digests);
+        let group = &blocks[index * LANES..][..LANES];
+        let mut rows: Rows<'_, GROUPS> = [[&group[0]; WIDTH]; GROUPS];
+        for (row, block) in rows.as_flattened_mut().iter_mut().zip(group) {
+            *row = block;
+        }
+        compress_group::<GROUPS>(&rows, digests.as_chunks_mut().0.try_into().unwrap());
     }
 
-    // The short final group, as in the hash.
-    let first = groups.len() * LANES;
-    if rest.len() < ONE_AT_A_TIME_BELOW {
-        for (input, digest) in inputs[first..].iter().zip(&mut *rest) {
-            *digest = Sha256Compress.compress(*input);
+    // The blocks left over, in the same passes as the hash.
+    let mut first = groups.len() * LANES;
+    while first < out.len() {
+        let (pass, count) = Pass::next(out.len() - first, FOUR_STREAMS);
+        let digests = &mut out[first..first + count];
+        let blocks = &blocks[first..first + count];
+        match pass {
+            Pass::Wide => compress_pass::<GROUPS>(blocks, digests),
+            Pass::Narrow => compress_pass::<1>(blocks, digests),
+            #[cfg(all(target_feature = "sha", target_feature = "sse4.1"))]
+            Pass::FourStreams => {
+                four_lane::compress_many::<ShaNi>(&inputs[first..first + count], digests);
+            }
+            #[cfg(not(all(target_feature = "sha", target_feature = "sse4.1")))]
+            Pass::FourStreams => {
+                unreachable!("four streams are only picked when the build has SHA-NI")
+            }
+            Pass::Single => {
+                for (input, digest) in inputs[first..first + count].iter().zip(digests) {
+                    *digest = Sha256Compress.compress(*input);
+                }
+            }
         }
-    } else {
-        // The spare lanes repeat the last block, and their digests are never written out.
-        let rows = core::array::from_fn(|lane| &blocks[first + lane.min(rest.len() - 1)]);
-        let mut digests = [[0u8; 32]; LANES];
-        compress_group(&rows, &mut digests);
-        rest.copy_from_slice(&digests[..rest.len()]);
+        first += count;
     }
 }
 
-/// One block per lane, from the initial hash value.
+/// Compress the blocks of one register pass of `G` groups into `out`.
+///
+/// The spare lanes repeat the last block, and their digests are never written out.
+///
+/// Kept out of line so its stack buffers only cost a call that has blocks left over.
+#[inline(never)]
+fn compress_pass<const G: usize>(blocks: &[[u8; BLOCK_BYTES]], out: &mut [[u8; 32]]) {
+    let last = blocks.len() - 1;
+    let mut rows: Rows<'_, G> = [[&blocks[last]; WIDTH]; G];
+    for (row, block) in rows.as_flattened_mut().iter_mut().zip(blocks) {
+        *row = block;
+    }
+    let mut digests = [[[0u8; 32]; WIDTH]; G];
+    compress_group::<G>(&rows, &mut digests);
+    out.copy_from_slice(&digests.as_flattened()[..out.len()]);
+}
+
+/// One block per lane of `G` groups, from the initial hash value.
 #[inline]
-fn compress_group(rows: &[&[u8; BLOCK_BYTES]; LANES], out: &mut [[u8; 32]; LANES]) {
+fn compress_group<const G: usize>(rows: &Rows<'_, G>, out: &mut Digests<G>) {
     // No padding: the digest is the chaining value after this single block.
-    let mut state = initial_state();
+    let mut state = initial_state::<G>();
     compress_blocks(&mut state, &load_block(rows));
     store_digests(&state, out);
 }
@@ -238,7 +381,7 @@ struct Lanes<'a> {
     len: usize,
     /// Index of the message in lane 0.
     first: usize,
-    /// Distinct messages in the group, between 1 and 32.
+    /// Distinct messages in the group, at least one and at most its lanes.
     count: usize,
 }
 
@@ -250,34 +393,45 @@ impl Lanes<'_> {
         (self.first + lane.min(self.count - 1)) * self.len
     }
 
-    /// The whole block at byte `offset` of the message of every lane.
+    /// The whole block at byte `offset` of the message of every lane of `G` groups.
     ///
     /// # Panics
     ///
     /// Panics if a lane has fewer than `offset + 64` bytes left in the batch.
     #[inline(always)]
-    fn rows(&self, offset: usize) -> [&[u8; BLOCK_BYTES]; LANES] {
-        core::array::from_fn(|lane| {
-            self.input[self.start(lane) + offset..][..BLOCK_BYTES]
+    fn rows<const G: usize>(&self, offset: usize) -> Rows<'_, G> {
+        // One flat pass over the lanes, which the compiler turns into a few vector steps.
+        let mut rows: Rows<'_, G> = [[&[0; BLOCK_BYTES]; WIDTH]; G];
+        for (lane, row) in rows.as_flattened_mut().iter_mut().enumerate() {
+            *row = self.input[self.start(lane) + offset..][..BLOCK_BYTES]
                 .try_into()
-                .unwrap()
-        })
+                .unwrap();
+        }
+        rows
     }
 }
 
-/// Hash the message of every lane.
-fn hash_group(lanes: &Lanes<'_>, padding: &Padding, out: &mut [[u8; 32]; LANES]) {
-    let mut state = initial_state();
+/// Hash the message of every lane of `G` groups.
+fn hash_group<const G: usize>(lanes: &Lanes<'_>, padding: &Padding, out: &mut Digests<G>) {
+    let mut state = initial_state::<G>();
 
     // Every whole block of message bytes, then the last partial one if any.
-    //
-    // One call site keeps a single copy of the kernel in the loop.
     let whole_blocks = lanes.len / BLOCK_BYTES;
     let blocks = whole_blocks + usize::from(padding.tail > 0);
-    for index in 0..blocks {
+
+    // A message of several whole blocks takes them in a loop of its own.
+    //
+    // A short one keeps a single copy of the kernel in the loop below.
+    let first = if whole_blocks > 1 {
+        compress_whole_blocks(lanes, &mut state, whole_blocks);
+        whole_blocks
+    } else {
+        0
+    };
+    for index in first..blocks {
         let offset = index * BLOCK_BYTES;
         let block = if index < whole_blocks {
-            load_block(&lanes.rows(offset))
+            load_block(&lanes.rows::<G>(offset))
         } else {
             last_block(lanes, offset, padding)
         };
@@ -292,32 +446,61 @@ fn hash_group(lanes: &Lanes<'_>, padding: &Padding, out: &mut [[u8; 32]; LANES])
     store_digests(&state, out);
 }
 
-/// The padded last block of every lane, holding its final `padding.tail` message bytes.
+/// Absorb the first `blocks` whole blocks of every lane of `G` groups.
+///
+/// The lanes' offsets are found once, before the loop.
+/// So every load address is ready early, and more loads are in flight from memory.
 #[inline(never)]
-fn last_block(lanes: &Lanes<'_>, offset: usize, padding: &Padding) -> Block {
+fn compress_whole_blocks<const G: usize>(lanes: &Lanes<'_>, state: &mut State<G>, blocks: usize) {
+    let mut starts = [[0; WIDTH]; G];
+    for (lane, start) in starts.as_flattened_mut().iter_mut().enumerate() {
+        *start = lanes.start(lane);
+    }
+    for index in 0..blocks {
+        let offset = index * BLOCK_BYTES;
+        let mut rows: Rows<'_, G> = [[&[0; BLOCK_BYTES]; WIDTH]; G];
+        for (row, start) in rows
+            .as_flattened_mut()
+            .iter_mut()
+            .zip(starts.as_flattened())
+        {
+            *row = lanes.input[start + offset..][..BLOCK_BYTES]
+                .try_into()
+                .unwrap();
+        }
+        compress_blocks(state, &load_block(&rows));
+    }
+}
+
+/// The padded last block of every lane of `G` groups, holding its final `padding.tail` message bytes.
+#[inline(never)]
+fn last_block<const G: usize>(lanes: &Lanes<'_>, offset: usize, padding: &Padding) -> Block<G> {
     let tail = padding.tail;
 
     // Every lane's message ends inside the batch, the last lane's furthest in.
-    assert!(lanes.start(LANES - 1) + offset + tail <= lanes.input.len());
+    assert!(lanes.start(WIDTH * G - 1) + offset + tail <= lanes.input.len());
 
     // A masked load reads the tail bytes and zeroes the rest of the row.
     //
     // Masked-off bytes are never accessed, so no read goes past a message end.
     let mask: __mmask64 = (1 << tail) - 1;
-    let mut block: Block = core::array::from_fn(|g| {
-        transpose_rows(core::array::from_fn(|l| {
+    let mut block: Block<G> = [[zero(); BLOCK_WORDS]; G];
+    for (g, words) in block.iter_mut().enumerate() {
+        let mut rows = [zero(); WIDTH];
+        for (l, row) in rows.iter_mut().enumerate() {
             // SAFETY:
             // - the module's gate enables AVX-512BW, which byte-masked loads need;
             // - the `tail` enabled bytes lie inside the batch, by the assertion above.
-            unsafe {
-                let row = lanes
+            *row = unsafe {
+                let start = lanes
                     .input
                     .as_ptr()
                     .add(lanes.start(WIDTH * g + l) + offset);
-                _mm512_maskz_loadu_epi8(mask, row.cast())
-            }
-        }))
-    });
+                _mm512_maskz_loadu_epi8(mask, start.cast())
+            };
+        }
+        *words = transpose_rows(rows);
+    }
 
     // Words are big-endian, so the first message byte is the top byte of its word.
     //
@@ -338,11 +521,24 @@ fn last_block(lanes: &Lanes<'_>, offset: usize, padding: &Padding) -> Block {
     block
 }
 
-/// The initial hash value of FIPS 180-4 section 5.3.3, in every lane.
+/// The initial hash value of FIPS 180-4 section 5.3.3, in every lane of `G` groups.
 #[inline(always)]
-fn initial_state() -> State {
+fn initial_state<const G: usize>() -> State<G> {
     // Every lane of every group starts from the same eight words.
-    [H256_256.map(splat); GROUPS]
+    let mut state = [[zero(); STATE_WORDS]; G];
+    for group in &mut state {
+        for (word, &h) in group.iter_mut().zip(&H256_256) {
+            *word = splat(h);
+        }
+    }
+    state
+}
+
+/// The zero word in every lane.
+#[inline(always)]
+fn zero() -> __m512i {
+    // SAFETY: this module only compiles when the target enables AVX-512F.
+    unsafe { _mm512_setzero_si512() }
 }
 
 /// The same word in every lane.
@@ -385,17 +581,22 @@ fn transpose_blocks(a: __m512i, b: __m512i, c: __m512i, d: __m512i) -> [__m512i;
     }
 }
 
-/// Load one block from each lane as the big-endian message words of both groups.
+/// Load one block from each lane as the big-endian message words of `G` groups.
 ///
-/// - Row `l` is one block of the message in lane `l`.
+/// - Row `l` of group `g` is one block of the message in lane `16g + l`.
 /// - Word `w` of group `g` holds word `w` of the messages in lanes `16g` to `16g + 15`.
 #[inline(always)]
-fn load_block(rows: &[&[u8; BLOCK_BYTES]; LANES]) -> Block {
-    let (groups, _) = rows.as_chunks::<WIDTH>();
-    core::array::from_fn(|g| {
-        // SAFETY: each row is 64 readable bytes, and the load has no alignment requirement.
-        transpose_rows(groups[g].map(|row| unsafe { _mm512_loadu_si512(row.as_ptr().cast()) }))
-    })
+fn load_block<const G: usize>(rows: &Rows<'_, G>) -> Block<G> {
+    let mut block = [[zero(); BLOCK_WORDS]; G];
+    for (words, rows) in block.iter_mut().zip(rows) {
+        let mut loaded = [zero(); WIDTH];
+        for (vector, row) in loaded.iter_mut().zip(rows) {
+            // SAFETY: each row is 64 readable bytes, and the load has no alignment requirement.
+            *vector = unsafe { _mm512_loadu_si512(row.as_ptr().cast()) };
+        }
+        *words = transpose_rows(loaded);
+    }
+    block
 }
 
 /// Turn sixteen rows of one block each into sixteen big-endian message words.
@@ -403,12 +604,16 @@ fn load_block(rows: &[&[u8; BLOCK_BYTES]; LANES]) -> Block {
 /// Word `w` of the result holds word `w` of every row, row `l` in lane `l`.
 #[inline(always)]
 fn transpose_rows(rows: [__m512i; WIDTH]) -> [__m512i; BLOCK_WORDS] {
-    let r = rows.map(byte_swap);
+    let mut r = rows;
+    for row in &mut r {
+        *row = byte_swap(*row);
+    }
 
     // Phase 1: block k of u[q][j] is word 4k + j of rows 4q to 4q + 3.
-    let u: [[__m512i; 4]; 4] = core::array::from_fn(|q| {
-        transpose_blocks(r[4 * q], r[4 * q + 1], r[4 * q + 2], r[4 * q + 3])
-    });
+    let mut u = [[zero(); 4]; 4];
+    for (q, u) in u.iter_mut().enumerate() {
+        *u = transpose_blocks(r[4 * q], r[4 * q + 1], r[4 * q + 2], r[4 * q + 3]);
+    }
 
     // Phase 2: word 4k + j gathers block k of u[0][j] to u[3][j], in row order.
     let mut words = [r[0]; BLOCK_WORDS];
@@ -431,14 +636,16 @@ fn transpose_rows(rows: [__m512i; WIDTH]) -> [__m512i; BLOCK_WORDS] {
     words
 }
 
-/// Write the big-endian digest of every lane of both groups.
+/// Write the big-endian digest of every lane of `G` groups.
 ///
 /// Two adjacent digests fill one 64-byte store, so eight stores cover a group.
 #[inline(always)]
-fn store_digests(state: &State, out: &mut [[u8; 32]; LANES]) {
-    let (groups, _) = out.as_chunks_mut::<WIDTH>();
-    for (state, out) in state.iter().zip(groups) {
-        let s = state.map(byte_swap);
+fn store_digests<const G: usize>(state: &State<G>, out: &mut Digests<G>) {
+    for (state, out) in state.iter().zip(out) {
+        let mut s = *state;
+        for word in &mut s {
+            *word = byte_swap(*word);
+        }
 
         // Block k of lo[j] is words 0 to 3 of lane 4k + j, and hi[j] holds words 4 to 7.
         let lo = transpose_blocks(s[0], s[1], s[2], s[3]);
@@ -474,6 +681,8 @@ fn store_digests(state: &State, out: &mut [[u8; 32]; LANES]) {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use proptest::prelude::*;
 
     use super::*;
@@ -489,8 +698,8 @@ mod tests {
         })
     }
 
-    /// One chaining value per lane, packed into both groups: lane `16g + l` is lane `l` of group `g`.
-    fn pack(states: &[[u32; STATE_WORDS]; LANES]) -> State {
+    /// One chaining value per lane, packed into `G` groups: lane `16g + l` is lane `l` of group `g`.
+    fn pack<const G: usize>(states: &[[u32; STATE_WORDS]]) -> State<G> {
         core::array::from_fn(|g| {
             core::array::from_fn(|i| {
                 let lanes: [u32; WIDTH] = core::array::from_fn(|l| states[WIDTH * g + l][i]);
@@ -509,53 +718,116 @@ mod tests {
         out
     }
 
+    /// Random chaining values, one per lane of `G` groups.
+    fn random_states<const G: usize>(
+        stream: &mut impl Iterator<Item = u32>,
+    ) -> Vec<[u32; STATE_WORDS]> {
+        (0..WIDTH * G)
+            .map(|_| core::array::from_fn(|_| stream.next().unwrap()))
+            .collect()
+    }
+
+    /// The block kernel of `G` groups against the specification, from random chaining values.
+    fn check_block_kernel<const G: usize>(seed: u64) -> Result<(), TestCaseError> {
+        // Random chaining values and blocks, different in every lane.
+        let mut stream = words(seed | 1);
+        let states = random_states::<G>(&mut stream);
+        let blocks: Vec<[u8; BLOCK_BYTES]> = (0..WIDTH * G)
+            .map(|_| {
+                let words: [u32; BLOCK_WORDS] = core::array::from_fn(|_| stream.next().unwrap());
+                *words
+                    .map(u32::to_le_bytes)
+                    .as_flattened()
+                    .as_array()
+                    .unwrap()
+            })
+            .collect();
+
+        // Load, compress and store through the vector path.
+        let mut state = pack::<G>(&states);
+        let rows = core::array::from_fn(|g| core::array::from_fn(|l| &blocks[WIDTH * g + l]));
+        compress_blocks(&mut state, &load_block::<G>(&rows));
+        let mut out = [[[0u8; 32]; WIDTH]; G];
+        store_digests(&state, &mut out);
+
+        // Every lane must match one compression of FIPS 180-4 section 6.2.2.
+        for (lane, out) in out.as_flattened().iter().enumerate() {
+            let mut expected = states[lane];
+            spec_compress(&mut expected, &blocks[lane]);
+            prop_assert_eq!(*out, digest(expected), "lane {}", lane);
+        }
+        Ok(())
+    }
+
+    /// The shared-block kernel of `G` groups against the specification, from random chaining values.
+    fn check_shared_kernel<const G: usize>(seed: u64) -> Result<(), TestCaseError> {
+        // Random chaining values in every lane, and one random block for all of them.
+        let mut stream = words(seed | 1);
+        let states = random_states::<G>(&mut stream);
+        let block: [u32; BLOCK_WORDS] = core::array::from_fn(|_| stream.next().unwrap());
+
+        // The schedule is expanded once, in scalar code, and broadcast.
+        let mut state = pack::<G>(&states);
+        compress_shared(&mut state, &shared_schedule(&block));
+        let mut out = [[[0u8; 32]; WIDTH]; G];
+        store_digests(&state, &mut out);
+
+        // The specification reads the block as big-endian bytes.
+        let bytes = *block
+            .map(u32::to_be_bytes)
+            .as_flattened()
+            .as_array()
+            .unwrap();
+        for (lane, out) in out.as_flattened().iter().enumerate() {
+            let mut expected = states[lane];
+            spec_compress(&mut expected, &bytes);
+            prop_assert_eq!(*out, digest(expected), "lane {}", lane);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn every_pass_fits_its_lanes_and_the_passes_cover_the_batch() {
+        for four_streams in [false, true] {
+            for count in 1..=4 * LANES {
+                // Walk a batch of `count` messages the way the drivers do.
+                let mut left = count;
+                let mut passes = Vec::new();
+                while left > 0 {
+                    let (pass, take) = Pass::next(left, four_streams);
+
+                    // A pass takes at least one message, and no more than its lanes hold.
+                    let capacity = match pass {
+                        Pass::Wide => LANES,
+                        Pass::Narrow => WIDTH,
+                        Pass::FourStreams | Pass::Single => left,
+                    };
+                    assert!((1..=capacity.min(left)).contains(&take), "{count} messages");
+                    passes.push(pass);
+                    left -= take;
+                }
+
+                // Whole groups of 32 always take the widest pass.
+                let wide = passes.iter().filter(|&&pass| pass == Pass::Wide).count();
+                assert!(wide >= count / LANES, "{count} messages");
+
+                // Only a build with SHA-NI uses four streams.
+                assert!(four_streams || !passes.contains(&Pass::FourStreams));
+            }
+        }
+    }
+
     proptest! {
         #[test]
         fn the_block_kernel_matches_the_specification_from_any_chaining_value(seed in any::<u64>()) {
-            // Random chaining values and blocks, different in every lane.
-            let mut stream = words(seed | 1);
-            let states: [[u32; STATE_WORDS]; LANES] =
-                core::array::from_fn(|_| core::array::from_fn(|_| stream.next().unwrap()));
-            let blocks: [[u8; BLOCK_BYTES]; LANES] = core::array::from_fn(|_| {
-                let words: [u32; BLOCK_WORDS] = core::array::from_fn(|_| stream.next().unwrap());
-                *words.map(u32::to_le_bytes).as_flattened().as_array().unwrap()
-            });
-
-            // Load, compress and store through the vector path.
-            let mut state = pack(&states);
-            compress_blocks(&mut state, &load_block(&blocks.each_ref()));
-            let mut out = [[0u8; 32]; LANES];
-            store_digests(&state, &mut out);
-
-            // Every lane must match one compression of FIPS 180-4 section 6.2.2.
-            for lane in 0..LANES {
-                let mut expected = states[lane];
-                spec_compress(&mut expected, &blocks[lane]);
-                prop_assert_eq!(out[lane], digest(expected), "lane {}", lane);
-            }
+            check_block_kernel::<1>(seed)?;
+            check_block_kernel::<GROUPS>(seed)?;
         }
 
         #[test]
         fn the_shared_kernel_matches_the_specification_from_any_chaining_value(seed in any::<u64>()) {
-            // Random chaining values in every lane, and one random block for all of them.
-            let mut stream = words(seed | 1);
-            let states: [[u32; STATE_WORDS]; LANES] =
-                core::array::from_fn(|_| core::array::from_fn(|_| stream.next().unwrap()));
-            let block: [u32; BLOCK_WORDS] = core::array::from_fn(|_| stream.next().unwrap());
-
-            // The schedule is expanded once, in scalar code, and broadcast.
-            let mut state = pack(&states);
-            compress_shared(&mut state, &shared_schedule(&block));
-            let mut out = [[0u8; 32]; LANES];
-            store_digests(&state, &mut out);
-
-            // The specification reads the block as big-endian bytes.
-            let bytes = *block.map(u32::to_be_bytes).as_flattened().as_array().unwrap();
-            for lane in 0..LANES {
-                let mut expected = states[lane];
-                spec_compress(&mut expected, &bytes);
-                prop_assert_eq!(out[lane], digest(expected), "lane {}", lane);
-            }
+            check_shared_kernel::<1>(seed)?;
+            check_shared_kernel::<GROUPS>(seed)?;
         }
     }
 }

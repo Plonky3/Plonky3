@@ -171,6 +171,14 @@ jobs:
             avx512: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
+          # The AVX-512 SHA-256 backend hands the last few messages of a batch to SHA-NI streams.
+          # No other leg sets both, so this one compiles that hand-off.
+          - name: linux, avx512f+avx512bw+sha, build only
+            os: ubuntu-latest
+            features: "+avx512f,+avx512bw,+sha,+sse4.1"
+            compile_only: true
+            target: x86_64-unknown-linux-gnu
+            modes: serial parallel
           # The inversion's repeated-squaring kernel also needs PCLMULQDQ and AVX-512 VBMI.
           # No other leg sets both, so this one compiles and tests that kernel.
           - name: linux, pclmulqdq+avx512vbmi+gfni, build only
