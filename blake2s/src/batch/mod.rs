@@ -127,6 +127,7 @@ mod tests {
     use hex_literal::hex;
 
     use super::*;
+    use crate::tests::official_vectors;
 
     /// RFC 7693 appendix E: BLAKE2s-256 of every self-test digest, in order.
     const SELFTEST_GRAND_HASH: [u8; DIGEST_BYTES] =
@@ -188,5 +189,19 @@ mod tests {
         let mut grand = vec![[0u8; DIGEST_BYTES]];
         hash_many(&digests, &mut grand);
         assert_eq!(grand[0], SELFTEST_GRAND_HASH);
+    }
+
+    #[test]
+    fn the_official_keyed_vectors_match() {
+        // The official keyed answers all use the 32-byte key 00 01 .. 1f.
+        let key: Vec<u8> = (0..32).collect();
+        for (input, digest) in official_vectors(include_str!("../test_vectors/keyed.txt")) {
+            assert_eq!(
+                blake2s(DIGEST_BYTES, &key, &input),
+                digest,
+                "{} bytes",
+                input.len()
+            );
+        }
     }
 }

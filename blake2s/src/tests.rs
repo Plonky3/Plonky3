@@ -1,5 +1,8 @@
-//! Every test pins this implementation to something outside it: RFC 7693's own vectors, or
-//! RustCrypto's `blake2`.
+//! Every test pins this implementation to an outside reference:
+//!
+//! - RFC 7693's own vectors.
+//! - The official BLAKE2 known answers.
+//! - RustCrypto's `blake2`.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -34,25 +37,59 @@ fn fixture(bytes: usize) -> Vec<u8> {
         .collect()
 }
 
-/// BLAKE2s-256 of the empty message, from the BLAKE2 reference test vectors.
-const EMPTY_DIGEST: [u8; DIGEST_BYTES] =
-    hex!("69217A3079908094E11121D042354A7C1F55B6482CA1A51E1B250DFD1ED0EEF9");
+/// Official BLAKE2s-256 known answers, as input and digest pairs.
+///
+/// Input `n` is the bytes `00 01 .. n-1`, for `n` from 0 to 255.
+///
+/// Each file is one hex digest per line, from the BLAKE2 reference repository:
+///
+/// ```text
+/// jq -r '.[] | select(.hash == "blake2s" and .key == "") | .out' testvectors/blake2-kat.json
+/// ```
+///
+/// The keyed file selects a non-empty key instead, always `00 01 .. 1f`.
+pub(crate) fn official_vectors(file: &str) -> impl Iterator<Item = (Vec<u8>, [u8; DIGEST_BYTES])> {
+    // A truncated file would silently skip the longest inputs.
+    assert_eq!(file.lines().count(), 256, "the vector file is truncated");
+    file.lines().enumerate().map(|(n, line)| {
+        // Input n counts up from zero.
+        let input = (0..n).map(|i| i as u8).collect();
+
+        // Two hex characters per digest byte.
+        let digest = core::array::from_fn(|i| {
+            u8::from_str_radix(&line[2 * i..2 * i + 2], 16).expect("hex digest")
+        });
+        (input, digest)
+    })
+}
 
 #[test]
 fn the_rfc_7693_vector_matches() {
     assert_eq!(Blake2s256::hash(b"abc"), ABC_DIGEST);
-    assert_eq!(Blake2s256::hash(b""), EMPTY_DIGEST);
 }
 
 #[test]
 fn known_answers_match_in_every_lane_of_a_batch() {
     // Two full lane groups plus one spare, all of the same known message.
-    for (message, expected) in [(&b"abc"[..], ABC_DIGEST), (&b""[..], EMPTY_DIGEST)] {
-        let count = 2 * LANES + 1;
-        let messages = message.repeat(count);
+    let count = 2 * LANES + 1;
+    let messages = b"abc".repeat(count);
+    let mut digests = vec![[0u8; DIGEST_BYTES]; count];
+    Blake2s256.hash_many(&messages, &mut digests);
+    assert!(digests.iter().all(|digest| digest == &ABC_DIGEST));
+}
+
+#[test]
+fn the_official_unkeyed_vectors_match() {
+    // Every length from 0 to 255 bytes: empty, every tail size, and up to four blocks.
+    for (input, digest) in official_vectors(include_str!("test_vectors/unkeyed.txt")) {
+        let len = input.len();
+        assert_eq!(Blake2s256::hash(&input), digest, "{len} bytes");
+
+        // One full lane group plus one spare, so both the full and the padded group run.
+        let count = LANES + 1;
         let mut digests = vec![[0u8; DIGEST_BYTES]; count];
-        Blake2s256.hash_many(&messages, &mut digests);
-        assert!(digests.iter().all(|digest| digest == &expected));
+        Blake2s256.hash_many(&input.repeat(count), &mut digests);
+        assert!(digests.iter().all(|d| d == &digest), "{len} bytes, batched");
     }
 }
 
