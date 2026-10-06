@@ -5,11 +5,17 @@ use p3_field::{PackedValue, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::stack::EitherRow;
 use p3_monty_31::dft::RecursiveDft;
 
+/// DFT evaluations in natural or bit-reversed row order.
+///
+/// Row access preserves the underlying storage's specialized implementation.
 #[derive(Debug)]
 pub enum MaybeBitreversedMatrix<T> {
+    /// Rows viewed through a bit-reversal permutation.
     Yes(BitReversedMatrixView<RowMajorMatrix<T>>),
+    /// Rows in natural order.
     No(RowMajorMatrix<T>),
 }
 
@@ -27,10 +33,6 @@ impl<T> From<BitReversedMatrixView<RowMajorMatrix<T>>> for MaybeBitreversedMatri
     }
 }
 
-// TODO: This is pretty nasty. Anyone actually using the matrix trait for
-// MaybeBitreversedMatrix outside of the to_row_major_matrix trait is going to have
-// a bad time. Might want to refactor this somehow. We only use to_row_major_matrix
-// from this trait in the proving loop so it's not a huge issue for now.
 impl<T> Matrix<T> for MaybeBitreversedMatrix<T>
 where
     T: Send + Sync + Clone,
@@ -73,11 +75,12 @@ where
         &self,
         r: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
-        match self {
-            Self::Yes(_) => {
-                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+        // SAFETY: The caller supplies a valid row in the unchanged dimensions.
+        unsafe {
+            match self {
+                Self::Yes(inner) => EitherRow::Left(inner.row_unchecked(r).into_iter()),
+                Self::No(inner) => EitherRow::Right(inner.row_unchecked(r).into_iter()),
             }
-            Self::No(inner) => unsafe { inner.row_unchecked(r) },
         }
     }
 
@@ -87,19 +90,26 @@ where
         start: usize,
         end: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
-        match self {
-            Self::Yes(inner) => unsafe { inner.row_subseq_unchecked(r, start, end) },
-            Self::No(_) => {
-                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+        // SAFETY: The caller supplies a valid row and an in-bounds column range.
+        // Both dimensions match the underlying storage.
+        unsafe {
+            match self {
+                Self::Yes(inner) => {
+                    EitherRow::Left(inner.row_subseq_unchecked(r, start, end).into_iter())
+                }
+                Self::No(inner) => {
+                    EitherRow::Right(inner.row_subseq_unchecked(r, start, end).into_iter())
+                }
             }
         }
     }
 
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
-        match self {
-            Self::Yes(inner) => unsafe { inner.row_slice_unchecked(r) },
-            Self::No(_) => {
-                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+        // SAFETY: The caller supplies a valid row in the unchanged dimensions.
+        unsafe {
+            match self {
+                Self::Yes(inner) => EitherRow::Left(inner.row_slice_unchecked(r)),
+                Self::No(inner) => EitherRow::Right(inner.row_slice_unchecked(r)),
             }
         }
     }
@@ -110,11 +120,13 @@ where
         start: usize,
         end: usize,
     ) -> impl Deref<Target = [T]> {
-        match self {
-            Self::Yes(_) => {
-                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+        // SAFETY: The caller supplies a valid row and an in-bounds column range.
+        // Both dimensions match the underlying storage.
+        unsafe {
+            match self {
+                Self::Yes(inner) => EitherRow::Left(inner.row_subslice_unchecked(r, start, end)),
+                Self::No(inner) => EitherRow::Right(inner.row_subslice_unchecked(r, start, end)),
             }
-            Self::No(inner) => unsafe { inner.row_subslice_unchecked(r, start, end) },
         }
     }
 
@@ -129,10 +141,15 @@ where
         P: PackedValue<Value = T>,
         T: Clone + 'a,
     {
+        // Preserve both the full packs and the unpacked tail.
         match self {
-            Self::Yes(inner) => inner.horizontally_packed_row(r),
-            Self::No(_) => {
-                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+            Self::Yes(inner) => {
+                let (packed, suffix) = inner.horizontally_packed_row(r);
+                (EitherRow::Left(packed), EitherRow::Left(suffix))
+            }
+            Self::No(inner) => {
+                let (packed, suffix) = inner.horizontally_packed_row(r);
+                (EitherRow::Right(packed), EitherRow::Right(suffix))
             }
         }
     }
@@ -145,11 +162,10 @@ where
         P: PackedValue<Value = T>,
         T: Clone + Default + 'a,
     {
+        // Delegate padding to the underlying storage.
         match self {
-            Self::Yes(_) => {
-                unimplemented!("Not implemented for MaybeBitreversedMatrix")
-            }
-            Self::No(inner) => inner.padded_horizontally_packed_row(r),
+            Self::Yes(inner) => EitherRow::Left(inner.padded_horizontally_packed_row(r)),
+            Self::No(inner) => EitherRow::Right(inner.padded_horizontally_packed_row(r)),
         }
     }
 }
@@ -242,6 +258,139 @@ where
             Self::Recursive(inner_dft) => inner_dft.coset_lde_batch(mat, added_bits, shift).into(),
             Self::Parallel(inner_dft) => inner_dft.coset_lde_batch(mat, added_bits, shift).into(),
             Self::SmallBatch(inner_dft) => inner_dft.coset_lde_batch(mat, added_bits, shift).into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::FieldArray;
+    use p3_matrix::Matrix;
+    use p3_matrix::bitrev::BitReversalPerm;
+    use p3_matrix::dense::RowMajorMatrix;
+
+    use super::MaybeBitreversedMatrix;
+
+    type F = BabyBear;
+
+    fn assert_accessors_match<M: Matrix<F>>(wrapper: &MaybeBitreversedMatrix<F>, inner: &M) {
+        // Invariant: wrapping preserves dimensions and logical row contents.
+        assert_eq!(wrapper.width(), inner.width());
+        assert_eq!(wrapper.height(), inner.height());
+
+        // Safe access rejects the first row beyond the matrix.
+        assert!(wrapper.row(inner.height()).is_none());
+        assert!(wrapper.row_slice(inner.height()).is_none());
+
+        for r in 0..inner.height() {
+            // Iteration and borrowed slices must expose the same logical row.
+            let actual: Vec<F> = wrapper.row(r).unwrap().into_iter().collect();
+            let expected: Vec<F> = inner.row(r).unwrap().into_iter().collect();
+            assert_eq!(actual, expected, "row({r})");
+
+            // Compare slices without allocating copies.
+            assert_eq!(
+                &*wrapper.row_slice(r).unwrap(),
+                &*inner.row_slice(r).unwrap(),
+                "row_slice({r})"
+            );
+
+            // Cover every column range, including empty ranges at both ends.
+            for start in 0..=inner.width() {
+                for end in start..=inner.width() {
+                    // SAFETY: The row exists and the loop bounds keep the range within its width.
+                    let actual: Vec<F> = unsafe { wrapper.row_subseq_unchecked(r, start, end) }
+                        .into_iter()
+                        .collect();
+
+                    // SAFETY: The same bounds apply to the underlying matrix.
+                    let expected: Vec<F> = unsafe { inner.row_subseq_unchecked(r, start, end) }
+                        .into_iter()
+                        .collect();
+                    assert_eq!(
+                        actual, expected,
+                        "row_subseq_unchecked({r}, {start}, {end})"
+                    );
+
+                    // SAFETY: Both matrices have the checked row and column bounds.
+                    assert_eq!(
+                        &*unsafe { wrapper.row_subslice_unchecked(r, start, end) },
+                        &*unsafe { inner.row_subslice_unchecked(r, start, end) },
+                        "row_subslice_unchecked({r}, {start}, {end})"
+                    );
+                }
+            }
+
+            // Two lanes exercise short rows, exact packs, and a trailing element.
+            let (actual_packed, actual_suffix) =
+                wrapper.horizontally_packed_row::<FieldArray<F, 2>>(r);
+            let (expected_packed, expected_suffix) =
+                inner.horizontally_packed_row::<FieldArray<F, 2>>(r);
+            assert_eq!(
+                actual_packed.collect::<Vec<_>>(),
+                expected_packed.collect::<Vec<_>>(),
+                "horizontally_packed_row({r}), packed half"
+            );
+            assert_eq!(
+                actual_suffix.collect::<Vec<_>>(),
+                expected_suffix.collect::<Vec<_>>(),
+                "horizontally_packed_row({r}), suffix half"
+            );
+
+            // The final pack must retain the tail and pad unused lanes with zero.
+            assert_eq!(
+                wrapper
+                    .padded_horizontally_packed_row::<FieldArray<F, 2>>(r)
+                    .collect::<Vec<_>>(),
+                inner
+                    .padded_horizontally_packed_row::<FieldArray<F, 2>>(r)
+                    .collect::<Vec<_>>(),
+                "padded_horizontally_packed_row({r})"
+            );
+        }
+    }
+
+    #[test]
+    fn no_variant_matches_the_row_major_matrix() {
+        // Include a single row and an empty matrix in natural order.
+        for height in [0, 1, 4, 8] {
+            for width in 1..=4 {
+                // Distinct entries expose row-order and column-range errors.
+                let inner =
+                    RowMajorMatrix::new((1..=(height * width) as u32).map(F::new).collect(), width);
+                let wrapper = MaybeBitreversedMatrix::No(inner.clone());
+
+                // Every access path must agree with the underlying storage.
+                assert_accessors_match(&wrapper, &inner);
+
+                // Materialization preserves the natural row order.
+                assert_eq!(wrapper.to_row_major_matrix().values, inner.values);
+            }
+        }
+    }
+
+    #[test]
+    fn yes_variant_matches_the_bit_reversed_view() {
+        // Bit reversal needs a positive power-of-two height.
+        for height in [1, 4, 8] {
+            for width in 1..=4 {
+                // Distinct rows expose the permutation: [0, 1, 2, 3] -> [0, 2, 1, 3].
+                let matrix =
+                    RowMajorMatrix::new((1..=(height * width) as u32).map(F::new).collect(), width);
+                let inner = BitReversalPerm::new_view(matrix);
+                let wrapper =
+                    MaybeBitreversedMatrix::Yes(BitReversalPerm::new_view(inner.inner.clone()));
+
+                // Every access path must apply the same row permutation.
+                assert_accessors_match(&wrapper, &inner);
+
+                // Materialization applies the permutation to the stored rows.
+                assert_eq!(
+                    wrapper.to_row_major_matrix().values,
+                    inner.to_row_major_matrix().values
+                );
+            }
         }
     }
 }
