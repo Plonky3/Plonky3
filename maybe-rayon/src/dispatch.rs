@@ -13,7 +13,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::Any;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 use std::panic::AssertUnwindSafe;
 use std::sync::Mutex;
 
@@ -98,8 +98,8 @@ struct Gate {
     job: *const (dyn Fn() + Sync),
     /// Whether unclaimed work is left, erased like `job`.
     left: *const (dyn Fn() -> bool + Sync),
-    /// Helpers still to wake.
-    to_wake: AtomicUsize,
+    /// Helpers still to wake; it may go below zero, which wakes no one.
+    to_wake: AtomicIsize,
     /// Helpers inside the job.
     entered: AtomicUsize,
     /// Whether the caller has stopped waiting for newcomers.
@@ -131,7 +131,7 @@ impl Gate {
         let gate = Arc::new(Self {
             job,
             left,
-            to_wake: AtomicUsize::new(pieces.min(current_num_threads()) - 1),
+            to_wake: AtomicIsize::new(pieces.min(current_num_threads()) as isize - 1),
             entered: AtomicUsize::new(0),
             closed: AtomicBool::new(false),
             panic: Mutex::new(None),
@@ -155,10 +155,7 @@ impl Gate {
     /// Wakes up to two more helpers, if any are still wanted.
     fn wake(gate: &Arc<Self>) {
         for _ in 0..2 {
-            let wanted = gate
-                .to_wake
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
-            if wanted.is_err() {
+            if gate.to_wake.fetch_sub(1, Ordering::Relaxed) <= 0 {
                 return;
             }
             let shared = Arc::clone(gate);
