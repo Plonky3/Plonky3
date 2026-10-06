@@ -555,6 +555,9 @@ pub trait TaskSizeExt: IndexedParallelIterator {
         if min_len >= len {
             return drive_serially(self, ForEachSerially(op));
         }
+        #[cfg(feature = "parallel")]
+        crate::dispatch::for_each(self.with_min_len(min_len), op);
+        #[cfg(not(feature = "parallel"))]
         self.with_min_len(min_len).for_each(op);
     }
 
@@ -578,6 +581,9 @@ pub trait TaskSizeExt: IndexedParallelIterator {
         if min_len >= len {
             return drive_serially(self, MapCollectSerially(map_op));
         }
+        #[cfg(feature = "parallel")]
+        return crate::dispatch::map_collect(self.with_min_len(min_len), map_op);
+        #[cfg(not(feature = "parallel"))]
         self.with_min_len(min_len).map(map_op).collect()
     }
 }
