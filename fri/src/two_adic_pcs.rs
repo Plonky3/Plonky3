@@ -90,6 +90,8 @@ where
     ///
     /// Matrices are scheduled largest first so the small ones fill idle cores, and the results
     /// are returned in the order of `evaluations`.
+    ///
+    /// The LDEs run as separate tasks when the cost model splits the loop, and in one task otherwise.
     fn coset_ldes(
         &self,
         evaluations: impl IntoIterator<Item = (TwoAdicMultiplicativeCoset<Val>, RowMajorMatrix<Val>)>,
@@ -103,8 +105,9 @@ where
 
         // An item reads its input and writes the blown-up output.
         let total_values: usize = jobs.iter().map(|(_, _, evals)| evals.values.len()).sum();
-        let item_bytes =
-            (total_values << self.fri.log_blowup).div_ceil(jobs.len().max(1)) * size_of::<Val>();
+        let item_bytes = (total_values + (total_values << self.fri.log_blowup))
+            .div_ceil(jobs.len().max(1))
+            * size_of::<Val>();
 
         let dft = &self.dft;
         let log_blowup = self.fri.log_blowup;
@@ -1614,7 +1617,7 @@ mod tests {
 
         // Repeated heights with distinct widths: a swap between equal-height matrices
         // changes the matrices handed to the committer.
-        let inputs: Vec<_> = [(2, 3), (5, 2), (3, 4), (5, 5), (4, 1), (2, 6)]
+        let inputs: Vec<_> = [(10, 5), (11, 4), (10, 8), (11, 7), (10, 4), (11, 6)]
             .into_iter()
             .map(|(log_height, width)| {
                 let domain = <MyPcs as Pcs<EF, Challenger>>::natural_domain_for_degree(
