@@ -7,6 +7,36 @@ use crate::zerocheck::backend_tests::{FixtureAir, Instance};
 
 type Tower = BinaryField128;
 
+fn check_packed_folds<R: Field>(value: impl Fn(usize) -> R) {
+    for log_len in 1..=14 {
+        for challenge in [R::ZERO, R::ONE, value(0xF01D)] {
+            let mut values = Vec::with_capacity((1 << log_len) + 7);
+            values.extend((0..1 << log_len).map(&value));
+            let pointer = values.as_ptr();
+            let capacity = values.capacity();
+            let mut scalar = Poly::new(values.clone());
+            let mut packed = Poly::new(values);
+            while packed.num_evals() > 1 {
+                scalar.fix_prefix_var_mut(challenge);
+                fold_repr_column(&mut packed, R::Packing::from(challenge));
+                assert_eq!(packed.as_slice(), scalar.as_slice());
+                assert_eq!(packed.as_slice().as_ptr(), pointer);
+            }
+            assert_eq!(packed.into_evals().capacity(), capacity);
+        }
+    }
+}
+
+#[test]
+fn packed_representation_folds_match_scalar_folds() {
+    check_packed_folds::<Ghash128>(|i| {
+        Ghash128::from_repr((i as u128 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C835))
+    });
+    check_packed_folds::<p3_baby_bear::BabyBear>(|i| {
+        p3_baby_bear::BabyBear::from_usize(i.wrapping_mul(0x9E37_79B9))
+    });
+}
+
 #[test]
 fn the_fold_tables_fold_every_gf4_pair() {
     let r = Tower::from_repr(0xF01D_0000_0000_0000_0000_0000_0000_0007);
