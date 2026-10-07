@@ -662,6 +662,11 @@ impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     }
 
     #[inline]
+    fn flatten_slice_to_base(values: &[Self]) -> Option<&[F]> {
+        Some(values)
+    }
+
+    #[inline]
     fn flatten_to_base(vec: Vec<Self>) -> Vec<F> {
         vec
     }

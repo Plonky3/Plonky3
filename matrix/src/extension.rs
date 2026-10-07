@@ -201,6 +201,30 @@ mod tests {
     type EF = Complex<Mersenne31>;
 
     #[test]
+    fn identity_contiguous_rows_borrow_the_original_elements() {
+        use p3_binary_field::{BinaryField128, TowerLevel};
+
+        let values: Vec<_> = (0..12).map(BinaryField128::from_repr).collect();
+        let inner = RowMajorMatrix::new(values, 3);
+        let flat = FlatMatrixView::<BinaryField128, BinaryField128, _>::new(inner.as_view());
+        for start in 0..=4 {
+            for end in start..=4 {
+                let rows = flat.contiguous_rows(start..end).unwrap();
+                assert_eq!(&*rows, &inner.values[start * 3..end * 3]);
+                assert_eq!(rows.as_ptr(), inner.values.as_ptr().wrapping_add(start * 3));
+            }
+        }
+        assert!(flat.contiguous_rows(Range { start: 3, end: 2 }).is_none());
+        assert!(flat.contiguous_rows(0..5).is_none());
+        assert!(flat.contiguous_rows(5..5).is_none());
+        let empty = FlatMatrixView::<BinaryField128, BinaryField128, _>::new(RowMajorMatrix::new(
+            vec![],
+            3,
+        ));
+        assert!(empty.contiguous_rows(0..0).unwrap().is_empty());
+    }
+
+    #[test]
     fn flattened_contiguous_rows_borrow_ordered_cubic_coefficients() {
         use p3_binary_field::{Poly64, Poly192};
         let values: Vec<_> = (0..12)
