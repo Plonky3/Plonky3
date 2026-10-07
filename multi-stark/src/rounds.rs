@@ -833,6 +833,69 @@ impl<F> NodeStep<F> {
     }
 }
 
+/// Broadcast node gaps once, retaining base-field scalars for cheaper mixed multiplication.
+#[derive(Clone, Copy)]
+enum PackedNodeStep<B, E> {
+    Unit(usize),
+    Base(B),
+    Extension(E),
+}
+
+fn packed_node_step<F: Field, EF: ExtensionField<F>>(
+    step: NodeStep<EF>,
+) -> PackedNodeStep<F::Packing, EF::ExtensionPacking> {
+    match step {
+        NodeStep::Unit(count) => PackedNodeStep::Unit(count),
+        NodeStep::Scaled(gap) => gap.as_base().map_or_else(
+            || PackedNodeStep::Extension(EF::ExtensionPacking::from(gap)),
+            |base| PackedNodeStep::Base(F::Packing::from(base)),
+        ),
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> PackedScratch<PackedExt<F, EF::ExtensionPacking>, EF> {
+    /// Advance columns and boundary selectors by the same prepared node gap.
+    fn advance_node(
+        &mut self,
+        step: PackedNodeStep<F::Packing, EF::ExtensionPacking>,
+        next_columns: &[Range<usize>],
+        boundary: &mut BoundaryEvals<PackedExt<F, EF::ExtensionPacking>>,
+        boundary_diff: BoundaryEvals<PackedExt<F, EF::ExtensionPacking>>,
+    ) {
+        match step {
+            PackedNodeStep::Unit(count) => {
+                for _ in 0..count {
+                    self.add_diffs(next_columns);
+                    *boundary += boundary_diff;
+                }
+            }
+            PackedNodeStep::Base(step) => {
+                let add = |point: &mut [PackedExt<F, EF::ExtensionPacking>],
+                           diff: &[PackedExt<F, EF::ExtensionPacking>]| {
+                    for (value, diff) in point.iter_mut().zip(diff) {
+                        value.0 += diff.0 * step;
+                    }
+                };
+                add(&mut self.local_point, &self.local_diff);
+                for run in next_columns {
+                    add(
+                        &mut self.next_point.fill()[run.clone()],
+                        &self.next_diff[run.clone()],
+                    );
+                }
+                boundary.first.0 += boundary_diff.first.0 * step;
+                boundary.last.0 += boundary_diff.last.0 * step;
+                boundary.transition.0 += boundary_diff.transition.0 * step;
+            }
+            PackedNodeStep::Extension(step) => {
+                let step = PackedExt::new(step);
+                self.add_scaled_diffs(step, next_columns);
+                boundary.add_scaled(boundary_diff, step);
+            }
+        }
+    }
+}
+
 /// Pair each interpolation node a round evaluates with the step that reaches it.
 ///
 /// The row scratch starts at node zero and visits the nodes in increasing order.
@@ -2528,7 +2591,10 @@ where
         let packing_width = F::Packing::WIDTH;
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
-        let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true));
+        let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true))
+            .into_iter()
+            .map(|(node, step)| (node, packed_node_step::<F, EF>(step)))
+            .collect::<Vec<_>>();
         let next_columns = next_row_runs(&self.slots);
         // Every worker of a stage that reads no successor row reads the same zeros.
         let next_zeros = next_columns
@@ -2647,19 +2713,7 @@ where
                     );
 
                     for &(node, step) in &schedule {
-                        match step {
-                            NodeStep::Unit(count) => {
-                                for _ in 0..count {
-                                    scratch.add_diffs(&next_columns);
-                                    boundary += boundary_diff;
-                                }
-                            }
-                            NodeStep::Scaled(step) => {
-                                let step = PackedExt::new(EF::ExtensionPacking::from(step));
-                                scratch.add_scaled_diffs(step, &next_columns);
-                                boundary.add_scaled(boundary_diff, step);
-                            }
-                        }
+                        scratch.advance_node(step, &next_columns, &mut boundary, boundary_diff);
                         for slot in &self.slots {
                             let enabled = slot.enabled_families(node, true);
                             if !enabled.constraints && enabled.interaction.is_none() {
@@ -2892,6 +2946,198 @@ mod tests {
             node_schedule::<F>([2, 3]),
             vec![(2, NodeStep::Scaled(node(2))), (3, NodeStep::Unit(1))]
         );
+    }
+
+    #[test]
+    fn cubic_packed_node_steps_match_scalar_extension_arithmetic() {
+        use p3_binary_field::{Poly64, Poly192};
+        use rand::RngExt;
+        type P = <Poly192 as ExtensionField<Poly64>>::ExtensionPacking;
+        type V = PackedExt<Poly64, P>;
+
+        let mut rng = SmallRng::seed_from_u64(0x1926_4103);
+        let mut random = || {
+            let lanes: Vec<Poly192> = (0..<Poly64 as Field>::Packing::WIDTH)
+                .map(|_| rng.random())
+                .collect();
+            V::new(<P as PackedFieldExtension<Poly64, Poly192>>::from_ext_fn(
+                |lane| lanes[lane],
+            ))
+        };
+        let mut scratch = PackedScratch::<V, Poly192>::new(&[], &[], 7, None);
+        scratch.local_point = (0..7).map(|_| random()).collect();
+        scratch.local_diff = (0..7).map(|_| random()).collect();
+        for value in scratch.next_point.fill() {
+            *value = random();
+        }
+        for value in scratch.next_diff.fill() {
+            *value = random();
+        }
+        let original_local = scratch.local_point.clone();
+        let original_next = scratch.next_point.to_vec();
+        let mut boundary = BoundaryEvals::new(random(), random(), random());
+        let original_boundary = boundary;
+        let boundary_diff = BoundaryEvals::new(random(), random(), random());
+        let runs = [1..3, 5..6];
+        let mut gap = Poly192::ZERO;
+        for step in [
+            NodeStep::Unit(0),
+            NodeStep::Scaled(Poly192::from(Poly64::new(2))),
+            NodeStep::Unit(2),
+            NodeStep::Scaled(Poly192::new([Poly64::ONE, Poly64::ONE, Poly64::ZERO])),
+            NodeStep::Unit(1),
+            NodeStep::Scaled(Poly192::ZERO),
+            NodeStep::Scaled(Poly192::new([Poly64::ZERO, Poly64::ZERO, Poly64::ONE])),
+        ] {
+            let packed = packed_node_step::<Poly64, Poly192>(step);
+            match step {
+                NodeStep::Unit(count) => {
+                    assert!(matches!(packed, PackedNodeStep::Unit(_)));
+                    gap += Poly192::from_usize(count);
+                }
+                NodeStep::Scaled(step) => {
+                    assert_eq!(
+                        matches!(packed, PackedNodeStep::Base(_)),
+                        <Poly192 as ExtensionField<Poly64>>::as_base(&step).is_some()
+                    );
+                    gap += step;
+                }
+            }
+            scratch.advance_node(packed, &runs, &mut boundary, boundary_diff);
+            let check = |actual: V, initial: V, diff: V, scale: Poly192| {
+                for ((actual, initial), diff) in
+                    <P as PackedFieldExtension<Poly64, Poly192>>::to_ext_iter([actual.0])
+                        .zip(<P as PackedFieldExtension<Poly64, Poly192>>::to_ext_iter([
+                            initial.0,
+                        ]))
+                        .zip(<P as PackedFieldExtension<Poly64, Poly192>>::to_ext_iter([
+                            diff.0,
+                        ]))
+                {
+                    assert_eq!(actual, initial + diff * scale);
+                }
+            };
+            for column in 0..7 {
+                check(
+                    scratch.local_point[column],
+                    original_local[column],
+                    scratch.local_diff[column],
+                    gap,
+                );
+                let next_gap = if runs.iter().any(|run| run.contains(&column)) {
+                    gap
+                } else {
+                    Poly192::ZERO
+                };
+                check(
+                    scratch.next_point[column],
+                    original_next[column],
+                    scratch.next_diff[column],
+                    next_gap,
+                );
+            }
+            check(
+                boundary.first,
+                original_boundary.first,
+                boundary_diff.first,
+                gap,
+            );
+            check(
+                boundary.last,
+                original_boundary.last,
+                boundary_diff.last,
+                gap,
+            );
+            check(
+                boundary.transition,
+                original_boundary.transition,
+                boundary_diff.transition,
+                gap,
+            );
+        }
+    }
+
+    #[test]
+    fn cubic_packed_round_matches_direct_mle_with_successors_and_boundaries() {
+        use p3_binary_field::{Poly64, Poly192};
+        use rand::RngExt;
+        struct BoundaryAir;
+        impl BaseAir<Poly64> for BoundaryAir {
+            fn width(&self) -> usize {
+                1
+            }
+        }
+        impl<AB: AirBuilder<F = Poly64>> Air<AB> for BoundaryAir {
+            fn eval(&self, builder: &mut AB) {
+                let main = builder.main();
+                let local = main.current_slice()[0];
+                let next = main.next_slice()[0];
+                builder.when_first_row().assert_bool(local);
+                builder.when_last_row().assert_bool(local);
+                builder.when_transition().assert_bool(next);
+            }
+        }
+        let trace: Vec<_> = (0..32)
+            .map(|i| Poly64::from_bool((i ^ (i >> 2)) & 1 != 0))
+            .collect();
+        let table = Table::new(RowMajorMatrix::new(trace.clone(), trace.len()));
+        let stage = Stage::new(
+            vec![&BoundaryAir],
+            vec![&[]],
+            vec![0],
+            vec![None],
+            vec![&table],
+            vec![AirProfile {
+                degrees: AirDegrees {
+                    constraints: 3,
+                    interactions: 0,
+                },
+                num_constraints: 3,
+                declares_lookups: false,
+                declares_indexed: false,
+            }],
+            StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![]),
+        );
+        let mut rng = SmallRng::seed_from_u64(0x6464_1920);
+        let alpha: Poly192 = rng.random();
+        let tau: Vec<Poly192> = (0..5).map(|_| rng.random()).collect();
+        let prefix: Poly192 = rng.random();
+        let mut base = RoundStateBase::new(
+            stage,
+            alpha,
+            Poly192::ONE,
+            vec![Poly192::ONE],
+            Point::new(tau.clone()),
+            DEFAULT_SLICED_ROUNDS,
+        );
+        base.round_poly(&Poly::new_from_point(&tau[1..], Poly192::ONE));
+        let mut ext = base.fold(prefix);
+        let eq_suffix = Poly::new_from_point(&tau[2..], Poly192::ONE);
+        let actual = ext.round_poly_packed(&eq_suffix);
+        let shifted: Vec<_> = (0..trace.len())
+            .map(|i| trace[(i + 1).min(trace.len() - 1)])
+            .collect();
+        let expected = [0, 2, 3].map(|node| {
+            eq_suffix
+                .as_slice()
+                .iter()
+                .enumerate()
+                .map(|(row, &weight)| {
+                    let mut coordinates = vec![prefix, Poly192::interpolation_node(node)];
+                    coordinates.extend_from_slice(Point::hypercube(row, 3).as_slice());
+                    let point = Point::new(coordinates);
+                    let local = PolyView::new(&trace).eval_base(&point);
+                    let next = PolyView::new(&shifted).eval_base(&point);
+                    let boundary = BoundaryEvals::at(point.as_slice());
+                    let local_bool = local.square() - local;
+                    weight
+                        * ((boundary.first * local_bool * alpha + boundary.last * local_bool)
+                            * alpha
+                            + boundary.transition * (next.square() - next))
+                })
+                .sum::<Poly192>()
+        });
+        assert_eq!(actual, expected);
     }
 
     struct BooleanAir;
