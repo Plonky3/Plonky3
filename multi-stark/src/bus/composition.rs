@@ -7,11 +7,13 @@
 //! The family runs inside the zerocheck sumcheck, over the same cube and challenges.
 //! Its terminal expression is checked against the same openings the AIR constraints read.
 //!
-//! Round zero lifts every source column into the challenge field before any folding.
+//! Every source column is read in place, from its committed table or its period vector.
 //!
-//! A degree-four extension therefore holds four times the trace for the whole reduction.
+//! The first challenge that binds one of its table's row variables folds it in half.
+//! A shorter table therefore stays in place while it is dormant.
+//! The fold is a half-height challenge-field polynomial.
 //!
-//! The batched zerocheck avoids that by folding packed base-field rows in its first round.
+//! Row selectors are never materialized; their closed form tracks the bound row variables.
 
 use alloc::vec::Vec;
 
@@ -21,9 +23,10 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::generic_degree::{RoundPolyInterpolator, RoundProver};
-use p3_sumcheck::layout::Table;
+use p3_sumcheck::layout::{ColumnView, Table};
 
 use crate::bus::BusContext;
+use crate::selectors::BoundaryEvals;
 
 /// Prover state for the mixed-height bus composition polynomial.
 pub(crate) struct BusCompositionProver<'a, F: Field, EF: ExtensionField<F>> {
@@ -33,8 +36,8 @@ pub(crate) struct BusCompositionProver<'a, F: Field, EF: ExtensionField<F>> {
     fingerprint_weights: Vec<EF>,
     /// Random tuple-fingerprint shift.
     offset: EF,
-    /// Folded source polynomials grouped once per AIR.
-    airs: Vec<AirState<F, EF>>,
+    /// Source columns and selectors grouped once per AIR.
+    airs: Vec<AirState<'a, F, EF>>,
     /// Maximum round degree, derived once from the public plan.
     degree: usize,
     /// Number of global variables already bound.
@@ -53,22 +56,106 @@ struct CompositionTerm<EF> {
     row_claim: EF,
 }
 
-/// Folded source multilinears shared by every bus term owned by one AIR.
-struct AirState<F: Field, EF: ExtensionField<F>> {
-    /// Polynomials of the main columns this AIR's declarations read.
-    main: Vec<Poly<EF>>,
+/// One source multilinear, read in place until one of its row variables is bound, then folded.
+enum Source<'a, F: Field, EF> {
+    /// A committed column, decoding Boolean words where the table packs them.
+    Committed(ColumnView<'a, F>),
+    /// A periodic column, which repeats its period vector down the whole table.
+    ///
+    /// The period is a power of two dividing the height, so row `r` reads entry `r mod period`.
+    Periodic {
+        /// Values of one period.
+        period: Vec<F>,
+        /// Rows of the table the column belongs to.
+        height: usize,
+    },
+    /// The column after one or more of its row variables are bound.
+    Folded(Poly<EF>),
+}
+
+impl<F: Field, EF: ExtensionField<F>> Source<'_, F, EF> {
+    /// The value at `row` of the current hypercube.
+    #[inline]
+    fn at(&self, row: usize) -> EF {
+        match self {
+            Self::Committed(column) => column.value(row).into(),
+            Self::Periodic { period, .. } => period[row & (period.len() - 1)].into(),
+            Self::Folded(poly) => poly.as_slice()[row],
+        }
+    }
+
+    /// The line through rows `row` and `row + half` of the current hypercube, at `node`.
+    #[inline]
+    fn interpolate(&self, row: usize, half: usize, node: EF) -> EF {
+        match self {
+            Self::Committed(column) => {
+                let low = column.value(row);
+                node * (column.value(row + half) - low) + low
+            }
+            Self::Periodic { period, .. } => {
+                let mask = period.len() - 1;
+                let low = period[row & mask];
+                node * (period[(row + half) & mask] - low) + low
+            }
+            Self::Folded(poly) => {
+                let values = poly.as_slice();
+                values[row] + (values[row + half] - values[row]) * node
+            }
+        }
+    }
+
+    /// Binds the leading row variable, moving a column read in place into the challenge field.
+    fn fold(&mut self, challenge: EF) {
+        let folded = match self {
+            Self::Committed(column) => {
+                let column = *column;
+                fold_in_half(column.len() / 2, challenge, |row| column.value(row))
+            }
+            Self::Periodic { period, height } => {
+                let mask = period.len() - 1;
+                fold_in_half(*height / 2, challenge, |row| period[row & mask])
+            }
+            Self::Folded(poly) => {
+                poly.fix_prefix_var_mut(challenge);
+                return;
+            }
+        };
+        *self = Self::Folded(folded);
+    }
+}
+
+/// Binds the leading variable of a base-field column of `2 * half` rows, read cell by cell.
+fn fold_in_half<F, EF>(half: usize, challenge: EF, cell: impl Fn(usize) -> F + Sync) -> Poly<EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    // One item reads a pair of column cells and writes one folded entry.
+    Poly::new((0..half).into_par_iter().map_collect_min_task_bytes(
+        2 * size_of::<F>() + size_of::<EF>(),
+        |row| {
+            let low = cell(row);
+            challenge * (cell(row + half) - low) + low
+        },
+    ))
+}
+
+/// Source multilinears shared by every bus term owned by one AIR.
+struct AirState<'a, F: Field, EF: ExtensionField<F>> {
+    /// Sources of the main columns this AIR's declarations read.
+    main: Vec<Source<'a, F, EF>>,
     /// Column index of each of those, and the declared width they are placed into.
     main_layout: (Vec<usize>, usize),
-    /// Polynomials of the preprocessed columns this AIR's declarations read.
-    preprocessed: Vec<Poly<EF>>,
+    /// Sources of the preprocessed columns this AIR's declarations read.
+    preprocessed: Vec<Source<'a, F, EF>>,
     /// Column index of each of those, and the declared width they are placed into.
     preprocessed_layout: (Vec<usize>, usize),
-    /// Polynomials of the periodic columns this AIR's declarations read, at full height.
-    periodic: Vec<Poly<EF>>,
+    /// Sources of the periodic columns this AIR's declarations read.
+    periodic: Vec<Source<'a, F, EF>>,
     /// Column index of each of those, and the declared width they are placed into.
     periodic_layout: (Vec<usize>, usize),
-    /// First-row, last-row, and transition selector polynomials.
-    selectors: [Poly<EF>; 3],
+    /// Folded boundary-selector values at the bound row variables.
+    boundary: BoundaryEvals<EF>,
     /// Equality polynomial anchored at the ProductGKR row point.
     equality: Poly<EF>,
     /// Bus terms emitted by this AIR.
@@ -81,7 +168,7 @@ struct AirState<F: Field, EF: ExtensionField<F>> {
     public_values: Vec<F>,
 }
 
-impl<F, EF> AirState<F, EF>
+impl<F, EF> AirState<'_, F, EF>
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -121,7 +208,6 @@ where
             (&self.preprocessed_layout.0, self.preprocessed_layout.1);
         let periodic_polys = &self.periodic;
         let (periodic_indices, periodic_width) = (&self.periodic_layout.0, self.periodic_layout.1);
-        let selectors = &self.selectors;
         let equality = &self.equality;
         let public_values = &self.public_values;
         let claims = (0..height)
@@ -139,22 +225,23 @@ where
                 |(mut claims, mut main, mut preprocessed, mut periodic, mut scratch), row| {
                     // Unread columns keep their zero, which no planned expression names.
                     for (&index, column) in main_indices.iter().zip(main_polys) {
-                        main[index] = column.as_slice()[row];
+                        main[index] = column.at(row);
                     }
                     for (&index, column) in fixed_indices.iter().zip(fixed_polys) {
-                        preprocessed[index] = column.as_slice()[row];
+                        preprocessed[index] = column.at(row);
                     }
                     for (&index, column) in periodic_indices.iter().zip(periodic_polys) {
-                        periodic[index] = column.as_slice()[row];
+                        periodic[index] = column.at(row);
                     }
+                    let boundary = BoundaryEvals::from_row(row, height);
                     let evaluation = BusEvaluation {
                         main: &main,
                         preprocessed: &preprocessed,
                         public: public_values,
                         periodic: &periodic,
-                        is_first_row: selectors[0].as_slice()[row],
-                        is_last_row: selectors[1].as_slice()[row],
-                        is_transition: selectors[2].as_slice()[row],
+                        is_first_row: boundary.first,
+                        is_last_row: boundary.last,
+                        is_transition: boundary.transition,
                     };
                     let weight = equality.as_slice()[row];
                     for (claim, factor) in claims.iter_mut().zip(&factors) {
@@ -190,14 +277,14 @@ where
     /// # Arguments
     ///
     /// - `num_variables`: width of the shared cube, at least the tallest bus table.
-    /// - `periodic`: the tables [`BusContext::periodic_tables`] returns.
+    /// - `periodic`: the period vectors [`BusContext::period_vectors`] returns.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         context: &'a BusContext<F, EF>,
         output: &BusReductionOutput<EF>,
-        tables: &[&Table<F>],
-        preprocessed: &[Option<&Table<F>>],
-        periodic: &[Option<Table<F>>],
+        tables: &[&'a Table<F>],
+        preprocessed: &[Option<&'a Table<F>>],
+        periodic: &[Option<Vec<Vec<F>>>],
         public_values: &[&[F]],
         direction_challenge: EF,
         num_variables: usize,
@@ -220,55 +307,38 @@ where
                 let coefficient = direction_weight * block_weight;
                 let state = airs[air].get_or_insert_with(|| {
                     // Column views read a packed Boolean table without expanding it first.
-                    // Only the columns a declaration reads are lifted, and then folded.
+                    // Only the columns a declaration reads are kept, and they are read in place.
                     let main_columns = context.main_columns(air);
+                    let table = tables[air];
                     let main = main_columns
                         .iter()
-                        .map(|&column| {
-                            Poly::new(
-                                tables[air]
-                                    .column(column)
-                                    .values()
-                                    .map(Into::into)
-                                    .collect(),
-                            )
-                        })
+                        .map(|&column| Source::Committed(table.column(column)))
                         .collect::<Vec<_>>();
                     let fixed_columns = context.preprocessed_columns(air);
                     let fixed_width = preprocessed[air].map_or(0, Table::num_polys);
                     let preprocessed = preprocessed[air]
                         .iter()
-                        .flat_map(|table| {
-                            fixed_columns.iter().map(|&column| {
-                                Poly::new(table.column(column).values().map(Into::into).collect())
-                            })
+                        .flat_map(|&table| {
+                            fixed_columns
+                                .iter()
+                                .map(move |&column| Source::Committed(table.column(column)))
                         })
                         .collect::<Vec<_>>();
-                    // Periodic columns fold exactly like committed ones.
+                    // Periodic columns keep one period each and fold exactly like committed ones.
                     let periodic_columns = context.periodic_columns(air);
-                    let periodic_width = periodic[air].as_ref().map_or(0, Table::num_polys);
+                    let periodic_width = periodic[air].as_ref().map_or(0, Vec::len);
+                    let height = 1usize << table.num_variables();
                     let periodic = periodic[air]
                         .iter()
-                        .flat_map(|table| {
-                            periodic_columns.iter().map(|&column| {
-                                Poly::new(table.column(column).values().map(Into::into).collect())
-                            })
+                        .flat_map(|periods| {
+                            periodic_columns
+                                .iter()
+                                .map(move |&column| Source::Periodic {
+                                    period: periods[column].clone(),
+                                    height,
+                                })
                         })
                         .collect::<Vec<_>>();
-                    let height = 1usize << share.row_variables;
-                    let selectors = [
-                        Poly::new((0..height).map(|row| EF::from_bool(row == 0)).collect()),
-                        Poly::new(
-                            (0..height)
-                                .map(|row| EF::from_bool(row + 1 == height))
-                                .collect(),
-                        ),
-                        Poly::new(
-                            (0..height)
-                                .map(|row| EF::from_bool(row + 1 < height))
-                                .collect(),
-                        ),
-                    ];
                     AirState {
                         main,
                         main_layout: (main_columns.to_vec(), tables[air].num_polys()),
@@ -276,7 +346,8 @@ where
                         preprocessed_layout: (fixed_columns.to_vec(), fixed_width),
                         periodic,
                         periodic_layout: (periodic_columns.to_vec(), periodic_width),
-                        selectors,
+                        // No row variable is bound yet, so both prefix products are empty.
+                        boundary: BoundaryEvals::at(&[]),
                         equality: Poly::new(Point::new(row_point).equality_weights_msb()),
                         terms: Vec::new(),
                         unused_prefix: num_variables - share.row_variables,
@@ -318,7 +389,7 @@ where
         }
     }
 
-    fn evaluate_air(&self, air: &AirState<F, EF>, node: EF) -> EF {
+    fn evaluate_air(&self, air: &AirState<'_, F, EF>, node: EF) -> EF {
         // Slot placement is settled once per term, outside the row loop below.
         let factors = air
             .terms
@@ -338,6 +409,9 @@ where
 
         // Interpolate shared columns once, then evaluate every declaration owned by this AIR.
         let half = air.equality.as_slice().len() / 2;
+        // The selectors' line at `node` is the selectors with `node` bound as one more variable.
+        let mut prefix = air.boundary;
+        prefix.apply(node);
         (0..half)
             .into_par_iter()
             .map_init(
@@ -350,32 +424,29 @@ where
                     )
                 },
                 |(main, prep, periodic, scratch), row| {
-                    let interpolate = |poly: &Poly<EF>| {
-                        let values = poly.as_slice();
-                        values[row] + (values[row + half] - values[row]) * node
-                    };
                     // Unread columns keep their zero, which no planned expression names.
-                    for (&index, polynomial) in air.main_layout.0.iter().zip(&air.main) {
-                        main[index] = interpolate(polynomial);
+                    for (&index, source) in air.main_layout.0.iter().zip(&air.main) {
+                        main[index] = source.interpolate(row, half, node);
                     }
-                    for (&index, polynomial) in
-                        air.preprocessed_layout.0.iter().zip(&air.preprocessed)
+                    for (&index, source) in air.preprocessed_layout.0.iter().zip(&air.preprocessed)
                     {
-                        prep[index] = interpolate(polynomial);
+                        prep[index] = source.interpolate(row, half, node);
                     }
-                    for (&index, polynomial) in air.periodic_layout.0.iter().zip(&air.periodic) {
-                        periodic[index] = interpolate(polynomial);
+                    for (&index, source) in air.periodic_layout.0.iter().zip(&air.periodic) {
+                        periodic[index] = source.interpolate(row, half, node);
                     }
+                    let boundary = BoundaryEvals::from_row_with_prefix(row, half, prefix);
                     let evaluation = BusEvaluation {
                         main,
                         preprocessed: prep,
                         public: &air.public_values,
                         periodic,
-                        is_first_row: interpolate(&air.selectors[0]),
-                        is_last_row: interpolate(&air.selectors[1]),
-                        is_transition: interpolate(&air.selectors[2]),
+                        is_first_row: boundary.first,
+                        is_last_row: boundary.last,
+                        is_transition: boundary.transition,
                     };
-                    let equality = interpolate(&air.equality);
+                    let values = air.equality.as_slice();
+                    let equality = values[row] + (values[row + half] - values[row]) * node;
                     air.terms
                         .iter()
                         .zip(&factors)
@@ -404,16 +475,16 @@ where
                 air.prefix_evaluation *= challenge;
                 continue;
             }
-            for polynomial in air
+            for source in air
                 .main
                 .iter_mut()
                 .chain(&mut air.preprocessed)
                 .chain(&mut air.periodic)
-                .chain(&mut air.selectors)
-                .chain(core::iter::once(&mut air.equality))
             {
-                polynomial.fix_prefix_var_mut(challenge);
+                source.fold(challenge);
             }
+            air.boundary.apply(challenge);
+            air.equality.fix_prefix_var_mut(challenge);
         }
         self.round += 1;
     }
@@ -447,13 +518,27 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
     use p3_air::symbolic::AirLayout;
     use p3_air::{Air, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
     use p3_binary_field::BinaryField128;
     use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName, BusSymbolicBuilder};
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::generic_degree::RoundPolyInterpolator;
+    use p3_sumcheck::layout::Table;
+    use p3_util::log2_strict_usize;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::Source;
+    use crate::selectors::BoundaryEvals;
 
     struct TransitionBusAir;
 
@@ -500,5 +585,130 @@ mod tests {
         for (index, node) in nodes.iter().enumerate() {
             assert!(!nodes[index + 1..].contains(node));
         }
+    }
+
+    /// Runs one source through every round beside the dense polynomial it stands for.
+    ///
+    /// Each round checks the line the prover evaluates at a node, then the fold it keeps.
+    /// The closed-form selectors are checked the same way against materialized indicators.
+    fn assert_folds_like_dense<F, EF>(
+        mut source: Source<'_, F, EF>,
+        cells: &[F],
+        rng: &mut SmallRng,
+    ) where
+        F: Field,
+        EF: ExtensionField<F>,
+        StandardUniform: Distribution<EF>,
+    {
+        let height = cells.len();
+        // The line through rows `row` and `row + half` of a dense polynomial, at `node`.
+        let line = |poly: &Poly<EF>, row: usize, node: EF| {
+            let values = poly.as_slice();
+            let half = values.len() / 2;
+            values[row] + (values[row + half] - values[row]) * node
+        };
+        let selectors =
+            |boundary: BoundaryEvals<EF>| [boundary.first, boundary.last, boundary.transition];
+        let mut dense = Poly::new(cells.iter().map(|&cell| EF::from(cell)).collect());
+        let mut prefix = BoundaryEvals::<EF>::at(&[]);
+        let mut indicators = [
+            Poly::new((0..height).map(|row| EF::from_bool(row == 0)).collect()),
+            Poly::new(
+                (0..height)
+                    .map(|row| EF::from_bool(row + 1 == height))
+                    .collect(),
+            ),
+            Poly::new(
+                (0..height)
+                    .map(|row| EF::from_bool(row + 1 < height))
+                    .collect(),
+            ),
+        ];
+
+        // A dormant table's claim reads every row before any fold.
+        for row in 0..height {
+            assert_eq!(source.at(row), dense.as_slice()[row]);
+            assert_eq!(
+                selectors(BoundaryEvals::from_row(row, height)),
+                indicators.each_ref().map(|poly| poly.as_slice()[row])
+            );
+        }
+
+        for round in 0..log2_strict_usize(height) {
+            let half = height >> (round + 1);
+            let node: EF = rng.random();
+            let mut at_node = prefix;
+            at_node.apply(node);
+            for row in 0..half {
+                assert_eq!(source.interpolate(row, half, node), line(&dense, row, node));
+                assert_eq!(
+                    selectors(BoundaryEvals::from_row_with_prefix(row, half, at_node)),
+                    indicators.each_ref().map(|poly| line(poly, row, node))
+                );
+            }
+
+            let challenge: EF = rng.random();
+            source.fold(challenge);
+            dense.fix_prefix_var_mut(challenge);
+            prefix.apply(challenge);
+            for poly in &mut indicators {
+                poly.fix_prefix_var_mut(challenge);
+            }
+            // Binding a variable leaves a challenge-field copy of only the surviving half.
+            let Source::Folded(folded) = &source else {
+                panic!("a bound column lives in the challenge field");
+            };
+            assert_eq!(folded.as_slice(), dense.as_slice());
+        }
+    }
+
+    /// Dense, Boolean-packed and periodic columns of every height up to two packed words.
+    fn assert_sources_fold_like_dense<F, EF>(rng: &mut SmallRng)
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        StandardUniform: Distribution<F> + Distribution<EF>,
+    {
+        for log_height in 0..=7 {
+            let height = 1usize << log_height;
+
+            // Two columns, so the one under test starts at a nonzero offset.
+            let cells: Vec<F> = (0..2 * height).map(|_| rng.random()).collect();
+            let dense = Table::new(RowMajorMatrix::new(cells.clone(), height));
+            let source = Source::Committed(dense.column(1));
+            assert_folds_like_dense::<F, EF>(source, &cells[height..], rng);
+
+            // Three Boolean columns, 64 rows to a word, with bit zero holding the first row.
+            let bits: Vec<[bool; 3]> = (0..height)
+                .map(|_| [rng.random(), rng.random(), rng.random()])
+                .collect();
+            let mut words = vec![0u64; 3 * height.div_ceil(64)];
+            for (row, row_bits) in bits.iter().enumerate() {
+                for (column, &bit) in row_bits.iter().enumerate() {
+                    words[(row / 64) * 3 + column] |= u64::from(bit) << (row % 64);
+                }
+            }
+            let packed = Table::from_packed_bits(RowMajorMatrix::new(words, 3), log_height);
+            let cells: Vec<F> = bits.iter().map(|row| F::from_bool(row[1])).collect();
+            assert_folds_like_dense::<F, EF>(Source::Committed(packed.column(1)), &cells, rng);
+
+            // Every period that divides the height, from a constant up to the whole column.
+            for log_period in 0..=log_height {
+                let period: Vec<F> = (0..1 << log_period).map(|_| rng.random()).collect();
+                let cells: Vec<F> = (0..height).map(|row| period[row % period.len()]).collect();
+                let source = Source::Periodic { period, height };
+                assert_folds_like_dense::<F, EF>(source, &cells, rng);
+            }
+        }
+    }
+
+    #[test]
+    fn sources_fold_like_dense_polynomials() {
+        // The prover reads table columns and period vectors in place.
+        // It keeps the selectors in closed form.
+        // Any value differing from the dense challenge-field polynomials would change the proof.
+        let mut rng = SmallRng::seed_from_u64(0xB05);
+        assert_sources_fold_like_dense::<BinaryField128, BinaryField128>(&mut rng);
+        assert_sources_fold_like_dense::<BabyBear, BinomialExtensionField<BabyBear, 4>>(&mut rng);
     }
 }
