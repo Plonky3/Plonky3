@@ -3,10 +3,10 @@
 use alloc::vec::Vec;
 use core::arch::x86_64::{
     __m512i, _mm_sfence, _mm512_alignr_epi32, _mm512_gf2p8affine_epi64_epi8, _mm512_loadu_si512,
-    _mm512_mask_storeu_epi64, _mm512_permutexvar_epi8, _mm512_set1_epi64, _mm512_stream_si512,
-    _mm512_ternarylogic_epi64, _mm512_unpackhi_epi8, _mm512_unpackhi_epi16, _mm512_unpackhi_epi32,
-    _mm512_unpackhi_epi64, _mm512_unpacklo_epi8, _mm512_unpacklo_epi16, _mm512_unpacklo_epi32,
-    _mm512_unpacklo_epi64, _mm512_xor_si512,
+    _mm512_mask_storeu_epi64, _mm512_permutexvar_epi8, _mm512_set1_epi64, _mm512_storeu_si512,
+    _mm512_stream_si512, _mm512_ternarylogic_epi64, _mm512_unpackhi_epi8, _mm512_unpackhi_epi16,
+    _mm512_unpackhi_epi32, _mm512_unpackhi_epi64, _mm512_unpacklo_epi8, _mm512_unpacklo_epi16,
+    _mm512_unpacklo_epi32, _mm512_unpacklo_epi64, _mm512_xor_si512,
 };
 
 use crate::Ghash128;
@@ -196,15 +196,19 @@ impl<const GROUPS: usize> PreparedBitPlaneExpansion<GROUPS> {
 
     /// Appends the 64 lane sums selected by `words`.
     #[inline(never)]
-    pub(crate) fn append(&self, words: &[u64], output: &mut Vec<Ghash128>) {
-        assert_eq!(words.len(), 8 * GROUPS);
+    pub(crate) fn append<const CORNERS: usize>(
+        &self,
+        words: &[u64; CORNERS],
+        output: &mut Vec<Ghash128>,
+    ) {
+        assert_eq!(CORNERS, 8 * GROUPS);
         output.reserve(64);
         let old_len = output.len();
 
         // SAFETY: each input load reads one of the disjoint eight-word groups in `words`.
         // The length check above covers every group.
         // The output has reserved space for 64 more `Ghash128` values.
-        // The streamed stores write exactly those 64 entries and fence before returning.
+        // The stores write exactly those 64 entries; streamed stores fence before returning.
         // `Ghash128` is transparent over `u128` and every 128-bit pattern is valid.
         // No operation below can panic, so the length is raised only once every entry is set.
         unsafe {
@@ -393,7 +397,13 @@ impl<const GROUPS: usize> PreparedBitPlaneExpansion<GROUPS> {
             let lines = [
                 d0, d8, d4, d12, d2, d10, d6, d14, d1, d9, d5, d13, d3, d11, d7, d15,
             ];
-            stream(destination, &lines);
+            if GROUPS == 2 {
+                for (k, &line) in lines.iter().enumerate() {
+                    _mm512_storeu_si512(destination.add(4 * k).cast(), line);
+                }
+            } else {
+                stream(destination, &lines);
+            }
             output.set_len(old_len + 64);
         }
     }
