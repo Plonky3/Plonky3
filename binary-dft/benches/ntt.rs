@@ -127,7 +127,7 @@ fn ntt<F: TowerLevel, N: AdditiveNtt<F>>(
 
 /// Every backend's forward transform, at the folding width and on a single column.
 ///
-/// - `128/tower` is the level's own transform, which changes basis in a separate pass each way where the target multiplies carrylessly.
+/// - `128/tower` is the level's own transform, which changes basis in a separate pass each way where the target multiplies carrylessly and a twiddle is wider than its byte map covers.
 /// - `128/poly` changes basis once on the way in and once on the way out.
 /// - `128/ghash` holds data already in the basis the carryless multiply wants.
 fn bench_ntt(c: &mut Criterion) {

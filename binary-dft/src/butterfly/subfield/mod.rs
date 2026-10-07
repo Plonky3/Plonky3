@@ -277,6 +277,28 @@ impl SubfieldScaled for BinaryField128 {
     }
 }
 
+/// The bit width of the widest twiddle the register kernel scales byte by byte.
+///
+/// Its byte maps cover the one-, two- and four-byte subfields.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "gfni",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+))]
+pub(super) const BYTE_MAP_TWIDDLE_BITS: usize = 32;
+
+/// The bit width of the widest twiddle the butterfly scales byte by byte where the target multiplies carrylessly.
+///
+/// Only the one-byte product beats a carryless multiply, through the NEON byte map or the typed product.
+#[cfg(not(all(
+    target_arch = "x86_64",
+    target_feature = "gfni",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
+pub(super) const BYTE_MAP_TWIDDLE_BITS: usize = 8;
+
 /// Run the leading whole registers through the byte map the twiddle's subfield allows.
 ///
 /// # Returns

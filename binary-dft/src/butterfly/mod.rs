@@ -14,7 +14,8 @@ use p3_binary_field::{
     BinaryField128, Gf2, Ghash128, Poly64, TowerLevel,
 };
 use p3_field::{PackedValue, PrimeCharacteristicRing};
-use subfield::coordinate_butterfly;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
+use subfield::{BYTE_MAP_TWIDDLE_BITS, coordinate_butterfly};
 
 use crate::lch;
 use crate::poly::stages::{INTO_POLY, INTO_TOWER, convert};
@@ -146,10 +147,11 @@ impl ButterflyField for Poly64 {
     }
 }
 
-// The widest byte-aligned level, whose network runs in the polynomial basis where the target multiplies carrylessly.
+// The widest byte-aligned level, whose network runs in the polynomial basis when a twiddle is wider than the byte map covers.
 //
-// - A tower product changes basis three times around one carryless product.
+// - A tower product by such a twiddle changes basis three times around one carryless product.
 // - Changing the whole buffer once each way costs two changes per element instead.
+// - The byte map scales by a twiddle of its own subfield with no change of basis, so a transform with only those stays put.
 // - The change of basis is a field isomorphism that sends the tower Cantor basis to the `Ghash128` one.
 // - So every twiddle and domain point maps to its image, and the network computes the image of the tower result.
 // - Changing that back gives the tower result exactly.
@@ -162,30 +164,63 @@ impl ButterflyField for BinaryField128 {
     }
 
     fn lch_transform<const INVERSE: bool>(values: &mut [Self], width: usize, shift: Self) {
-        if !HAS_HARDWARE_CLMUL {
+        let log_n = log2_strict_usize(values.len() / width);
+        if HAS_HARDWARE_CLMUL && has_wide_twiddles(log_n, shift) {
+            ghash_transform::<INVERSE>(values, width, shift);
+        } else {
             lch::transform::<Self, INVERSE>(values, width, shift);
-            return;
         }
-        let words = Self::as_repr_slice_mut(values);
-        convert(words, INTO_POLY);
-        lch::transform::<Ghash128, INVERSE>(as_ghash(words), width, Ghash128::from(shift));
-        convert(words, INTO_TOWER);
     }
 
     fn lch_transform_cosets(values: &mut [Self], width: usize, log_message: usize) {
-        if !HAS_HARDWARE_CLMUL {
+        // Each coset's shift is a domain point below the height, so the subspace the height spans holds every coset.
+        let log_n = log2_ceil_usize(values.len() / width);
+        if HAS_HARDWARE_CLMUL && has_wide_twiddles(log_n, Self::ZERO) {
+            ghash_transform_cosets(values, width, log_message);
+        } else {
             lch::transform_cosets::<Self>(values, width, log_message);
-            return;
         }
-        let words = Self::as_repr_slice_mut(values);
-
-        // Every coset is written from the message, so the zero tail needs no change of basis.
-        convert(&mut words[..width << log_message], INTO_POLY);
-
-        // Each coset's shift is a domain point, and those of `Ghash128` are the images of the tower's.
-        lch::transform_cosets::<Ghash128>(as_ghash(words), width, log_message);
-        convert(words, INTO_TOWER);
     }
+}
+
+/// Whether a twiddle of the transform over `shift + S_l` can lie past the subfield the byte map covers.
+///
+/// - Each twiddle is `W_j(shift)` plus a point of `S_l`, with `l = log_n`.
+/// - The first `2^t` Cantor basis vectors span the tower subfield of `2^t` bits, which each `W_j` maps into itself.
+/// - So every twiddle lies in the smallest tower subfield that holds both the shift and `S_l`.
+///
+/// That subfield fits within the byte map's exactly when both the shift and `S_l` do.
+#[inline]
+fn has_wide_twiddles(log_n: usize, shift: BinaryField128) -> bool {
+    log_n > BYTE_MAP_TWIDDLE_BITS || shift.to_repr() >> BYTE_MAP_TWIDDLE_BITS != 0
+}
+
+/// The widest level's transform, with its network run over `Ghash128` between two changes of basis.
+pub(crate) fn ghash_transform<const INVERSE: bool>(
+    values: &mut [BinaryField128],
+    width: usize,
+    shift: BinaryField128,
+) {
+    let words = BinaryField128::as_repr_slice_mut(values);
+    convert(words, INTO_POLY);
+    lch::transform::<Ghash128, INVERSE>(as_ghash(words), width, Ghash128::from(shift));
+    convert(words, INTO_TOWER);
+}
+
+/// The widest level's padded transform, with its network run over `Ghash128` between two changes of basis.
+pub(crate) fn ghash_transform_cosets(
+    values: &mut [BinaryField128],
+    width: usize,
+    log_message: usize,
+) {
+    let words = BinaryField128::as_repr_slice_mut(values);
+
+    // Every coset is written from the message, so the zero tail needs no change of basis.
+    convert(&mut words[..width << log_message], INTO_POLY);
+
+    // Each coset's shift is a domain point, and those of `Ghash128` are the images of the tower's.
+    lch::transform_cosets::<Ghash128>(as_ghash(words), width, log_message);
+    convert(words, INTO_TOWER);
 }
 
 /// Polynomial coordinates read in place as the `Ghash128` elements they are.

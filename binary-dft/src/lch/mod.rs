@@ -163,6 +163,7 @@ mod tests {
         staged_runs,
     };
     use super::{ButterflyField, LchNtt, Twiddles};
+    use crate::butterfly::{ghash_transform, ghash_transform_cosets};
     use crate::domain::{domain_point, subspace_polynomial};
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
@@ -1277,12 +1278,71 @@ mod tests {
         }
     }
 
-    /// The widest level's own transform against its network held in the tower basis.
+    /// Every twiddle of a transform lies in the smallest tower subfield that holds its shift and its domain.
     ///
-    /// The level may run the network in the GHASH basis, and must still leave the tower result.
-    /// Only a build with a carryless multiply takes that route, so elsewhere both sides agree trivially.
+    /// The widest level picks the basis its network runs in from that subfield, without walking the twiddles.
+    #[test]
+    fn every_twiddle_lies_in_the_subfield_of_its_shift_and_domain() {
+        let bit_len = |x: u128| (u128::BITS - x.leading_zeros()) as usize;
+
+        // The tower subfield of `2^t` bits holds exactly the elements below `2^(2^t)`.
+        let subfield_bits = |log_n: usize, shift: BinaryField128| {
+            log_n.max(bit_len(shift.to_repr())).next_power_of_two()
+        };
+
+        // Every block twiddle of every stage, as the network seeds it.
+        let check = |log_n: usize, shift: BinaryField128, bits: usize| {
+            let twiddles = Twiddles::new(log_n, shift);
+            for stage in 0..log_n {
+                for block in 0..1usize << (log_n - 1 - stage) {
+                    let t = twiddles.at(stage, block).to_repr();
+                    assert!(
+                        bit_len(t) <= bits,
+                        "log_n={log_n} shift={:#x} stage={stage} block={block}: {t:#x} past {bits} bits",
+                        shift.to_repr()
+                    );
+                }
+            }
+        };
+
+        // Fixture state: no shift, a domain point within a nibble, a 17-bit shift, and one with bits throughout.
+        let shifts = [
+            BinaryField128::ZERO,
+            domain_point::<BinaryField128>(5),
+            BinaryField128::from_repr(0x1_2345),
+            sample::<BinaryField128>(SHIFTS[1]),
+        ];
+        for log_n in 0..=10 {
+            for shift in shifts {
+                check(log_n, shift, subfield_bits(log_n, shift));
+            }
+
+            // The cosets of a padded transform start at domain points below the height, so the height bounds them.
+            let bits = subfield_bits(log_n, BinaryField128::ZERO);
+            for log_message in 0..=log_n {
+                for c in 0..1usize << (log_n - log_message) {
+                    check(log_message, domain_point(c << log_message), bits);
+                }
+            }
+        }
+    }
+
+    /// The widest level's own transform, and its run over `Ghash128`, against its network held in the tower basis.
+    ///
+    /// The level takes the `Ghash128` run only for a wide twiddle on a build with a carryless multiply.
+    /// So the run is also called directly, which holds it to the tower result at every size.
     #[test]
     fn the_widest_level_transforms_as_its_tower_basis_network() {
+        type Transform = fn(&mut [BinaryField128], usize, BinaryField128);
+        let routes: [(&str, Transform, Transform); 2] = [
+            (
+                "level",
+                BinaryField128::lch_transform::<false>,
+                BinaryField128::lch_transform::<true>,
+            ),
+            ("ghash", ghash_transform::<false>, ghash_transform::<true>),
+        ];
+
         // Fixture state: one row up to sixteen rows, then 2^11 and 2^14 rows.
         //
         // - Each tall height has a shape past one tile, so the blocked schedule runs.
@@ -1292,34 +1352,48 @@ mod tests {
                 for shift_bits in SHIFTS {
                     let shift = sample::<BinaryField128>(shift_bits);
                     let coeffs = matrix::<BinaryField128>(log_n, width, 21).values;
-                    let label = format!("log_n={log_n} width={width} shift={shift_bits:#x}");
 
                     let mut evals = coeffs.clone();
                     super::transform::<BinaryField128, false>(&mut evals, width, shift);
-                    let mut actual = coeffs.clone();
-                    BinaryField128::lch_transform::<false>(&mut actual, width, shift);
-                    assert_eq!(actual, evals, "ntt {label}");
 
                     // The inverse of arbitrary values, so it is not checked only as an undo.
                     let mut expected = coeffs.clone();
                     super::transform::<BinaryField128, true>(&mut expected, width, shift);
-                    let mut actual = coeffs.clone();
-                    BinaryField128::lch_transform::<true>(&mut actual, width, shift);
-                    assert_eq!(actual, expected, "intt {label}");
 
-                    // And the inverse of the codeword returns the coefficients.
-                    BinaryField128::lch_transform::<true>(&mut evals, width, shift);
-                    assert_eq!(evals, coeffs, "round trip {label}");
+                    for (route, forward, inverse) in routes {
+                        let label =
+                            format!("{route} log_n={log_n} width={width} shift={shift_bits:#x}");
+
+                        let mut actual = coeffs.clone();
+                        forward(&mut actual, width, shift);
+                        assert_eq!(actual, evals, "ntt {label}");
+
+                        let mut actual = coeffs.clone();
+                        inverse(&mut actual, width, shift);
+                        assert_eq!(actual, expected, "intt {label}");
+
+                        // And the inverse of the codeword returns the coefficients.
+                        let mut actual = evals.clone();
+                        inverse(&mut actual, width, shift);
+                        assert_eq!(actual, coeffs, "round trip {label}");
+                    }
                 }
             }
         }
     }
 
-    /// The widest level's padded transform against its network held in the tower basis.
+    /// The widest level's padded transform, and its run over `Ghash128`, against its network held in the tower basis.
     ///
-    /// Only a build with a carryless multiply runs it in the GHASH basis, so elsewhere both sides agree trivially.
+    /// The level takes the `Ghash128` run only for a wide domain on a build with a carryless multiply.
+    /// So the run is also called directly, which holds it to the tower result at every size.
     #[test]
     fn the_widest_level_encodes_as_its_tower_basis_network() {
+        type Encode = fn(&mut [BinaryField128], usize, usize);
+        let routes: [(&str, Encode); 2] = [
+            ("level", BinaryField128::lch_transform_cosets),
+            ("ghash", ghash_transform_cosets),
+        ];
+
         // Fixture state: one tile holds 2^9 rows of 16 columns.
         //
         //     log_message 0 ..= 4   tiny cosets, each copied from the message and transformed alone
@@ -1333,12 +1407,18 @@ mod tests {
             for log_inv_rate in 0..=3 {
                 let mut padded = matrix::<BinaryField128>(log_message, width, 73).values;
                 padded.resize(padded.len() << log_inv_rate, BinaryField128::ZERO);
-                let label = format!("log_message={log_message} width={width} rate={log_inv_rate}");
 
                 let mut expected = padded.clone();
                 super::transform_cosets::<BinaryField128>(&mut expected, width, log_message);
-                BinaryField128::lch_transform_cosets(&mut padded, width, log_message);
-                assert_eq!(padded, expected, "{label}");
+
+                for (route, encode) in routes {
+                    let label = format!(
+                        "{route} log_message={log_message} width={width} rate={log_inv_rate}"
+                    );
+                    let mut actual = padded.clone();
+                    encode(&mut actual, width, log_message);
+                    assert_eq!(actual, expected, "{label}");
+                }
             }
         }
     }
