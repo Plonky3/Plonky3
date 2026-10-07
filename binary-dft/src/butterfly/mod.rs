@@ -15,7 +15,7 @@ use p3_binary_field::{
 };
 use p3_field::{PackedValue, PrimeCharacteristicRing};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
-use subfield::{BYTE_MAP_TWIDDLE_BITS, coordinate_butterfly};
+use subfield::{byte_map_twiddle_bits, coordinate_butterfly};
 
 use crate::lch;
 use crate::poly::stages::{INTO_POLY, INTO_TOWER, convert};
@@ -151,7 +151,7 @@ impl ButterflyField for Poly64 {
 //
 // - A tower product by such a twiddle changes basis three times around one carryless product.
 // - Changing the whole buffer once each way costs two changes per element instead.
-// - The byte map scales by a twiddle of its own subfield with no change of basis, so a transform with only those stays put.
+// - The byte map scales by a twiddle it covers on every run with no change of basis, so a transform with only those stays put.
 // - The change of basis is a field isomorphism that sends the tower Cantor basis to the `Ghash128` one.
 // - So every twiddle and domain point maps to its image, and the network computes the image of the tower result.
 // - Changing that back gives the tower result exactly.
@@ -165,7 +165,7 @@ impl ButterflyField for BinaryField128 {
 
     fn lch_transform<const INVERSE: bool>(values: &mut [Self], width: usize, shift: Self) {
         let log_n = log2_strict_usize(values.len() / width);
-        if HAS_HARDWARE_CLMUL && has_wide_twiddles(log_n, shift) {
+        if HAS_HARDWARE_CLMUL && has_wide_twiddles(width, log_n, shift) {
             ghash_transform::<INVERSE>(values, width, shift);
         } else {
             lch::transform::<Self, INVERSE>(values, width, shift);
@@ -175,7 +175,7 @@ impl ButterflyField for BinaryField128 {
     fn lch_transform_cosets(values: &mut [Self], width: usize, log_message: usize) {
         // Each coset's shift is a domain point below the height, so the subspace the height spans holds every coset.
         let log_n = log2_ceil_usize(values.len() / width);
-        if HAS_HARDWARE_CLMUL && has_wide_twiddles(log_n, Self::ZERO) {
+        if HAS_HARDWARE_CLMUL && has_wide_twiddles(width, log_n, Self::ZERO) {
             ghash_transform_cosets(values, width, log_message);
         } else {
             lch::transform_cosets::<Self>(values, width, log_message);
@@ -183,7 +183,7 @@ impl ButterflyField for BinaryField128 {
     }
 }
 
-/// Whether a twiddle of the transform over `shift + S_l` can lie past the subfield the byte map covers.
+/// Whether a twiddle of the transform over `shift + S_l`, on rows of `width`, can lie past the subfield the byte map covers.
 ///
 /// - Each twiddle is `W_j(shift)` plus a point of `S_l`, with `l = log_n`.
 /// - The first `2^t` Cantor basis vectors span the tower subfield of `2^t` bits, which each `W_j` maps into itself.
@@ -191,8 +191,9 @@ impl ButterflyField for BinaryField128 {
 ///
 /// That subfield fits within the byte map's exactly when both the shift and `S_l` do.
 #[inline]
-fn has_wide_twiddles(log_n: usize, shift: BinaryField128) -> bool {
-    log_n > BYTE_MAP_TWIDDLE_BITS || shift.to_repr() >> BYTE_MAP_TWIDDLE_BITS != 0
+fn has_wide_twiddles(width: usize, log_n: usize, shift: BinaryField128) -> bool {
+    let bits = byte_map_twiddle_bits(width * size_of::<BinaryField128>());
+    log_n > bits || shift.to_repr() >> bits != 0
 }
 
 /// The widest level's transform, with its network run over `Ghash128` between two changes of basis.
