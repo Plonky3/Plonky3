@@ -1,4 +1,4 @@
-//! GFNI expansion of 64 Boolean corner words into 64 polynomial-basis field values.
+//! GFNI expansion of Boolean corner words into 64 polynomial-basis field values.
 
 use alloc::vec::Vec;
 use core::arch::x86_64::{
@@ -58,12 +58,12 @@ const fn transpose8(mut value: u64) -> u64 {
     value ^ exchange ^ (exchange << 28)
 }
 
-/// The 16 output-byte rows of a 64 × 128 linear map, eight input-byte blocks each.
+/// The 16 output-byte rows of a linear map, one block per eight input corners.
 #[inline]
-const fn affine_blocks(columns: &[u128; 64]) -> [[u64; 8]; 16] {
-    let mut blocks = [[0u64; 8]; 16];
+const fn affine_blocks<const GROUPS: usize>(columns: &[u128]) -> [[u64; GROUPS]; 16] {
+    let mut blocks = [[0u64; GROUPS]; 16];
     let mut j = 0;
-    while j < 8 {
+    while j < GROUPS {
         let c0 = columns[8 * j].to_le_bytes();
         let c1 = columns[8 * j + 1].to_le_bytes();
         let c2 = columns[8 * j + 2].to_le_bytes();
@@ -101,13 +101,16 @@ unsafe fn masks(words: *const u64) -> __m512i {
     }
 }
 
-/// One output byte plane from the eight input mask planes.
+/// One output byte plane from the input mask planes.
 #[inline(always)]
-unsafe fn plane(input: &[__m512i; 8], row: &[u64; 8]) -> __m512i {
+unsafe fn plane<const GROUPS: usize>(input: &[__m512i; GROUPS], row: &[u64; GROUPS]) -> __m512i {
     // SAFETY: the build target supplies GFNI, AVX-512F, and AVX-512BW.
     unsafe {
         let image =
             |j| _mm512_gf2p8affine_epi64_epi8::<0>(input[j], _mm512_set1_epi64(row[j] as i64));
+        if GROUPS == 2 {
+            return _mm512_xor_si512(image(0), image(1));
+        }
         let a = _mm512_ternarylogic_epi64::<XOR3>(image(0), image(1), image(2));
         let b = _mm512_ternarylogic_epi64::<XOR3>(image(3), image(4), image(5));
         let c = _mm512_xor_si512(image(6), image(7));
@@ -175,33 +178,37 @@ unsafe fn stream_shifted<const SHIFT: i32>(target: *mut u128, lines: &[__m512i; 
     }
 }
 
-/// A prepared 64-corner Boolean-to-`Ghash128` expansion.
-pub(crate) struct PreparedBitPlaneExpansion {
-    blocks: [[u64; 8]; 16],
+/// A prepared Boolean-to-`Ghash128` expansion, with eight corners per group.
+pub(crate) struct PreparedBitPlaneExpansion<const GROUPS: usize> {
+    blocks: [[u64; GROUPS]; 16],
 }
 
-impl PreparedBitPlaneExpansion {
-    /// Prepares the eight GFNI blocks for each output byte.
+impl<const GROUPS: usize> PreparedBitPlaneExpansion<GROUPS> {
+    /// Prepares the GFNI blocks for each output byte, for 16 or 64 corners.
     #[inline]
-    pub(crate) const fn new(weights: [u128; 64]) -> Self {
+    pub(crate) const fn new(weights: &[u128]) -> Self {
+        assert!(GROUPS == 2 || GROUPS == 8);
+        assert!(weights.len() == 8 * GROUPS);
         Self {
-            blocks: affine_blocks(&weights),
+            blocks: affine_blocks(weights),
         }
     }
 
     /// Appends the 64 lane sums selected by `words`.
     #[inline(never)]
-    pub(crate) fn append(&self, words: &[u64; 64], output: &mut Vec<Ghash128>) {
+    pub(crate) fn append(&self, words: &[u64], output: &mut Vec<Ghash128>) {
+        assert_eq!(words.len(), 8 * GROUPS);
         output.reserve(64);
         let old_len = output.len();
 
-        // SAFETY: each input load reads one of the eight disjoint eight-word groups in `words`.
+        // SAFETY: each input load reads one of the disjoint eight-word groups in `words`.
+        // The length check above covers every group.
         // The output has reserved space for 64 more `Ghash128` values.
         // The streamed stores write exactly those 64 entries and fence before returning.
         // `Ghash128` is transparent over `u128` and every 128-bit pattern is valid.
         // No operation below can panic, so the length is raised only once every entry is set.
         unsafe {
-            let input: [__m512i; 8] =
+            let input: [__m512i; GROUPS] =
                 core::array::from_fn(|group| masks(words.as_ptr().add(8 * group)));
             let p0 = plane(&input, &self.blocks[0]);
             let p1 = plane(&input, &self.blocks[1]);

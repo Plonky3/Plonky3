@@ -2089,7 +2089,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         matches!(self.trace.cells, Planes::Low(_))
     }
 
-    /// The 64 singleton corner weights accepted by the bit-plane expansion hook.
+    /// The singleton corner weights for a low-plane expansion of the requested size.
     #[cfg(any(
         test,
         all(
@@ -2101,8 +2101,8 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         )
     ))]
     #[inline]
-    fn bit_plane_expansion_weights(&self) -> Option<[R; SLICED_LANES]> {
-        if !self.low_only() || self.corners != SLICED_LANES {
+    fn bit_plane_expansion_weights<const N: usize>(&self) -> Option<[R; N]> {
+        if !self.low_only() || self.corners != N {
             return None;
         }
         Some(core::array::from_fn(|corner| {
@@ -2231,7 +2231,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
             target_feature = "avx512bw",
             target_feature = "avx512vbmi"
         ))]
-        let bit_plane_weights = self.bit_plane_expansion_weights();
+        let bit_plane_weights = self.bit_plane_expansion_weights::<64>();
         #[cfg(all(
             target_arch = "x86_64",
             target_feature = "gfni",
@@ -2242,6 +2242,24 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         let bit_plane_expansion = bit_plane_weights
             .as_ref()
             .and_then(R::prepare_bit_plane_expansion);
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ))]
+        let bit_plane_weights_16 = self.bit_plane_expansion_weights::<16>();
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ))]
+        let bit_plane_expansion_16 = bit_plane_weights_16
+            .as_ref()
+            .and_then(R::prepare_bit_plane_expansion_16);
         (0..width.div_ceil(block_columns))
             .into_par_iter()
             .flat_map_iter(|block| {
@@ -2274,6 +2292,20 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
                             let words: &[u64; SLICED_LANES] = low
                                 .try_into()
                                 .expect("a prepared bit-plane expansion has exactly 64 corners");
+                            expand(words, values);
+                            continue;
+                        }
+                        #[cfg(all(
+                            target_arch = "x86_64",
+                            target_feature = "gfni",
+                            target_feature = "avx512f",
+                            target_feature = "avx512bw",
+                            target_feature = "avx512vbmi"
+                        ))]
+                        if let Some(expand) = &bit_plane_expansion_16 {
+                            let words: &[u64; 16] = low
+                                .try_into()
+                                .expect("a prepared short bit-plane expansion has 16 corners");
                             expand(words, values);
                             continue;
                         }

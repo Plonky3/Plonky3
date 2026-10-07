@@ -1111,6 +1111,18 @@ pub trait Field:
         None::<fn(&[u64; 64], &mut Vec<Self>)>
     }
 
+    /// Prepares a target-specific expansion of 16 bit-plane words into 64 weighted sums.
+    ///
+    /// As with [`Self::prepare_bit_plane_expansion`], each input word holds one bit per output
+    /// lane. Unsupported fields and targets return `None` to retain the portable path.
+    #[must_use]
+    fn prepare_bit_plane_expansion_16(
+        weights: &[Self; 16],
+    ) -> Option<impl Fn(&[u64; 16], &mut Vec<Self>) + Send + Sync + 'static> {
+        let _ = weights;
+        None::<fn(&[u64; 16], &mut Vec<Self>)>
+    }
+
     /// Check if the given field element is equal to the unique additive identity (ZERO).
     #[must_use]
     #[inline]
