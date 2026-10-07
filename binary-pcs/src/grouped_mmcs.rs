@@ -3,6 +3,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::ops::{Deref, Range};
 
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::{Field, PackedValue};
@@ -100,6 +101,15 @@ impl<F: Field, M: Matrix<F>> Matrix<F> for GroupedCodeword<M> {
 
     fn height(&self) -> usize {
         self.matrix.height() / self.group_size
+    }
+
+    #[inline]
+    fn contiguous_rows(&self, rows: Range<usize>) -> Option<impl Deref<Target = [F]>> {
+        if rows.start > rows.end || rows.end > self.height() {
+            return None;
+        }
+        self.matrix
+            .contiguous_rows(rows.start * self.group_size..rows.end * self.group_size)
     }
 
     unsafe fn row_subseq_unchecked(
@@ -395,6 +405,43 @@ mod tests {
                 unsafe { self.matrix.get_unchecked(r * self.group_size + lane, 0) }
             })
         }
+    }
+
+    #[test]
+    fn contiguous_grouped_rows_borrow_the_original_symbols() {
+        for group_size in [1, 2, 4, 8, 32] {
+            let grouped = GroupedCodeword {
+                matrix: RowMajorMatrix::new((0..32).map(F::from_repr).collect(), 1),
+                group_size,
+            };
+            let height = grouped.height();
+            for start in 0..=height {
+                for end in start..=height {
+                    let rows = grouped.contiguous_rows(start..end).unwrap();
+                    let expected = &grouped.matrix.values[start * group_size..end * group_size];
+                    assert_eq!(&*rows, expected);
+                    assert_eq!(rows.as_ptr(), expected.as_ptr());
+                }
+            }
+            for (start, end) in [
+                (1, 0),
+                (0, height + 1),
+                (height + 1, height + 1),
+                (0, usize::MAX),
+            ] {
+                assert!(grouped.contiguous_rows(start..end).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn contiguous_grouped_rows_preserve_the_inner_fallback() {
+        let grouped = GroupedCodeword {
+            matrix: RowMajorMatrix::new((0..64).map(F::from_repr).collect(), 1)
+                .vertically_strided(2, 0),
+            group_size: 4,
+        };
+        assert!(grouped.contiguous_rows(0..grouped.height()).is_none());
     }
 
     #[test]
