@@ -45,6 +45,20 @@ pub fn generate_trace_rows<F: PrimeField64>(
     trace
 }
 
+/// Split a BLAKE3 64-bit block counter into its low and high 32-bit words.
+///
+/// The counter is widened to `u64` before the shift so the split is correct on
+/// every target word width. Shifting the `usize` counter by 32 directly is only
+/// valid on 64-bit targets: on a 32-bit or `wasm32` target `usize` is 32 bits
+/// wide, and `wrapping_shr(32)` wraps the shift amount modulo 32 into a shift by
+/// 0, copying the low word into the high word instead of extracting it.
+#[inline]
+fn split_counter(counter: u64) -> (u32, u32) {
+    let counter_low = counter as u32;
+    let counter_hi = (counter >> 32) as u32;
+    (counter_low, counter_hi)
+}
+
 /// Each row is one full implementation of the Blake-3 hash.
 fn generate_trace_rows_for_perm<F: PrimeField64>(
     row: &mut Blake3Cols<F>,
@@ -60,8 +74,9 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
     row.chaining_values =
         array::from_fn(|i| array::from_fn(|j| u32_to_bits_le(input[16 + 4 * i + j])));
 
-    row.counter_low = u32_to_bits_le(counter as u32);
-    row.counter_hi = u32_to_bits_le(counter.wrapping_shr(32) as u32);
+    let (counter_low, counter_hi) = split_counter(counter as u64);
+    row.counter_low = u32_to_bits_le(counter_low);
+    row.counter_hi = u32_to_bits_le(counter_hi);
     row.block_len = u32_to_bits_le(block_len as u32);
 
     row.initial_row0 = array::from_fn(|i| {
@@ -86,8 +101,8 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
             (IV[3][0] as u32) + ((IV[3][1] as u32) << 16),
         ],
         [
-            counter as u32,
-            counter.wrapping_shr(32) as u32,
+            counter_low,
+            counter_hi,
             block_len as u32,
             0,
         ],
@@ -244,4 +259,36 @@ fn save_state_to_trace<R: PrimeCharacteristicRing>(
         ]
     });
     trace.row3 = array::from_fn(|i| u32_to_bits_le(state[3][i])); // Store all 32 bits unpacked.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_counter;
+
+    #[test]
+    fn split_counter_widens_before_shift() {
+        // The high word must be zero for any value that fits in `u32`, even on a
+        // 32-bit / wasm32 target where `usize` is only 32 bits wide. The old
+        // code did `counter.wrapping_shr(32)` on a `usize`, which on those
+        // targets wraps the shift amount modulo 32 into a shift by 0 and copies
+        // the low word into the high word.
+        assert_eq!(split_counter(0), (0, 0));
+        assert_eq!(split_counter(1), (1, 0));
+        assert_eq!(split_counter(u32::MAX as u64), (u32::MAX, 0));
+
+        // A value spanning both words extracts the high 32 bits correctly.
+        assert_eq!(split_counter((u32::MAX as u64) + 1), (0, 1));
+        assert_eq!(
+            split_counter(0x1234_5678_9abc_def0),
+            (0x9abc_def0, 0x1234_5678)
+        );
+    }
+
+    #[test]
+    fn split_counter_matches_usize_row_index() {
+        // The generation path widens the `usize` row counter to `u64` before the
+        // split, so a normal in-range row index keeps its high word at zero.
+        let counter: usize = 5;
+        assert_eq!(split_counter(counter as u64), (5, 0));
+    }
 }
