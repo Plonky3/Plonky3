@@ -42,6 +42,12 @@ impl<F: Field> IdentityPrefix<F> {
         Self::new(values)
     }
 
+    /// Bytes one fold moves: two reads and one write per folded row.
+    #[inline]
+    const fn fold_bytes(&self) -> usize {
+        3 * self.values.len().div_ceil(2) * size_of::<F>()
+    }
+
     /// Binds the lowest remaining variable.
     fn fold(&mut self, logical_len: usize, challenge: F) {
         debug_assert!(self.values.len() <= logical_len);
@@ -120,22 +126,34 @@ struct RadixFourState<F> {
 impl<F: Field> RadixFourState<F> {
     /// Splits an interleaved product level into four child tables.
     fn new(values: &IdentityPrefix<F>, logical_len: usize) -> Self {
-        let mut children: [Vec<F>; 4] = core::array::from_fn(|_| Vec::new());
-        for (index, &value) in values.values.iter().enumerate() {
-            let slot = index % 4;
-            let row = index / 4;
-            debug_assert!(row < logical_len);
-            children[slot].push(value);
-        }
-        let children = children.map(IdentityPrefix::new);
+        let values = &values.values;
+        debug_assert!(values.len().div_ceil(4) <= logical_len);
+
+        // Slot `s` gathers explicit entries `s, s + 4, s + 8, ...`, reading and writing each once.
+        let children = core::array::from_fn(|slot| {
+            let rows = (values.len() + 3 - slot) / 4;
+            IdentityPrefix::new(
+                (0..rows)
+                    .into_par_iter()
+                    .map_collect_min_task_bytes(2 * size_of::<F>(), |row| values[4 * row + slot]),
+            )
+        });
         Self { children }
+    }
+
+    /// Bytes one fold of every child moves.
+    fn fold_bytes(&self) -> usize {
+        self.children.iter().map(IdentityPrefix::fold_bytes).sum()
     }
 
     /// Binds one parent variable in every child multilinear.
     fn fold(&mut self, challenge: F, logical_len: usize) {
-        for child in &mut self.children {
-            child.fold(logical_len, challenge);
-        }
+        // Each child is charged the average, so the gate sees the whole fold, and still splits its
+        // own rows when they pay.
+        let child_bytes = self.fold_bytes() / 4;
+        self.children
+            .par_iter_mut()
+            .for_each_min_task_bytes(child_bytes, |child| child.fold(logical_len, challenge));
     }
 
     /// Reads the four terminal child claims after every parent variable is bound.
@@ -153,10 +171,18 @@ pub(super) struct RadixFourBatch<F> {
 impl<F: Field> RadixFourBatch<F> {
     /// Creates the batched states from one retained level per tree.
     pub(super) fn new(layers: &[ProductLayers<F>], depth: usize, logical_len: usize) -> Self {
-        let states = layers
+        // A tree reads its retained level once and writes it back as four children.
+        let tree_bytes = layers
             .iter()
-            .map(|layers| layers.radix_four_state(depth, logical_len))
-            .collect();
+            .map(|layers| 2 * layers.layers[depth].values.len() * size_of::<F>())
+            .sum::<usize>()
+            .checked_div(layers.len())
+            .unwrap_or(0);
+        let states = layers
+            .par_iter()
+            .map_collect_min_task_bytes(tree_bytes, |layers| {
+                layers.radix_four_state(depth, logical_len)
+            });
         Self { states }
     }
 
@@ -224,9 +250,18 @@ impl<F: Field> RadixFourBatch<F> {
 
     /// Binds one parent variable across every tree in the batch.
     pub(super) fn fold(&mut self, challenge: F, logical_len: usize) {
-        for state in &mut self.states {
-            state.fold(challenge, logical_len);
-        }
+        // Each tree is charged the average, so the gate sees the whole fold, and still splits its
+        // children when they pay.
+        let tree_bytes = self
+            .states
+            .iter()
+            .map(RadixFourState::fold_bytes)
+            .sum::<usize>()
+            .checked_div(self.states.len())
+            .unwrap_or(0);
+        self.states
+            .par_iter_mut()
+            .for_each_min_task_bytes(tree_bytes, |state| state.fold(challenge, logical_len));
     }
 
     /// Collects the terminal child claims in tree order.
@@ -276,6 +311,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_binary_field::{BinaryField128, Ghash128};
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use rand::distr::{Distribution, StandardUniform};
     use rand::{RngExt, SeedableRng};
@@ -379,6 +415,33 @@ mod tests {
         check_lines::<BinaryField128>(&mut rng, [false, false, true, false, true]);
         check_lines::<Ghash128>(&mut rng, [false, false, true, false, true]);
         check_lines::<BabyBearQuartic>(&mut rng, [false, false, true, true, true]);
+    }
+
+    #[test]
+    fn child_split_matches_an_interleaved_walk() {
+        // Lengths through seventeen end each slot on a full, partial or missing final row.
+        // Every third entry is one, so trailing identities are trimmed from some children.
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0003);
+        for len in 0..=17usize {
+            let values = (0..len)
+                .map(|index| {
+                    if index % 3 == 2 {
+                        BabyBear::ONE
+                    } else {
+                        rng.random::<BabyBear>()
+                    }
+                })
+                .collect::<Vec<_>>();
+            let state = RadixFourState::new(&IdentityPrefix::new(values.clone()), len.div_ceil(4));
+
+            let mut expected: [Vec<BabyBear>; 4] = Default::default();
+            for (index, &value) in values.iter().enumerate() {
+                expected[index % 4].push(value);
+            }
+            for (child, expected) in state.children.iter().zip(expected) {
+                assert_eq!(child.values, IdentityPrefix::new(expected).values);
+            }
+        }
     }
 
     #[test]
