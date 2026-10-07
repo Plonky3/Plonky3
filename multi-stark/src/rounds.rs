@@ -36,6 +36,26 @@ fn packed_column_at<F: Field>(column: ColumnView<'_, F>, row: usize) -> F::Packi
     )
 }
 
+/// Read a folded Boolean column through the four possible `(low, high)` values.
+///
+/// The lookup index is `low | (high << 1)`, so `sums` holds `[0, 1-r, r, 1]`.
+#[inline]
+fn boolean_fold_values<F: Field, EF: Field>(
+    view: ColumnView<'_, F>,
+    sums: [EF; 4],
+) -> impl Fn(usize) -> EF {
+    let ColumnView::Boolean { words, column, len } = view else {
+        unreachable!("Boolean folding requires a packed column");
+    };
+    let half = len / 2;
+    move |row| {
+        let low = (words.values[(row / 64) * words.width + column] >> (row % 64)) & 1;
+        let high_row = row + half;
+        let high = (words.values[(high_row / 64) * words.width + column] >> (high_row % 64)) & 1;
+        sums[(low | (high << 1)) as usize]
+    }
+}
+
 /// Native per-variable degrees of one AIR's two zerocheck expression families.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub struct AirDegrees {
@@ -1961,6 +1981,7 @@ where
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
     {
+        let boolean_sums = [EF::ZERO, EF::ONE - r, r, EF::ONE];
         self.fold_columns(
             r,
             |column| {
@@ -1975,15 +1996,12 @@ where
                         "packed fold needs a low half of at least {} rows, got {half}",
                         F::Packing::WIDTH
                     );
+                    let value = boolean_fold_values(column, boolean_sums);
                     Poly::new(
                         (0..half)
                             .step_by(F::Packing::WIDTH)
                             .map(|start| {
-                                EF::ExtensionPacking::from_ext_fn(|lane| {
-                                    let lo = column.value(start + lane);
-                                    let hi = column.value(start + half + lane);
-                                    r * EF::from(hi - lo) + EF::from(lo)
-                                })
+                                EF::ExtensionPacking::from_ext_fn(|lane| value(start + lane))
                             })
                             .collect(),
                     )
@@ -1996,11 +2014,7 @@ where
                     let half = column.len() / 2;
                     Poly::new(
                         (0..half)
-                            .map(|row| {
-                                let lo = column.value(row);
-                                let hi = column.value(row + half);
-                                EF::from(lo) + r * EF::from(hi - lo)
-                            })
+                            .map(boolean_fold_values(column, boolean_sums))
                             .collect(),
                     )
                 }
@@ -2752,6 +2766,61 @@ mod tests {
     use crate::config::DEFAULT_SLICED_ROUNDS;
 
     type F = BinaryField128;
+
+    #[test]
+    fn boolean_fold_values_match_dense_interpolation() {
+        fn check<F: Field, EF: ExtensionField<F>>() {
+            for num_vars in 1..=9 {
+                let height = 1usize << num_vars;
+                let half = height / 2;
+                let width = 7;
+                let mut words = vec![0u64; height.div_ceil(64) * width];
+                for row in 0..height {
+                    for column in 0..width {
+                        let pair = (row % half + column) % 4;
+                        let bit = (pair >> usize::from(row >= half)) & 1;
+                        words[(row / 64) * width + column] |= (bit as u64) << (row % 64);
+                    }
+                }
+                let table =
+                    Table::<F>::from_packed_bits(RowMajorMatrix::new(words, width), num_vars);
+                for r in [EF::ZERO, EF::ONE, EF::GENERATOR, EF::GENERATOR + EF::ONE] {
+                    let sums = [EF::ZERO, EF::ONE - r, r, EF::ONE];
+                    for column in table.columns() {
+                        let expected: Vec<_> = (0..half)
+                            .map(|row| {
+                                let lo = EF::from(column.value(row));
+                                let hi = EF::from(column.value(row + half));
+                                lo + r * (hi - lo)
+                            })
+                            .collect();
+                        let values = boolean_fold_values(column, sums);
+                        assert_eq!(
+                            (0..half).map(&values).collect::<Vec<_>>(),
+                            expected,
+                            "height {height}"
+                        );
+                        if half >= F::Packing::WIDTH {
+                            let packed = Poly::new(
+                                (0..half)
+                                    .step_by(F::Packing::WIDTH)
+                                    .map(|start| {
+                                        EF::ExtensionPacking::from_ext_fn(|lane| {
+                                            values(start + lane)
+                                        })
+                                    })
+                                    .collect::<Vec<_>>(),
+                            );
+                            assert_eq!(packed.unpack::<F, EF>().as_slice(), expected);
+                        }
+                    }
+                }
+            }
+        }
+        check::<F, F>();
+        check::<p3_binary_field::Poly64, p3_binary_field::Poly192>();
+        check::<BabyBear, p3_field::extension::BinomialExtensionField<BabyBear, 4>>();
+    }
 
     #[test]
     fn successor_runs_group_adjacent_declared_columns() {
