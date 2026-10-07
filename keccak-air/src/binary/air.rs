@@ -176,15 +176,6 @@ impl<AB: AirBuilder> Air<AB> for KeccakBinaryAir {
         let d: [[AB::Expr; 64]; 5] = array::from_fn(|x| {
             array::from_fn(|z| c[(x + 4) % 5][z].clone() + c[(x + 1) % 5][(z + 63) % 64].clone())
         });
-        let a_prime: [[[AB::Expr; 64]; 5]; 5] = array::from_fn(|y| {
-            array::from_fn(|x| array::from_fn(|z| d[x][z].clone() + local.a[y][x][z]))
-        });
-
-        // Rho and pi: B[x][y][z] is a bit of A'.
-        let b = |x: usize, y: usize, z: usize| {
-            let (source_y, source_x, rot) = rho_pi_source(x, y);
-            a_prime[source_y][source_x][(z + 64 - rot) % 64].clone()
-        };
 
         // A round row maps its state to the next row's state:
         //
@@ -196,10 +187,19 @@ impl<AB: AirBuilder> Air<AB> for KeccakBinaryAir {
         // which is also 0 on an output row.
         let not_output = AB::Expr::ONE + output_flag;
         for y in 0..5 {
+            // Rho and pi are a permutation, so materialize only the row chi consumes now.
+            let b_row: [[AB::Expr; 64]; 5] = array::from_fn(|x| {
+                let (source_y, source_x, rot) = rho_pi_source(x, y);
+                array::from_fn(|z| {
+                    let bit = (z + 64 - rot) % 64;
+                    d[source_x][bit].clone() + local.a[source_y][source_x][bit]
+                })
+            });
             for x in 0..5 {
                 builder.assert_zeros::<64, _>(array::from_fn(|z| {
-                    let chi =
-                        b(x, y, z) + (AB::Expr::ONE + b((x + 1) % 5, y, z)) * b((x + 2) % 5, y, z);
+                    let chi = b_row[x][z].clone()
+                        + (AB::Expr::ONE + b_row[(x + 1) % 5][z].clone())
+                            * b_row[(x + 2) % 5][z].clone();
                     let round_map = not_output.clone() * (chi + next.a[y][x][z]);
                     if x == 0 && y == 0 {
                         let rc_bit: AB::Expr = RC_BITS
