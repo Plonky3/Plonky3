@@ -469,14 +469,23 @@ impl BasedVectorSpace<Poly64> for Poly192 {
         })
     }
 
-    /// A whole vector of elements is one contiguous run of coordinates, so this is a copy.
+    /// A whole vector of elements is one contiguous run of coordinates, so the allocation is
+    /// reused as it is.
     #[inline]
     fn flatten_to_base(vec: Vec<Self>) -> Vec<Poly64> {
-        let mut out = Vec::with_capacity(vec.len() * DEGREE);
-        for element in vec {
-            out.extend_from_slice(&element.0);
-        }
-        out
+        // SAFETY: `Poly192` is `repr(transparent)` over `[Poly64; DEGREE]`, so it has the
+        // alignment of `Poly64` and the layout of `DEGREE` coordinates in basis order.
+        unsafe { p3_util::flatten_to_base::<Poly64, Self>(vec) }
+    }
+
+    /// The allocation is reused whenever its capacity is a whole number of elements, and copied
+    /// otherwise.
+    #[inline]
+    fn reconstitute_from_base(vec: Vec<Poly64>) -> Vec<Self> {
+        // SAFETY: `Poly192` is `repr(transparent)` over `[Poly64; DEGREE]`, so it has the
+        // alignment of `Poly64` and the layout of `DEGREE` coordinates in basis order. Every
+        // coordinate triple is a valid element, since every `Poly64` is a valid coordinate.
+        unsafe { p3_util::reconstitute_from_base::<Poly64, Self>(vec) }
     }
 }
 
@@ -581,12 +590,83 @@ impl HasFrobenius<Poly64> for Poly192 {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use p3_field::extension::HasFrobenius;
     use p3_field::{Algebra, BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
     use proptest::prelude::*;
 
     use super::{DEGREE, Poly192};
     use crate::Poly64;
+
+    /// Seven elements whose twenty-one coordinates are all distinct, so any reordering shows.
+    fn distinct_elements() -> Vec<Poly192> {
+        (0..7u64)
+            .map(|i| element([3 * i + 1, 3 * i + 2, 3 * i + 3]))
+            .collect()
+    }
+
+    /// Every element's coordinates in turn, which is what flattening is defined to produce.
+    fn concatenated_coordinates(elements: &[Poly192]) -> Vec<Poly64> {
+        elements
+            .iter()
+            .flat_map(<Poly192 as BasedVectorSpace<Poly64>>::as_basis_coefficients_slice)
+            .copied()
+            .collect()
+    }
+
+    /// Vectors cross between elements and coordinates inside the allocation they arrive in.
+    ///
+    /// The coordinates must still read in basis order, and reassembly must invert flattening.
+    #[test]
+    fn whole_vectors_flatten_and_reconstitute_in_basis_order() {
+        let elements = distinct_elements();
+        let expected = concatenated_coordinates(&elements);
+
+        let input = elements.clone();
+        let (address, capacity) = (input.as_ptr().cast::<u8>(), input.capacity());
+
+        let flat = <Poly192 as BasedVectorSpace<Poly64>>::flatten_to_base(input);
+        assert_eq!(flat, expected);
+        assert_eq!(flat.as_ptr().cast::<u8>(), address);
+        assert_eq!(flat.capacity(), capacity * DEGREE);
+
+        let back = <Poly192 as BasedVectorSpace<Poly64>>::reconstitute_from_base(flat);
+        assert_eq!(back, elements);
+        assert_eq!(back.as_ptr().cast::<u8>(), address);
+        assert_eq!(back.capacity(), capacity);
+
+        // The empty vector has no allocation to hand over, and must still round-trip.
+        let flat = <Poly192 as BasedVectorSpace<Poly64>>::flatten_to_base(Vec::new());
+        assert!(flat.is_empty());
+        assert!(<Poly192 as BasedVectorSpace<Poly64>>::reconstitute_from_base(flat).is_empty());
+    }
+
+    /// An allocation whose capacity is not a whole number of elements cannot be freed as
+    /// elements, so reassembly must copy out of it rather than adopt it.
+    #[test]
+    fn a_ragged_capacity_is_reassembled_into_a_fresh_allocation() {
+        let elements = distinct_elements();
+        let expected = concatenated_coordinates(&elements);
+
+        let mut ragged = Vec::with_capacity(expected.len() + 1);
+        ragged.extend_from_slice(&expected);
+        assert_ne!(ragged.capacity() % DEGREE, 0);
+        let address = ragged.as_ptr().cast::<u8>();
+
+        let back = <Poly192 as BasedVectorSpace<Poly64>>::reconstitute_from_base(ragged);
+        assert_eq!(back, elements);
+        assert_ne!(back.as_ptr().cast::<u8>(), address);
+    }
+
+    #[test]
+    #[should_panic]
+    fn reconstitute_rejects_an_incomplete_element() {
+        let _ = <Poly192 as BasedVectorSpace<Poly64>>::reconstitute_from_base(alloc::vec![
+            Poly64::ONE;
+            4
+        ]);
+    }
 
     /// An element from three raw bit patterns.
     fn element(a: [u64; 3]) -> Poly192 {

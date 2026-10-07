@@ -21,6 +21,7 @@ p3-challenger.workspace = true
 p3-field.workspace = true
 p3-maybe-rayon.workspace = true
 p3-symmetric.workspace = true
+p3-util.workspace = true
 
 num-bigint.workspace = true
 rand.workspace = true
