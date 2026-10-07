@@ -92,7 +92,9 @@ where
                 let log2_height = log2_ceil_usize(matrix.height());
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
-                matrix.row(reduced_index).unwrap().into_iter().collect()
+                let mut values = Vec::with_capacity(matrix.width());
+                values.extend(matrix.row(reduced_index).unwrap());
+                values
             })
             .collect_vec();
 
