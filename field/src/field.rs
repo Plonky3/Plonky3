@@ -510,6 +510,22 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
         (i < Self::DIMENSION).then(|| Self::from_basis_coefficients_fn(|j| F::from_bool(i == j)))
     }
 
+    /// Borrow a slice's basis coefficients when their storage is contiguous.
+    ///
+    /// The returned slice concatenates [`Self::as_basis_coefficients_slice`] for each element,
+    /// in order, and borrows the input storage. Implementations with padding or another layout
+    /// can retain the default `None`; callers must then use coefficient iteration.
+    ///
+    /// Support must be a property of the type's layout: an implementation must return `Some`
+    /// for every input slice, including empty slices, or `None` for every input slice. It must
+    /// not depend on the slice's contents, length, or address, and must remain stable when the
+    /// input storage moves or this method is called again.
+    #[must_use]
+    #[inline]
+    fn flatten_slice_to_base(_values: &[Self]) -> Option<&[F]> {
+        None
+    }
+
     /// Convert from a vector of `Self` to a vector of `F` by flattening the basis coefficients.
     ///
     /// Depending on the `BasedVectorSpace` this may be essentially a no-op and should certainly
