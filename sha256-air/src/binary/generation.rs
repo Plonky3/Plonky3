@@ -60,9 +60,9 @@ pub fn generate_binary_trace_rows<F: Field>(
 /// Generate a binary SHA-256 trace packed into one `u64` per 64 trace rows.
 ///
 /// The returned matrix keeps the AIR columns as its width. Physical row `w` stores logical
-/// rows `64 * w..64 * w + 63`, with bit zero holding the first logical row. The generic field
-/// parameter controls only the reusable temporary row used while generating the witness; the
-/// resulting bits are independent of that field.
+/// rows `64 * w..64 * w + 63`, with bit zero holding the first logical row. The witness is
+/// computed on bit planes, so the generic field parameter checks only the characteristic;
+/// no witness cell is materialized in that field.
 ///
 /// # Panics
 ///
@@ -91,24 +91,159 @@ pub fn generate_binary_trace_packed<F: Field>(
     inputs
         .par_chunks(64)
         .zip(words.par_chunks_exact_mut(NUM_SHA256_BINARY_COLS))
-        .for_each_init(
-            || F::zero_vec(NUM_SHA256_BINARY_COLS),
-            |row, (input_block, block)| {
-                // One reusable field row per worker keeps temporary storage bounded by the AIR
-                // width, independently of the number of trace rows and blocks.
-                for (lane, input) in input_block.iter().enumerate() {
-                    let row_cols: &mut Sha256BinaryCols<F> = row.as_mut_slice().borrow_mut();
-                    generate_trace_row(row_cols, input);
-                    for (column, &bit) in row.iter().enumerate() {
-                        if bit == F::ONE {
-                            block[column] |= 1u64 << lane;
-                        }
-                    }
-                }
-            },
-        );
+        .for_each(|(inputs, block)| generate_block(block, inputs));
 
     RowMajorMatrix::new(words, NUM_SHA256_BINARY_COLS)
+}
+
+/// Fill one packed block, with one compression per lane and zero in every absent lane.
+fn generate_block(block: &mut [u64], inputs: &[[u32; INPUT_WORDS]]) {
+    let mut words = [[0; 32]; INPUT_WORDS];
+    for pair in 0..INPUT_WORDS / 2 {
+        let mut rows = [0; 64];
+        for (row, input) in rows.iter_mut().zip(inputs) {
+            *row = u64::from(input[2 * pair]) | (u64::from(input[2 * pair + 1]) << 32);
+        }
+        transpose_bits(&mut rows);
+        words[2 * pair].copy_from_slice(&rows[..32]);
+        words[2 * pair + 1].copy_from_slice(&rows[32..]);
+    }
+
+    let cols: &mut Sha256BinaryCols<u64> = block.borrow_mut();
+    cols.w[..BLOCK_WORDS].copy_from_slice(&words[..BLOCK_WORDS]);
+    for i in 0..4 {
+        cols.a_chain[i] = words[BLOCK_WORDS + 3 - i];
+        cols.e_chain[i] = words[BLOCK_WORDS + 7 - i];
+    }
+
+    for (i, schedule) in cols.schedule.iter_mut().enumerate() {
+        let t = BLOCK_WORDS + i;
+        cols.w[t] = add_with_carries_planes(
+            &[
+                &small_sigma_planes(&cols.w[t - 2], [17, 19], 10),
+                &cols.w[t - 7],
+                &small_sigma_planes(&cols.w[t - 15], [7, 18], 3),
+                &cols.w[t - 16],
+            ],
+            &mut schedule.carries,
+        );
+    }
+
+    // Mask constants to active lanes: otherwise even an absent, all-zero input produces a
+    // nonzero witness. Ch below uses no complement, so every other operation preserves zero.
+    let lanes = u64::MAX >> (64 - inputs.len());
+    let mut unused_carries = [0; 31];
+    for (t, round) in cols.rounds.iter_mut().enumerate() {
+        let (a, b, c, d) = (
+            &cols.a_chain[t + 3],
+            &cols.a_chain[t + 2],
+            &cols.a_chain[t + 1],
+            &cols.a_chain[t],
+        );
+        let (e, f, g, h) = (
+            &cols.e_chain[t + 3],
+            &cols.e_chain[t + 2],
+            &cols.e_chain[t + 1],
+            &cols.e_chain[t],
+        );
+        round.ch = array::from_fn(|bit| g[bit] ^ (e[bit] & (f[bit] ^ g[bit])));
+        round.maj = array::from_fn(|bit| (a[bit] & b[bit]) ^ (a[bit] & c[bit]) ^ (b[bit] & c[bit]));
+        let constant = array::from_fn(|bit| {
+            if (SHA256_K[t] >> bit) & 1 != 0 {
+                lanes
+            } else {
+                0
+            }
+        });
+        round.t1 = add_with_carries_planes(
+            &[
+                h,
+                &big_sigma_planes(e, [6, 11, 25]),
+                &round.ch,
+                &constant,
+                &cols.w[t],
+            ],
+            &mut round.t1_carries,
+        );
+        // The AIR stores the carry of T1 + Sigma0(a), then adds Maj. Reassociating these
+        // additions would keep the output word but change the committed carry columns.
+        let new_a = add_with_carries_planes(
+            &[&round.t1, &big_sigma_planes(a, [2, 13, 22]), &round.maj],
+            core::slice::from_mut(&mut round.new_a_carries),
+        );
+        let new_e = add_planes(d, &round.t1, &mut unused_carries);
+        cols.a_chain[t + 4] = new_a;
+        cols.e_chain[t + 4] = new_e;
+    }
+    for i in 0..STATE_WORDS {
+        let chain = if i < 4 { &cols.a_chain } else { &cols.e_chain };
+        cols.h_out[i] = add_planes(
+            &chain[3 - i % 4],
+            &chain[NUM_COMPRESSION_ROUNDS + 3 - i % 4],
+            &mut unused_carries,
+        );
+    }
+}
+
+/// Transpose a 64 x 64 bit matrix: bit `j` of row `i` becomes bit `i` of row `j`.
+fn transpose_bits(rows: &mut [u64; 64]) {
+    let mut width = 32;
+    let mut mask = 0x0000_0000_ffff_ffff_u64;
+    while width != 0 {
+        for base in (0..64).step_by(2 * width) {
+            for row in base..base + width {
+                let swap = ((rows[row] >> width) ^ rows[row + width]) & mask;
+                rows[row] ^= swap << width;
+                rows[row + width] ^= swap;
+            }
+        }
+        width >>= 1;
+        mask ^= mask << width;
+    }
+}
+
+/// Add two words on bit planes, writing carries into bits 1 through 31.
+#[inline(always)]
+fn add_planes(x: &[u64; 32], y: &[u64; 32], carries: &mut [u64; 31]) -> [u64; 32] {
+    let mut sum = [0; 32];
+    let mut carry = 0;
+    for bit in 0..31 {
+        let half = x[bit] ^ y[bit];
+        sum[bit] = half ^ carry;
+        carry = (x[bit] & y[bit]) | (carry & half);
+        carries[bit] = carry;
+    }
+    sum[31] = x[31] ^ y[31] ^ carry;
+    sum
+}
+
+/// Add words in AIR order, storing the carries of every addition except the last.
+#[inline]
+fn add_with_carries_planes(words: &[&[u64; 32]], carries: &mut [[u64; 31]]) -> [u64; 32] {
+    debug_assert_eq!(words.len(), carries.len() + 2);
+    let mut partial = *words[0];
+    for (word, carry) in words[1..].iter().zip(carries.iter_mut()) {
+        partial = add_planes(&partial, word, carry);
+    }
+    add_planes(&partial, words[words.len() - 1], &mut [0; 31])
+}
+
+#[inline]
+fn big_sigma_planes(word: &[u64; 32], rotations: [usize; 3]) -> [u64; 32] {
+    array::from_fn(|bit| {
+        word[(bit + rotations[0]) % 32]
+            ^ word[(bit + rotations[1]) % 32]
+            ^ word[(bit + rotations[2]) % 32]
+    })
+}
+
+#[inline]
+fn small_sigma_planes(word: &[u64; 32], rotations: [usize; 2], shift: usize) -> [u64; 32] {
+    array::from_fn(|bit| {
+        word[(bit + rotations[0]) % 32]
+            ^ word[(bit + rotations[1]) % 32]
+            ^ word.get(bit + shift).copied().unwrap_or(0)
+    })
 }
 
 /// Fill one row with the witness of a single compression.
@@ -234,4 +369,47 @@ const fn small_sigma0(x: u32) -> u32 {
 /// `σ1(x) = (x >>> 17) ^ (x >>> 19) ^ (x >> 10)`.
 const fn small_sigma1(x: u32) -> u32 {
     x.rotate_right(17) ^ x.rotate_right(19) ^ (x >> 10)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plane_addition_matches_word_sums_and_carries() {
+        let x: [u32; 64] = array::from_fn(|lane| match lane % 4 {
+            0 => u32::MAX,
+            1 => 1 << (lane % 32),
+            2 => 0xaaaa_aaaa,
+            _ => 0,
+        });
+        let y: [u32; 64] = array::from_fn(|lane| match lane % 4 {
+            0 => 1,
+            1 => u32::MAX,
+            2 => 0x5555_5555,
+            _ => 1 << (lane % 32),
+        });
+        let planes = |words: &[u32; 64]| {
+            array::from_fn(|bit| {
+                words.iter().enumerate().fold(0, |plane, (lane, word)| {
+                    plane | (u64::from((word >> bit) & 1) << lane)
+                })
+            })
+        };
+        let mut carries = [0; 31];
+        let sum = add_planes(&planes(&x), &planes(&y), &mut carries);
+        for lane in 0..64 {
+            let expected = x[lane].wrapping_add(y[lane]);
+            let expected_carries = expected ^ x[lane] ^ y[lane];
+            for bit in 0..32 {
+                assert_eq!((sum[bit] >> lane) & 1, u64::from((expected >> bit) & 1));
+                if bit < 31 {
+                    assert_eq!(
+                        (carries[bit] >> lane) & 1,
+                        u64::from((expected_carries >> (bit + 1)) & 1)
+                    );
+                }
+            }
+        }
+    }
 }

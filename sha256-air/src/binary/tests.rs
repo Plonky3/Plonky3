@@ -8,7 +8,7 @@ use p3_air::{
     check_all_constraints, check_constraints, get_max_constraint_degree, get_symbolic_constraints,
 };
 use p3_baby_bear::BabyBear;
-use p3_binary_field::BinaryField128;
+use p3_binary_field::{BinaryField128, Gf2};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use rand::rngs::SmallRng;
@@ -16,7 +16,8 @@ use rand::{RngExt, SeedableRng};
 
 use super::air::{CONSTRAINTS_PER_ROUND, CONSTRAINTS_PER_SCHEDULE_WORD, NUM_INPUT_BITS};
 use super::{
-    NUM_SHA256_BINARY_COLS, Sha256BinaryAir, Sha256BinaryCols, generate_binary_trace_rows,
+    NUM_SHA256_BINARY_COLS, Sha256BinaryAir, Sha256BinaryCols, generate_binary_trace_packed,
+    generate_binary_trace_rows,
 };
 use crate::{INPUT_WORDS, SCHEDULE_EXTENSIONS, SHA256_IV};
 
@@ -24,6 +25,50 @@ type F = BinaryField128;
 
 /// An in-place edit of one trace row.
 type RowEdit = fn(&mut Sha256BinaryCols<F>);
+
+#[test]
+fn packed_trace_matches_every_dense_column() {
+    let mut rng = SmallRng::seed_from_u64(0x0005_a256);
+    for height in [1usize, 2, 4, 8, 16, 32, 64, 128] {
+        let inputs: Vec<[u32; INPUT_WORDS]> = (0..height)
+            .map(|row| match row % 5 {
+                0 => [0; INPUT_WORDS],
+                1 => [u32::MAX; INPUT_WORDS],
+                2 => array::from_fn(|word| {
+                    if word % 2 == 0 {
+                        0xaaaa_aaaa
+                    } else {
+                        0x5555_5555
+                    }
+                }),
+                _ => rng.random(),
+            })
+            .collect();
+        let dense = generate_binary_trace_rows::<F>(inputs.clone(), 0);
+        let packed = generate_binary_trace_packed::<Gf2>(inputs.clone());
+        assert_eq!(packed.width(), NUM_SHA256_BINARY_COLS);
+        assert_eq!(packed.height(), height.div_ceil(64));
+        assert_eq!(
+            packed.values,
+            generate_binary_trace_packed::<F>(inputs).values
+        );
+
+        for row in 0..height {
+            for column in 0..NUM_SHA256_BINARY_COLS {
+                let bit =
+                    (packed.values[(row / 64) * NUM_SHA256_BINARY_COLS + column] >> (row % 64)) & 1;
+                assert_eq!(
+                    F::from_bool(bit != 0),
+                    dense.values[row * NUM_SHA256_BINARY_COLS + column],
+                    "height {height}, row {row}, column {column}"
+                );
+            }
+        }
+        if height < 64 {
+            assert!(packed.values.iter().all(|word| word >> height == 0));
+        }
+    }
+}
 
 /// The `sha2` crate's compression of one block from `h_in`.
 fn reference_compress(input: &[u32; INPUT_WORDS]) -> [u32; 8] {
