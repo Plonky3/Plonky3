@@ -40,7 +40,9 @@ pub mod transcript;
 pub mod verifier;
 pub mod zerocheck;
 
-pub use backend::{GenericBackend, ReprBackend, SubfieldBackend, ZerocheckBackend};
+pub use backend::{
+    BooleanTensorBackend, GenericBackend, ReprBackend, SubfieldBackend, ZerocheckBackend,
+};
 pub use bus::BusBindingError;
 pub use contract::{MachineDeclaration, SealedProof, TableDeclaration};
 pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};

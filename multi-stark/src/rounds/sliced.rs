@@ -158,7 +158,8 @@ pub(super) struct SlicedTrace<'data> {
     /// The successor planes, laid out like `cells`.
     ///
     /// Row `s` holds the cell at row `min(s + 1, height - 1)`, the repeat-last successor.
-    /// Zero for every column no AIR reads on the next row.
+    /// Zero for every column no AIR reads on the next row. A Boolean tensor with no declared
+    /// successor reads may omit this buffer entirely.
     successors: Planes<'data>,
     /// The first-row, last-row, and transition selectors of each word, one bit per row.
     boundary: Vec<[u64; 3]>,
@@ -1218,6 +1219,103 @@ where
         self.round_poly_on_planes::<S, R>(eq_suffix, trace, &alpha_powers)
     }
 
+    /// Install a Boolean tensor without requiring a common `GF(4)` subfield.
+    ///
+    /// All eligibility checks and the tensor evaluation precede any change to the round state.
+    #[tracing::instrument(skip_all, level = "debug")]
+    pub(crate) fn round_poly_boolean_tensor(&mut self) -> Option<Vec<EF>>
+    where
+        A: for<'b> Air<SlicedQuadraticFolder<'b, F, EF>>,
+    {
+        let num_vars = self.num_evals().trailing_zeros() as usize;
+        if F::ONE + F::ONE != F::ZERO
+            || num_vars < 10
+            || self
+                .sliced_rounds
+                .min(MAX_SLICED_ROUNDS)
+                .min(num_vars - LANE_VARIABLES)
+                != 3
+            || self.degree() != 2
+            || self
+                .slots
+                .iter()
+                .any(|slot| slot.constraint_degree > 2 || slot.interaction.is_some())
+            || !next_row_runs(&self.slots).is_empty()
+            || self
+                .public_values
+                .iter()
+                .flat_map(|values| values.iter())
+                .any(|&value| value != F::ZERO && value != F::ONE)
+        {
+            return None;
+        }
+        let mut tables: Vec<&Table<F>> = Vec::new();
+        for slot in &self.slots {
+            tables.push(self.tables[slot.stage_index]);
+            tables.extend(self.preprocessed[slot.stage_index]);
+            tables.extend(self.periodic[slot.stage_index].as_ref());
+        }
+        let words = 1usize << (num_vars - LANE_VARIABLES);
+        let width = tables.iter().map(|table| table.num_polys()).sum();
+        let borrowed = match self.slots.as_slice() {
+            [slot] if tables.len() == 1 => {
+                let table: &'data Table<F> = self.tables[slot.stage_index];
+                table
+                    .packed_bits()
+                    .filter(|packed| {
+                        packed.width == width
+                            && words.checked_mul(width) == Some(packed.values.len())
+                    })
+                    .map(|packed| Cow::Borrowed(packed.values.as_slice()))
+            }
+            _ => None,
+        };
+        let cells = borrowed.or_else(|| direct_packed_cells(&tables, words).map(Cow::Owned))?;
+        let boundary = (0..words)
+            .map(|word| {
+                let first = u64::from(word == 0);
+                let last = if word + 1 == words {
+                    1 << (SLICED_LANES - 1)
+                } else {
+                    0
+                };
+                [first, last, !last]
+            })
+            .collect();
+        let trace = SlicedTrace {
+            num_vars,
+            width,
+            cells: Planes::Low(cells),
+            // Eligibility excludes successor reads, including during the boundary fold.
+            successors: Planes::Low(Cow::Borrowed(&[])),
+            boundary,
+            rounds: 3,
+        };
+        let tensor = sliced_tensor_infinity::<A, F, EF, EF>(
+            &trace,
+            &self.slots,
+            &self.public_values,
+            &self.alpha_powers,
+            self.tau.as_slice(),
+        )?;
+        let evals = tensor_round(&tensor, &self.slots, self.tau.as_slice(), &[], 0);
+        self.sliced = Some(SlicedColumns {
+            trace,
+            challenges: Vec::new(),
+            tensor: Some(tensor),
+            late_boundary: false,
+        });
+        Some(finish_round(
+            &mut self.constraint_groups,
+            &mut self.interaction_groups,
+            &self.betas,
+            self.eta,
+            &evals,
+            &[],
+            self.tau.as_slice()[0],
+        ))
+    }
+
     /// [`Self::round_poly_sliced`], retaining the four-variable tensor as a lookahead cache when
     /// the stage is eligible for it.
     #[tracing::instrument(skip_all, level = "debug")]
@@ -1991,6 +2089,18 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         EF: Field + HasSubfield<S>,
         R: From<EF>,
     {
+        Self::new_with_generator(trace, challenges, R::from(EF::from(S::GENERATOR)))
+    }
+
+    /// A low-only Boolean trace does not need a `GF(4)` generator.
+    fn new_with_generator<EF: Field>(
+        trace: &'a SlicedTrace<'a>,
+        challenges: &[EF],
+        generator: R,
+    ) -> Self
+    where
+        R: From<EF>,
+    {
         const {
             assert!(
                 CORNERS <= MAX_PLANE_FOLD_CORNERS,
@@ -2005,7 +2115,6 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
             trace.num_vars >= challenges.len() + LANE_VARIABLES,
             "a bound prefix must leave a whole residual word, or its corners collapse onto one"
         );
-        let generator = R::from(EF::from(S::GENERATOR));
         let weights = Poly::new_from_point(challenges, EF::ONE)
             .as_slice()
             .iter()
@@ -2752,6 +2861,34 @@ where
         matches!(&self.columns, ExtColumns::Sliced(columns) if columns.tensor.is_some())
     }
 
+    /// Contract the retained tensor, independently of any subfield used to construct it.
+    pub(crate) fn round_poly_tensor(&mut self) -> Option<Vec<EF>> {
+        let ExtColumns::Sliced(columns) = &self.columns else {
+            return None;
+        };
+        let tensor = columns.tensor.as_ref()?;
+        debug_assert_eq!(columns.challenges.len(), self.round);
+        if columns.challenges.len() >= tensor.depth {
+            return None;
+        }
+        let evals = tensor_round(
+            tensor,
+            &self.slots,
+            self.tau.as_slice(),
+            &columns.challenges,
+            self.round,
+        );
+        Some(finish_round(
+            &mut self.constraint_groups,
+            &mut self.interaction_groups,
+            &self.betas,
+            self.lookup_scale,
+            &evals,
+            &[],
+            self.tau.as_slice()[self.round],
+        ))
+    }
+
     /// Evaluate this round's polynomial on the stage's planes, while they have rounds left.
     ///
     /// # Returns
@@ -2770,32 +2907,22 @@ where
             return None;
         };
         debug_assert_eq!(columns.challenges.len(), self.round);
-        let evals = if let Some(tensor) = &columns.tensor {
-            if columns.challenges.len() >= tensor.depth {
-                return None;
-            }
-            tensor_round(
-                tensor,
-                &self.slots,
-                self.tau.as_slice(),
-                &columns.challenges,
-                columns.challenges.len(),
-            )
-        } else {
-            if columns.challenges.len() >= columns.trace.rounds {
-                return None;
-            }
-            sliced_round::<A, F, EF, S, R>(
-                eq_suffix,
-                &columns.trace,
-                &self.slots,
-                &self.public_values,
-                &self.alpha_powers,
-                self.tau.as_slice(),
-                &columns.challenges,
-                self.degree(),
-            )?
-        };
+        if columns.tensor.is_some() {
+            return self.round_poly_tensor();
+        }
+        if columns.challenges.len() >= columns.trace.rounds {
+            return None;
+        }
+        let evals = sliced_round::<A, F, EF, S, R>(
+            eq_suffix,
+            &columns.trace,
+            &self.slots,
+            &self.public_values,
+            &self.alpha_powers,
+            self.tau.as_slice(),
+            &columns.challenges,
+            self.degree(),
+        )?;
 
         // A sliced stage declares no lookup, so it has no lookup group to fill.
         Some(finish_round(
@@ -3269,6 +3396,32 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
+    /// Bind the tensor's fourth challenge and resume the generic packed kernels at round four.
+    pub(crate) fn fold_boolean_boundary(&mut self, r: EF) -> bool {
+        let ExtColumns::Sliced(columns) = &mut self.columns else {
+            return false;
+        };
+        if !columns.at_boundary() {
+            return false;
+        }
+        debug_assert!(matches!(columns.trace.cells, Planes::Low(_)));
+        debug_assert_eq!(columns.challenges.len(), 3);
+        let _span = tracing::debug_span!("fold_boolean_boundary").entered();
+        columns.challenges.push(r);
+        self.fold_claims(r);
+        let (trace, challenges) = self
+            .take_planes()
+            .expect("the Boolean stage is on its planes");
+        let fold = PlaneFold::<EF, 16>::new_with_generator(&trace, &challenges, EF::ZERO);
+        self.columns = ExtColumns::Scalar(
+            fold.unslice_columns(STAGED_COLUMNS.min(rows_per_task(trace.width))),
+        );
+        self.pack_scalar_columns();
+        self.boundary.apply(r);
+        self.round += 1;
+        true
+    }
+
     /// Fold a stage off its planes into the storage the challenge-field kernels read.
     ///
     /// The columns pack into lanes while half the residual rows still fill one, as a fold does.
@@ -3280,12 +3433,18 @@ where
         if !matches!(self.columns, ExtColumns::Sliced(_)) {
             return;
         }
-        let want_packed = self.num_evals() / 2 >= F::Packing::WIDTH;
         self.unslice::<S>();
-        if want_packed && let ExtColumns::Scalar(columns) = &self.columns {
+        self.pack_scalar_columns();
+    }
+
+    /// Match the storage decision made by the generic round and fold kernels.
+    fn pack_scalar_columns(&mut self) {
+        let want_packed = self.num_evals() / 2 >= F::Packing::WIDTH;
+        if want_packed && let ExtColumns::Scalar(columns) = &mut self.columns {
             let width = F::Packing::WIDTH;
-            let packed = columns
-                .par_iter()
+            // Release each scalar allocation as its packed replacement is produced.
+            let packed = core::mem::take(columns)
+                .into_par_iter()
                 .map(|column| {
                     let rows = column.as_slice();
                     Poly::new(
@@ -3304,3 +3463,6 @@ where
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod boolean_tests;

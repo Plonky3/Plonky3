@@ -95,6 +95,60 @@ pub trait ZerocheckBackend<F: Field, EF: ExtensionField<F>, A>:
 #[derive(Debug)]
 pub struct GenericBackend;
 
+/// A Boolean tensor for the first four rounds of eligible quadratic stages, followed by the
+/// generic backend's SIMD-packed extension-field kernels.
+///
+/// The tensor requires characteristic two, at least 1024 rows, three configured sliced rounds,
+/// packed Boolean tables and public values, and no lookups or successor reads. Dense tables,
+/// including periodic columns, use the generic kernels. An AIR constant outside `{0, 1}` also
+/// discards the tensor before any claim changes. Every fallback preserves the generic proof.
+#[derive(Debug)]
+pub struct BooleanTensorBackend;
+
+#[expect(private_interfaces)]
+impl<F, EF, A> private::Dispatch<F, EF, A> for BooleanTensorBackend
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: ProverAir<F, EF> + for<'a> Air<SlicedQuadraticFolder<'a, F, EF>>,
+    EF::ExtensionPacking: From<EF> + From<F::Packing>,
+{
+    type Repr = EF;
+
+    fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
+        state
+            .round_poly_boolean_tensor()
+            .unwrap_or_else(|| state.round_poly(eq_suffix))
+    }
+
+    fn fold0<'air, 'data>(
+        state: RoundStateBase<'air, 'data, A, F, EF>,
+        r: EF,
+    ) -> RoundStateExt<'air, 'data, A, F, EF> {
+        if state.is_sliced() {
+            state.fold_sliced(r)
+        } else {
+            state.fold(r)
+        }
+    }
+
+    fn round(state: &mut RoundStateExt<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
+        state
+            .round_poly_tensor()
+            .unwrap_or_else(|| state.round_poly(eq_suffix))
+    }
+
+    fn fold(state: &mut RoundStateExt<'_, '_, A, F, EF>, r: EF) {
+        if !state.fold_sliced(r) && !state.fold_boolean_boundary(r) {
+            state.fold(r);
+        }
+    }
+
+    fn openings(state: RoundStateExt<'_, '_, A, F, EF>) -> Vec<(usize, AirOpenings<EF>)> {
+        state.into_openings()
+    }
+}
+
 // The sealed kernels take the crate-private round states.
 #[expect(private_interfaces)]
 impl<F, EF, A> private::Dispatch<F, EF, A> for GenericBackend
