@@ -199,7 +199,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger, R> Pcs<Challenge, Chal
 where
     Val: TwoAdicField + PrimeField64,
     StandardUniform: Distribution<Val>,
-    Dft: TwoAdicSubgroupDft<Val>,
+    Dft: TwoAdicSubgroupDft<Val> + Sync,
     InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
@@ -292,7 +292,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger, R>
 where
     Val: TwoAdicField + PrimeField64,
     StandardUniform: Distribution<Val>,
-    Dft: TwoAdicSubgroupDft<Val>,
+    Dft: TwoAdicSubgroupDft<Val> + Sync,
     InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
@@ -1683,7 +1683,7 @@ mod tests {
     ///
     /// - The inverse transform returns coefficients in natural order.
     /// - Undoing the row permutation recovers the order the commitment expects.
-    fn check_fused_quotient_ldes<D: TwoAdicSubgroupDft<Val> + Clone>(dft: &D) {
+    fn check_fused_quotient_ldes<D: TwoAdicSubgroupDft<Val> + Clone + Sync>(dft: &D) {
         for (log_h, width, num_chunks) in [(4, 4, 2), (4, 3, 4)] {
             let mut rng = SmallRng::seed_from_u64(11);
             let perm = Perm::new_from_rng_128(&mut rng);
