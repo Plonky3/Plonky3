@@ -185,18 +185,32 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
     /// - Point covering every stacked variable.
     #[tracing::instrument(skip_all)]
     fn record_virtual(&mut self, point: &Point<EF>) -> EF {
-        // Per-column accumulation state:
-        //
-        //     eval    : running stacked evaluation
-        //     openings: one virtual opening per column, carrying its residuals
-        //     weights : per-column selector-equality scalars
-        let mut eval = EF::ZERO;
-        let mut openings = Vec::new();
-        let mut weights = Vec::new();
+        // Every column slot, in placement and selector order.
+        let slots: Vec<_> = self
+            .claims
+            .placements
+            .iter()
+            .flat_map(|placement| {
+                let table = &self.claims.tables[placement.idx()];
+                placement
+                    .selectors()
+                    .iter()
+                    .enumerate()
+                    .map(move |(poly_idx, selector)| (table, poly_idx, selector))
+            })
+            .collect();
 
-        for placement in &self.claims.placements {
-            let table = &self.claims.tables[placement.idx()];
-            for (poly_idx, selector) in placement.selectors().iter().enumerate() {
+        // Average bytes one column evaluation reads.
+        let column_bytes = slots
+            .iter()
+            .map(|(table, ..)| size_of::<F>() << table.num_variables())
+            .sum::<usize>()
+            / slots.len().max(1);
+
+        // Columns evaluate independently; collection preserves slot order.
+        let per_column = slots.into_par_iter().map_collect_min_task_bytes(
+            column_bytes,
+            |(table, poly_idx, selector)| {
                 // Source column behind this slot.
                 let poly = table.poly(poly_idx);
 
@@ -213,19 +227,30 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
                 let local_svo = SvoPoint::new_packed(self.claims.folding, &local_part);
                 let (column_eval, partial_evals) = local_svo.eval(poly);
 
-                // Add the weighted column evaluation into the stacked total.
-                eval += weight * column_eval;
+                // Virtual opening: no source column tag, residuals attached.
+                (
+                    weight,
+                    Opening {
+                        poly_idx: None,
+                        eval: column_eval,
+                        data: partial_evals,
+                    },
+                )
+            },
+        );
 
-                // Record a virtual opening: no source column tag, residuals attached.
-                openings.push(Opening {
-                    poly_idx: None,
-                    eval: column_eval,
-                    data: partial_evals,
-                });
-
-                // Stash the weight for the accumulator-batcher call below.
-                weights.push(weight);
-            }
+        // Per-column accumulation state:
+        //
+        //     eval    : running stacked evaluation
+        //     openings: one virtual opening per column, carrying its residuals
+        //     weights : per-column selector-equality scalars
+        let mut eval = EF::ZERO;
+        let mut openings = Vec::with_capacity(per_column.len());
+        let mut weights = Vec::with_capacity(per_column.len());
+        for (weight, opening) in per_column {
+            eval += weight * opening.eval;
+            weights.push(weight);
+            openings.push(opening);
         }
 
         // Batch every per-column opening into per-round preprocessing accumulators.
@@ -599,7 +624,10 @@ mod tests {
     use alloc::vec;
 
     use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::dense::RowMajorMatrix;
     use proptest::prelude::*;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
     use crate::layout::prover::test_utils::{
@@ -637,6 +665,37 @@ mod tests {
         assert_eq!(scalar, packed);
         // The adaptive dispatcher must return that same polynomial on either branch.
         assert_eq!(prover.residual_weights_packed(&rs, alpha), packed);
+    }
+
+    #[test]
+    fn record_virtual_matches_the_stacked_evaluation() {
+        // Invariant:
+        //     The virtual claim is the evaluation of the stacked polynomial, however
+        //     columns are scheduled: summing weighted per-column evaluations in slot
+        //     order must reproduce it, and the claim must be the one recorded.
+        //
+        // Fixture state:
+        //     Tables of different arity and width, so slots differ in cost and selector.
+        let mut rng = SmallRng::seed_from_u64(7);
+        let tables = [(3, 9), (5, 7), (1, 8)]
+            .into_iter()
+            .map(|(polys, vars): (usize, usize)| {
+                Table::new(RowMajorMatrix::new(
+                    (0..polys << vars).map(|_| rng.random()).collect(),
+                    1 << vars,
+                ))
+            })
+            .collect();
+        let witness = PrefixProver::<F, EF>::new_witness(tables, FOLDING);
+        let stacked = witness.stacked_poly();
+        let mut prover = PrefixProver::<F, EF>::from_witness(witness);
+
+        let point = Point::<EF>::rand(&mut rng, stacked.num_variables());
+        let eval = prover.record_virtual(&point);
+
+        assert_eq!(eval, stacked.eval_base(&point));
+        assert_eq!(prover.claims.virtual_claims.len(), 1);
+        assert_eq!(prover.claims.virtual_claims[0].eval, eval);
     }
 
     #[test]
