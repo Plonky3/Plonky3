@@ -123,6 +123,16 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
                 forward(chunk, plan, shift, Fold::EXIT);
             });
             forward(message, plan, BinaryField128::ZERO, Fold::EXIT);
+        } else if log_inv_rate >= 4 && len <= 32 * 1024 / size_of::<u128>() {
+            // Many cache-sized cosets repay one bounded snapshot of their common source.
+            // Keep every coset, including the first, in the same parallel transform pass.
+            let snapshot = message.to_vec();
+            for_chunks(values, len, log_message, |(c, chunk)| {
+                if c != 0 {
+                    chunk.copy_from_slice(&snapshot);
+                }
+                forward(chunk, plan, domain_point(c << log_message), Fold::EXIT);
+            });
         } else {
             // Small cosets are copied first, then transformed together.
             for_chunks(tail, len, 1, |(_, chunk)| chunk.copy_from_slice(message));
@@ -1220,5 +1230,53 @@ mod tests {
     fn shifted_ntt_batch_rejects_a_non_power_of_two_height() {
         let coeffs = RowMajorMatrix::new(matrix(0, 1, 0).values.repeat(3), 1);
         let _ = PolyBasisNtt.ntt_batch(coeffs);
+    }
+
+    #[test]
+    fn small_high_rate_cosets_match_the_tower_transform() {
+        let check = || {
+            for (width, log_message, rate) in [
+                (1, 0, 4),
+                (3, 0, 10),
+                (3, 1, 9),
+                (3, 1, 10),
+                (16, 3, 10),
+                (16, 3, 3),
+                (16, 7, 4),
+                (17, 7, 4),
+                (3, 9, 4),
+                (3, 10, 4),
+                (1, 11, 4),
+                (1, 12, 4),
+                (1, 13, 4),
+            ] {
+                let message = matrix(log_message, width, 1793);
+                let mut padded = message.clone();
+                padded
+                    .values
+                    .resize(padded.values.len() << rate, BinaryField128::ZERO);
+                let expected = LchNtt::<BinaryField128>::default().ntt_batch(padded.clone());
+                assert_eq!(
+                    PolyBasisNtt.ntt_batch_padded(padded, rate),
+                    expected,
+                    "width={width} log={log_message} rate={rate}"
+                );
+                assert_eq!(
+                    PolyBasisNtt.ntt_batch_borrowed(message.as_view(), rate),
+                    expected
+                );
+                assert_eq!(message, matrix(log_message, width, 1793));
+            }
+        };
+        #[cfg(feature = "parallel")]
+        for workers in [1, 2, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(check);
+        }
+        #[cfg(not(feature = "parallel"))]
+        check();
     }
 }
