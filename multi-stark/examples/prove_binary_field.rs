@@ -200,12 +200,16 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use p3_binary_field::{BinaryField2, Ghash128};
     use p3_binary_pcs::{BinaryPcsError, BinaryPcsProof};
     use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName};
     use p3_field::PrimeCharacteristicRing;
     use p3_multi_stark::config::PcsError;
     use p3_multi_stark::zerocheck::ZerocheckError;
-    use p3_multi_stark::{SecurityError, VerificationError, VerifyingKey, prove, verify};
+    use p3_multi_stark::{
+        GenericBackend, ReprBackend, SecurityError, SubfieldBackend, VerificationError,
+        VerifyingKey, prove, prove_with_backend, verify,
+    };
 
     use super::*;
 
@@ -236,6 +240,30 @@ mod tests {
                 [value.clone() * value],
                 BusActivation::Boolean(selector),
             );
+        }
+    }
+
+    /// One end of the binary bus, declaring that it reads no next row.
+    ///
+    /// The representation backend builds its first-round tensor only for stages of such AIRs.
+    struct CurrentRowBusAir(BinaryBusAir);
+
+    impl BaseAir<F> for CurrentRowBusAir {
+        fn width(&self) -> usize {
+            self.0.width()
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            Vec::new()
+        }
+    }
+
+    impl<AB> Air<AB> for CurrentRowBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            self.0.eval(builder);
         }
     }
 
@@ -284,6 +312,20 @@ mod tests {
             rows.extend([
                 F::from_repr((row + 2) as u128),
                 F::from_bool(row < live && row.is_multiple_of(2)),
+            ]);
+        }
+        Table::new(RowMajorMatrix::new(rows, 2).transpose())
+    }
+
+    /// Builds one two-column binary bus table whose payloads and selectors are all bits.
+    ///
+    /// Every cell lies in `GF(2)`, so a stage of these tables fits the sliced kernels.
+    fn bit_bus_table(log_height: usize) -> Table<F> {
+        let mut rows = Vec::with_capacity(2 << log_height);
+        for row in 0usize..1usize << log_height {
+            rows.extend([
+                F::from_bool(row.count_ones().is_multiple_of(2)),
+                F::from_bool(!row.is_multiple_of(3)),
             ]);
         }
         Table::new(RowMajorMatrix::new(rows, 2).transpose())
@@ -550,6 +592,79 @@ mod tests {
                 VerifierInstance::new(airs[2], &vk, 2, &[]),
             ]),
             &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn bit_valued_binary_bus_proofs_match_across_backends() {
+        // Every cell is a bit, no AIR reads a next row, and each half of the stage spans several
+        // sixty-four-row words. The subfield backend then evaluates the AIRs through the sliced
+        // folder, and the representation backend builds its first-round tensor through the
+        // quadratic folder.
+        //
+        // Each must leave the declaration's Booleanity check, which the declaration path asserts,
+        // as the only constraint, and assert nothing for its tuple. Anything else breaks the
+        // constraint count or changes a round polynomial, and so the proof.
+        //
+        // The height clears the sliced kernels' thresholds with room to spare: the tensor path
+        // needs at least ten row variables, three sliced rounds, degree two and no next-row reads,
+        // and the delayed boundary path needs eleven.
+        let log_height = 12;
+        // Four stacked columns need two variables above the trace height.
+        let config = config(log_height + 1);
+        let push = CurrentRowBusAir(BinaryBusAir {
+            direction: BusDirection::Push,
+        });
+        let pull = CurrentRowBusAir(BinaryBusAir {
+            direction: BusDirection::Pull,
+        });
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let instances = || {
+            ProverInstances::new(vec![
+                ProverInstance::new(&push, bit_bus_table(log_height), &pk, &[]),
+                ProverInstance::new(&pull, bit_bus_table(log_height), &pk, &[]),
+            ])
+        };
+
+        let generic =
+            prove_with_backend::<_, _, GenericBackend>(&config, instances(), 0, &mut challenger())
+                .unwrap();
+        let expected = postcard::to_allocvec(&generic).unwrap();
+        let subfield = prove_with_backend::<_, _, SubfieldBackend<BinaryField2>>(
+            &config,
+            instances(),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        assert_eq!(postcard::to_allocvec(&subfield).unwrap(), expected);
+        let repr = prove_with_backend::<_, _, ReprBackend<BinaryField2, Ghash128>>(
+            &config,
+            instances(),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        assert_eq!(postcard::to_allocvec(&repr).unwrap(), expected);
+        let late = prove_with_backend::<_, _, ReprBackend<BinaryField2, Ghash128, true>>(
+            &config,
+            instances(),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        assert_eq!(postcard::to_allocvec(&late).unwrap(), expected);
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, log_height, &[]),
+                VerifierInstance::new(&pull, &vk, log_height, &[]),
+            ]),
+            &generic,
             0,
             &mut challenger(),
         )
