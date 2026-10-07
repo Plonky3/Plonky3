@@ -1322,15 +1322,37 @@ mod kernel {
             low: u64,
             high: u64,
         ) {
+            self.add_planes(prepared, index, [low, high]);
+        }
+
+        /// Add a Boolean constraint for [`Self::finish_bits`], without recording a high plane.
+        #[inline]
+        pub(crate) fn add_bits<R: Field>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            index: usize,
+            bits: u64,
+        ) {
+            self.add_planes(prepared, index, [bits]);
+        }
+
+        #[inline]
+        fn add_planes<R: Field, const N: usize>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            index: usize,
+            planes: [u64; N],
+        ) {
             if index >= prepared.0.len {
                 return;
             }
-            self.planes[0][index % RING] = low;
-            self.planes[1][index % RING] = high;
+            for (ring, plane) in self.planes.iter_mut().zip(planes) {
+                ring[index % RING] = plane;
+            }
             if index % BLOCK == BLOCK - 1 && index >= BLOCK {
                 // SAFETY: this module is compiled only where the build enables every target
                 // feature the kernel names.
-                unsafe { self.flush(&prepared.0, index / BLOCK - 1) };
+                unsafe { self.flush::<R, N>(&prepared.0, index / BLOCK - 1) };
             }
         }
 
@@ -1343,20 +1365,20 @@ mod kernel {
             prepared: &PreparedPowers<R>,
             lanes: &LaneSums<R>,
         ) -> R {
-            self.finish_with(prepared, |plane| plane_sum(lanes, plane))
+            self.finish_with::<R, 2>(prepared, |plane| plane_sum(lanes, plane))
         }
 
-        /// [`Self::finish`], for values with only a low bit plane.
+        /// [`Self::finish`], for values added through [`Self::add_bits`].
         pub(crate) fn finish_bits<R: Field>(
             &mut self,
             prepared: &PreparedPowers<R>,
             lanes: &BitLaneSums<R>,
         ) -> R {
-            self.finish_with(prepared, |plane| lanes.sum(plane))
+            self.finish_with::<R, 1>(prepared, |plane| lanes.sum(plane))
         }
 
         /// Finish the byte-sliced sums, contracting every coordinate plane through `plane_sum`.
-        fn finish_with<R: Field>(
+        fn finish_with<R: Field, const N: usize>(
             &mut self,
             prepared: &PreparedPowers<R>,
             plane_sum: impl FnMut(u64) -> R,
@@ -1367,10 +1389,10 @@ mod kernel {
             // the kernel names.
             unsafe {
                 if full > 0 {
-                    self.flush(prepared, full - 1);
+                    self.flush::<R, N>(prepared, full - 1);
                 }
                 if !prepared.len.is_multiple_of(BLOCK) {
-                    self.flush(prepared, full);
+                    self.flush::<R, N>(prepared, full);
                 }
             }
             if !self.carried {
@@ -1405,21 +1427,21 @@ mod kernel {
         ///
         /// A plane on which the whole block vanishes adds nothing.
         #[target_feature(enable = "avx512f,avx512bw,gfni")]
-        fn flush<R: Field>(&mut self, prepared: &Prepared<R>, block: usize) {
+        fn flush<R: Field, const N: usize>(&mut self, prepared: &Prepared<R>, block: usize) {
             let at = block % WAITING;
-            let planes = [0, 1].map(|plane| load(&self.planes[plane].as_chunks::<BLOCK>().0[at]));
+            let planes: [_; N] =
+                core::array::from_fn(|plane| load(&self.planes[plane].as_chunks::<BLOCK>().0[at]));
             if planes
                 .iter()
                 .all(|&words| _mm512_test_epi64_mask(words, words) == 0)
             {
                 return;
             }
-            for ring in &mut self.planes {
+            for ring in &mut self.planes[..N] {
                 ring.as_chunks_mut::<BLOCK>().0[at] = [0; BLOCK];
             }
             let bytes = R::NUM_BYTES;
             let matrices = &prepared.blocks[block * 2 * bytes..(block + 1) * 2 * bytes];
-            let (low, high) = matrices.split_at(bytes);
             let active = planes.map(|words| _mm512_test_epi64_mask(words, words) != 0);
             let lanes = core::array::from_fn(|i| {
                 if active[i] {
@@ -1430,10 +1452,11 @@ mod kernel {
             });
             accumulate_bytes(
                 &mut self.sums,
-                [
-                    low[..BYTES].try_into().unwrap(),
-                    high[..BYTES].try_into().unwrap(),
-                ],
+                core::array::from_fn(|plane| {
+                    matrices[plane * bytes..plane * bytes + BYTES]
+                        .try_into()
+                        .unwrap()
+                }),
                 &lanes,
                 active,
             );
@@ -1443,10 +1466,11 @@ mod kernel {
                     .get_or_insert_with(|| Box::new(ExtraSums([[0; REGISTER_WORDS]; EXTRA_BYTES])));
                 accumulate_bytes(
                     &mut extra.0,
-                    [
-                        low[BYTES..].try_into().unwrap(),
-                        high[BYTES..].try_into().unwrap(),
-                    ],
+                    core::array::from_fn(|plane| {
+                        matrices[plane * bytes + BYTES..(plane + 1) * bytes]
+                            .try_into()
+                            .unwrap()
+                    }),
                     &lanes,
                     active,
                 );
@@ -1506,14 +1530,14 @@ mod kernel {
 
     /// Accumulate a bounded group of coordinate rows without keeping all 24 sums in registers.
     #[target_feature(enable = "avx512f,avx512bw,gfni")]
-    fn accumulate_bytes<const B: usize>(
+    fn accumulate_bytes<const B: usize, const N: usize>(
         words: &mut [[u64; REGISTER_WORDS]; B],
-        matrices: [&[u64; B]; 2],
-        lanes: &[__m512i; 2],
-        active: [bool; 2],
+        matrices: [&[u64; B]; N],
+        lanes: &[__m512i; N],
+        active: [bool; N],
     ) {
         let mut sums = words.map(|row| load(&row));
-        for plane in 0..2 {
+        for plane in 0..N {
             if !active[plane] {
                 continue;
             }
@@ -1636,6 +1660,16 @@ mod kernel {
             _index: usize,
             _low: u64,
             _high: u64,
+        ) {
+            match prepared.0.0 {}
+        }
+
+        /// Never called: no prepared layout exists.
+        pub(crate) fn add_bits<R>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            _index: usize,
+            _bits: u64,
         ) {
             match prepared.0.0 {}
         }

@@ -534,10 +534,63 @@ mod kernel_tests {
             });
             let prepared = prepared(&[power], Poly192::ZERO);
             let mut sums = PreparedSums::new();
-            sums.add(&prepared, 0, 1 << 63, 0);
+            sums.add_bits(&prepared, 0, 1 << 63);
             assert_eq!(sums.finish_bits(&prepared, &lanes), power);
             assert!(sums.has_extra_sums());
         }
+    }
+
+    #[test]
+    fn bit_prepared_sums_match_raw_lanes_across_ring_boundaries() {
+        fn check<R: Field>()
+        where
+            StandardUniform: Distribution<R>,
+        {
+            let mut rng = SmallRng::seed_from_u64(0xB175_0192);
+            for count in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 65] {
+                let weights = (0..64).map(|_| rng.random()).collect::<Vec<R>>();
+                let lanes = BitLaneSums::new(&weights);
+                let powers = (0..count).map(|_| rng.random()).collect::<Vec<R>>();
+                let prepared = prepared(&powers, R::ZERO);
+                for all_zero in [false, true] {
+                    let mut sums = PreparedSums::new();
+                    let mut expected = R::ZERO;
+                    for index in 0..count + 3 {
+                        let bits = if all_zero || (index / 8) % 3 == 1 {
+                            0
+                        } else if index % 3 == 0 {
+                            1 << (index % 64)
+                        } else if index % 3 == 1 {
+                            u64::MAX
+                        } else {
+                            rng.random::<u64>()
+                        };
+                        sums.add_bits(&prepared, index, bits);
+                        if let Some(&power) = powers.get(index) {
+                            for (lane, &weight) in weights.iter().enumerate() {
+                                if (bits >> lane) & 1 != 0 {
+                                    expected += power * weight;
+                                }
+                            }
+                        }
+                    }
+                    assert_eq!(sums.finish_bits(&prepared, &lanes), expected);
+                }
+            }
+        }
+        check::<Ghash128>();
+        check::<Poly192>();
+    }
+
+    #[test]
+    fn past_end_bit_constraints_do_not_activate_cubic_sums() {
+        let prepared = prepared(&[Poly192::ONE], Poly192::ZERO);
+        let lanes = BitLaneSums::new(&[Poly192::ONE; SLICED_LANES]);
+        let mut sums = PreparedSums::new();
+        sums.add_bits(&prepared, 0, 0);
+        sums.add_bits(&prepared, 1, u64::MAX);
+        assert_eq!(sums.finish_bits(&prepared, &lanes), Poly192::ZERO);
+        assert!(!sums.has_extra_sums());
     }
 
     #[test]
