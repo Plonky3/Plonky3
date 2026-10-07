@@ -1,5 +1,6 @@
 //! Physical placement of source tables inside the stacked committed polynomial.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use p3_field::{Field, PackedValue};
@@ -243,9 +244,11 @@ impl<'a, F: Field> ColumnView<'a, F> {
 /// Dense tables retain the original field-cell layout. Boolean tables keep one `u64` word per
 /// 64 logical rows and expose [`ColumnView`] for consumers that can operate without decoding the
 /// full trace.
+///
+/// Clones share the cells; a table that is padded copies them first.
 #[derive(Debug, Clone)]
 pub struct Table<F: Field> {
-    storage: TableStorage<F>,
+    storage: Arc<TableStorage<F>>,
 }
 
 impl<F: Field> Table<F> {
@@ -262,7 +265,7 @@ impl<F: Field> Table<F> {
         );
         assert!(columns.height() > 0, "table must have at least one column");
         Self {
-            storage: TableStorage::Dense(columns),
+            storage: Arc::new(TableStorage::Dense(columns)),
         }
     }
 
@@ -310,10 +313,10 @@ impl<F: Field> Table<F> {
             );
         }
         Self {
-            storage: TableStorage::Boolean {
+            storage: Arc::new(TableStorage::Boolean {
                 words,
                 num_variables,
-            },
+            }),
         }
     }
 
@@ -382,7 +385,7 @@ impl<F: Field> Table<F> {
     /// Returns one column without materializing packed storage.
     pub fn column(&self, id: usize) -> ColumnView<'_, F> {
         assert!(id < self.num_polys(), "table column out of bounds");
-        match &self.storage {
+        match &*self.storage {
             TableStorage::Dense(columns) => {
                 let start = id * columns.width;
                 ColumnView::Dense(&columns.values[start..start + columns.width])
@@ -411,8 +414,8 @@ impl<F: Field> Table<F> {
     }
 
     /// Returns the packed backing matrix, if this table is Boolean-packed.
-    pub const fn packed_bits(&self) -> Option<&RowMajorMatrix<u64>> {
-        match &self.storage {
+    pub fn packed_bits(&self) -> Option<&RowMajorMatrix<u64>> {
+        match &*self.storage {
             TableStorage::Dense(_) => None,
             TableStorage::Boolean { words, .. } => Some(words),
         }
@@ -422,10 +425,10 @@ impl<F: Field> Table<F> {
     ///
     /// An already dense table is returned without copying.
     pub fn into_dense(self) -> Self {
-        match self.storage {
+        match &*self.storage {
             TableStorage::Dense(_) => self,
-            TableStorage::Boolean {
-                words,
+            &TableStorage::Boolean {
+                ref words,
                 num_variables,
             } => {
                 let height = 1usize << num_variables;
@@ -444,7 +447,7 @@ impl<F: Field> Table<F> {
     }
 
     fn dense_matrix(&self) -> &RowMajorMatrix<F> {
-        match &self.storage {
+        match &*self.storage {
             TableStorage::Dense(columns) => columns,
             TableStorage::Boolean { .. } => {
                 panic!("dense table access is unavailable for packed Boolean storage")
@@ -454,15 +457,15 @@ impl<F: Field> Table<F> {
 
     /// Returns the number of columns.
     pub fn num_polys(&self) -> usize {
-        match &self.storage {
+        match &*self.storage {
             TableStorage::Dense(columns) => columns.height(),
             TableStorage::Boolean { words, .. } => words.width,
         }
     }
 
     /// Returns the shared number of variables.
-    pub const fn num_variables(&self) -> usize {
-        match &self.storage {
+    pub fn num_variables(&self) -> usize {
+        match &*self.storage {
             TableStorage::Dense(columns) => columns.width.ilog2() as usize,
             TableStorage::Boolean { num_variables, .. } => *num_variables,
         }
@@ -477,7 +480,7 @@ impl<F: Field> Table<F> {
     fn pad_zeros(&mut self, num_variables: usize) {
         let current_num_variables = self.num_variables();
         if current_num_variables < num_variables {
-            match &mut self.storage {
+            match Arc::make_mut(&mut self.storage) {
                 TableStorage::Dense(columns) => columns
                     .widen_right((1 << num_variables) - (1 << current_num_variables), F::ZERO),
                 TableStorage::Boolean { .. } => {
@@ -1811,6 +1814,70 @@ mod tests {
         assert_eq!(
             witness.stacked_poly().as_slice(),
             &[a0, a1, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO],
+        );
+    }
+
+    #[test]
+    fn a_table_clone_shares_its_cells() {
+        // Invariant:
+        //     Cloning a table does not copy its cells, for both dense and packed storage.
+        //     A retained table is cloned for every opening, so the clone must stay cheap.
+        let dense = Table::new(RowMajorMatrix::new(
+            (0..8).map(F::from_u64).collect::<Vec<_>>(),
+            4,
+        ));
+        let packed = Table::<F>::from_packed_bits(RowMajorMatrix::new(vec![0b1010, 0b0110], 2), 2);
+
+        let dense_clone = dense.clone();
+        let packed_clone = packed.clone();
+
+        assert!(core::ptr::eq(
+            dense.column(1).as_dense().unwrap(),
+            dense_clone.column(1).as_dense().unwrap(),
+        ));
+        assert!(core::ptr::eq(
+            packed.packed_bits().unwrap(),
+            packed_clone.packed_bits().unwrap(),
+        ));
+    }
+
+    #[test]
+    fn padding_a_shared_table_leaves_its_clone_untouched() {
+        // Invariant:
+        //     Padding mutates the cells in place only when the table is their sole owner.
+        //     A table that shares its cells with a clone is padded on a private copy, so the
+        //     clone keeps its arity and values.
+        //
+        // Fixture state:
+        //     one dense table of arity 1 with two columns, committed at folding 3.
+        let cells: Vec<F> = (1..=4).map(F::from_u64).collect();
+        let original = Table::new(RowMajorMatrix::new(cells.clone(), 2));
+
+        let padded = Witness::new(vec![original.clone()], 3);
+        let padded_interleaved = Witness::new_interleaved(vec![original.clone()], 3);
+
+        assert_eq!(padded.tables[0].num_variables(), 3);
+        assert_eq!(padded_interleaved.tables[0].num_variables(), 3);
+        assert_eq!(original.num_variables(), 1);
+        assert_eq!(original.poly(0).as_slice(), &cells[..2]);
+        assert_eq!(original.poly(1).as_slice(), &cells[2..]);
+    }
+
+    #[test]
+    fn densifying_a_shared_packed_table_leaves_its_clone_packed() {
+        // Invariant:
+        //     `into_dense` decodes a shared packed table into a new dense table and does not
+        //     alter the cells its clones read.
+        let packed = Table::<F>::from_packed_bits(RowMajorMatrix::new(vec![0b1010], 1), 2);
+        let clone = packed.clone();
+
+        let dense = packed.into_dense();
+
+        assert!(dense.packed_bits().is_none());
+        assert!(clone.packed_bits().is_some());
+        assert_eq!(
+            dense.poly(0).as_slice(),
+            &[F::ZERO, F::ONE, F::ZERO, F::ONE]
         );
     }
 
