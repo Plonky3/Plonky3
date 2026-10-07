@@ -500,6 +500,18 @@ mod tests {
                 });
             }
         }
+        // Serial upper passes can run in pairs, with one ordinary pass left over.
+        for extra in 0..=5 {
+            for width in WIDTHS {
+                plans.push(Plan {
+                    width,
+                    log_n: 4 + extra,
+                    local: 4,
+                    log_block: 0,
+                    depth: 0,
+                });
+            }
+        }
         plans
     }
 
