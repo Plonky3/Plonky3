@@ -196,23 +196,25 @@ impl<AB: AirBuilder> Air<AB> for KeccakBinaryAir {
                 })
             });
             for x in 0..5 {
-                builder.assert_zeros::<64, _>(array::from_fn(|z| {
+                let differences: [AB::Expr; 64] = array::from_fn(|z| {
                     let chi = b_row[x][z].clone()
                         + (AB::Expr::ONE + b_row[(x + 1) % 5][z].clone())
                             * b_row[(x + 2) % 5][z].clone();
-                    let round_map = not_output.clone() * (chi + next.a[y][x][z]);
-                    if x == 0 && y == 0 {
+                    chi + next.a[y][x][z]
+                });
+                if x == 0 && y == 0 {
+                    builder.assert_zeros::<64, _>(array::from_fn(|z| {
                         let rc_bit: AB::Expr = RC_BITS
                             .iter()
                             .zip(flags)
                             .filter(|(rc_bits, _)| rc_bits[z] != 0)
                             .map(|(_, &flag)| flag.into())
                             .sum();
-                        round_map + rc_bit
-                    } else {
-                        round_map
-                    }
-                }));
+                        not_output.clone() * differences[z].clone() + rc_bit
+                    }));
+                } else {
+                    builder.assert_zeros_with_filter(not_output.clone(), differences);
+                }
             }
         }
     }
