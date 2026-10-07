@@ -32,13 +32,13 @@ pub struct LchNtt<F> {
 impl<F: ButterflyField> AdditiveNtt<F> for LchNtt<F> {
     fn shifted_ntt_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
         let width = mat.width();
-        transform::<F, false>(&mut mat.values, width, shift);
+        F::lch_transform::<false>(&mut mat.values, width, shift);
         mat
     }
 
     fn shifted_intt_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
         let width = mat.width();
-        transform::<F, true>(&mut mat.values, width, shift);
+        F::lch_transform::<true>(&mut mat.values, width, shift);
         mat
     }
 
@@ -53,18 +53,24 @@ impl<F: ButterflyField> AdditiveNtt<F> for LchNtt<F> {
         assert!(log_n <= 1 << F::LOG_BITS, "domain exceeds field dimension");
 
         // The zero tail starts where the message ends, which fixes the coset size.
-        transform_cosets(&mut mat.values, width, log_n - log_inv_rate);
+        F::lch_transform_cosets(&mut mat.values, width, log_n - log_inv_rate);
         mat
     }
 }
 
 /// Transform a row-major buffer of `width` columns in place, over the coset `shift + S_l`.
 ///
+/// The network runs in the level's own representation.
+///
 /// # Panics
 ///
 /// - Panics if the row count is not a power of two.
 /// - Panics if the domain dimension exceeds the bit width of the level.
-fn transform<F: ButterflyField, const INVERSE: bool>(values: &mut [F], width: usize, shift: F) {
+pub(crate) fn transform<F: ButterflyField, const INVERSE: bool>(
+    values: &mut [F],
+    width: usize,
+    shift: F,
+) {
     let log_n = log2_strict_usize(values.len() / width);
     assert!(log_n <= 1 << F::LOG_BITS, "domain exceeds field dimension");
     let twiddles = Twiddles::new(log_n, shift);
@@ -104,7 +110,13 @@ fn transform<F: ButterflyField, const INVERSE: bool>(values: &mut [F], width: us
 /// Coset `c` is the message transformed over `domain_point(c * 2^log_message) + S_log_message`.
 ///
 /// The subspace polynomials are linear, so every coset's blocks read the full network's twiddles.
-fn transform_cosets<F: ButterflyField>(values: &mut [F], width: usize, log_message: usize) {
+///
+/// The network runs in the level's own representation.
+pub(crate) fn transform_cosets<F: ButterflyField>(
+    values: &mut [F],
+    width: usize,
+    log_message: usize,
+) {
     let len = width << log_message;
 
     // A coset within one tile is cheap to copy and transform on its own.
@@ -1253,13 +1265,81 @@ mod tests {
 
         let shift = sample::<BinaryField128>(0x0123_4567_89ab_cdef);
 
-        let tower = LchNtt::<BinaryField128>::default().shifted_ntt_batch(tower_coeffs, shift);
+        // The widest level may run its own transform in the GHASH basis, so the tower side calls the network directly.
+        let mut tower = tower_coeffs.values;
+        super::transform::<BinaryField128, false>(&mut tower, WIDTH, shift);
         let ghash =
             LchNtt::<Ghash128>::default().shifted_ntt_batch(ghash_coeffs, Ghash128::from(shift));
 
         // Converting before or after the transform must give the same values.
-        for (t, g) in tower.values.iter().zip(&ghash.values) {
+        for (t, g) in tower.iter().zip(&ghash.values) {
             assert_eq!(Ghash128::from(*t), *g);
+        }
+    }
+
+    /// The widest level's own transform against its network held in the tower basis.
+    ///
+    /// The level may run the network in the GHASH basis, and must still leave the tower result.
+    /// Only a build with a carryless multiply takes that route, so elsewhere both sides agree trivially.
+    #[test]
+    fn the_widest_level_transforms_as_its_tower_basis_network() {
+        // Fixture state: one row up to sixteen rows, then 2^11 and 2^14 rows.
+        //
+        // - Each tall height has a shape past one tile, so the blocked schedule runs.
+        // - Each also has a shape past the length at which a pool of up to 64 workers splits a change of basis.
+        for log_n in [0, 1, 2, 3, 4, 5, 11, 14] {
+            for width in [1usize, 3, 16] {
+                for shift_bits in SHIFTS {
+                    let shift = sample::<BinaryField128>(shift_bits);
+                    let coeffs = matrix::<BinaryField128>(log_n, width, 21).values;
+                    let label = format!("log_n={log_n} width={width} shift={shift_bits:#x}");
+
+                    let mut evals = coeffs.clone();
+                    super::transform::<BinaryField128, false>(&mut evals, width, shift);
+                    let mut actual = coeffs.clone();
+                    BinaryField128::lch_transform::<false>(&mut actual, width, shift);
+                    assert_eq!(actual, evals, "ntt {label}");
+
+                    // The inverse of arbitrary values, so it is not checked only as an undo.
+                    let mut expected = coeffs.clone();
+                    super::transform::<BinaryField128, true>(&mut expected, width, shift);
+                    let mut actual = coeffs.clone();
+                    BinaryField128::lch_transform::<true>(&mut actual, width, shift);
+                    assert_eq!(actual, expected, "intt {label}");
+
+                    // And the inverse of the codeword returns the coefficients.
+                    BinaryField128::lch_transform::<true>(&mut evals, width, shift);
+                    assert_eq!(evals, coeffs, "round trip {label}");
+                }
+            }
+        }
+    }
+
+    /// The widest level's padded transform against its network held in the tower basis.
+    ///
+    /// Only a build with a carryless multiply runs it in the GHASH basis, so elsewhere both sides agree trivially.
+    #[test]
+    fn the_widest_level_encodes_as_its_tower_basis_network() {
+        // Fixture state: one tile holds 2^9 rows of 16 columns.
+        //
+        //     log_message 0 ..= 4   tiny cosets, each copied from the message and transformed alone
+        //     log_message 9         a coset of exactly one tile, still copied
+        //     log_message 11        cosets past one tile, which share their first pass
+        assert_eq!(size_of::<BinaryField128>() * (16 << 9), DEEP_TILE_BYTES);
+        let shapes = (0..=4)
+            .flat_map(|log_message| [1usize, 3, 16].map(|width| (width, log_message)))
+            .chain([(16, 9), (16, 11)]);
+        for (width, log_message) in shapes {
+            for log_inv_rate in 0..=3 {
+                let mut padded = matrix::<BinaryField128>(log_message, width, 73).values;
+                padded.resize(padded.len() << log_inv_rate, BinaryField128::ZERO);
+                let label = format!("log_message={log_message} width={width} rate={log_inv_rate}");
+
+                let mut expected = padded.clone();
+                super::transform_cosets::<BinaryField128>(&mut expected, width, log_message);
+                BinaryField128::lch_transform_cosets(&mut padded, width, log_message);
+                assert_eq!(padded, expected, "{label}");
+            }
         }
     }
 }

@@ -8,6 +8,7 @@
 mod poly64;
 mod subfield;
 
+use p3_binary_field::poly_basis::HAS_HARDWARE_CLMUL;
 use p3_binary_field::{
     BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
     BinaryField128, Gf2, Ghash128, Poly64, TowerLevel,
@@ -15,11 +16,17 @@ use p3_binary_field::{
 use p3_field::{PackedValue, PrimeCharacteristicRing};
 use subfield::coordinate_butterfly;
 
+use crate::lch;
+use crate::poly::stages::{INTO_POLY, INTO_TOWER, convert};
+
 /// A field the additive transform has a butterfly kernel for.
 ///
 /// Every tower level implements it.
 ///
 /// The levels differ in how much of the twiddle's structure their kernel exploits.
+///
+/// A level runs the transform network in its own representation, unless an isomorphic one has
+/// cheaper products. The result is the same either way.
 pub trait ButterflyField: TowerLevel {
     /// Send each pair `(u, v)` to `(u + t*v, u + (t + 1)*v)`, in place.
     ///
@@ -29,6 +36,32 @@ pub trait ButterflyField: TowerLevel {
     ///
     /// Panics if the two runs have different lengths.
     fn butterfly<const INVERSE: bool>(lo: &mut [Self], hi: &mut [Self], t: Self);
+
+    /// Run the Lin-Chung-Han transform in place, over a row-major buffer of `width` columns and
+    /// the coset `shift + S_l`.
+    ///
+    /// The inverse flag recovers the coefficients from the evaluations instead.
+    ///
+    /// # Panics
+    ///
+    /// - Panics if the row count is not a power of two.
+    /// - Panics if the domain dimension exceeds the bit width of the level.
+    #[inline]
+    fn lch_transform<const INVERSE: bool>(values: &mut [Self], width: usize, shift: Self) {
+        lch::transform::<Self, INVERSE>(values, width, shift);
+    }
+
+    /// Run the forward Lin-Chung-Han transform in place, over a row-major buffer of `width`
+    /// columns whose leading `2^log_message` rows hold the message and the rest zeros.
+    ///
+    /// # Panics
+    ///
+    /// - Panics if the buffer is not a whole number of message-sized cosets.
+    /// - Panics if the dimension of the domain the cosets cover exceeds the bit width of the level.
+    #[inline]
+    fn lch_transform_cosets(values: &mut [Self], width: usize, log_message: usize) {
+        lch::transform_cosets::<Self>(values, width, log_message);
+    }
 }
 
 /// The butterfly over whole SIMD packings, then the scalar tail.
@@ -101,7 +134,7 @@ macro_rules! impl_butterfly_field {
 }
 
 // The byte-aligned tower levels, whose bytes are their subfield coordinates.
-impl_butterfly_field!(coordinate_butterfly: BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128);
+impl_butterfly_field!(coordinate_butterfly: BinaryField8, BinaryField16, BinaryField32, BinaryField64);
 
 // The sub-byte levels and the GHASH basis, which only have their packing.
 impl_butterfly_field!(plain_butterfly: Gf2, BinaryField2, BinaryField4, Ghash128);
@@ -111,6 +144,60 @@ impl ButterflyField for Poly64 {
     fn butterfly<const INVERSE: bool>(lo: &mut [Self], hi: &mut [Self], t: Self) {
         poly64::butterfly::<INVERSE>(lo, hi, t);
     }
+}
+
+// The widest byte-aligned level, whose network runs in the polynomial basis where the target multiplies carrylessly.
+//
+// - A tower product changes basis three times around one carryless product.
+// - Changing the whole buffer once each way costs two changes per element instead.
+// - The change of basis is a field isomorphism that sends the tower Cantor basis to the `Ghash128` one.
+// - So every twiddle and domain point maps to its image, and the network computes the image of the tower result.
+// - Changing that back gives the tower result exactly.
+//
+// Without a carryless multiply a `Ghash128` product is bit-serial, so the network stays in the tower basis.
+impl ButterflyField for BinaryField128 {
+    #[inline]
+    fn butterfly<const INVERSE: bool>(lo: &mut [Self], hi: &mut [Self], t: Self) {
+        coordinate_butterfly::<Self, INVERSE>(lo, hi, t);
+    }
+
+    fn lch_transform<const INVERSE: bool>(values: &mut [Self], width: usize, shift: Self) {
+        if !HAS_HARDWARE_CLMUL {
+            lch::transform::<Self, INVERSE>(values, width, shift);
+            return;
+        }
+        let words = Self::as_repr_slice_mut(values);
+        convert(words, INTO_POLY);
+        lch::transform::<Ghash128, INVERSE>(as_ghash(words), width, Ghash128::from(shift));
+        convert(words, INTO_TOWER);
+    }
+
+    fn lch_transform_cosets(values: &mut [Self], width: usize, log_message: usize) {
+        if !HAS_HARDWARE_CLMUL {
+            lch::transform_cosets::<Self>(values, width, log_message);
+            return;
+        }
+        let words = Self::as_repr_slice_mut(values);
+
+        // Every coset is written from the message, so the zero tail needs no change of basis.
+        convert(&mut words[..width << log_message], INTO_POLY);
+
+        // Each coset's shift is a domain point, and those of `Ghash128` are the images of the tower's.
+        lch::transform_cosets::<Ghash128>(as_ghash(words), width, log_message);
+        convert(words, INTO_TOWER);
+    }
+}
+
+/// Polynomial coordinates read in place as the `Ghash128` elements they are.
+#[inline]
+const fn as_ghash(words: &mut [u128]) -> &mut [Ghash128] {
+    // SAFETY: `Ghash128` is `#[repr(transparent)]` over `u128`.
+    //
+    // - A run of one is therefore a run of the other, of the same length and alignment.
+    // - Every `u128` is a canonical `Ghash128`, so every word read through the view is a valid element.
+    // - Every element written through the view is a `u128`, so the words stay initialised.
+    // - The view borrows the same words exclusively for the same lifetime.
+    unsafe { core::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<Ghash128>(), words.len()) }
 }
 
 #[cfg(test)]

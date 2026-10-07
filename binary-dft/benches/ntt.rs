@@ -127,7 +127,7 @@ fn ntt<F: TowerLevel, N: AdditiveNtt<F>>(
 
 /// Every backend's forward transform, at the folding width and on a single column.
 ///
-/// - `128/tower` keeps the data in the tower basis.
+/// - `128/tower` is the level's own transform, which changes basis in a separate pass each way where the target multiplies carrylessly.
 /// - `128/poly` changes basis once on the way in and once on the way out.
 /// - `128/ghash` holds data already in the basis the carryless multiply wants.
 fn bench_ntt(c: &mut Criterion) {
@@ -208,6 +208,9 @@ fn bench_encode_padded(c: &mut Criterion) {
     let wide = AdditiveRsEncoder::<BinaryField128>::default();
     encode_padded(c, "128/narrow", NARROW_WIDTH, &wide);
     encode_padded(c, "128", WIDTH, &wide);
+
+    let tower = AdditiveRsEncoder::new(LchNtt::<BinaryField128>::default());
+    encode_padded(c, "128/tower", WIDTH, &tower);
 
     let poly64 = AdditiveRsEncoder::new(LchNtt::<Poly64>::default());
     encode_padded(c, "64/poly/narrow", NARROW_WIDTH, &poly64);
