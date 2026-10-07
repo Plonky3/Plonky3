@@ -1,5 +1,6 @@
 //! End-to-end tests exercising the WHIR PCS through the multilinear trait.
 
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -152,7 +153,8 @@ fn prescribed_and_direct_open_reject_scalar_claim_budget() {
         ood,
         &mut challenger,
         direct_data.layout,
-        direct_data.merkle_data,
+        Arc::into_inner(direct_data.merkle_data)
+            .expect("the failed open_at released the other owner"),
         1,
     );
     assert!(matches!(
@@ -426,6 +428,106 @@ fn run_whir_pcs_at_prescribed_points<L: Layout<F, EF>>(
         &mut challenger,
     )
     .map(|_evals| ())
+}
+
+/// A proving key keeps its commitment's prover data and opens a clone of it on every proof.
+/// The clone must share the committed Merkle data and open to the original's proof.
+fn check_a_retained_clone_opens_like_the_original<L: Layout<F, EF> + Clone>() {
+    let specs = [TableSpec::new(
+        TableShape::new(8, 2),
+        vec![
+            OpeningBatch::new(vec![0, 1], Vec::new()),
+            OpeningBatch::new(vec![0], Vec::new()),
+        ],
+    )];
+    let folding_factor = FoldingFactor::Constant(2);
+    let folding = folding_factor.at_round(0);
+    let witness = L::new_witness(table_specs_to_tables(&specs), folding);
+    let protocol = OpeningProtocol::new(specs.to_vec()).pad_to_min_num_variables(folding);
+    let shapes = protocol.table_shapes();
+    let points: Vec<Point<EF>> = protocol
+        .iter_openings()
+        .enumerate()
+        .map(|(b, (table_idx, _batch))| {
+            let n = shapes[table_idx].num_variables();
+            Point::new(
+                (0..n)
+                    .map(|c| EF::from_u64((7 + b * 13 + c * 3) as u64))
+                    .collect(),
+            )
+        })
+        .collect();
+
+    let num_variables = witness.num_variables();
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+    let params = ProtocolParameters {
+        security_level: 32,
+        pow_bits: 0,
+        round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+        folding_factor,
+        soundness_type: SecurityAssumption::CapacityBound,
+        starting_log_inv_rate: 1,
+    };
+    let pcs = TestWhirPcs::<L>::new(
+        WhirConfig::new(num_variables, params).unwrap(),
+        MyDft::default(),
+        mmcs,
+    );
+
+    let mut challenger = challenger();
+    let (_, prover_data) = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+        &pcs,
+        witness,
+        &mut challenger,
+    )
+    .unwrap();
+    let retained = prover_data.clone();
+    assert!(Arc::ptr_eq(&retained.merkle_data, &prover_data.merkle_data));
+
+    // Both openings start from the same transcript state.
+    // The shared `open` path also runs while other owners are alive.
+    let via_open_clone = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::open(
+        &pcs,
+        retained.clone(),
+        protocol.clone(),
+        &mut challenger.clone(),
+    )
+    .unwrap();
+    let from_clone = pcs
+        .open_at(retained, &protocol, &points, &mut challenger.clone())
+        .unwrap();
+    let from_original = pcs
+        .open_at(
+            prover_data.clone(),
+            &protocol,
+            &points,
+            &mut challenger.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        postcard::to_allocvec(&from_clone).unwrap(),
+        postcard::to_allocvec(&from_original).unwrap()
+    );
+
+    let via_open_original = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::open(
+        &pcs,
+        prover_data,
+        protocol,
+        &mut challenger.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        postcard::to_allocvec(&via_open_clone).unwrap(),
+        postcard::to_allocvec(&via_open_original).unwrap()
+    );
+}
+
+#[test]
+fn a_retained_clone_opens_like_the_original() {
+    check_a_retained_clone_opens_like_the_original::<PrefixProver<F, EF>>();
+    check_a_retained_clone_opens_like_the_original::<SuffixProver<F, EF>>();
 }
 
 #[test]

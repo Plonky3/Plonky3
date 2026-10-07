@@ -1,5 +1,6 @@
 //! Adapter implementing the multilinear PCS trait for the WHIR protocol.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -29,8 +30,8 @@ use crate::pcs::proof::PcsProof;
 ///
 /// A commitment reused across proofs stores this data once.
 /// Each opening then receives a clone instead of a freshly committed copy.
-/// Cloning copies only the committed data.
-/// It skips the codeword re-encode and the Merkle rebuild.
+/// A clone shares the Merkle data and the committed tables, so it skips the codeword re-encode
+/// and the Merkle rebuild; a prefix layout still copies its stacked polynomial.
 #[derive(Clone)]
 pub struct WhirProverData<F, EF, MT, L>
 where
@@ -42,7 +43,10 @@ where
     /// Layout-mode prover holding the per-table opening claims accumulator.
     pub layout: L,
     /// Merkle prover data behind the initial commitment; reused to open STIR queries.
-    pub merkle_data: MT::ProverData<DenseMatrix<F>>,
+    ///
+    /// Clones share it; an opening drops its reference once a later round replaces the initial
+    /// commitment, or when the run ends.
+    pub merkle_data: Arc<MT::ProverData<DenseMatrix<F>>>,
     /// Marker tying the data to its extension field; carries no runtime state.
     _marker: PhantomData<EF>,
 }
@@ -108,7 +112,7 @@ where
             commitment,
             WhirProverData {
                 layout,
-                merkle_data,
+                merkle_data: Arc::new(merkle_data),
                 _marker: PhantomData,
             },
         ))
@@ -143,7 +147,7 @@ where
 
         // The claims are bound and the WHIR run starts here.
         // Its driver therefore seeds here, ahead of the run's first challenge.
-        let whir = self.prove(
+        let whir = self.prove_shared(
             initial_ood_answers,
             challenger,
             prover_data.layout,
@@ -286,7 +290,7 @@ where
 
         // The claims are bound and the WHIR run starts here.
         // Its driver therefore seeds here, ahead of the run's first challenge.
-        let whir = self.prove(
+        let whir = self.prove_shared(
             initial_ood_answers,
             challenger,
             prover_data.layout,
