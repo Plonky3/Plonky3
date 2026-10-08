@@ -6,14 +6,15 @@
 use core::arch::aarch64::veor3q_u64;
 use core::arch::aarch64::{
     uint64x2_t, vcombine_u64, vcreate_u64, vdupq_laneq_u64, vdupq_n_u64, veorq_u64, vextq_u64,
-    vgetq_lane_u64, vld1q_dup_u64, vld1q_u64, vmull_high_p64, vmull_p64, vreinterpretq_p64_u64,
-    vshlq_n_u64, vshrq_n_u64, vst1q_lane_u64, vst1q_u64, vzip1q_u64, vzip2q_u64,
+    vgetq_lane_u64, vld1q_dup_u64, vld1q_u64, vmull_high_p64, vmull_p64, vqtbl1q_u8,
+    vreinterpretq_p64_u64, vreinterpretq_u8_u64, vreinterpretq_u64_u8, vshlq_n_u64, vshrq_n_u64,
+    vst1q_lane_u64, vst1q_u64, vzip1q_u64, vzip2q_u64,
 };
 use core::mem::transmute;
 
 use crate::clmul::register::Register128;
 use crate::clmul::wide::{
-    HIGH_BY_HIGH, HIGH_BY_LOW, LOW_BY_LOW, Lanes64, TAIL_64, reduce_by_multiply,
+    HIGH_BY_HIGH, HIGH_BY_LOW, LOW_BY_LOW, Lanes64, TAIL_64, TOP_NIBBLE_FOLD,
 };
 
 // SAFETY for every method below: this module is compiled only when `aes` is enabled.
@@ -85,13 +86,19 @@ impl Lanes64 for uint64x2_t {
         unsafe { vshrq_n_u64::<N>(self) }
     }
 
-    // Apple cores issue `PMULL` on every vector pipe, as cheaply as an exclusive or.
-    //
-    // So three instructions fold the product, where the shifts take nine.
+    // One carryless fold and an independent nibble lookup replace two dependent multiplies.
     #[inline(always)]
     fn reduce_lane(self) -> Self {
         // SAFETY: `neon` is implied by `aes`, under which this module compiles.
-        reduce_by_multiply(self, unsafe { vdupq_n_u64(TAIL_64) })
+        unsafe {
+            let folded = self.clmul::<HIGH_BY_HIGH>(vdupq_n_u64(TAIL_64));
+            // The overflow correction depends only on the original high quadword's
+            // top nibble, so its lookup runs independently of the carryless fold.
+            let nibble = vextq_u64::<1>(vshrq_n_u64::<60>(self), vshrq_n_u64::<60>(self));
+            let table = core::arch::aarch64::vld1q_u8(TOP_NIBBLE_FOLD.as_ptr());
+            let spill = vreinterpretq_u64_u8(vqtbl1q_u8(table, vreinterpretq_u8_u64(nibble)));
+            self.xor3(folded, spill)
+        }
     }
 
     // Each parity reduces in place, and one interleave collects the two low quadwords.
