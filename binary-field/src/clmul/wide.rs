@@ -225,7 +225,7 @@ pub(crate) fn fold<L: Lanes64>(low: L, high: L) -> L {
 /// Addition of products is exclusive or, so a sum of them stays in this form.
 ///
 /// Reduction is `F_2`-linear, so a whole sum is reduced once at the end.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Wide<L> {
     /// The 128-bit products of the elements in even quadwords.
     pub(crate) even: L,

@@ -170,7 +170,7 @@ pub use poly64::PackedPoly64;
         target_feature = "aes"
     )
 ))]
-pub use poly192::PackedPoly192;
+pub use poly192::{PackedPoly192, PackedPoly192Unreduced};
 pub(crate) use selected::*;
 #[cfg(all(
     target_arch = "x86_64",
