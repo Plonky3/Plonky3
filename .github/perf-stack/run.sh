@@ -29,18 +29,18 @@ codegen-units=1
 EOF
 }
 export RUSTFLAGS='-C target-cpu=native'
-for spec in 'before:bad2eeb7' 'after_api:65feb3c8' 'after:db96a50b'; do
+for spec in 'before:bad2eeb7' 'after:f045bc6e'; do
  IFS=: read -r label revision <<< "$spec"
  git checkout -f "$revision"
  write_manifest
  features=wide
- if [[ "$label" != before ]]; then features=wide,power; fi
+ 
  cargo build --release --manifest-path "$bench_dir/Cargo.toml" --features "$features"
  cp "$bench_dir/target/release/stack-measurements" "/tmp/stack-binaries/$label"
 done
 lscpu
 for round in 1 2 3; do
- if [[ "$round" == 2 ]]; then labels=(after after_api before); else labels=(before after_api after); fi
+ if [[ "$round" == 2 ]]; then labels=(after before); else labels=(before after); fi
  for label in "${labels[@]}"; do
   printf '\nROUND %s REVISION %s\n' "$round" "$label"
   "/tmp/stack-binaries/$label"
