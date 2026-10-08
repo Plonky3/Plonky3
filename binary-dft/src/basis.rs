@@ -102,10 +102,11 @@ impl<F: TowerLevel> BasisNtt<F> {
         assert!(block < (1usize << layer), "block outside domain");
         let row = &self.rows[self.log_domain_size() - layer - 1];
         let mut t = *row.last().expect("a subspace row includes its shift");
-        for (bit, &v) in row[1..row.len() - 1].iter().enumerate() {
-            if block >> bit & 1 != 0 {
-                t += v;
-            }
+        let mut selected = block;
+        while selected != 0 {
+            let bit = selected.trailing_zeros() as usize;
+            t += row[1 + bit];
+            selected &= selected - 1;
         }
         t
     }
@@ -131,13 +132,14 @@ impl<F: TowerLevel> BasisNtt<F> {
             *v1.last().expect("shift present"),
             *v2.last().expect("shift present"),
         );
-        // A single walk shares the block's subset-sum decisions across all three rows.
-        for bit in 0..layer {
-            if block >> bit & 1 != 0 {
-                t += v0[1 + bit];
-                a += v1[2 + bit];
-                c += v2[3 + bit];
-            }
+        // Only selected basis vectors contribute, with one index shared across all three rows.
+        let mut selected = block;
+        while selected != 0 {
+            let bit = selected.trailing_zeros() as usize;
+            t += v0[1 + bit];
+            a += v1[2 + bit];
+            c += v2[3 + bit];
+            selected &= selected - 1;
         }
         let (d, e0, e1) = (v1[1], v2[1], v2[2]);
         [t, a, a + d, c, c + e0, c + e1, c + e0 + e1]
