@@ -97,7 +97,18 @@ impl Lanes64 for uint64x2_t {
     // Each parity reduces in place, and one interleave collects the two low quadwords.
     #[inline(always)]
     fn reduce_wide(even: Self, odd: Self) -> Self {
-        even.reduce_lane().unpack_low(odd.reduce_lane())
+        let (mut even, mut odd) = (even.reduce_lane(), odd.reduce_lane());
+        // Preserve the two vector sums until their reduced low lanes are interleaved.
+        // This emits no instructions and prevents three interleaves before one sum.
+        unsafe {
+            core::arch::asm!(
+                "/* {0:v} {1:v} */",
+                inout(vreg) even,
+                inout(vreg) odd,
+                options(pure, nomem, nostack, preserves_flags)
+            );
+        }
+        even.unpack_low(odd)
     }
 }
 
