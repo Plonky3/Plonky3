@@ -230,6 +230,17 @@ impl<F: ButterflyField> BasisNtt<F> {
             "matrix height differs from domain"
         );
         assert_eq!(values.len() % width, 0, "incomplete matrix row");
+        if !F::FUSE_RADIX8 {
+            for done in 0..dim {
+                let layer = if INVERSE { dim - done - 1 } else { done };
+                let size = values.len() >> layer;
+                for (block, values) in values.chunks_exact_mut(size).enumerate() {
+                    let (lo, hi) = values.split_at_mut(size / 2);
+                    F::butterfly::<INVERSE>(lo, hi, self.twiddle(layer, block));
+                }
+            }
+            return;
+        }
         let mut done = 0;
         while done < dim {
             let stages = (dim - done).min(3);

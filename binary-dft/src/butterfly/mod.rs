@@ -21,6 +21,12 @@ use subfield::coordinate_butterfly;
 ///
 /// The levels differ in how much of the twiddle's structure their kernel exploits.
 pub trait ButterflyField: TowerLevel {
+    /// Whether the transform driver should group three stages for this backend.
+    ///
+    /// The default keeps the ordinary per-stage sweep. A specialized register
+    /// kernel can opt in without imposing its traversal on other field types.
+    const FUSE_RADIX8: bool = false;
+
     /// Send each pair `(u, v)` to `(u + t*v, u + (t + 1)*v)`, in place.
     ///
     /// The inverse flag applies the inverse map instead.
@@ -157,6 +163,12 @@ impl_butterfly_field!(coordinate_butterfly: BinaryField8, BinaryField16, BinaryF
 impl_butterfly_field!(plain_butterfly: Gf2, BinaryField2, BinaryField4, Ghash128, Rijndael8b);
 
 impl ButterflyField for Poly64 {
+    const FUSE_RADIX8: bool = cfg!(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ));
+
     #[inline]
     fn butterfly<const INVERSE: bool>(lo: &mut [Self], hi: &mut [Self], t: Self) {
         poly64::butterfly::<INVERSE>(lo, hi, t);
