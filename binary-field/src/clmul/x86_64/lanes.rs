@@ -90,6 +90,30 @@ impl Register128 for __m128i {
     // The carryless multiplier is the scarce unit on the cores this backend targets.
     const CHEAP_MULTIPLY: bool = false;
 
+    #[cfg(target_feature = "gfni")]
+    #[inline(always)]
+    fn reduce_product(product: Self) -> u64 {
+        use core::arch::x86_64::{_mm_gf2p8affine_epi64_epi8, _mm_set1_epi64x};
+
+        use crate::ByteMatrix;
+        // Each byte of high * 0x1b contributes a low byte and a carry into
+        // the next byte. The last carry folds into byte zero modulo x^64 + 0x1b.
+        const LOW: u64 =
+            ByteMatrix::from_images([0x1b, 0x36, 0x6c, 0xd8, 0xb0, 0x60, 0xc0, 0x80]).to_quadword();
+        const CARRY: u64 = ByteMatrix::from_images([0, 0, 0, 0, 1, 3, 6, 13]).to_quadword();
+        // SAFETY: the module requires PCLMULQDQ and this arm additionally requires GFNI.
+        unsafe {
+            let high = _mm_unpackhi_epi64(product, product);
+            let low = _mm_gf2p8affine_epi64_epi8::<0>(high, _mm_set1_epi64x(LOW as i64));
+            let carry = _mm_gf2p8affine_epi64_epi8::<0>(high, _mm_set1_epi64x(CARRY as i64));
+            let top = _mm_gf2p8affine_epi64_epi8::<0>(
+                _mm_srli_epi64::<56>(carry),
+                _mm_set1_epi64x(LOW as i64),
+            );
+            _mm_cvtsi128_si64(product.xor3(low, _mm_slli_epi64::<8>(carry)).xor(top)) as u64
+        }
+    }
+
     #[inline(always)]
     fn lift(value: u64) -> Self {
         unsafe { _mm_cvtsi64_si128(value as i64) }
@@ -129,5 +153,42 @@ impl Register128 for __m128i {
     #[inline(always)]
     fn load_scalar(k: &u64) -> Self {
         unsafe { _mm_loadl_epi64(ptr::from_ref(k).cast()) }
+    }
+}
+
+#[cfg(all(test, target_feature = "gfni"))]
+mod tests {
+    use core::arch::x86_64::__m128i;
+
+    use proptest::prelude::*;
+
+    use crate::clmul::reduce_64;
+    use crate::clmul::register::Register128;
+
+    /// The vector register represents exactly two unrestricted coefficient words.
+    fn reduce(words: [u64; 2]) -> u64 {
+        // SAFETY: every bit pattern is valid in both sixteen-byte representations.
+        let register = unsafe { core::mem::transmute::<[u64; 2], __m128i>(words) };
+        __m128i::reduce_product(register)
+    }
+
+    #[test]
+    fn affine_reduction_matches_every_polynomial_basis_vector() {
+        for bit in 0..128 {
+            let value = 1u128 << bit;
+            assert_eq!(
+                reduce([value as u64, (value >> 64) as u64]),
+                reduce_64(value)
+            );
+        }
+        assert_eq!(reduce([u64::MAX; 2]), reduce_64(u128::MAX));
+        assert_eq!(reduce([0; 2]), 0);
+    }
+
+    proptest! {
+        #[test]
+        fn affine_reduction_matches_arbitrary_polynomials(words in any::<[u64;2]>()) {
+            prop_assert_eq!(reduce(words), reduce_64(u128::from(words[0]) | (u128::from(words[1]) << 64)));
+        }
     }
 }

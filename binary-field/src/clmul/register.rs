@@ -42,6 +42,12 @@ pub(crate) trait Register128: Lanes64 {
     /// The three coordinates, from a register holding the first two and one holding the third.
     fn store(pair: Self, last: Self) -> [u64; 3];
 
+    /// Reduce a scalar coefficient product, using the scalar-multiplication schedule.
+    #[inline(always)]
+    fn reduce_product(product: Self) -> u64 {
+        product.reduce_lane().lower()
+    }
+
     /// The value in the low quadword, where the mixed carryless product reads it.
     fn load_scalar(k: &u64) -> Self;
 }
@@ -58,7 +64,7 @@ fn reduce<R: Register128>(product: R) -> u64 {
 #[inline]
 pub(crate) fn poly_mul_64<R: Register128>(a: u64, b: u64) -> u64 {
     // The 128-bit product fills the register, then folds back into its low quadword.
-    reduce(R::lift(a).clmul::<LOW_BY_LOW>(R::lift(b)))
+    R::reduce_product(R::lift(a).clmul::<LOW_BY_LOW>(R::lift(b)))
 }
 
 /// Squaring in `GF(2^64)`, taking and returning the polynomial representation.
