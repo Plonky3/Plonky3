@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::Instant;
-use p3_binary_field::Rijndael8b;
-use p3_binary_dft::RijndaelLde;
+use p3_binary_field::{Poly64,Rijndael8b};
+use p3_binary_dft::{BasisNtt,RijndaelLde};
 use p3_field::{Field,PackedValue,PrimeCharacteristicRing};
 fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     let mut n = 1usize;
@@ -22,30 +22,10 @@ fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     println!("{name}: {mean:.6} ns/element; 95% CI +/- {:.6}; samples={times:?}", 2.228*sd/11f64.sqrt());
 }
 fn main() {
- type Bytes=<Rijndael8b as Field>::Packing;
- let mut values=Bytes::from_fn(|i|Rijndael8b::from_byte((i*17+81) as u8));
- let factors=Bytes::from_fn(|i|Rijndael8b::from_byte((i*31+19) as u8));
- measure("packed AES product",Bytes::WIDTH,||{
-  values=black_box(values)*black_box(factors);
-  let _=black_box(values);
- });
- let plan=RijndaelLde::new(6,Rijndael8b::ZERO,Rijndael8b::from_byte(64));
- let a:[u8;64]=core::array::from_fn(|i|(17*i+19) as u8);
- let b:[u8;64]=core::array::from_fn(|i|(31*i+37) as u8);
- let mut a_col=[Rijndael8b::ZERO;64];
- let mut b_col=[Rijndael8b::ZERO;64];
- measure("weighted byte extensions",64,||{
-  let mut sum=[Bytes::ZERO;64/Bytes::WIDTH];
-  for k in 0..8 {
-   black_box(&plan).apply(black_box(&a[k*8..k*8+8]), &mut a_col);
-   black_box(&plan).apply(black_box(&b[k*8..k*8+8]), &mut b_col);
-   let weight=Bytes::from(Rijndael8b::from_byte(1<<k));
-   for (i,s) in sum.iter_mut().enumerate() {
-    let x=*Bytes::from_slice(&a_col[i*Bytes::WIDTH..(i+1)*Bytes::WIDTH]);
-    let y=*Bytes::from_slice(&b_col[i*Bytes::WIDTH..(i+1)*Bytes::WIDTH]);
-    *s += x*y*weight;
-   }
-  }
-  let _=black_box(sum);
- });
+ let plan=BasisNtt::<Poly64>::polynomial(18,Poly64::from_bits(1<<25));
+ let mut data:Vec<_>=(0..1<<18).map(|i| Poly64::from_bits((i as u64).wrapping_mul(0x123456789abcdef))).collect();
+ measure("Poly64 forward NTT",data.len(),||{black_box(&plan).forward(black_box(&mut data)); let _=black_box(&data);});
+ let plan=BasisNtt::<Poly64>::polynomial(1,Poly64::from_bits(1<<25));
+ let mut data:Vec<_>=(0..1<<16).map(|i|Poly64::from_bits((i as u64).wrapping_mul(0x123456789abcdef))).collect();
+ measure("Poly64 wide butterfly",data.len(),||{black_box(&plan).forward_batch(black_box(&mut data),1<<15);let _=black_box(&data);});
 }
