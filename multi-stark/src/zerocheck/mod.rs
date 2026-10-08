@@ -831,7 +831,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                 .iter()
                 .map(|table| table.num_variables())
                 .collect::<Vec<_>>();
-            let periodic = family.context.periodic_tables(self.airs, &num_variables);
+            let periodic = family.context.period_vectors(self.airs, &num_variables);
             let prover = BusCompositionProver::new(
                 family.context,
                 family.output,

@@ -686,6 +686,7 @@ where
 mod tests {
     extern crate std;
 
+    use alloc::borrow::Cow;
     use alloc::string::String;
     use alloc::vec;
     use core::cell::Cell;
@@ -699,11 +700,12 @@ mod tests {
     use p3_dft::Radix2DFTSmallBatch;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{PackedValue, PrimeCharacteristicRing};
+    use p3_keccak::Keccak256Hash;
     use p3_lookup::{IndexedLookupBuilder, TraceWindow};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
-    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, TruncatedPermutation};
     use p3_util::{log2_ceil_usize, log2_strict_usize};
     use p3_whir::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirProver};
     use rand::SeedableRng;
@@ -2271,6 +2273,138 @@ mod tests {
             &mut challenger(),
         )
         .unwrap();
+    }
+
+    /// One end of a bus whose pushed payload is a periodic column.
+    enum PeriodicBusAir {
+        /// Pushes, on every row, the entry of this period the row reads.
+        Push(Vec<F>),
+        /// Pulls the committed payload on each row its Boolean selector names.
+        Pull,
+    }
+
+    impl BaseAir<F> for PeriodicBusAir {
+        fn width(&self) -> usize {
+            match self {
+                Self::Push(_) => 1,
+                Self::Pull => 2,
+            }
+        }
+
+        fn num_periodic_columns(&self) -> usize {
+            match self {
+                Self::Push(_) => 1,
+                Self::Pull => 0,
+            }
+        }
+
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            match self {
+                Self::Push(period) => Cow::Owned(vec![period.clone()]),
+                Self::Pull => Cow::Borrowed(&[]),
+            }
+        }
+    }
+
+    impl<AB> Air<AB> for PeriodicBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let first = builder.main().current_slice()[0];
+            let (direction, value, activation) = match self {
+                Self::Push(_) => {
+                    // The batch refuses an AIR with no round polynomial of its own.
+                    builder.assert_zero(first);
+                    let entry: AB::Expr = builder.periodic_values()[0].into();
+                    (BusDirection::Push, entry, BusActivation::Always)
+                }
+                Self::Pull => {
+                    let selector: AB::Expr = builder.main().current_slice()[1].into();
+                    let payload: AB::Expr = first.into();
+                    (
+                        BusDirection::Pull,
+                        payload,
+                        BusActivation::Boolean(selector),
+                    )
+                }
+            };
+            builder.push_bus_interaction(
+                BusName::new("periodic-payload"),
+                direction,
+                [value],
+                activation,
+            );
+        }
+    }
+
+    #[test]
+    fn a_periodic_bus_payload_repeats_down_a_dormant_table() {
+        // The push side reads a period of four entries down eight rows.
+        // The pull side commits the same eight payloads in a table four times taller.
+        //
+        //     rounds  : | r_0 r_1 | r_2           | r_3 r_4                    |
+        //     payload : | dormant | constant line | the period's two variables |
+        //
+        // Row `r` reads entry `r mod 4`, so only the last two rounds move the payload.
+        // By then the push table has folded once, at its own height.
+        // A fold sized for any other height pairs the wrong rows there, and the proof fails.
+        let period = [3, 5, 7, 11].map(F::from_u64).to_vec();
+        let push = PeriodicBusAir::Push(period.clone());
+        let pull = PeriodicBusAir::Pull;
+        let config = config(7, FOLDING);
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+
+        // The first eight pull rows select the period twice over, as the push side sends it.
+        let pull_columns = (0..32)
+            .map(|row| period[row % 4])
+            .chain((0..32).map(|row| F::from_bool(row < 8)))
+            .collect();
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(
+                    &push,
+                    Table::new(RowMajorMatrix::new(F::zero_vec(8), 8)),
+                    &pk,
+                    &[],
+                ),
+                ProverInstance::new(
+                    &pull,
+                    Table::new(RowMajorMatrix::new(pull_columns, 32)),
+                    &pk,
+                    &[],
+                ),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, 3, &[]),
+                VerifierInstance::new(&pull, &vk, 5, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        // The product proof and the shared sumcheck are functions of the statement alone.
+        // Pinning their bytes pins every round message the composition sent.
+        // A failure here means the transcript changed, which is right only when intended.
+        let bytes = postcard::to_allocvec(&(&proof.bus, &proof.sumcheck)).unwrap();
+        assert_eq!(
+            Keccak256Hash.hash_iter(bytes),
+            [
+                0x6c, 0xd6, 0x68, 0xde, 0x46, 0x48, 0x73, 0x67, 0x4a, 0x2d, 0xf3, 0x79, 0xe4, 0xaa,
+                0x5d, 0x4f, 0x52, 0x3b, 0xfb, 0x3c, 0xf8, 0x2e, 0x35, 0x51, 0xb5, 0xc9, 0xb6, 0x78,
+                0x11, 0xfb, 0x7c, 0x75
+            ]
+        );
     }
 
     /// AIR asserting `x * y = z`, an AND gate only while every cell is a bit.
