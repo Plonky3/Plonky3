@@ -28,11 +28,11 @@ codegen-units=1
 EOF
 }
 export RUSTFLAGS='-C target-cpu=native'
-for spec in 'before:perf/rijndael-weighted-lde' 'after:perf/poly192-four-lane-products'; do
+for spec in 'before:perf/poly192-four-lane-products' 'after:perf/poly64-radix8-nonzero'; do
  IFS=: read -r label revision <<< "$spec"
  git checkout -f "$revision"
  write_manifest
- features=wide,short
+ features=wide,fused
  cargo build --release --manifest-path "$bench_dir/Cargo.toml" --features "$features"
  cp "$bench_dir/target/release/stack-measurements" "/tmp/stack-binaries/$label"
 done
