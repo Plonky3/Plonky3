@@ -1,9 +1,7 @@
 use std::hint::black_box;
 use std::time::Instant;
-use p3_binary_field::{Poly64, Poly192, Rijndael8b};
-use p3_binary_dft::ButterflyField;
-use p3_field::{Algebra, Field, PackedValue, PackedFieldExtension, PrimeCharacteristicRing};
-
+use p3_binary_field::{Poly64,Poly192,PackedPoly192Unreduced};
+use p3_field::{Field,ExtensionField,PackedFieldExtension,PackedValue,PrimeCharacteristicRing};
 fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     let mut n = 1usize;
     loop {
@@ -23,56 +21,20 @@ fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     println!("{name}: {mean:.6} ns/element; 95% CI +/- {:.6}; samples={times:?}", 2.228*sd/11f64.sqrt());
 }
 fn main() {
-    type Bytes = <Rijndael8b as Field>::Packing;
-    let mut bytes = Bytes::from_fn(|i| Rijndael8b::from_byte((i*17+81) as u8));
-    let factors = Bytes::from_fn(|i| Rijndael8b::from_byte((i*31+19) as u8));
-    measure("packed AES product", Bytes::WIDTH, || {
-        bytes = black_box(bytes) * black_box(factors);
-        let _ = black_box(bytes);
-    });
-    let mut lo: Vec<_> = (0..256).map(|i| Poly64::new(17*i+1)).collect();
-    let mut hi: Vec<_> = (0..256).map(|i| Poly64::new(31*i+7)).collect();
-    measure("Poly64 butterfly", 256, || {
-        Poly64::butterfly::<false>(black_box(&mut lo), black_box(&mut hi), black_box(Poly64::new(0x123456789abcdef)));
-    });
-    type Ext = <Poly192 as p3_field::ExtensionField<Poly64>>::ExtensionPacking;
-    let mut a = Ext::from_ext_fn(|i| Poly192::new([Poly64::new(i as u64+1),Poly64::new(7),Poly64::new(11)]));
-    let b = Ext::from_ext_fn(|i| Poly192::new([Poly64::new(19),Poly64::new(i as u64+3),Poly64::new(23)]));
-    measure("packed Poly192 product", <Poly64 as Field>::Packing::WIDTH, || {
-        a = black_box(a) * black_box(b);
-        let _ = black_box(a);
-    });
-    let mixed_values: [Poly192;8] = core::array::from_fn(|i| Poly192::new([Poly64::new(i as u64*17+1),Poly64::new(i as u64*7+19),Poly64::new(i as u64*31+41)]));
-    let mixed_coeffs: [Poly64;8] = core::array::from_fn(|i| Poly64::new(i as u64*29+17));
-    measure("Poly192 mixed dot 8",8,|| {
-        let _ = black_box(Poly192::mixed_dot_product(black_box(&mixed_values),black_box(&mixed_coeffs)));
-    });
-    measure("mixed chunks reduced", 64*8, || {
-        let mut sum = Poly192::ZERO;
-        for _ in 0..64 {
-            sum += Poly192::mixed_dot_product(black_box(&mixed_values), black_box(&mixed_coeffs));
-        }
-        let _ = black_box(sum);
-    });
-    #[cfg(feature="accumulator")]
-    measure("mixed chunks deferred", 64*8, || {
-        let mut sum = p3_binary_field::Poly192MixedAccumulator::new();
-        for _ in 0..64 {
-            sum.add_dot_product(black_box(&mixed_values), black_box(&mixed_coeffs));
-        }
-        let _ = black_box(sum.finish());
-    });
-    #[cfg(feature="column")]
-    {
-        let weights: Vec<_> = (0..64).map(|i| Poly64::new(13*i+9)).collect();
-        let rows: Vec<_> = (0..64*48).map(|i| Poly64::new(29*i+3)).collect();
-        let mut out = vec![Poly64::ZERO; 48];
-        measure("column sum scalar", 64*48, || {
-            for c in 0..48 { out[c] = (0..64).map(|r| weights[r] * rows[r*48+c]).sum(); }
-            black_box(&out);
-        });
-        measure("column sum deferred", 64*48, || {
-            Poly64::columnwise_dot_product(black_box(&weights),black_box(&rows),black_box(&mut out));
-        });
-    }
+ type Ext = <Poly192 as ExtensionField<Poly64>>::ExtensionPacking;
+ let a: [Ext;64] = core::array::from_fn(|g| Ext::from_ext_fn(|l| Poly192::new(core::array::from_fn(|c|Poly64::new((g as u64*13+l as u64*7+c as u64*31+19).wrapping_mul(0x123456789abcdef))))));
+ let b: [Ext;64] = core::array::from_fn(|g| Ext::from_ext_fn(|l| Poly192::new(core::array::from_fn(|c|Poly64::new((g as u64*17+l as u64*29+c as u64*37+41).wrapping_mul(0xfedcba987654321))))));
+ let units=64*<Poly64 as Field>::Packing::WIDTH;
+ measure("packed chunks reduced",units,||{
+  let (a,b)=(black_box(&a),black_box(&b));
+  let mut sum=Ext::ZERO;
+  for i in 0..64 {sum += a[i]*b[i];}
+  let _=black_box(sum);
+ });
+ measure("packed chunks deferred",units,||{
+  let (a,b)=(black_box(&a),black_box(&b));
+  let mut sum=PackedPoly192Unreduced::default();
+  for i in 0..64 {sum += a[i].mul_unreduced(b[i]);}
+  let _=black_box(sum.reduce());
+ });
 }

@@ -26,23 +26,12 @@ codegen-units=1
 EOF
 }
 export RUSTFLAGS='-C target-cpu=native'
-for spec in 'wide:perf/poly192-mixed-dot:wide' 'column:perf/poly192-mixed-accumulator:wide,accumulator'; do
- IFS=: read -r label revision features <<< "$spec"
- git checkout -f "$revision"
- write_manifest
- feature_args=()
- # The feature exists only in the last layers; omit its declaration on lower revisions.
- if [[ "$label" == before || "$label" == aes || "$label" == neon ]]; then
-  sed -i '/wide=\[/d' "$bench_dir/Cargo.toml"
- fi
- if [[ -n "$features" ]]; then feature_args=(--features "$features"); fi
- cargo build --release --manifest-path "$bench_dir/Cargo.toml" "${feature_args[@]}"
- cp "$bench_dir/target/release/stack-measurements" "/tmp/stack-binaries/$label"
-done
+git checkout -f perf/poly192-deferred-products
+write_manifest
+cargo build --release --manifest-path "$bench_dir/Cargo.toml" --features wide
+cp "$bench_dir/target/release/stack-measurements" /tmp/stack-binaries/deferred
 lscpu
 for round in 1 2 3; do
- for label in wide column; do
-  printf '\nROUND %s REVISION %s\n' "$round" "$label"
-  "/tmp/stack-binaries/$label"
- done
+ printf '\nROUND %s\n' "$round"
+ /tmp/stack-binaries/deferred
 done
