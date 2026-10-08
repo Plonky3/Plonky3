@@ -106,7 +106,7 @@ impl Lanes64 for uint64x2_t {
 // Every load and store stays inside the array or the reference it is handed.
 impl Register128 for uint64x2_t {
     // Apple cores issue `PMULL` on every vector pipe, as cheaply as an exclusive or.
-    const CHEAP_MULTIPLY: bool = true;
+    const CHEAP_MULTIPLY: bool = false;
 
     #[inline(always)]
     fn lift(value: u64) -> Self {
