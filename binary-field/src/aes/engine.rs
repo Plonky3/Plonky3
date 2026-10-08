@@ -410,6 +410,19 @@ pub(super) fn add_power<const POWER: i32>(dst: &mut [u16], src: &[u8]) {
     }
 }
 
+/// Shift byte polynomials by a run-time generator power.
+#[inline(always)]
+pub(super) fn add_power_dynamic(dst: &mut [u16], src: &[u8], power: u8) {
+    debug_assert_eq!(dst.len(), src.len());
+    #[cfg(target_arch = "aarch64")]
+    let covered = neon::add_power_dynamic_prefix(dst, src, power);
+    #[cfg(not(target_arch = "aarch64"))]
+    let covered = 0;
+    for (sum, &byte) in dst[covered..].iter_mut().zip(&src[covered..]) {
+        *sum ^= u16::from(byte) << power;
+    }
+}
+
 /// Reduce sixteen-bit polynomials into their AES-field representatives.
 #[inline(always)]
 pub(super) fn reduce_polynomials(src: &[u16], dst: &mut [u8]) {

@@ -50,6 +50,26 @@ pub(super) fn add_power_prefix<const POWER: i32>(dst: &mut [u16], src: &[u8]) ->
     covered
 }
 
+/// Add terms with a run-time shift to complete sixteen-lane blocks.
+#[inline(always)]
+pub(super) fn add_power_dynamic_prefix(dst: &mut [u16], src: &[u8], power: u8) -> usize {
+    let covered = src.len() / 16 * 16;
+    // SAFETY: NEON is an AArch64 baseline feature.
+    let shift = unsafe { vdupq_n_s16(i16::from(power)) };
+    for start in (0..covered).step_by(16) {
+        // SAFETY: the slices cover sixteen readable bytes and sixteen writable u16 lanes.
+        unsafe {
+            let values = vld1q_u8(src.as_ptr().add(start));
+            let low = vshlq_u16(vmovl_u8(vget_low_u8(values)), shift);
+            let high = vshlq_u16(vmovl_high_u8(values), shift);
+            let target = dst.as_mut_ptr().add(start);
+            vst1q_u16(target, veorq_u16(vld1q_u16(target), low));
+            vst1q_u16(target.add(8), veorq_u16(vld1q_u16(target.add(8)), high));
+        }
+    }
+    covered
+}
+
 /// Reduce complete sixteen-lane blocks with the shared nibble-table fold.
 #[inline(always)]
 pub(super) fn reduce_prefix(src: &[u16], dst: &mut [u8]) -> usize {

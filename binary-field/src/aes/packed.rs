@@ -96,6 +96,16 @@ impl<const N: usize> RijndaelPowerAccumulator<N> {
         }
     }
 
+    /// Add a generator-weighted term when its power is selected at run time.
+    ///
+    /// # Panics
+    /// Panics unless `power` is between zero and seven.
+    #[inline(always)]
+    pub fn add_power(&mut self, values: PackedRijndael8b<N>, power: u8) {
+        assert!(power < 8, "generator power must be between zero and seven");
+        super::engine::add_power_dynamic(&mut self.0, values.bytes(), power);
+    }
+
     /// Reduce all polynomial sums modulo the AES-field modulus.
     #[inline(always)]
     pub fn finish(self) -> PackedRijndael8b<N> {
@@ -550,6 +560,11 @@ mod tests {
             macro_rules! add {
                 ($power:literal) => {
                     sum.add::<$power>(values);
+                    let mut dynamic = super::RijndaelPowerAccumulator::<N>::new();
+                    dynamic.add_power(values, $power);
+                    let mut fixed = super::RijndaelPowerAccumulator::<N>::new();
+                    fixed.add::<$power>(values);
+                    assert_eq!(dynamic.finish(), fixed.finish());
                     for (out, &value) in reference.iter_mut().zip(&values.0) {
                         *out += value * Rijndael8b::from_byte(1 << $power);
                     }
