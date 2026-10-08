@@ -22,6 +22,7 @@ mod basis;
     target_feature = "avx512vbmi"
 ))]
 mod bit_plane;
+pub(crate) mod column;
 mod gf192;
 mod gf64;
 mod powers;
