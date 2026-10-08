@@ -29,11 +29,11 @@ codegen-units=1
 EOF
 }
 export RUSTFLAGS='-C target-cpu=native'
-for spec in 'before:b06a4c7e' 'after:01ba9d8f'; do
+for spec in 'before:b06a4c7e' 'after:c7c1ae63'; do
  IFS=: read -r label revision <<< "$spec"
  git checkout -f "$revision"
  write_manifest
- features=wide
+ features=wide,fused
  
  cargo build --release --manifest-path "$bench_dir/Cargo.toml" --features "$features"
  cp "$bench_dir/target/release/stack-measurements" "/tmp/stack-binaries/$label"
