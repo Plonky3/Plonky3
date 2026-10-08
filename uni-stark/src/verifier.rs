@@ -70,14 +70,25 @@ pub fn validate_degree_bits(
 ///
 /// Given quotient chunks and their domains, this computes the Lagrange
 /// interpolation coefficients (zps) and reconstructs quotient(zeta).
+///
+/// # Errors
+///
+/// Returns [`InvalidProofShapeError::OpenedValuesDimensionMismatch`] unless there is
+/// exactly one chunk per domain and each chunk holds one extension element's
+/// coefficients. Recursive verifiers call this directly, so the shape is checked here
+/// rather than assumed from [`verify`].
 pub fn recompose_quotient_from_chunks<SC>(
     quotient_chunks_domains: &[Domain<SC>],
     quotient_chunks: &[Vec<SC::Challenge>],
     zeta: SC::Challenge,
-) -> SC::Challenge
+) -> Result<SC::Challenge, InvalidProofShapeError>
 where
     SC: StarkGenericConfig,
 {
+    if quotient_chunks.len() != quotient_chunks_domains.len() {
+        return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch);
+    }
+
     let zps = quotient_chunks_domains
         .iter()
         .enumerate()
@@ -96,17 +107,15 @@ where
         })
         .collect_vec();
 
-    // valid_shape checks each ch has length <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION,
-    // so from_ext_basis_coefficients won't return None.
+    // A chunk of the wrong length has no extension element, and the proof is rejected.
     quotient_chunks
         .iter()
-        .enumerate()
-        .map(|(ch_i, ch)| {
-            zps[ch_i]
-                * SC::Challenge::from_ext_basis_coefficients(ch)
-                    .expect("quotient chunk length checked in valid_shape")
+        .zip(zps)
+        .try_fold(SC::Challenge::ZERO, |acc, (ch, zp)| {
+            SC::Challenge::from_ext_basis_coefficients(ch)
+                .map(|chunk| acc + zp * chunk)
+                .ok_or(InvalidProofShapeError::OpenedValuesDimensionMismatch)
         })
-        .sum::<SC::Challenge>()
 }
 
 /// Verifies that the folded constraints match the quotient polynomial at zeta.
@@ -138,6 +147,36 @@ where
         air.public_boundary_io().is_empty(),
         "uni-stark does not support boundary-IO public values; bind them with AIR constraints"
     );
+
+    // The constraint folder indexes the rows and values below by column, so each must be
+    // as wide as the AIR says.
+    //
+    //     trace_local, trace_next -> the AIR's width
+    //     public_values           -> the AIR's public value count
+    //     periodic_values         -> one per periodic column the AIR declares
+    //
+    // Why: a short row would panic inside `eval` instead of rejecting the proof.
+    //
+    // Recursive verifiers reach this public entry point directly, so the shapes are checked
+    // here as well as in `verify`.
+    let air_width = A::width(air);
+    if trace_local.len() != air_width {
+        return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch.into());
+    }
+    if trace_next.len() != air_width {
+        return Err(InvalidProofShapeError::TraceNextMismatch { air: None }.into());
+    }
+    let expected_public_values_len = air.num_public_values();
+    if public_values.len() != expected_public_values_len {
+        return Err(InvalidProofShapeError::PublicValuesLengthMismatch {
+            expected: expected_public_values_len,
+            got: public_values.len(),
+        }
+        .into());
+    }
+    if periodic_values.len() != air.periodic_columns().len() {
+        return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch.into());
+    }
 
     let sels = trace_domain.selectors_at_point(zeta);
 
@@ -706,7 +745,7 @@ where
         &quotient_chunks_domains,
         &opened_values.quotient_chunks,
         zeta,
-    );
+    )?;
 
     let zeros;
     let trace_next_slice = match &opened_values.trace_next {
