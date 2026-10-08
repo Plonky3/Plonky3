@@ -195,7 +195,7 @@ impl RijndaelLde {
     /// # Panics
     /// Panics unless both inputs contain one complete row per weight and the
     /// output has `row_len()` elements.
-    #[inline]
+    #[inline(always)]
     pub fn weighted_product_sum(&self, a: &[u8], b: &[u8], weights: &[F8], out: &mut [F8]) {
         assert_eq!(a.len(), b.len(), "input matrices differ in size");
         assert_eq!(a.len() % self.n_chunks, 0, "incomplete Boolean row");
@@ -263,7 +263,7 @@ impl RijndaelLde {
         target_endian = "little",
         target_feature = "aes"
     ))]
-    #[inline]
+    #[inline(always)]
     fn power_product_sum_neon64(&self, a: &[u8], b: &[u8], out: &mut [F8]) {
         use p3_binary_field::{PackedRijndael8b, RijndaelPowerAccumulator};
         let mut sums = [RijndaelPowerAccumulator::<16>::new(); 4];
