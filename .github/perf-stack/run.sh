@@ -29,7 +29,7 @@ codegen-units=1
 EOF
 }
 export RUSTFLAGS='-C target-cpu=native'
-for spec in 'before:b06a4c7e' 'after:c7c1ae63'; do
+for spec in 'before:b06a4c7e' 'after:84a17a1e'; do
  IFS=: read -r label revision <<< "$spec"
  git checkout -f "$revision"
  write_manifest
