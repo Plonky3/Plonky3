@@ -42,21 +42,25 @@ fn main() {
         a = black_box(a) * black_box(b);
         let _ = black_box(a);
     });
-    #[cfg(feature="basis")]
-    {
-        let plan = p3_binary_dft::BasisNtt::polynomial(7, Poly64::new(0));
-        let mut values: Vec<_> = (0..128*64).map(|i| Poly64::new(i*17+3)).collect();
-        measure("explicit basis scalar", values.len(), || {
-            plan.transform_algebra::<Poly64,false>(black_box(&mut values),64);
-        });
-        measure("explicit basis batched", values.len(), || {
-            plan.forward_batch(black_box(&mut values),64);
-        });
-    }
     let mixed_values: [Poly192;8] = core::array::from_fn(|i| Poly192::new([Poly64::new(i as u64*17+1),Poly64::new(i as u64*7+19),Poly64::new(i as u64*31+41)]));
     let mixed_coeffs: [Poly64;8] = core::array::from_fn(|i| Poly64::new(i as u64*29+17));
     measure("Poly192 mixed dot 8",8,|| {
         let _ = black_box(Poly192::mixed_dot_product(black_box(&mixed_values),black_box(&mixed_coeffs)));
+    });
+    measure("mixed chunks reduced", 64*8, || {
+        let mut sum = Poly192::ZERO;
+        for _ in 0..64 {
+            sum += Poly192::mixed_dot_product(black_box(&mixed_values), black_box(&mixed_coeffs));
+        }
+        let _ = black_box(sum);
+    });
+    #[cfg(feature="accumulator")]
+    measure("mixed chunks deferred", 64*8, || {
+        let mut sum = p3_binary_field::Poly192MixedAccumulator::new();
+        for _ in 0..64 {
+            sum.add_dot_product(black_box(&mixed_values), black_box(&mixed_coeffs));
+        }
+        let _ = black_box(sum.finish());
     });
     #[cfg(feature="column")]
     {

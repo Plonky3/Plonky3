@@ -14,6 +14,7 @@ edition="2024"
 [features]
 wide=["p3-binary-field/wide-poly"]
 column=[]
+accumulator=[]
 basis=[]
 [dependencies]
 p3-binary-field={path="$repo_root/binary-field"}
@@ -25,7 +26,7 @@ codegen-units=1
 EOF
 }
 export RUSTFLAGS='-C target-cpu=native'
-for spec in 'before:perf/rijndael-neon-products:' 'aes:perf/poly64-neon-butterfly:' 'neon:perf/poly64-neon-schedule:' 'wide:perf/poly64-column-dot:wide' 'column:perf/poly192-mixed-dot:wide'; do
+for spec in 'wide:perf/poly192-mixed-dot:wide' 'column:perf/poly192-mixed-accumulator:wide,accumulator'; do
  IFS=: read -r label revision features <<< "$spec"
  git checkout -f "$revision"
  write_manifest
@@ -40,7 +41,7 @@ for spec in 'before:perf/rijndael-neon-products:' 'aes:perf/poly64-neon-butterfl
 done
 lscpu
 for round in 1 2 3; do
- for label in before aes neon wide column; do
+ for label in wide column; do
   printf '\nROUND %s REVISION %s\n' "$round" "$label"
   "/tmp/stack-binaries/$label"
  done
