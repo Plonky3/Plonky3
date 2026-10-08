@@ -22,6 +22,8 @@ use crate::clmul::wide::{
 //
 // The three-way exclusive or is compiled only under `sha3`, the feature it requires.
 impl Lanes64 for uint64x2_t {
+    const DIRECT_CUBIC_PRODUCTS: bool = true;
+
     #[inline(always)]
     fn zero() -> Self {
         unsafe { vdupq_n_u64(0) }

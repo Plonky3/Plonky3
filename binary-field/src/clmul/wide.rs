@@ -84,6 +84,9 @@ pub(crate) const TOP_NIBBLE_FOLD: [u8; 16] = {
 ///
 /// Every method acts on 64-bit or 128-bit lanes independently, never across a 128-bit lane.
 pub(crate) trait Lanes64: Copy {
+    /// Whether nine direct cubic products beat the operand sums of Karatsuba.
+    const DIRECT_CUBIC_PRODUCTS: bool = false;
+
     /// All lanes zero.
     fn zero() -> Self;
 
@@ -302,6 +305,18 @@ impl<L: Lanes64> Wide<L> {
 pub(crate) fn cubic_mul<L: Lanes64>(a: [L; 3], b: [L; 3]) -> [Wide<L>; 3] {
     let [a0, a1, a2] = a;
     let [b0, b1, b2] = b;
+
+    if L::DIRECT_CUBIC_PRODUCTS {
+        let c00 = Wide::mul(a0, b0);
+        let c11 = Wide::mul(a1, b1);
+        let c22 = Wide::mul(a2, b2);
+        let cross = Wide::mul(a1, b2).xor(Wide::mul(a2, b1));
+        return [
+            c00.xor(cross),
+            Wide::mul(a0, b1).xor3(Wide::mul(a1, b0), c22).xor(cross),
+            Wide::mul(a0, b2).xor3(c11, Wide::mul(a2, b0)).xor(c22),
+        ];
+    }
 
     // The three diagonal products.
     let c0 = Wide::mul(a0, b0);
