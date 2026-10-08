@@ -53,6 +53,11 @@ fn main() {
             plan.forward_batch(black_box(&mut values),64);
         });
     }
+    let mixed_values: [Poly192;8] = core::array::from_fn(|i| Poly192::new([Poly64::new(i as u64*17+1),Poly64::new(i as u64*7+19),Poly64::new(i as u64*31+41)]));
+    let mixed_coeffs: [Poly64;8] = core::array::from_fn(|i| Poly64::new(i as u64*29+17));
+    measure("Poly192 mixed dot 8",8,|| {
+        let _ = black_box(Poly192::mixed_dot_product(black_box(&mixed_values),black_box(&mixed_coeffs)));
+    });
     #[cfg(feature="column")]
     {
         let weights: Vec<_> = (0..64).map(|i| Poly64::new(13*i+9)).collect();
