@@ -26,12 +26,18 @@ codegen-units=1
 EOF
 }
 export RUSTFLAGS='-C target-cpu=native'
-git checkout -f perf/poly192-deferred-products
-write_manifest
-cargo build --release --manifest-path "$bench_dir/Cargo.toml" --features wide
-cp "$bench_dir/target/release/stack-measurements" /tmp/stack-binaries/deferred
+for spec in 'before:perf/poly192-deferred-products' 'after:perf/rijndael-lde-neon-registers'; do
+ IFS=: read -r label revision <<< "$spec"
+ git checkout -f "$revision"
+ write_manifest
+ cargo build --release --manifest-path "$bench_dir/Cargo.toml" --features wide
+ cp "$bench_dir/target/release/stack-measurements" "/tmp/stack-binaries/$label"
+done
 lscpu
 for round in 1 2 3; do
- printf '\nROUND %s\n' "$round"
- /tmp/stack-binaries/deferred
+ if [[ "$round" == 2 ]]; then labels=(after before); else labels=(before after); fi
+ for label in "${labels[@]}"; do
+  printf '\nROUND %s REVISION %s\n' "$round" "$label"
+  "/tmp/stack-binaries/$label"
+ done
 done

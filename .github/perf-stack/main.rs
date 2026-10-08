@@ -1,7 +1,8 @@
 use std::hint::black_box;
 use std::time::Instant;
-use p3_binary_field::{Poly64,Poly192,PackedPoly192Unreduced};
-use p3_field::{Field,ExtensionField,PackedFieldExtension,PackedValue,PrimeCharacteristicRing};
+use p3_binary_field::Rijndael8b;
+use p3_binary_dft::RijndaelLde;
+use p3_field::PrimeCharacteristicRing;
 fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     let mut n = 1usize;
     loop {
@@ -21,20 +22,10 @@ fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     println!("{name}: {mean:.6} ns/element; 95% CI +/- {:.6}; samples={times:?}", 2.228*sd/11f64.sqrt());
 }
 fn main() {
- type Ext = <Poly192 as ExtensionField<Poly64>>::ExtensionPacking;
- let a: [Ext;64] = core::array::from_fn(|g| Ext::from_ext_fn(|l| Poly192::new(core::array::from_fn(|c|Poly64::new((g as u64*13+l as u64*7+c as u64*31+19).wrapping_mul(0x123456789abcdef))))));
- let b: [Ext;64] = core::array::from_fn(|g| Ext::from_ext_fn(|l| Poly192::new(core::array::from_fn(|c|Poly64::new((g as u64*17+l as u64*29+c as u64*37+41).wrapping_mul(0xfedcba987654321))))));
- let units=64*<Poly64 as Field>::Packing::WIDTH;
- measure("packed chunks reduced",units,||{
-  let (a,b)=(black_box(&a),black_box(&b));
-  let mut sum=Ext::ZERO;
-  for i in 0..64 {sum += a[i]*b[i];}
-  let _=black_box(sum);
- });
- measure("packed chunks deferred",units,||{
-  let (a,b)=(black_box(&a),black_box(&b));
-  let mut sum=PackedPoly192Unreduced::default();
-  for i in 0..64 {sum += a[i].mul_unreduced(b[i]);}
-  let _=black_box(sum.reduce());
+ let plan=RijndaelLde::new(6,Rijndael8b::ZERO,Rijndael8b::from_byte(64));
+ let bytes=[19,37,83,131,211,7,61,173];
+ let mut out=[Rijndael8b::ZERO;64];
+ measure("byte extension 64",64,||{
+  black_box(&plan).apply(black_box(&bytes),black_box(&mut out));
  });
 }
