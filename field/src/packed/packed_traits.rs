@@ -434,6 +434,24 @@ pub trait PackedFieldExtension<
         Self::from_ext_fn(|lane| slice[lane])
     }
 
+    /// Pack elements at indices `0, stride, 2 * stride, ...` into consecutive lanes.
+    ///
+    /// The stride counts extension elements. For example, a two-lane packing of
+    /// `[a0, a1, b0, b1]` with stride two contains `[a0, b0]`. A zero stride
+    /// broadcasts the first element, and extra elements at the end are ignored.
+    ///
+    /// # Panics
+    /// Panics if the last selected index overflows or is outside `slice`.
+    #[inline]
+    #[must_use]
+    fn from_ext_strided_slice(slice: &[ExtField], stride: usize) -> Self {
+        let last = (BaseField::Packing::WIDTH - 1)
+            .checked_mul(stride)
+            .expect("strided packing index overflow");
+        assert!(last < slice.len(), "strided packing slice is too short");
+        Self::from_ext_fn(|lane| slice[lane * stride])
+    }
+
     /// Pack `N` columns from `W` rows of extension field elements into `N` packed extensions.
     ///
     /// This is the extension-field analog of [`PackedValue::pack_columns`]: given `W` rows

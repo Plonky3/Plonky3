@@ -665,6 +665,27 @@ impl PackedFieldExtension<Poly64, Poly192> for PackedPoly192 {
         Self::from_vectors(coordinates)
     }
 
+    /// Gather selected elements directly into coordinate registers.
+    #[inline]
+    fn from_ext_strided_slice(slice: &[Poly192], stride: usize) -> Self {
+        let last = (WIDTH_64 - 1)
+            .checked_mul(stride)
+            .expect("strided packing index overflow");
+        assert!(last < slice.len(), "strided packing slice is too short");
+        #[cfg(target_arch = "aarch64")]
+        {
+            // SAFETY: the checked indices name two complete, three-quadword elements.
+            let coordinates = unsafe {
+                lanes::gather_3_pair(slice[0].limbs().as_ptr(), slice[stride].limbs().as_ptr())
+            };
+            Self::from_vectors(coordinates)
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            Self::from_ext_fn(|lane| slice[lane * stride])
+        }
+    }
+
     /// The inverse transpose, written straight into the slice.
     ///
     /// # Panics
@@ -814,6 +835,18 @@ mod tests {
             prop_assert_eq!(&unpacked(sum.reduce()), &expected);
             prop_assert_eq!(sum.sum_lanes().reduce(), expected.into_iter().sum::<Poly192>());
             prop_assert_eq!(unpacked((sum + sum).reduce()), alloc::vec![Poly192::ZERO; WIDTH_64]);
+        }
+
+        #[test]
+        fn strided_gathers_match_lane_construction(
+            raw in any::<[[u64; 3]; 64]>(),
+            stride in 0usize..8,
+            offset in 0usize..8,
+        ) {
+            let values = raw.map(|row| Poly192::new(row.map(Poly64::new)));
+            let got = PackedPoly192::from_ext_strided_slice(&values[offset..], stride);
+            let expected = PackedPoly192::from_ext_fn(|lane| values[offset + lane * stride]);
+            prop_assert_eq!(got, expected);
         }
 
         #[test]

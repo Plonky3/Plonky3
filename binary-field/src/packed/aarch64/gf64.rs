@@ -3,7 +3,8 @@
 //! The lane operations are the ones the scalar kernels already run on.
 
 use core::arch::aarch64::{
-    uint64x2_t, uint64x2x3_t, vextq_u64, vld1q_u64, vst3q_u64, vzip1q_u64, vzip2q_u64,
+    uint64x2_t, uint64x2x3_t, vextq_u64, vld1q_dup_u64, vld1q_u64, vst3q_u64, vzip1q_u64,
+    vzip2q_u64,
 };
 
 /// The register one packed value occupies.
@@ -56,6 +57,22 @@ pub(crate) unsafe fn gather_3(from: *const u64) -> [Reg; 3] {
             vextq_u64::<1>(low, high),
             vzip2q_u64(crossed, high),
         ]
+    }
+}
+
+/// Two separate three-quadword elements, as three coordinate registers.
+///
+/// # Safety
+/// Both addresses must be readable for three quadwords; no alignment is required.
+#[inline(always)]
+pub(crate) unsafe fn gather_3_pair(first: *const u64, second: *const u64) -> [Reg; 3] {
+    // SAFETY: each load stays in one of the caller's three-quadword elements.
+    unsafe {
+        let a = vld1q_u64(first);
+        let b = vld1q_u64(second);
+        let a2 = vld1q_dup_u64(first.add(2));
+        let b2 = vld1q_dup_u64(second.add(2));
+        [vzip1q_u64(a, b), vzip2q_u64(a, b), vzip1q_u64(a2, b2)]
     }
 }
 
