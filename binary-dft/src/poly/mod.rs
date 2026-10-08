@@ -123,7 +123,7 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
                 forward(chunk, plan, shift, Fold::EXIT);
             });
             forward(message, plan, BinaryField128::ZERO, Fold::EXIT);
-        } else if log_inv_rate >= 4 && len <= 32 * 1024 / size_of::<u128>() {
+        } else if log_inv_rate >= 7 && len <= 32 * 1024 / size_of::<u128>() {
             // Many cache-sized cosets repay one bounded snapshot of their common source.
             // Keep every coset, including the first, in the same parallel transform pass.
             let snapshot = message.to_vec();
@@ -1237,11 +1237,15 @@ mod tests {
         let check = || {
             for (width, log_message, rate) in [
                 (1, 0, 4),
+                (1, 0, 7),
                 (3, 0, 10),
                 (3, 1, 9),
                 (3, 1, 10),
                 (16, 3, 10),
                 (16, 3, 3),
+                (16, 6, 6),
+                (16, 7, 7),
+                (17, 7, 7),
                 (16, 7, 4),
                 (17, 7, 4),
                 (3, 9, 4),
