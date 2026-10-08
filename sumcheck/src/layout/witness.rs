@@ -1057,17 +1057,25 @@ impl<F: Field> Witness<F> {
 
         let mut stacked = Poly::<F>::zero(num_variables);
 
-        for placement in &placements {
-            let table = &tables[placement.idx()];
-            for (poly_idx, selector) in placement.selectors().iter().enumerate() {
-                let poly = table.poly(poly_idx);
+        // Column slots as (values, selector variables, selector index).
+        let slots: Vec<(PolyView<'_, F>, usize, usize)> = placements
+            .iter()
+            .flat_map(|placement| {
+                let table = &tables[placement.idx()];
+                placement
+                    .selectors()
+                    .iter()
+                    .enumerate()
+                    .map(move |(poly_idx, selector)| {
+                        (table.poly(poly_idx), selector.num_variables, selector.index)
+                    })
+            })
+            .collect();
 
-                for (local_idx, &value) in poly.as_slice().iter().enumerate() {
-                    let dst = (local_idx << selector.num_variables) | selector.index;
-                    stacked.as_mut_slice()[dst] = value;
-                }
-            }
-        }
+        let max_selector_vars = slots.iter().map(|&(_, vars, _)| vars).max().unwrap_or(0);
+        let task_floor = min_task_len(1 << num_variables, 2 * size_of::<F>());
+        let chunk = gather_chunk_len(task_floor, max_selector_vars, num_variables);
+        gather_chunked(&slots, stacked.as_mut_slice(), chunk);
 
         Self {
             tables,
@@ -1187,6 +1195,52 @@ pub(super) struct WitnessParts<F: Field> {
     pub(super) folding: usize,
     /// Stacked committed polynomial, when the layout retains one.
     pub(super) poly: Option<Poly<F>>,
+}
+
+/// Destination chunk length for the stacked gather.
+///
+/// A chunk must hold whole selector periods, so it is at least the widest period. Every
+/// chunk length is a power of two, so chunks tile the hypercube exactly.
+///
+/// The task-size floor is rounded up to a power of two, then clamped to
+/// `[2^max_selector_vars, 2^num_variables]`.
+fn gather_chunk_len(task_floor: usize, max_selector_vars: usize, num_variables: usize) -> usize {
+    task_floor
+        .next_power_of_two()
+        .max(1 << max_selector_vars)
+        .min(1 << num_variables)
+}
+
+/// Gathers column slots into `out`, one destination chunk per task.
+///
+/// Each slot is (values, selector variables, selector index), and places value `i` at
+/// `(i << selector variables) | selector index`.
+///
+/// Chunks are independent: one spans whole selector periods, so a slot with `v` selector
+/// variables writes exactly `chunk >> v` consecutive values of its column into it.
+///
+/// # Panics
+///
+/// - If `chunk` is not a power of two or exceeds `out.len()`.
+/// - If `chunk` is shorter than any slot's period.
+fn gather_chunked<F: Field>(
+    slots: &[(PolyView<'_, F>, usize, usize)],
+    out: &mut [F],
+    chunk: usize,
+) {
+    assert!(chunk.is_power_of_two() && chunk <= out.len());
+    assert!(slots.iter().all(|&(_, vars, _)| chunk >> vars != 0));
+    out.par_chunks_mut(chunk)
+        .enumerate()
+        .for_each(|(chunk_idx, dst)| {
+            for (view, vars, index) in slots {
+                let start = (chunk_idx * chunk) >> vars;
+                let values = &view.as_slice()[start..];
+                for (local_idx, &value) in values.iter().take(chunk >> vars).enumerate() {
+                    dst[(local_idx << vars) | index] = value;
+                }
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1795,6 +1849,66 @@ mod tests {
     }
 
     #[test]
+    fn interleaved_gather_matches_scalar_scatter_at_every_chunk_length() {
+        // Invariant:
+        //     However the stack is cut into chunks, every column value lands in the cell
+        //     a plain per-column strided scatter writes, and unused cells stay zero.
+        //     A chunk boundary that split a selector period would shift or drop values.
+        //
+        // Fixture state:
+        //     Mixed arities and widths (including a single-column table) stack into a
+        //     hypercube several times larger than the smallest legal chunk.
+        let make = |polys: usize, arity: usize, salt: u64| {
+            let len = 1 << arity;
+            let values = (0..polys * len)
+                .map(|i| F::from_u64(salt + 7 * i as u64 + 1))
+                .collect::<Vec<_>>();
+            Table::new(RowMajorMatrix::new(values, len))
+        };
+        let witness = Witness::new_interleaved(
+            vec![make(3, 10, 0), make(2, 8, 1 << 20), make(1, 6, 1 << 21)],
+            3,
+        );
+        let n = witness.num_variables();
+
+        let mut expected = vec![F::ZERO; 1 << n];
+        let mut slots = Vec::new();
+        for placement in &witness.placements {
+            let table = &witness.tables[placement.idx()];
+            for (poly_idx, selector) in placement.selectors().iter().enumerate() {
+                let view = table.poly(poly_idx);
+                for (local_idx, &value) in view.as_slice().iter().enumerate() {
+                    expected[(local_idx << selector.num_variables) | selector.index] = value;
+                }
+                slots.push((view, selector.num_variables, selector.index));
+            }
+        }
+        let max_vars = slots.iter().map(|&(_, vars, _)| vars).max().unwrap();
+
+        assert_eq!(witness.stacked_poly().as_slice(), expected.as_slice());
+        assert!(n > max_vars + 1, "fixture must allow several chunks");
+        for log_chunk in max_vars..=n {
+            let mut out = vec![F::ZERO; 1 << n];
+            gather_chunked(&slots, &mut out, 1 << log_chunk);
+            assert_eq!(out, expected, "chunk length 2^{log_chunk}");
+        }
+    }
+
+    #[test]
+    fn interleaved_gather_of_one_column_is_the_column() {
+        // Invariant:
+        //     A lone column has no selector bits, so the stack is the column itself.
+        let values = (0..1u64 << 9)
+            .map(|i| F::from_u64(3 * i + 1))
+            .collect::<Vec<_>>();
+        let witness = Witness::new_interleaved(
+            vec![Table::new(RowMajorMatrix::new(values.clone(), 1 << 9))],
+            3,
+        );
+        assert_eq!(witness.stacked_poly().as_slice(), values.as_slice());
+    }
+
+    #[test]
     fn witness_new_pads_tables_below_folding() {
         // Invariant:
         //     A table smaller than the preprocessing depth is committed as the
@@ -2176,6 +2290,59 @@ mod tests {
                 actual: source.shape,
             }
         );
+    }
+
+    #[test]
+    fn gather_chunk_len_is_a_bounded_power_of_two() {
+        let num_variables = 10;
+        for max_selector_vars in 0..=num_variables {
+            for floor in [
+                0,
+                1,
+                2,
+                3,
+                5,
+                100,
+                129,
+                1000,
+                1 << 10,
+                1 << 20,
+                usize::MAX >> 2,
+            ] {
+                let chunk = gather_chunk_len(floor, max_selector_vars, num_variables);
+                assert!(chunk.is_power_of_two());
+                assert!(chunk >= 1 << max_selector_vars);
+                assert!(chunk <= 1 << num_variables);
+            }
+        }
+    }
+
+    #[test]
+    fn gather_chunk_len_follows_the_floor_between_the_bounds() {
+        // A floor of 1 is lifted to the widest selector period.
+        assert_eq!(gather_chunk_len(1, 4, 10), 16);
+        // A non-power-of-two floor rounds up.
+        assert_eq!(gather_chunk_len(100, 2, 10), 128);
+        // A floor above the hypercube is clamped to it.
+        assert_eq!(gather_chunk_len(1 << 20, 3, 10), 1 << 10);
+    }
+
+    #[test]
+    #[should_panic]
+    fn gather_chunked_rejects_a_chunk_shorter_than_a_period() {
+        let column = vec![F::ZERO; 1];
+        let slots = [(PolyView::new(&column), 2, 0)];
+        let mut out = vec![F::ZERO; 8];
+        gather_chunked(&slots, &mut out, 2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn gather_chunked_rejects_a_non_power_of_two_chunk() {
+        let column = vec![F::ZERO; 6];
+        let slots = [(PolyView::new(&column), 0, 0)];
+        let mut out = vec![F::ZERO; 6];
+        gather_chunked(&slots, &mut out, 3);
     }
 
     #[test]
