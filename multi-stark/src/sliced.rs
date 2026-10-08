@@ -1442,6 +1442,30 @@ mod kernel {
             }
             let bytes = R::NUM_BYTES;
             let matrices = &prepared.blocks[block * 2 * bytes..(block + 1) * 2 * bytes];
+            if bytes == BYTES {
+                // Sixteen sums fit beside the lane bytes. Keep this loop in the flush so
+                // extending the kernel to wider fields does not add a call and spills here.
+                let mut sums = self.sums.map(|words| load(&words));
+                for (plane, &words) in planes.iter().enumerate() {
+                    if _mm512_test_epi64_mask(words, words) == 0 {
+                        continue;
+                    }
+                    let lanes = lane_bytes(words);
+                    let matrices = &matrices[plane * bytes..(plane + 1) * bytes];
+                    for (sum, &matrix) in sums.iter_mut().zip(matrices) {
+                        let picked = _mm512_gf2p8affine_epi64_epi8::<0>(
+                            lanes,
+                            _mm512_set1_epi64(matrix as i64),
+                        );
+                        *sum = _mm512_xor_si512(*sum, picked);
+                    }
+                }
+                for (words, sum) in self.sums.iter_mut().zip(sums) {
+                    store(words, sum);
+                }
+                self.carried = true;
+                return;
+            }
             let active = planes.map(|words| _mm512_test_epi64_mask(words, words) != 0);
             let lanes = core::array::from_fn(|i| {
                 if active[i] {
