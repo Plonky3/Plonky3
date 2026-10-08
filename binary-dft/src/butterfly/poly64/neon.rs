@@ -54,14 +54,19 @@ pub(super) fn butterfly<const INVERSE: bool>(
 pub(super) fn radix8<const INVERSE: bool>(rows: &mut [&mut [Poly64]; 8], t: &[Poly64; 7]) -> usize {
     let covered = rows[0].len() / 2 * 2;
     let bulk = covered / 4 * 4;
-    radix8_groups::<INVERSE, 2>(rows, t, 0..bulk);
-    radix8_groups::<INVERSE, 1>(rows, t, bulk..covered);
+    if t.iter().all(|t| t.to_bits() != 0) {
+        radix8_groups::<INVERSE, 2, false>(rows, t, 0..bulk);
+        radix8_groups::<INVERSE, 1, false>(rows, t, bulk..covered);
+    } else {
+        radix8_groups::<INVERSE, 2, true>(rows, t, 0..bulk);
+        radix8_groups::<INVERSE, 1, true>(rows, t, bulk..covered);
+    }
     covered
 }
 
 /// Process independent lane pairs together to overlap their multiplication chains.
 #[inline(always)]
-fn radix8_groups<const INVERSE: bool, const PAIRS: usize>(
+fn radix8_groups<const INVERSE: bool, const PAIRS: usize, const HAS_ZEROS: bool>(
     rows: &mut [&mut [Poly64]; 8],
     t: &[Poly64; 7],
     range: core::ops::Range<usize>,
@@ -82,7 +87,7 @@ fn radix8_groups<const INVERSE: bool, const PAIRS: usize>(
                     if INVERSE {
                         hi = core::array::from_fn(|pair| veorq_u64(hi[pair], lo[pair]));
                     }
-                    if t[$t].to_bits() != 0 {
+                    if !HAS_ZEROS || t[$t].to_bits() != 0 {
                         let products = hi.map(|value| multiply(value, twiddles[$t]));
                         lo = core::array::from_fn(|pair| veorq_u64(lo[pair], products[pair]));
                     }
