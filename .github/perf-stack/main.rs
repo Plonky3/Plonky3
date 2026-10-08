@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::Instant;
-use p3_binary_field::{Poly64,Poly192,PackedPoly192,PackedPoly64};
-use p3_field::{PackedFieldExtension,PackedValue};
+use p3_binary_field::{Poly64,Poly192,PackedPoly192};
+use p3_field::{PrimeCharacteristicRing,PackedFieldExtension};
 
 
 fn measure(name: &str, units: usize, mut f: impl FnMut()) {
@@ -23,10 +23,13 @@ fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     println!("{name}: {mean:.6} ns/element; 95% CI +/- {:.6}; samples={times:?}", 2.228*sd/11f64.sqrt());
 }
 fn main(){
- let width=PackedPoly64::WIDTH;
- let a:Vec<_>=(0..64).map(|i|Poly192::new(core::array::from_fn(|j|Poly64::new(0x123456789abcdefu64.wrapping_mul((i*3+j+1)as u64))))).collect();
- let b:Vec<_>=(0..64).map(|i|Poly192::new(core::array::from_fn(|j|Poly64::new(0xfedcba9876543210u64.wrapping_mul((i*3+j+1)as u64))))).collect();
- assert_eq!(<PackedPoly192 as PackedFieldExtension<Poly64,Poly192>>::extract(&PackedPoly192::from_ext_slice(&a[..width]),width-1),a[width-1]);
- measure("packed cubic coordinate load",64/width,||{for row in black_box(&a).chunks_exact(width){let _=black_box(PackedPoly192::from_ext_slice(row));}});
- measure("packed loaded product sum",64/width,||{let mut sum=PackedPoly192::from_ext_slice(&a[..width]).mul_unreduced(PackedPoly192::from_ext_slice(&b[..width]));for (a,b) in black_box(&a).chunks_exact(width).zip(black_box(&b).chunks_exact(width)){sum+=PackedPoly192::from_ext_slice(a).mul_unreduced(PackedPoly192::from_ext_slice(b));}let _=black_box(sum.reduce());});
+ let a=Poly192::new([Poly64::new(0x123456789abcdef),Poly64::new(0xfedcba9876543210),Poly64::new(0x1020304050607080)]);
+ let b=Poly192::new([Poly64::new(0xabcdef0123456789),Poly64::new(0x9876543210fedcba),Poly64::new(0x8899aabbccddeeff)]);
+ assert_eq!(a*Poly192::ONE,a);
+ let mut x=a;
+ measure("scalar cubic dependent",1,||{x=black_box(x)*black_box(b);let _=black_box(x);});
+ let mut x=[a;8];
+ measure("scalar cubic independent",8,||{for y in &mut x{*y=black_box(*y)*black_box(b);}let _=black_box(x);});
+ let mut x=PackedPoly192::from(a);let b=PackedPoly192::from(b);
+ measure("packed cubic dependent",1,||{x=black_box(x)*black_box(b);let _=black_box(x);});
 }
