@@ -183,6 +183,13 @@ impl<EF: BitCoordinates, R: BitCoordinates> BitTensor<EF, R> {
     /// That is one multiplication per coordinate, whatever the element was accumulated from.
     /// A zero row scales to nothing, so its multiplication is never formed.
     pub fn add_scaled_columns(&mut self, other: &Self, a: EF) {
+        if a == EF::ZERO {
+            return;
+        }
+        if a == EF::ONE {
+            *self += other;
+            return;
+        }
         #[cfg(all(
             target_arch = "x86_64",
             target_feature = "gfni",
