@@ -91,6 +91,13 @@ impl Register128 for __m128i {
     const CHEAP_MULTIPLY: bool = false;
 
     #[inline(always)]
+    fn reduce_product(product: Self) -> u64 {
+        // Two carryless folds keep both product halves in the vector register file.
+        super::super::wide::reduce_by_multiply(product, Self::lift(super::super::wide::TAIL_64))
+            .lower()
+    }
+
+    #[inline(always)]
     fn lift(value: u64) -> Self {
         unsafe { _mm_cvtsi64_si128(value as i64) }
     }
