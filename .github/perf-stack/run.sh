@@ -18,6 +18,7 @@ accumulator=[]
 basis=[]
 short=[]
 fused=[]
+weighted=[]
 [dependencies]
 p3-binary-field={path="$repo_root/binary-field"}
 p3-binary-dft={path="$repo_root/binary-dft"}
@@ -28,12 +29,12 @@ codegen-units=1
 EOF
 }
 export RUSTFLAGS='-C target-cpu=native'
-for spec in 'before:perf/poly64-neon-unroll' 'after:perf/poly64-radix8-neon'; do
+for spec in 'before:perf/poly64-radix8-neon' 'after:perf/rijndael-weighted-lde'; do
  IFS=: read -r label revision <<< "$spec"
  git checkout -f "$revision"
  write_manifest
  features=wide
- if [[ "$label" == after ]]; then features=wide,fused; fi
+ if [[ "$label" == after ]]; then features=wide,weighted; fi
  cargo build --release --manifest-path "$bench_dir/Cargo.toml" --features "$features"
  cp "$bench_dir/target/release/stack-measurements" "/tmp/stack-binaries/$label"
 done
