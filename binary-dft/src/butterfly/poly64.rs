@@ -7,6 +7,8 @@
 use p3_binary_field::Poly64;
 
 use super::packed_butterfly;
+#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+mod neon;
 
 /// The butterfly over two runs of `GF(2^64)` elements.
 ///
@@ -89,11 +91,21 @@ fn register_prefix<const INVERSE: bool>(lo: &mut [Poly64], hi: &mut [Poly64], t:
     covered
 }
 
+/// The NEON kernel covers lane pairs, leaving an odd scalar tail.
+#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[inline]
+fn register_prefix<const INVERSE: bool>(lo: &mut [Poly64], hi: &mut [Poly64], t: Poly64) -> usize {
+    neon::butterfly::<INVERSE>(lo, hi, t)
+}
+
 /// Without a wide carryless multiply there is no register prefix.
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "vpclmulqdq"
+#[cfg(not(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        target_feature = "vpclmulqdq"
+    ),
+    all(target_arch = "aarch64", target_feature = "aes")
 )))]
 #[inline]
 const fn register_prefix<const INVERSE: bool>(
