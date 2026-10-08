@@ -211,13 +211,53 @@ impl<F: ButterflyField> BasisNtt<F> {
     /// Evaluate a row-major coefficient matrix on the ordered domain.
     pub fn forward_batch(&self, values: &mut [F], width: usize) {
         // Dispatch each contiguous row group to the field's optimized butterfly.
-        self.transform::<F, false>(values, width, F::butterfly::<false>);
+        self.transform_field::<false>(values, width);
     }
 
     /// Interpolate a row-major evaluation matrix on the ordered domain.
     pub fn inverse_batch(&self, values: &mut [F], width: usize) {
         // Reverse the stage order and each local butterfly.
-        self.transform::<F, true>(values, width, F::butterfly::<true>);
+        self.transform_field::<true>(values, width);
+    }
+
+    /// Group three adjacent stages so the field can keep their rows in registers.
+    fn transform_field<const INVERSE: bool>(&self, values: &mut [F], width: usize) {
+        assert!(width > 0, "matrix width must be positive");
+        let dim = self.log_domain_size();
+        assert_eq!(
+            values.len() / width,
+            1usize << dim,
+            "matrix height differs from domain"
+        );
+        assert_eq!(values.len() % width, 0, "incomplete matrix row");
+        let mut done = 0;
+        while done < dim {
+            let stages = (dim - done).min(3);
+            if stages == 3 {
+                let layer = if INVERSE { dim - done - 3 } else { done };
+                let size = values.len() >> layer;
+                for (block, values) in values.chunks_exact_mut(size).enumerate() {
+                    let mut chunks = values.chunks_exact_mut(size / 8);
+                    let mut rows =
+                        core::array::from_fn(|_| chunks.next().expect("eight equal slabs"));
+                    F::butterfly_radix8::<INVERSE>(&mut rows, &self.twiddles_radix8(layer, block));
+                }
+            } else {
+                for step in 0..stages {
+                    let layer = if INVERSE {
+                        dim - done - step - 1
+                    } else {
+                        done + step
+                    };
+                    let size = values.len() >> layer;
+                    for (block, values) in values.chunks_exact_mut(size).enumerate() {
+                        let (lo, hi) = values.split_at_mut(size / 2);
+                        F::butterfly::<INVERSE>(lo, hi, self.twiddle(layer, block));
+                    }
+                }
+            }
+            done += stages;
+        }
     }
 }
 

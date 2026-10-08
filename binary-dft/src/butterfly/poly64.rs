@@ -37,6 +37,98 @@ pub(super) fn butterfly<const INVERSE: bool>(lo: &mut [Poly64], hi: &mut [Poly64
     packed_butterfly::<Poly64, INVERSE>(&mut lo[covered..], &mut hi[covered..], t);
 }
 
+/// Cover complete ARM lane pairs with the fused kernel, then handle scalar tails.
+#[inline]
+pub(super) fn radix8<const INVERSE: bool>(rows: &mut [&mut [Poly64]; 8], t: &[Poly64; 7]) {
+    assert!(
+        rows.iter().all(|row| row.len() == rows[0].len()),
+        "radix-8 row lengths differ"
+    );
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    let covered = neon::radix8::<INVERSE>(rows, t);
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    {
+        if covered < rows[0].len() {
+            radix8_scalar_tail::<INVERSE>(rows, t, covered);
+        }
+    }
+
+    #[cfg(not(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )))]
+    {
+        super::radix8::<Poly64, INVERSE>(rows, t);
+    }
+}
+
+/// Apply the remaining single column without invoking twelve empty-prefix kernels.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
+#[inline]
+fn radix8_scalar_tail<const INVERSE: bool>(
+    rows: &mut [&mut [Poly64]; 8],
+    t: &[Poly64; 7],
+    column: usize,
+) {
+    let mut values: [Poly64; 8] = rows.each_ref().map(|row| row[column]);
+    macro_rules! step {
+        ($lo:literal, $hi:literal, $t:literal) => {{
+            if INVERSE {
+                values[$hi] += values[$lo];
+            }
+            if t[$t].to_bits() != 0 {
+                values[$lo] += t[$t] * values[$hi];
+            }
+            if !INVERSE {
+                values[$hi] += values[$lo];
+            }
+        }};
+    }
+    if INVERSE {
+        step!(0, 1, 3);
+        step!(2, 3, 4);
+        step!(4, 5, 5);
+        step!(6, 7, 6);
+        step!(0, 2, 1);
+        step!(1, 3, 1);
+        step!(4, 6, 2);
+        step!(5, 7, 2);
+        step!(0, 4, 0);
+        step!(1, 5, 0);
+        step!(2, 6, 0);
+        step!(3, 7, 0);
+    } else {
+        step!(0, 4, 0);
+        step!(1, 5, 0);
+        step!(2, 6, 0);
+        step!(3, 7, 0);
+        step!(0, 2, 1);
+        step!(1, 3, 1);
+        step!(4, 6, 2);
+        step!(5, 7, 2);
+        step!(0, 1, 3);
+        step!(2, 3, 4);
+        step!(4, 5, 5);
+        step!(6, 7, 6);
+    }
+    for (row, value) in rows.iter_mut().zip(values) {
+        row[column] = value;
+    }
+}
+
 /// The widest carryless-multiply register the build enables.
 #[cfg(all(
     target_arch = "x86_64",

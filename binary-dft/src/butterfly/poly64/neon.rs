@@ -49,6 +49,86 @@ pub(super) fn butterfly<const INVERSE: bool>(
     covered
 }
 
+/// Keep eight rows in registers through all twelve butterflies of three stages.
+#[inline]
+pub(super) fn radix8<const INVERSE: bool>(rows: &mut [&mut [Poly64]; 8], t: &[Poly64; 7]) -> usize {
+    let covered = rows[0].len() / 2 * 2;
+    let bulk = covered / 4 * 4;
+    radix8_groups::<INVERSE, 2>(rows, t, 0..bulk);
+    radix8_groups::<INVERSE, 1>(rows, t, bulk..covered);
+    covered
+}
+
+/// Process independent lane pairs together to overlap their multiplication chains.
+#[inline(always)]
+fn radix8_groups<const INVERSE: bool, const PAIRS: usize>(
+    rows: &mut [&mut [Poly64]; 8],
+    t: &[Poly64; 7],
+    range: core::ops::Range<usize>,
+) {
+    // SAFETY: the caller checked equal row lengths. Every load/store covers one valid
+    // pair in a disjoint row, and this module requires the carryless-multiply feature.
+    unsafe {
+        let twiddles = t.map(|t| vdupq_n_u64(t.to_bits()));
+        for start in range.step_by(2 * PAIRS) {
+            let mut values: [[uint64x2_t; PAIRS]; 8] = core::array::from_fn(|row| {
+                core::array::from_fn(|pair| {
+                    vld1q_u64(rows[row].as_ptr().add(start + 2 * pair).cast())
+                })
+            });
+            macro_rules! step {
+                ($lo:literal, $hi:literal, $t:literal) => {{
+                    let (mut lo, mut hi) = (values[$lo], values[$hi]);
+                    if INVERSE {
+                        hi = core::array::from_fn(|pair| veorq_u64(hi[pair], lo[pair]));
+                    }
+                    if t[$t].to_bits() != 0 {
+                        let products = hi.map(|value| multiply(value, twiddles[$t]));
+                        lo = core::array::from_fn(|pair| veorq_u64(lo[pair], products[pair]));
+                    }
+                    if !INVERSE {
+                        hi = core::array::from_fn(|pair| veorq_u64(hi[pair], lo[pair]));
+                    }
+                    values[$lo] = lo;
+                    values[$hi] = hi;
+                }};
+            }
+            if INVERSE {
+                step!(0, 1, 3);
+                step!(2, 3, 4);
+                step!(4, 5, 5);
+                step!(6, 7, 6);
+                step!(0, 2, 1);
+                step!(1, 3, 1);
+                step!(4, 6, 2);
+                step!(5, 7, 2);
+                step!(0, 4, 0);
+                step!(1, 5, 0);
+                step!(2, 6, 0);
+                step!(3, 7, 0);
+            } else {
+                step!(0, 4, 0);
+                step!(1, 5, 0);
+                step!(2, 6, 0);
+                step!(3, 7, 0);
+                step!(0, 2, 1);
+                step!(1, 3, 1);
+                step!(4, 6, 2);
+                step!(5, 7, 2);
+                step!(0, 1, 3);
+                step!(2, 3, 4);
+                step!(4, 5, 5);
+                step!(6, 7, 6);
+            }
+            for (row, pairs) in rows.iter_mut().zip(values) {
+                for (pair, value) in pairs.into_iter().enumerate() {
+                    vst1q_u64(row.as_mut_ptr().add(start + 2 * pair).cast(), value);
+                }
+            }
+        }
+    }
+}
+
 /// Multiply and reduce two independent word products in the vector register file.
 ///
 /// # Safety
