@@ -26,7 +26,7 @@ fn main(){
  let width=PackedPoly64::WIDTH;
  let a:Vec<_>=(0..64).map(|i|Poly192::new(core::array::from_fn(|j|Poly64::new(0x123456789abcdefu64.wrapping_mul((i*3+j+1)as u64))))).collect();
  let b:Vec<_>=(0..64).map(|i|Poly192::new(core::array::from_fn(|j|Poly64::new(0xfedcba9876543210u64.wrapping_mul((i*3+j+1)as u64))))).collect();
- assert_eq!(PackedPoly192::from_ext_slice(&a[..width]).extract(1),a[1]);
+ assert_eq!(<PackedPoly192 as PackedFieldExtension<Poly64,Poly192>>::extract(&PackedPoly192::from_ext_slice(&a[..width]),width-1),a[width-1]);
  measure("packed cubic coordinate load",64/width,||{for row in black_box(&a).chunks_exact(width){let _=black_box(PackedPoly192::from_ext_slice(row));}});
  measure("packed loaded product sum",64/width,||{let mut sum=PackedPoly192::from_ext_slice(&a[..width]).mul_unreduced(PackedPoly192::from_ext_slice(&b[..width]));for (a,b) in black_box(&a).chunks_exact(width).zip(black_box(&b).chunks_exact(width)){sum+=PackedPoly192::from_ext_slice(a).mul_unreduced(PackedPoly192::from_ext_slice(b));}let _=black_box(sum.reduce());});
 }
