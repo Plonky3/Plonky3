@@ -29,7 +29,8 @@ use rand::distr::{Distribution, StandardUniform};
 
 use super::gf64::{self as lanes, Reg, WIDTH_64};
 use super::poly64::PackedPoly64;
-use crate::clmul::wide::{Wide, cubic_mul, cubic_mul_base, cubic_square};
+use crate::clmul::wide::{Lanes64, Wide, cubic_mul, cubic_mul_base, cubic_square};
+use crate::clmul::{poly_dot_192_by_64, reduce_64};
 use crate::{Gf2, Poly64, Poly192};
 
 /// The number of coordinates over the coefficient field.
@@ -42,6 +43,37 @@ const DEGREE: usize = 3;
 pub struct PackedPoly192([PackedPoly64; DEGREE]);
 
 impl PackedPoly192 {
+    /// Sum scalar extension-by-base products across packed lanes before reducing.
+    #[inline]
+    pub(crate) fn mixed_dot_scalar(a: &[Poly192], f: &[Poly64]) -> Poly192 {
+        let mut sums = [Wide::<Reg>::zero(); DEGREE];
+        let done = a.len() / WIDTH_64 * WIDTH_64;
+        for start in (0..done).step_by(WIDTH_64) {
+            // Full groups load one extension coordinate per register lane.
+            let x = Self::from_ext_slice(&a[start..start + WIDTH_64]);
+            let k = PackedPoly64::from_fn(|lane| f[start + lane]);
+            let products = cubic_mul_base(x.to_vectors(), k.to_vector());
+            for (sum, product) in sums.iter_mut().zip(products) {
+                *sum = sum.xor(product);
+            }
+        }
+        let coordinates = sums.map(|sum| {
+            // Even and odd products share the same 128-bit polynomial representation.
+            let both = sum.even.xor(sum.odd);
+            // SAFETY: a coordinate register holds WIDTH_64/2 unrestricted 128-bit products.
+            let products: [u128; WIDTH_64 / 2] = unsafe { core::mem::transmute(both) };
+            let product = products.into_iter().fold(0, |sum, product| sum ^ product);
+            Poly64::new(reduce_64(product))
+        });
+        let tail = poly_dot_192_by_64(
+            a[done..]
+                .iter()
+                .zip(&f[done..])
+                .map(|(x, k)| (x.limbs(), k.as_bits())),
+        );
+        Poly192::new(coordinates) + Poly192::from_limbs(tail)
+    }
+
     /// The three coordinate registers.
     #[inline(always)]
     fn to_vectors(self) -> [Reg; DEGREE] {
