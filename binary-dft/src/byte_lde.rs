@@ -267,28 +267,23 @@ impl RijndaelLde {
     fn power_product_sum_neon64(&self, a: &[u8], b: &[u8], out: &mut [F8]) {
         use p3_binary_field::{PackedRijndael8b, RijndaelPowerAccumulator};
         let mut sums = [RijndaelPowerAccumulator::<16>::new(); 4];
-        macro_rules! add {
-            ($power:literal) => {{
-                let offset = 8 * $power;
-                let a = self.lookup_neon64(&a[offset..offset + 8]);
-                let b = self.lookup_neon64(&b[offset..offset + 8]);
-                // SAFETY: both representations are sixteen unrestricted bytes per block.
-                // PackedValue and the scalar's transparent representation guarantee this layout.
-                let a: [PackedRijndael8b<16>; 4] = unsafe { core::mem::transmute(a) };
-                let b: [PackedRijndael8b<16>; 4] = unsafe { core::mem::transmute(b) };
-                for i in 0..4 {
-                    sums[i].add::<$power>(a[i] * b[i]);
-                }
-            }};
+        for (power, (a, b)) in a
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<8>().0)
+            .enumerate()
+        {
+            let a = self.lookup_neon64(a);
+            let b = self.lookup_neon64(b);
+            // SAFETY: both representations are sixteen unrestricted bytes per block.
+            // PackedValue and the scalar's transparent representation guarantee this layout.
+            let a: [PackedRijndael8b<16>; 4] = unsafe { core::mem::transmute(a) };
+            let b: [PackedRijndael8b<16>; 4] = unsafe { core::mem::transmute(b) };
+            for i in 0..4 {
+                sums[i].add_power(a[i] * b[i], power as u8);
+            }
         }
-        add!(0);
-        add!(1);
-        add!(2);
-        add!(3);
-        add!(4);
-        add!(5);
-        add!(6);
-        add!(7);
         for (chunk, sum) in out.as_chunks_mut::<16>().0.iter_mut().zip(sums) {
             chunk.copy_from_slice(sum.finish().as_slice());
         }
