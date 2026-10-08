@@ -25,6 +25,7 @@ fn measure(name: &str, units: usize, mut f: impl FnMut()) {
 fn main(){
  let base=Poly64::new(0x123456789abcdef);
  let multiplier=Poly64::new(0x987654321fedcba);
+ measure("scalar base register chain",256,||{let(mut x,b)=black_box((base,multiplier));for _ in 0..256{x*=b;}let _=black_box(x);});
  let mut scalar=base;
  measure("scalar base dependent",1,||{scalar=black_box(scalar)*black_box(multiplier);let _=black_box(scalar);});
  let mut scalars=[base;8];
@@ -32,6 +33,9 @@ fn main(){
  let a=Poly192::new([Poly64::new(0x123456789abcdef),Poly64::new(0xfedcba9876543210),Poly64::new(0x1020304050607080)]);
  let b=Poly192::new([Poly64::new(0xabcdef0123456789),Poly64::new(0x9876543210fedcba),Poly64::new(0x8899aabbccddeeff)]);
  assert_eq!(a*Poly192::ONE,a);
+ measure("scalar cubic register chain",256,||{let(mut x,b)=black_box((a,b));for _ in 0..256{x*=b;}let _=black_box(x);});
+ let a_rows=[a;256];let b_rows=[b;256];let mut out_rows=[Poly192::ZERO;256];
+ measure("scalar cubic array sweep",256,||{let(a,b)=black_box((&a_rows,&b_rows));for ((out,&a),&b) in out_rows.iter_mut().zip(a).zip(b){*out=a*b;}let _=black_box(&out_rows);});
  let mut x=a;
  measure("scalar cubic dependent",1,||{x=black_box(x)*black_box(b);let _=black_box(x);});
  let mut x=[a;8];
