@@ -15,6 +15,7 @@
 
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
+use core::cmp::Reverse;
 use core::fmt::Debug;
 use core::marker::PhantomData;
 
@@ -77,6 +78,60 @@ impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
             forged_fold_schedule: None,
             _phantom: PhantomData,
         }
+    }
+}
+
+impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
+where
+    Val: TwoAdicField + PrimeField64,
+    Dft: TwoAdicSubgroupDft<Val> + Sync,
+{
+    /// Compute the bit-reversed LDE of every matrix, running the per-matrix LDEs concurrently.
+    ///
+    /// Matrices are scheduled largest first so the small ones fill idle cores, and the results
+    /// are returned in the order of `evaluations`.
+    ///
+    /// The LDEs run as separate tasks when the cost model splits the loop, and in one task otherwise.
+    fn coset_ldes(
+        &self,
+        evaluations: impl IntoIterator<Item = (TwoAdicMultiplicativeCoset<Val>, RowMajorMatrix<Val>)>,
+    ) -> Vec<RowMajorMatrix<Val>> {
+        let mut jobs: Vec<_> = evaluations
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (domain, evals))| (idx, domain, evals))
+            .collect();
+        jobs.sort_by_key(|(_, _, evals)| Reverse(evals.values.len()));
+
+        // An item reads its input and writes the blown-up output.
+        let total_values: usize = jobs.iter().map(|(_, _, evals)| evals.values.len()).sum();
+        let item_bytes = (total_values + (total_values << self.fri.log_blowup))
+            .div_ceil(jobs.len().max(1))
+            * size_of::<Val>();
+
+        let dft = &self.dft;
+        let log_blowup = self.fri.log_blowup;
+        let mut ldes: Vec<_> = jobs
+            .into_par_iter()
+            .with_min_task_bytes(item_bytes)
+            .map(|(idx, domain, evals)| {
+                assert_eq!(domain.size(), evals.height());
+                // coset_lde_batch converts from evaluations over `xH` to evaluations over `shift * x * K`.
+                // Hence, letting `shift = g/x` the output will be evaluations over `gK` as desired.
+                // When `x = g`, we could just use the standard LDE but currently this doesn't seem
+                // to give a meaningful performance boost.
+                let shift = Val::GENERATOR / domain.shift();
+                // Compute the LDE with blowup factor fri.log_blowup.
+                // We bit reverse as this is required by our implementation of the FRI protocol.
+                let lde = dft
+                    .coset_lde_batch(evals, log_blowup, shift)
+                    .bit_reverse_rows()
+                    .to_row_major_matrix();
+                (idx, lde)
+            })
+            .collect();
+        ldes.sort_unstable_by_key(|(idx, _)| *idx);
+        ldes.into_iter().map(|(_, lde)| lde).collect()
     }
 }
 
@@ -401,7 +456,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challen
     for TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
 where
     Val: TwoAdicField + PrimeField64,
-    Dft: TwoAdicSubgroupDft<Val>,
+    Dft: TwoAdicSubgroupDft<Val> + Sync,
     InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: ExtensionField<Val>,
@@ -435,23 +490,7 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
-        let ldes: Vec<_> = evaluations
-            .into_iter()
-            .map(|(domain, evals)| {
-                assert_eq!(domain.size(), evals.height());
-                // coset_lde_batch converts from evaluations over `xH` to evaluations over `shift * x * K`.
-                // Hence, letting `shift = g/x` the output will be evaluations over `gK` as desired.
-                // When `x = g`, we could just use the standard LDE but currently this doesn't seem
-                // to give a meaningful performance boost.
-                let shift = Val::GENERATOR / domain.shift();
-                // Compute the LDE with blowup factor fri.log_blowup.
-                // We bit reverse as this is required by our implementation of the FRI protocol.
-                self.dft
-                    .coset_lde_batch(evals, self.fri.log_blowup, shift)
-                    .bit_reverse_rows()
-                    .to_row_major_matrix()
-            })
-            .collect();
+        let ldes = self.coset_ldes(evaluations);
 
         Ok(
             // Commit to the bit-reversed LDEs.
@@ -895,7 +934,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> UnivariateStarkPcs<Cha
     for TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
 where
     Val: TwoAdicField + PrimeField64,
-    Dft: TwoAdicSubgroupDft<Val>,
+    Dft: TwoAdicSubgroupDft<Val> + Sync,
     InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: ExtensionField<Val>,
@@ -920,23 +959,7 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         _num_chunks: usize,
     ) -> Result<Vec<RowMajorMatrix<Val>>, Self::ProverError> {
-        Ok(evaluations
-            .into_iter()
-            .map(|(domain, evals)| {
-                assert_eq!(domain.size(), evals.height());
-                // coset_lde_batch converts from evaluations over `xH` to evaluations over `shift * x * K`.
-                // Hence, letting `shift = g/x` the output will be evaluations over `gK` as desired.
-                // When `x = g`, we could just use the standard LDE but currently this doesn't seem
-                // to give a meaningful performance boost.
-                let shift = Val::GENERATOR / domain.shift();
-                // Compute the LDE with blowup factor fri.log_blowup.
-                // We bit reverse as this is required by our implementation of the FRI protocol.
-                self.dft
-                    .coset_lde_batch(evals, self.fri.log_blowup, shift)
-                    .bit_reverse_rows()
-                    .to_row_major_matrix()
-            })
-            .collect())
+        Ok(self.coset_ldes(evaluations))
     }
 
     fn commit_ldes(
@@ -1544,5 +1567,88 @@ mod tests {
         assert!(!use_packed_fold(1, 8, 31));
         assert!(!use_packed_fold(8, 4, 31));
         assert!(!use_packed_fold(4, 8, 64));
+    }
+
+    /// Run the per-matrix LDEs one after another, in input order.
+    fn sequential_ldes(
+        pcs: &MyPcs,
+        inputs: &[(Domain, RowMajorMatrix<F>)],
+    ) -> Vec<RowMajorMatrix<F>> {
+        inputs
+            .iter()
+            .map(|(domain, evals)| {
+                pcs.dft
+                    .coset_lde_batch(
+                        evals.clone(),
+                        pcs.fri.log_blowup,
+                        F::GENERATOR / domain.shift(),
+                    )
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
+            })
+            .collect()
+    }
+
+    /// Concurrent LDEs must hand the committer the same matrices in the same order as a
+    /// sequential pass.
+    ///
+    /// The commitment depends on that order for matrices of equal height, and openings
+    /// address matrices by their input position.
+    /// Heights are neither sorted nor distinct, so the largest-first schedule has to be undone.
+    #[test]
+    fn concurrent_ldes_match_sequential_reference_in_input_order() {
+        let mut rng = SmallRng::seed_from_u64(7);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let val_mmcs = ValMmcs::new(hash.clone(), compress.clone(), 0);
+        let challenge_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress, 0));
+        let fri_params = FriParameters {
+            log_blowup: 2,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 2,
+            batch_proof_of_work_bits: 0,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: challenge_mmcs,
+        };
+        let pcs = MyPcs::new(Radix2Dit::default(), val_mmcs, fri_params);
+
+        // Repeated heights with distinct widths: a swap between equal-height matrices
+        // changes the matrices handed to the committer.
+        let inputs: Vec<_> = [(10, 5), (11, 4), (10, 8), (11, 7), (10, 4), (11, 6)]
+            .into_iter()
+            .map(|(log_height, width)| {
+                let domain = <MyPcs as Pcs<EF, Challenger>>::natural_domain_for_degree(
+                    &pcs,
+                    1 << log_height,
+                );
+                (
+                    domain,
+                    RowMajorMatrix::<F>::rand_nonzero(&mut rng, 1 << log_height, width),
+                )
+            })
+            .collect();
+        let expected = sequential_ldes(&pcs, &inputs);
+
+        let (commitment, data) =
+            <MyPcs as Pcs<EF, Challenger>>::commit(&pcs, inputs.clone()).unwrap();
+        let (expected_commitment, expected_data) =
+            <MyPcs as UnivariateStarkPcs<EF, Challenger>>::commit_ldes(&pcs, expected.clone())
+                .unwrap();
+        assert_eq!(commitment, expected_commitment);
+        assert_eq!(
+            pcs.mmcs.get_matrices(&data),
+            pcs.mmcs.get_matrices(&expected_data)
+        );
+
+        let quotient_ldes = <MyPcs as UnivariateStarkPcs<EF, Challenger>>::get_quotient_ldes(
+            &pcs,
+            inputs,
+            expected.len(),
+        )
+        .unwrap();
+        assert_eq!(quotient_ldes, expected);
     }
 }
