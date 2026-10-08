@@ -6,7 +6,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::extension::FlatMatrixView;
 use p3_matrix::{Dimensions, Matrix};
 
-use crate::{BatchOpening, BatchOpeningRef, Mmcs, MmcsProofGeometry};
+use crate::{BatchOpening, BatchOpeningRef, HidingMmcs, Mmcs, MmcsProofGeometry};
 
 /// Errors encountered while verifying an extension-field MMCS opening.
 #[derive(Debug, thiserror::Error)]
@@ -241,4 +241,13 @@ where
             )
             .map_err(ExtensionMmcsError::Inner)
     }
+}
+
+// The inner MMCS commits the base-field coefficients of the extension rows, so hiding them hides the rows.
+impl<F, EF, InnerMmcs> HidingMmcs<EF> for ExtensionMmcs<F, EF, InnerMmcs>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    InnerMmcs: HidingMmcs<F>,
+{
 }

@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
+use p3_commit::{BatchOpening, BatchOpeningRef, HidingMmcs, Mmcs};
 use p3_field::PackedValue;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::HorizontalPair;
@@ -65,7 +65,57 @@ impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS
     ///   while a cap_height of h uses all hashes from the h-th level below the root (2^h
     ///   in the case of a binary tree)
     /// * `rng` - A random number generator for generating salts.
+    ///
+    /// `SALT_ELEMS` must be at least 1, since an unsalted leaf hides nothing.
+    ///
+    /// A zero salt length fails to compile.
+    ///
+    /// ```
+    /// use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    /// use p3_field::Field;
+    /// use p3_merkle_tree::MerkleTreeHidingMmcs;
+    /// use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    /// use rand::SeedableRng;
+    /// use rand::rngs::StdRng;
+    ///
+    /// type Perm = Poseidon2BabyBear<16>;
+    /// type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    /// type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+    /// type Packed = <BabyBear as Field>::Packing;
+    ///
+    /// let perm = Perm::new_from_rng_128(&mut StdRng::seed_from_u64(1));
+    /// let (hash, compress) = (Hash::new(perm.clone()), Compress::new(perm));
+    /// let _mmcs = MerkleTreeHidingMmcs::<Packed, Packed, Hash, Compress, StdRng, 2, 8, 4>::new(
+    ///     hash, compress, 0, StdRng::seed_from_u64(2),
+    /// );
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    /// use p3_field::Field;
+    /// use p3_merkle_tree::MerkleTreeHidingMmcs;
+    /// use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    /// use rand::SeedableRng;
+    /// use rand::rngs::StdRng;
+    ///
+    /// type Perm = Poseidon2BabyBear<16>;
+    /// type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    /// type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+    /// type Packed = <BabyBear as Field>::Packing;
+    ///
+    /// let perm = Perm::new_from_rng_128(&mut StdRng::seed_from_u64(1));
+    /// let (hash, compress) = (Hash::new(perm.clone()), Compress::new(perm));
+    /// let _mmcs = MerkleTreeHidingMmcs::<Packed, Packed, Hash, Compress, StdRng, 2, 8, 0>::new(
+    ///     hash, compress, 0, StdRng::seed_from_u64(2),
+    /// );
+    /// ```
     pub const fn new(hash: H, compress: C, cap_height: usize, rng: R) -> Self {
+        const {
+            assert!(
+                SALT_ELEMS > 0,
+                "a hiding MMCS needs at least one salt element per leaf"
+            );
+        }
         let inner = MerkleTreeMmcs::new(hash, compress, cap_height);
         Self {
             inner,
@@ -93,6 +143,26 @@ where
             rng: Mutex::new(R::from_rng(&mut *self.rng.lock())),
         }
     }
+}
+
+// Every leaf carries `SALT_ELEMS > 0` fresh salt elements (checked in `new`), so the commitment hides the unopened rows.
+impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
+    HidingMmcs<P::Value> for MerkleTreeHidingMmcs<P, PW, H, C, R, N, DIGEST_ELEMS, SALT_ELEMS>
+where
+    P: PackedValue,
+    P::Value: Serialize + DeserializeOwned,
+    PW: PackedValue,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
+        + Sync,
+    R: CryptoRng + SeedableRng + Send,
+    PW::Value: Eq + Clone,
+    [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<P::Value>,
+{
 }
 
 impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
