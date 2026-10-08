@@ -22,10 +22,10 @@ fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     println!("{name}: {mean:.6} ns/element; 95% CI +/- {:.6}; samples={times:?}", 2.228*sd/11f64.sqrt());
 }
 fn main() {
- let plan=BasisNtt::<Poly64>::polynomial(18,Poly64::from_bits(1<<25));
- let mut data:Vec<_>=(0..1<<18).map(|i| Poly64::from_bits((i as u64).wrapping_mul(0x123456789abcdef))).collect();
+ let plan=BasisNtt::<Poly64>::polynomial(18,Poly64::new(1<<25));
+ let mut data:Vec<_>=(0..1<<18).map(|i| Poly64::new((i as u64).wrapping_mul(0x123456789abcdef))).collect();
  measure("Poly64 forward NTT",data.len(),||{black_box(&plan).forward(black_box(&mut data)); let _=black_box(&data);});
- let plan=BasisNtt::<Poly64>::polynomial(1,Poly64::from_bits(1<<25));
- let mut data:Vec<_>=(0..1<<16).map(|i|Poly64::from_bits((i as u64).wrapping_mul(0x123456789abcdef))).collect();
+ let plan=BasisNtt::<Poly64>::polynomial(1,Poly64::new(1<<25));
+ let mut data:Vec<_>=(0..1<<16).map(|i|Poly64::new((i as u64).wrapping_mul(0x123456789abcdef))).collect();
  measure("Poly64 wide butterfly",data.len(),||{black_box(&plan).forward_batch(black_box(&mut data),1<<15);let _=black_box(&data);});
 }
