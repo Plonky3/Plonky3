@@ -33,6 +33,30 @@ use crate::clmul::wide::{Lanes64, Wide, cubic_mul, cubic_mul_base, cubic_square}
 use crate::clmul::{poly_dot_192_by_64, raw_product_64, reduce_64};
 use crate::{Gf2, Poly64, Poly192, Poly192Unreduced};
 
+/// Multiply exactly four scalar pairs with the 256-bit coordinate backend.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    target_feature = "avx2"
+))]
+#[inline]
+pub(crate) fn mul4(a: [Poly192; 4], b: [Poly192; 4]) -> [Poly192; 4] {
+    use super::x86_64::lanes::gf64 as short;
+    // SAFETY: each array is twelve quadwords, exactly three 256-bit registers.
+    // Poly192 and Poly64 are transparent over their coordinate arrays and words.
+    let (a, b) = unsafe {
+        (
+            short::gather_3(a.as_ptr().cast()),
+            short::gather_3(b.as_ptr().cast()),
+        )
+    };
+    let products = cubic_mul(a, b).map(Wide::reduce);
+    let mut out = [Poly192::ZERO; 4];
+    // SAFETY: the destination is four complete extension elements; no alignment is required.
+    unsafe { short::scatter_3(out.as_mut_ptr().cast(), products) };
+    out
+}
+
 /// The number of coordinates over the coefficient field.
 const DEGREE: usize = 3;
 

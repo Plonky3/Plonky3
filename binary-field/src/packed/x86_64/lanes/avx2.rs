@@ -1,15 +1,20 @@
 //! The 256-bit register: two `GF(2^128)` elements, or four `GF(2^64)` ones.
 
+#[cfg(not(all(
+    feature = "wide-poly",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
+use core::arch::x86_64::_mm256_permute2x128_si256;
 #[cfg(not(target_feature = "avx512f"))]
 use core::arch::x86_64::_mm256_shuffle_epi32;
 #[cfg(target_feature = "avx512vl")]
 use core::arch::x86_64::_mm256_ternarylogic_epi64;
 use core::arch::x86_64::{
     __m256i, _mm_set_epi64x, _mm256_blend_epi32, _mm256_broadcastsi128_si256,
-    _mm256_clmulepi64_epi128, _mm256_loadu_si256, _mm256_permute2x128_si256,
-    _mm256_permute4x64_epi64, _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_slli_epi64,
-    _mm256_srli_epi64, _mm256_storeu_si256, _mm256_unpackhi_epi64, _mm256_unpacklo_epi64,
-    _mm256_xor_si256,
+    _mm256_clmulepi64_epi128, _mm256_loadu_si256, _mm256_permute4x64_epi64, _mm256_setzero_si256,
+    _mm256_shuffle_epi8, _mm256_slli_epi64, _mm256_srli_epi64, _mm256_storeu_si256,
+    _mm256_unpackhi_epi64, _mm256_unpacklo_epi64, _mm256_xor_si256,
 };
 
 use super::triples::Plan;
@@ -148,6 +153,11 @@ pub(crate) fn interleave(a: Reg, b: Reg, block_len: usize) -> (Reg, Reg) {
 ///
 /// # Panics
 /// Panics if the block length does not divide the width in quadwords.
+#[cfg(not(all(
+    feature = "wide-poly",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
 #[inline(always)]
 pub(crate) fn interleave_64(a: Reg, b: Reg, block_len: usize) -> (Reg, Reg) {
     match block_len {
@@ -277,12 +287,22 @@ pub(crate) fn interleave_3(coordinates: [Reg; 3]) -> [Reg; 3] {
 }
 
 /// Interleaves quadwords: `[a0 .. a3], [b0 .. b3]` to `[a0 b0 a2 b2], [a1 b1 a3 b3]`.
+#[cfg(not(all(
+    feature = "wide-poly",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
 #[inline(always)]
 fn interleave_u64(a: Reg, b: Reg) -> (Reg, Reg) {
     (unpack_low_64(a, b), unpack_high_64(a, b))
 }
 
 /// Interleaves 128-bit halves: `[a0 a1], [b0 b1]` to `[a0 b0], [a1 b1]`.
+#[cfg(not(all(
+    feature = "wide-poly",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
 #[inline(always)]
 fn interleave_u128(a: Reg, b: Reg) -> (Reg, Reg) {
     // The high half of `a` beside the low half of `b`.
