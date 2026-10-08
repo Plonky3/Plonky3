@@ -37,7 +37,12 @@ use crate::{Gf2, Poly64, Poly192, Poly192Unreduced};
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "vpclmulqdq",
-    target_feature = "avx2"
+    target_feature = "avx2",
+    not(all(
+        feature = "wide-poly",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ))
 ))]
 #[inline]
 pub(crate) fn mul4(a: [Poly192; 4], b: [Poly192; 4]) -> [Poly192; 4] {
@@ -55,6 +60,63 @@ pub(crate) fn mul4(a: [Poly192; 4], b: [Poly192; 4]) -> [Poly192; 4] {
     // SAFETY: the destination is four complete extension elements; no alignment is required.
     unsafe { short::scatter_3(out.as_mut_ptr().cast(), products) };
     out
+}
+
+/// Multiply four pairs using one 128-bit polynomial lane per pair.
+#[cfg(all(
+    feature = "wide-poly",
+    target_arch = "x86_64",
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "vpclmulqdq",
+    target_feature = "avx2"
+))]
+#[inline]
+pub(crate) fn mul4(a: [Poly192; 4], b: [Poly192; 4]) -> [Poly192; 4] {
+    use core::arch::x86_64::{__m512i, _mm512_set_epi64};
+
+    use crate::clmul::wide::fold_cubic;
+
+    // Each 128-bit lane holds one coefficient in its low half. One carryless
+    // multiplication therefore computes all four products of that coefficient.
+    let pack = |values: &[Poly192; 4], coordinate| {
+        // SAFETY: this function is compiled only with AVX-512F enabled.
+        unsafe {
+            _mm512_set_epi64(
+                0,
+                values[3].limbs()[coordinate] as i64,
+                0,
+                values[2].limbs()[coordinate] as i64,
+                0,
+                values[1].limbs()[coordinate] as i64,
+                0,
+                values[0].limbs()[coordinate] as i64,
+            )
+        }
+    };
+    let [a0, a1, a2] = array::from_fn(|i| pack(&a, i));
+    let [b0, b1, b2] = array::from_fn(|i| pack(&b, i));
+    let terms = [
+        a0.clmul::<0>(b0),
+        a1.clmul::<0>(b1),
+        a2.clmul::<0>(b2),
+        a0.xor(a1).clmul::<0>(b0.xor(b1)),
+        a0.xor(a2).clmul::<0>(b0.xor(b2)),
+        a1.xor(a2).clmul::<0>(b1.xor(b2)),
+    ];
+    let [r0, r1, r2] = fold_cubic(terms, Lanes64::xor, Lanes64::xor3);
+    let pair = Wide { even: r0, odd: r1 }.reduce();
+    let last = r2.reduce_lane();
+    // SAFETY: both registers contain eight unrestricted u64 words. The pair
+    // has the first two reduced coefficients together; the last has each third
+    // coefficient in the low half of its original 128-bit lane.
+    let (pair, last): ([u64; 8], [u64; 8]) = unsafe {
+        (
+            core::mem::transmute::<__m512i, [u64; 8]>(pair),
+            core::mem::transmute::<__m512i, [u64; 8]>(last),
+        )
+    };
+    array::from_fn(|i| Poly192::from_limbs([pair[2 * i], pair[2 * i + 1], last[2 * i]]))
 }
 
 /// The number of coordinates over the coefficient field.

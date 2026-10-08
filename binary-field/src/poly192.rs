@@ -272,8 +272,9 @@ impl Poly192MixedAccumulator {
 impl Poly192 {
     /// Multiply four independent pairs, preserving their input order.
     ///
-    /// Uses four 256-bit coefficient lanes on AVX2 with VPCLMULQDQ, even when
-    /// `wide-poly` selects eight lanes for ordinary packed operations.
+    /// Uses four 256-bit coefficient lanes on AVX2 with VPCLMULQDQ. With
+    /// `wide-poly` and AVX-512F/BW, each pair instead occupies a 128-bit lane
+    /// in a 512-bit register, halving the number of carryless multiplies.
     #[inline]
     pub fn mul4(a: [Self; 4], b: [Self; 4]) -> [Self; 4] {
         #[cfg(all(
