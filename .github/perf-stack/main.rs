@@ -1,6 +1,7 @@
 use std::hint::black_box;
 use std::time::Instant;
-use p3_binary_field::Poly64;
+use p3_binary_field::{Poly64,Poly192,PackedPoly192};
+use p3_field::PackedFieldExtension;
 
 
 fn measure(name: &str, units: usize, mut f: impl FnMut()) {
@@ -22,10 +23,9 @@ fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     println!("{name}: {mean:.6} ns/element; 95% CI +/- {:.6}; samples={times:?}", 2.228*sd/11f64.sqrt());
 }
 fn main(){
- assert_eq!(Poly64::new(1<<63)*Poly64::new(2),Poly64::new(0x1b));
- let mut x=Poly64::new(0x123456789abcdef);
- let b=Poly64::new(0xfedcba9876543210);
- measure("Poly64 product dependent",1,||{x=black_box(x)*black_box(b);let _=black_box(x);});
- let mut x=core::array::from_fn::<_,8,_>(|i|Poly64::new(0x123456789abcdefu64.wrapping_mul((i+1)as u64)));
- measure("Poly64 product independent",8,||{for y in &mut x{*y=black_box(*y)*black_box(b);}let _=black_box(x);});
+ let a:Vec<_>=(0..64).map(|i|Poly192::new(core::array::from_fn(|j|Poly64::new(0x123456789abcdefu64.wrapping_mul((i*3+j+1)as u64))))).collect();
+ let b:Vec<_>=(0..64).map(|i|Poly192::new(core::array::from_fn(|j|Poly64::new(0xfedcba9876543210u64.wrapping_mul((i*3+j+1)as u64))))).collect();
+ assert_eq!(PackedPoly192::from_ext_slice(&a[..2]).extract(1),a[1]);
+ measure("packed cubic coordinate load",32,||{for row in black_box(&a).chunks_exact(2){let _=black_box(PackedPoly192::from_ext_slice(row));}});
+ measure("packed loaded product sum",32,||{let mut sum=PackedPoly192::from_ext_slice(&a[..2]).mul_unreduced(PackedPoly192::from_ext_slice(&b[..2]));for (a,b) in black_box(&a).chunks_exact(2).zip(black_box(&b).chunks_exact(2)){sum+=PackedPoly192::from_ext_slice(a).mul_unreduced(PackedPoly192::from_ext_slice(b));}let _=black_box(sum.reduce());});
 }
