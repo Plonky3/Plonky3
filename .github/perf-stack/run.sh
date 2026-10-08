@@ -25,7 +25,7 @@ codegen-units=1
 EOF
 }
 export RUSTFLAGS='-C target-cpu=native'
-for spec in 'before:eab7f0e3662500cde47cb0b6dad61afc99e3deac:' 'aes:perf/rijndael-neon-products:' 'neon:perf/poly64-neon-butterfly:' 'wide:perf/poly192-wide-packing:wide,basis' 'column:perf/poly64-column-dot:wide,basis,column'; do
+for spec in 'before:perf/rijndael-neon-products:' 'aes:perf/poly64-neon-butterfly:' 'neon:perf/poly64-neon-schedule:'; do
  IFS=: read -r label revision features <<< "$spec"
  git checkout -f "$revision"
  write_manifest
@@ -40,7 +40,7 @@ for spec in 'before:eab7f0e3662500cde47cb0b6dad61afc99e3deac:' 'aes:perf/rijndae
 done
 lscpu
 for round in 1 2 3; do
- for label in before aes neon wide column; do
+ for label in before aes neon; do
   printf '\nROUND %s REVISION %s\n' "$round" "$label"
   "/tmp/stack-binaries/$label"
  done
