@@ -1,0 +1,23 @@
+name: Native stack measurements
+on:
+  push:
+    branches: [perf/stack-measurements]
+concurrency:
+  group: native-stack-measurements
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Measure each stack layer on native hardware
+        run: bash .github/perf-stack/run.sh
