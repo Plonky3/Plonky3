@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::time::Instant;
 use p3_binary_field::{Poly64, Poly192, Rijndael8b};
 use p3_binary_dft::ButterflyField;
-use p3_field::{Field, PackedValue, PackedFieldExtension, PrimeCharacteristicRing};
+use p3_field::{Algebra, Field, PackedValue, PackedFieldExtension, PrimeCharacteristicRing};
 
 fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     let mut n = 1usize;
