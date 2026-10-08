@@ -3,7 +3,7 @@ on:
   push:
     branches: [perf/stack-measurements]
 concurrency:
-  group: native-stack-measurements
+  group: native-stack-measurements-${{ github.sha }}
   cancel-in-progress: true
 permissions:
   contents: read
@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04-arm, ubuntu-latest]
+        runner: [ubuntu-latest]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
