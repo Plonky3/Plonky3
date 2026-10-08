@@ -49,7 +49,15 @@ pub(super) fn radix8<const INVERSE: bool>(rows: &mut [&mut [Poly64]; 8], t: &[Po
         target_endian = "little",
         target_feature = "aes"
     ))]
-    let covered = neon::radix8::<INVERSE>(rows, t);
+    let covered = {
+        if rows[0].len() < 2 {
+            if !rows[0].is_empty() {
+                radix8_scalar_tail::<INVERSE>(rows, t, 0);
+            }
+            return;
+        }
+        neon::radix8::<INVERSE>(rows, t)
+    };
     #[cfg(all(
         target_arch = "aarch64",
         target_endian = "little",
