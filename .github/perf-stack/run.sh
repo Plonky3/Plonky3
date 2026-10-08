@@ -26,7 +26,7 @@ codegen-units=1
 EOF
 }
 export RUSTFLAGS='-C target-cpu=native'
-for spec in 'before:perf/poly192-deferred-products' 'after:perf/rijndael-lde-neon-registers'; do
+for spec in 'before:perf/rijndael-lde-neon-registers' 'after:perf/rijndael-neon-reduction'; do
  IFS=: read -r label revision <<< "$spec"
  git checkout -f "$revision"
  write_manifest
