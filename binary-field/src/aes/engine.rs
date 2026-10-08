@@ -398,7 +398,7 @@ pub(crate) fn invert_slice(bytes: &mut [u8]) {
 }
 
 /// Shift byte polynomials into a sixteen-bit running sum.
-#[inline]
+#[inline(always)]
 pub(super) fn add_power<const POWER: i32>(dst: &mut [u16], src: &[u8]) {
     debug_assert_eq!(dst.len(), src.len());
     #[cfg(target_arch = "aarch64")]
@@ -411,7 +411,7 @@ pub(super) fn add_power<const POWER: i32>(dst: &mut [u16], src: &[u8]) {
 }
 
 /// Reduce sixteen-bit polynomials into their AES-field representatives.
-#[inline]
+#[inline(always)]
 pub(super) fn reduce_polynomials(src: &[u16], dst: &mut [u8]) {
     debug_assert_eq!(dst.len(), src.len());
     #[cfg(target_arch = "aarch64")]

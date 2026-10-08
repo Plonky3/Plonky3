@@ -81,7 +81,7 @@ impl<const N: usize> RijndaelPowerAccumulator<N> {
     ///
     /// # Panics
     /// Panics unless `POWER` is between zero and seven.
-    #[inline]
+    #[inline(always)]
     pub fn add<const POWER: i32>(&mut self, values: PackedRijndael8b<N>) {
         match POWER {
             0 => super::engine::add_power::<0>(&mut self.0, values.bytes()),
@@ -97,7 +97,7 @@ impl<const N: usize> RijndaelPowerAccumulator<N> {
     }
 
     /// Reduce all polynomial sums modulo the AES-field modulus.
-    #[inline]
+    #[inline(always)]
     pub fn finish(self) -> PackedRijndael8b<N> {
         let mut out = PackedRijndael8b::ZERO;
         super::engine::reduce_polynomials(&self.0, out.bytes_mut());

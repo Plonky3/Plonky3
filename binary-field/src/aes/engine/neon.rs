@@ -32,7 +32,7 @@ pub(super) fn mul_prefix<'a, 'b>(dst: &'a mut [u8], src: &'b [u8]) -> (&'a mut [
 }
 
 /// Add shifted byte polynomials to complete sixteen-lane blocks.
-#[inline]
+#[inline(always)]
 pub(super) fn add_power_prefix<const POWER: i32>(dst: &mut [u16], src: &[u8]) -> usize {
     let covered = src.len() / 16 * 16;
     for start in (0..covered).step_by(16) {
@@ -51,7 +51,7 @@ pub(super) fn add_power_prefix<const POWER: i32>(dst: &mut [u16], src: &[u8]) ->
 }
 
 /// Reduce complete sixteen-lane blocks with the shared nibble-table fold.
-#[inline]
+#[inline(always)]
 pub(super) fn reduce_prefix(src: &[u16], dst: &mut [u8]) -> usize {
     let covered = src.len() / 16 * 16;
     for start in (0..covered).step_by(16) {
