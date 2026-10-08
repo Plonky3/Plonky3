@@ -31,6 +31,41 @@ pub(super) fn mul_prefix<'a, 'b>(dst: &'a mut [u8], src: &'b [u8]) -> (&'a mut [
     (tail, rest)
 }
 
+/// Add shifted byte polynomials to complete sixteen-lane blocks.
+#[inline]
+pub(super) fn add_power_prefix<const POWER: i32>(dst: &mut [u16], src: &[u8]) -> usize {
+    let covered = src.len() / 16 * 16;
+    for start in (0..covered).step_by(16) {
+        // SAFETY: each source block has sixteen bytes and each destination block
+        // has sixteen u16 lanes. NEON is an AArch64 baseline feature.
+        unsafe {
+            let values = vld1q_u8(src.as_ptr().add(start));
+            let low = vshll_n_u8::<POWER>(vget_low_u8(values));
+            let high = vshll_high_n_u8::<POWER>(values);
+            let target = dst.as_mut_ptr().add(start);
+            vst1q_u16(target, veorq_u16(vld1q_u16(target), low));
+            vst1q_u16(target.add(8), veorq_u16(vld1q_u16(target.add(8)), high));
+        }
+    }
+    covered
+}
+
+/// Reduce complete sixteen-lane blocks with the shared nibble-table fold.
+#[inline]
+pub(super) fn reduce_prefix(src: &[u16], dst: &mut [u8]) -> usize {
+    let covered = src.len() / 16 * 16;
+    for start in (0..covered).step_by(16) {
+        // SAFETY: the source provides sixteen readable u16 lanes and the destination
+        // sixteen writable bytes. All loads and stores may be unaligned.
+        unsafe {
+            let source = src.as_ptr().add(start);
+            let out = reduce(vld1q_u16(source), vld1q_u16(source.add(8)));
+            vst1q_u8(dst.as_mut_ptr().add(start), out);
+        }
+    }
+    covered
+}
+
 /// The AES modulus maps a high byte to its product by `0x1b`.
 const fn reduction_table(high_nibble: bool) -> [u8; 16] {
     let mut table = [0; 16];
