@@ -445,6 +445,14 @@ jobs:
             packed::poly192::tests::the_shared_packed_extension_suite_passes \
             packed::x86_64::lanes::triples::tests::the_plans_round_trip_at_both_widths
 
+      - name: Lint optional eight-lane polynomial packing
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.features == '+avx512f,+vpclmulqdq'
+        env:
+          RUSTFLAGS: -C debuginfo=0 -C target-feature=+avx512f,+avx512bw,+vpclmulqdq
+        run: cargo +stable clippy --target x86_64-unknown-linux-gnu --all-targets --package p3-binary-field --features wide-poly -- -D warnings
+
       # The interpreter has shims for the 256-bit carryless multiply, so the `Poly64` butterfly's register kernel runs on every host.
       #
       # The 512-bit arm stays build-only, since the interpreter has no shim for its ternary logic.
