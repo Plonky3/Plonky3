@@ -23,6 +23,12 @@ fn measure(name: &str, units: usize, mut f: impl FnMut()) {
     println!("{name}: {mean:.6} ns/element; 95% CI +/- {:.6}; samples={times:?}", 2.228*sd/11f64.sqrt());
 }
 fn main(){
+ let base=Poly64::new(0x123456789abcdef);
+ let multiplier=Poly64::new(0x987654321fedcba);
+ let mut scalar=base;
+ measure("scalar base dependent",1,||{scalar=black_box(scalar)*black_box(multiplier);let _=black_box(scalar);});
+ let mut scalars=[base;8];
+ measure("scalar base independent",8,||{for y in &mut scalars{*y=black_box(*y)*black_box(multiplier);}let _=black_box(scalars);});
  let a=Poly192::new([Poly64::new(0x123456789abcdef),Poly64::new(0xfedcba9876543210),Poly64::new(0x1020304050607080)]);
  let b=Poly192::new([Poly64::new(0xabcdef0123456789),Poly64::new(0x9876543210fedcba),Poly64::new(0x8899aabbccddeeff)]);
  assert_eq!(a*Poly192::ONE,a);
