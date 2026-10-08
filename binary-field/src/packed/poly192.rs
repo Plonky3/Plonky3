@@ -30,7 +30,7 @@ use rand::distr::{Distribution, StandardUniform};
 use super::gf64::{self as lanes, Reg, WIDTH_64};
 use super::poly64::PackedPoly64;
 use crate::clmul::wide::{Lanes64, Wide, cubic_mul, cubic_mul_base, cubic_square};
-use crate::clmul::{poly_dot_192_by_64, reduce_64};
+use crate::clmul::{poly_dot_192_by_64, raw_product_64, reduce_64};
 use crate::{Gf2, Poly64, Poly192};
 
 /// The number of coordinates over the coefficient field.
@@ -41,6 +41,76 @@ const DEGREE: usize = 3;
 #[repr(transparent)]
 #[must_use]
 pub struct PackedPoly192([PackedPoly64; DEGREE]);
+
+/// Coordinate sums whose 128-bit polynomial lanes remain in the selected vector registers.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PackedMixedAccumulator(
+    /// One register of polynomial sums per extension coordinate.
+    [Reg; DEGREE],
+);
+
+impl Default for PackedMixedAccumulator {
+    fn default() -> Self {
+        Self([Reg::zero(); DEGREE])
+    }
+}
+
+impl PackedMixedAccumulator {
+    /// Accumulate one complete packing before any horizontal sum or field reduction.
+    #[inline]
+    pub(crate) fn add_packed(&mut self, values: PackedPoly192, weights: PackedPoly64) {
+        let products = cubic_mul_base(values.to_vectors(), weights.to_vector());
+        for (sum, product) in self.0.iter_mut().zip(products) {
+            *sum = sum.xor3(product.even, product.odd);
+        }
+    }
+
+    /// Accumulate whole packings, then place a scalar tail in the first polynomial lane.
+    #[inline]
+    pub(crate) fn add_dot(&mut self, values: &[Poly192], weights: &[Poly64]) {
+        let done = values.len() / WIDTH_64 * WIDTH_64;
+        for start in (0..done).step_by(WIDTH_64) {
+            let values = PackedPoly192::from_ext_slice(&values[start..start + WIDTH_64]);
+            let weights = PackedPoly64::from_fn(|lane| weights[start + lane]);
+            self.add_packed(values, weights);
+        }
+        if done < values.len() {
+            let tail = values[done..].iter().zip(&weights[done..]).fold(
+                [0u128; DEGREE],
+                |sum, (value, weight)| {
+                    core::array::from_fn(|i| {
+                        sum[i] ^ raw_product_64(value.limbs()[i], weight.to_bits())
+                    })
+                },
+            );
+            for (sum, tail) in self.0.iter_mut().zip(tail) {
+                let mut lanes = [0u128; WIDTH_64 / 2];
+                lanes[0] = tail;
+                // SAFETY: the lane array and register have equal sizes and unrestricted bit patterns.
+                let tail: Reg = unsafe { core::mem::transmute(lanes) };
+                *sum = sum.xor(tail);
+            }
+        }
+    }
+
+    /// Combine partial sums in their vector representation.
+    #[inline]
+    pub(crate) fn merge(&mut self, other: Self) {
+        for (sum, term) in self.0.iter_mut().zip(other.0) {
+            *sum = sum.xor(term);
+        }
+    }
+
+    /// Sum the polynomial lanes, leaving the field reduction to the caller.
+    #[inline]
+    pub(crate) fn coordinates(self) -> [u128; DEGREE] {
+        self.0.map(|sum| {
+            // SAFETY: each register holds WIDTH_64/2 unrestricted 128-bit polynomial sums.
+            let products: [u128; WIDTH_64 / 2] = unsafe { core::mem::transmute(sum) };
+            products.into_iter().fold(0, |sum, product| sum ^ product)
+        })
+    }
+}
 
 impl PackedPoly192 {
     /// Sum scalar extension-by-base products across packed lanes before reducing.

@@ -45,7 +45,7 @@ mod aarch64;
         target_feature = "aes"
     )
 ))]
-mod poly192;
+pub(crate) mod poly192;
 #[cfg(any(
     all(
         target_arch = "x86_64",
