@@ -93,8 +93,11 @@ impl Register128 for __m128i {
     #[inline(always)]
     fn reduce_product(product: Self) -> u64 {
         // Two carryless folds keep both product halves in the vector register file.
-        super::super::wide::reduce_by_multiply(product, Self::lift(super::super::wide::TAIL_64))
-            .lower()
+        super::super::wide::reduce_by_multiply(
+            product,
+            Self::lift(super::super::wide::TAIL_64).swap(),
+        )
+        .lower()
     }
 
     #[inline(always)]
