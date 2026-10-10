@@ -214,7 +214,10 @@ impl Lanes64 for avx2::Reg {
 // Three-way sums keep the default two exclusive ors.
 //
 // The compiler fuses them into one ternary logic op, and the interpreter the tests run under has no shim for that op.
-#[cfg(target_feature = "avx512f")]
+#[cfg(all(
+    target_feature = "avx512f",
+    not(all(feature = "wide-poly", target_feature = "avx512bw"))
+))]
 impl Lanes64 for avx512::Reg {
     #[inline(always)]
     fn zero() -> Self {

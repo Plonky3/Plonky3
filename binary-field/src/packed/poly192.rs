@@ -29,7 +29,11 @@ use rand::distr::{Distribution, StandardUniform};
 
 use super::gf64::{self as lanes, Reg, WIDTH_64};
 use super::poly64::PackedPoly64;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx512f",
+    not(all(feature = "wide-poly", target_feature = "avx512bw"))
+))]
 use super::x86_64::pairs;
 use crate::clmul::wide::{Lanes64, Wide, cubic_mul, cubic_mul_base, cubic_square};
 use crate::clmul::{poly_dot_192_by_64, raw_product_64, reduce_64};
@@ -576,7 +580,11 @@ impl PrimeCharacteristicRing for PackedPoly192 {
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         // Two terms per 512-bit multiply, where the target has one.
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "avx512f",
+            not(all(feature = "wide-poly", target_feature = "avx512bw"))
+        ))]
         let sum = pairs::sum_of_products(
             u,
             v,
@@ -588,7 +596,11 @@ impl PrimeCharacteristicRing for PackedPoly192 {
         );
 
         // Otherwise accumulate the folded, unreduced coordinates of every term.
-        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+        #[cfg(not(all(
+            target_arch = "x86_64",
+            target_feature = "avx512f",
+            not(all(feature = "wide-poly", target_feature = "avx512bw"))
+        )))]
         let sum = u.iter().zip(v).fold([Wide::zero(); DEGREE], |sum, (a, b)| {
             let product = cubic_mul(a.to_vectors(), b.to_vectors());
             array::from_fn(|i| sum[i].xor(product[i]))
@@ -613,7 +625,11 @@ impl Algebra<PackedPoly64> for PackedPoly192 {
         PackedPoly64: Dup,
     {
         // Two terms per 512-bit multiply, where the target has one.
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "avx512f",
+            not(all(feature = "wide-poly", target_feature = "avx512bw"))
+        ))]
         let sum = pairs::sum_of_products(
             a,
             f,
@@ -625,7 +641,11 @@ impl Algebra<PackedPoly64> for PackedPoly192 {
         );
 
         // Otherwise accumulate three unreduced coordinate products per term.
-        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+        #[cfg(not(all(
+            target_arch = "x86_64",
+            target_feature = "avx512f",
+            not(all(feature = "wide-poly", target_feature = "avx512bw"))
+        )))]
         let sum = a.iter().zip(f).fold([Wide::zero(); DEGREE], |sum, (x, k)| {
             let product = cubic_mul_base(x.to_vectors(), k.to_vector());
             array::from_fn(|i| sum[i].xor(product[i]))

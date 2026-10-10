@@ -26,7 +26,11 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::gf64::{self as lanes, Reg, WIDTH_64};
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx512f",
+    not(all(feature = "wide-poly", target_feature = "avx512bw"))
+))]
 use super::x86_64::pairs;
 use crate::clmul::wide::{Lanes64, Wide};
 use crate::gf2::characteristic_two_methods;
@@ -158,7 +162,11 @@ impl PrimeCharacteristicRing for PackedPoly64 {
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         // Two terms per 512-bit multiply, where the target has one.
-        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "avx512f",
+            not(all(feature = "wide-poly", target_feature = "avx512bw"))
+        ))]
         let [sum] = pairs::sum_of_products(
             u,
             v,
@@ -170,7 +178,11 @@ impl PrimeCharacteristicRing for PackedPoly64 {
         );
 
         // Otherwise two carryless multiplies and two exclusive ors per term, nothing else.
-        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+        #[cfg(not(all(
+            target_arch = "x86_64",
+            target_feature = "avx512f",
+            not(all(feature = "wide-poly", target_feature = "avx512bw"))
+        )))]
         let sum = u.iter().zip(v).fold(Wide::zero(), |sum, (a, b)| {
             sum.xor(Wide::mul(a.to_vector(), b.to_vector()))
         });
