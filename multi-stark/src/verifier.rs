@@ -3,10 +3,14 @@
 use alloc::vec::Vec;
 use core::fmt::Debug;
 
-use p3_air::{BoundaryIoError, boundary};
+use p3_air::symbolic::AirLayout;
+use p3_air::{Air, BoundaryIoError, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
-use p3_lookup::TraceWindow;
+use p3_field::{ExtensionField, Field};
+use p3_lookup::{
+    IndexedLookupError, IndexedLookups, InteractionSymbolicBuilder, Lookups, TraceWindow,
+};
 use p3_sumcheck::{OpeningEvals, PrescribedPointPcs};
 use thiserror::Error;
 
@@ -296,10 +300,14 @@ where
         }
     }
 
-    // Indexed lookups change the described sequence, so the plan is settled first.
+    // One symbolic pass per AIR serves both lookup plans.
     //
-    // Both sides derive it from the AIRs alone, so no proof value reaches it.
-    let indexed_plan = IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &log_heights)
+    // Both sides derive them from the AIRs alone, so no proof value reaches them.
+    let (indexed, lookups) =
+        declarations::<C::Val, C::Challenge, A>(&airs).map_err(VerificationError::IndexedLookup)?;
+
+    // Indexed lookups change the described sequence, so the plan is settled first.
+    let indexed_plan = IndexedPlan::from_declared::<C::Val>(&indexed, &log_heights)
         .map_err(VerificationError::IndexedLookup)?;
     let bus = BusContext::<C::Val, C::Challenge>::build(&airs, &log_heights)?;
 
@@ -365,8 +373,8 @@ where
     // 5. Verify the lookup reduction, inside the delegation bracket.
     // Its claim feeds the coupled AIR sumcheck below, so a rejection stops the replay here.
     let lookup = match transcript.lookup_argument(|challenger| {
-        verify_lookup::<C::Val, C::Challenge, A, _>(
-            &airs,
+        verify_lookup::<C::Val, C::Challenge, _>(
+            lookups,
             &log_heights,
             proof.lookup.as_ref(),
             challenger,
@@ -625,4 +633,30 @@ where
             bus_family,
         )
         .map_err(VerificationError::Zerocheck)
+}
+
+/// What every AIR declares to the two lookup plans, from one symbolic pass per AIR.
+///
+/// A pass costs about as much as the AIR is wide, and both plans read the same builder.
+///
+/// # Errors
+///
+/// Returns an error when an indexed declaration names a column its AIR does not have.
+fn declarations<F, EF, A>(
+    airs: &[&A],
+) -> Result<(Vec<IndexedLookups>, Vec<Lookups<F>>), IndexedLookupError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
+{
+    airs.iter()
+        .map(|&air| {
+            let layout = AirLayout::from_air(air);
+            let builder = InteractionSymbolicBuilder::<F, EF>::from_air(air, layout);
+            let indexed = IndexedLookups::from_builder(&builder, &layout)?;
+            Ok((indexed, Lookups::from_builder(&builder)))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|declared| declared.into_iter().unzip())
 }
