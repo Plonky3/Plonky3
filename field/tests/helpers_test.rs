@@ -49,6 +49,39 @@ mod helpers {
         assert_eq!(par_x, original);
     }
 
+    /// A length mismatch must be rejected, not silently mis-paired.
+    ///
+    /// Each slice is packed by its own length, so in a release build the two `zip`s match
+    /// unrelated positions instead of truncating. With `WIDTH = 4`, `slice.len() = 5` and
+    /// `other.len() = 3` would add `other[0] * s` to `slice[4]` and touch nothing else.
+    #[test]
+    #[should_panic(expected = "slices must have equal length")]
+    fn test_add_scaled_slice_in_place_mismatched_lengths() {
+        let mut x = vec![BabyBear::ONE; 5];
+        let y = vec![BabyBear::TWO; 3];
+
+        add_scaled_slice_in_place(&mut x, &y, BabyBear::from_u8(3));
+    }
+
+    #[test]
+    #[should_panic(expected = "slices must have equal length")]
+    fn test_par_add_scaled_slice_in_place_mismatched_lengths() {
+        let mut x = vec![BabyBear::ONE; 5];
+        let y = vec![BabyBear::TWO; 3];
+
+        par_add_scaled_slice_in_place(&mut x, &y, BabyBear::from_u8(3));
+    }
+
+    /// Shorter `other` is a mismatch too, and must be rejected before any element is written.
+    #[test]
+    #[should_panic(expected = "slices must have equal length")]
+    fn test_add_scaled_slice_in_place_longer_other() {
+        let mut x = vec![BabyBear::ONE; 2];
+        let y = vec![BabyBear::TWO; 4];
+
+        add_scaled_slice_in_place(&mut x, &y, BabyBear::ONE);
+    }
+
     #[test]
     fn test_field_to_array() {
         // Convert value 9 to array of size 4
