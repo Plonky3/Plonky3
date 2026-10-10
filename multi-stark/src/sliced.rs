@@ -33,6 +33,7 @@ use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_air::{Air, AirBuilder, RowWindow};
+use p3_bus::{BusActivation, BusDirection, BusInteractionRecorder, BusName, RecordToken};
 use p3_field::{Algebra, Field, HasSubfield, PrimeCharacteristicRing};
 use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
 
@@ -573,7 +574,9 @@ pub struct SlicedEvaluation<R> {
 ///
 /// Every asserted constraint is summed across the lanes with the weights of a [`LaneSums`], then
 /// weighted by its descending alpha power. Lookup declarations are dropped, as in
-/// [`crate::folder::MultilinearFolder`]: a stage that declares lookups never runs here.
+/// [`crate::folder::MultilinearFolder`]: a stage that declares lookups never runs here. A bus
+/// declaration leaves only its Booleanity check, asserted like any other constraint; its tuple
+/// is left to the bus protocol.
 #[derive(Debug)]
 pub struct SlicedFolder<'a, F, S, R> {
     /// Two-row main window holding the current and shifted-by-one rows.
@@ -841,6 +844,28 @@ where
 
     fn num_indexed_tables(&self) -> usize {
         0
+    }
+}
+
+/// Bus tuples are dropped: a declaration's Booleanity check is asserted before it is recorded.
+impl<'a, F, S, R> BusInteractionRecorder for SlicedFolder<'a, F, S, R>
+where
+    F: HasSubfield<S>,
+    S: Field,
+    R: Field,
+{
+    fn record_bus_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _token: RecordToken,
+        _bus: BusName<'_>,
+        _direction: BusDirection,
+        fields: impl IntoIterator<Item = E>,
+        _activation: BusActivation<Self::Expr>,
+    ) {
+        // The bus protocol evaluates its retained symbolic profile after commitment.
+        fields.into_iter().for_each(|field| {
+            let _ = field.into();
+        });
     }
 }
 

@@ -11,7 +11,7 @@ mod subfield;
 use p3_binary_field::poly_basis::HAS_HARDWARE_CLMUL;
 use p3_binary_field::{
     BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
-    BinaryField128, Gf2, Ghash128, Poly64, TowerLevel,
+    BinaryField128, Gf2, Ghash128, Poly64, Rijndael8b, TowerLevel,
 };
 use p3_field::{PackedValue, PrimeCharacteristicRing};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -29,6 +29,12 @@ use crate::poly::stages::{INTO_POLY, INTO_TOWER, convert};
 /// A level runs the transform network in its own representation, unless an isomorphic one has
 /// cheaper products. The result is the same either way.
 pub trait ButterflyField: TowerLevel {
+    /// Whether the transform driver should group three stages for this backend.
+    ///
+    /// The default keeps the ordinary per-stage sweep. A specialized register
+    /// kernel can opt in without imposing its traversal on other field types.
+    const FUSE_RADIX8: bool = false;
+
     /// Send each pair `(u, v)` to `(u + t*v, u + (t + 1)*v)`, in place.
     ///
     /// The inverse flag applies the inverse map instead.
@@ -37,6 +43,19 @@ pub trait ButterflyField: TowerLevel {
     ///
     /// Panics if the two runs have different lengths.
     fn butterfly<const INVERSE: bool>(lo: &mut [Self], hi: &mut [Self], t: Self);
+
+    /// Apply three stages to eight equal-length, disjoint rows.
+    ///
+    /// Twiddles are in breadth-first order: one for the outer stage, two
+    /// for the middle stage, and four for the inner stage. The inverse
+    /// executes these stages in reverse order, using inverse butterflies.
+    ///
+    /// # Panics
+    /// Panics if the row lengths differ.
+    #[inline]
+    fn butterfly_radix8<const INVERSE: bool>(rows: &mut [&mut [Self]; 8], t: &[Self; 7]) {
+        radix8::<Self, INVERSE>(rows, t);
+    }
 
     /// Run the Lin-Chung-Han transform in place, over a row-major buffer of `width` columns and
     /// the coset `shift + S_l`.
@@ -62,6 +81,43 @@ pub trait ButterflyField: TowerLevel {
     #[inline]
     fn lch_transform_cosets(values: &mut [Self], width: usize, log_message: usize) {
         lch::transform_cosets::<Self>(values, width, log_message);
+    }
+}
+
+/// Apply the twelve butterflies of three stages through each field's kernel.
+#[inline]
+fn radix8<F: ButterflyField, const INVERSE: bool>(rows: &mut [&mut [F]; 8], t: &[F; 7]) {
+    assert!(
+        rows.iter().all(|row| row.len() == rows[0].len()),
+        "radix-8 row lengths differ"
+    );
+    let [r0, r1, r2, r3, r4, r5, r6, r7] = rows;
+    if INVERSE {
+        F::butterfly::<true>(r0, r1, t[3]);
+        F::butterfly::<true>(r2, r3, t[4]);
+        F::butterfly::<true>(r4, r5, t[5]);
+        F::butterfly::<true>(r6, r7, t[6]);
+        F::butterfly::<true>(r0, r2, t[1]);
+        F::butterfly::<true>(r1, r3, t[1]);
+        F::butterfly::<true>(r4, r6, t[2]);
+        F::butterfly::<true>(r5, r7, t[2]);
+        F::butterfly::<true>(r0, r4, t[0]);
+        F::butterfly::<true>(r1, r5, t[0]);
+        F::butterfly::<true>(r2, r6, t[0]);
+        F::butterfly::<true>(r3, r7, t[0]);
+    } else {
+        F::butterfly::<false>(r0, r4, t[0]);
+        F::butterfly::<false>(r1, r5, t[0]);
+        F::butterfly::<false>(r2, r6, t[0]);
+        F::butterfly::<false>(r3, r7, t[0]);
+        F::butterfly::<false>(r0, r2, t[1]);
+        F::butterfly::<false>(r1, r3, t[1]);
+        F::butterfly::<false>(r4, r6, t[2]);
+        F::butterfly::<false>(r5, r7, t[2]);
+        F::butterfly::<false>(r0, r1, t[3]);
+        F::butterfly::<false>(r2, r3, t[4]);
+        F::butterfly::<false>(r4, r5, t[5]);
+        F::butterfly::<false>(r6, r7, t[6]);
     }
 }
 
@@ -138,12 +194,23 @@ macro_rules! impl_butterfly_field {
 impl_butterfly_field!(coordinate_butterfly: BinaryField8, BinaryField16, BinaryField32, BinaryField64);
 
 // The sub-byte levels and the GHASH basis, which only have their packing.
-impl_butterfly_field!(plain_butterfly: Gf2, BinaryField2, BinaryField4, Ghash128);
+impl_butterfly_field!(plain_butterfly: Gf2, BinaryField2, BinaryField4, Ghash128, Rijndael8b);
 
 impl ButterflyField for Poly64 {
+    const FUSE_RADIX8: bool = cfg!(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ));
+
     #[inline]
     fn butterfly<const INVERSE: bool>(lo: &mut [Self], hi: &mut [Self], t: Self) {
         poly64::butterfly::<INVERSE>(lo, hi, t);
+    }
+
+    #[inline]
+    fn butterfly_radix8<const INVERSE: bool>(rows: &mut [&mut [Self]; 8], t: &[Self; 7]) {
+        poly64::radix8::<INVERSE>(rows, t);
     }
 }
 
@@ -262,6 +329,85 @@ mod tests {
         BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, ButterflyField,
         Ghash128, Poly64, byte_map_twiddle_bits, wide_stages_repay_conversion,
     };
+
+    #[test]
+    fn radix8_zero_corners_and_tails_match_separate_stages() {
+        for width in [0, 1, 2, 3, 7, 8, 15, 16, 17] {
+            for corner in [0, 1, 1 << 63, u64::MAX] {
+                let t = core::array::from_fn(|i| Poly64::new(if i % 2 == 0 { corner } else { 0 }));
+                let input: [Vec<Poly64>; 8] = core::array::from_fn(|r| {
+                    (0..width)
+                        .map(|lane| Poly64::new((r * width + lane) as u64 ^ corner))
+                        .collect()
+                });
+                for inverse in [false, true] {
+                    let mut got = input.clone();
+                    let mut want = input.clone();
+                    if inverse {
+                        Poly64::butterfly_radix8::<true>(
+                            &mut got.each_mut().map(Vec::as_mut_slice),
+                            &t,
+                        );
+                        super::radix8::<Poly64, true>(
+                            &mut want.each_mut().map(Vec::as_mut_slice),
+                            &t,
+                        );
+                    } else {
+                        Poly64::butterfly_radix8::<false>(
+                            &mut got.each_mut().map(Vec::as_mut_slice),
+                            &t,
+                        );
+                        super::radix8::<Poly64, false>(
+                            &mut want.each_mut().map(Vec::as_mut_slice),
+                            &t,
+                        );
+                    }
+                    assert_eq!(
+                        got, want,
+                        "width={width}, corner={corner}, inverse={inverse}"
+                    );
+                }
+                let mut roundtrip = input.clone();
+                Poly64::butterfly_radix8::<false>(
+                    &mut roundtrip.each_mut().map(Vec::as_mut_slice),
+                    &t,
+                );
+                Poly64::butterfly_radix8::<true>(
+                    &mut roundtrip.each_mut().map(Vec::as_mut_slice),
+                    &t,
+                );
+                assert_eq!(roundtrip, input);
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "radix-8 row lengths differ")]
+    fn radix8_rejects_mismatched_rows() {
+        let mut input: [Vec<Poly64>; 8] = core::array::from_fn(|i| alloc::vec![Poly64::ZERO; i]);
+        Poly64::butterfly_radix8::<false>(
+            &mut input.each_mut().map(Vec::as_mut_slice),
+            &[Poly64::ZERO; 7],
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+        #[test]
+        fn radix8_random_lanes_match_separate_stages(
+            raw in any::<[[u64; 17];8]>(), t in any::<[u64;7]>(), width in 0usize..=17
+        ) {
+            let t=t.map(Poly64::new);
+            let input: [Vec<Poly64>;8]=raw.map(|row|row[..width].iter().copied().map(Poly64::new).collect());
+            let mut got=input.clone();
+            let mut want=input.clone();
+            Poly64::butterfly_radix8::<false>(&mut got.each_mut().map(Vec::as_mut_slice), &t);
+            super::radix8::<Poly64, false>(&mut want.each_mut().map(Vec::as_mut_slice), &t);
+            prop_assert_eq!(&got,&want);
+            Poly64::butterfly_radix8::<true>(&mut got.each_mut().map(Vec::as_mut_slice), &t);
+            prop_assert_eq!(&got,&input);
+        }
+    }
 
     /// The twiddles a random search is unlikely to reach.
     ///

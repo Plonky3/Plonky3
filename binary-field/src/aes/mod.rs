@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::aes::engine::ByteMatrix;
 pub use crate::aes::frobenius::LinearizedPoly8b;
-pub use crate::aes::packed::PackedRijndael8b;
+pub use crate::aes::packed::{PackedRijndael8b, RijndaelPowerAccumulator};
 use crate::cantor::CANTOR_BASIS_128;
 use crate::gf2::characteristic_two_methods;
 use crate::tower::TowerLevel;

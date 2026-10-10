@@ -2,7 +2,7 @@
 //!
 //! ```text
 //!     GF(2^128)    the widest register:   256 bits, or 512 with avx512f
-//!     GF(2^64)     always 256 bits:       4 elements, 12 coordinates of GF(2^192)
+//!     GF(2^64)     default 256 bits:      4 elements, 12 coordinates of GF(2^192)
 //! ```
 //!
 //! The prover holds one packed value per trace column in scratch buffers.
@@ -17,12 +17,23 @@
 //!     4 lanes, 256-bit registers    0.570 s
 //! ```
 //!
-//! So the `GF(2^64)` packings stay at 256 bits and take the ternary logic op where it exists.
+//! The default `GF(2^64)` packings use 256 bits and take ternary logic where it exists.
+//! The separate `wide-poly` backend selects eight coefficient lanes or four polynomial lanes.
 
+#[cfg(not(all(
+    feature = "wide-poly",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
 mod avx2;
 #[cfg(target_feature = "avx512f")]
 mod avx512;
 // The compile-time plan for moving between three-quadword elements and coordinate registers.
+#[cfg(not(all(
+    feature = "wide-poly",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
 mod triples;
 
 #[cfg(not(target_feature = "avx512f"))]
@@ -30,6 +41,11 @@ pub(crate) use avx2::*;
 #[cfg(target_feature = "avx512f")]
 pub(crate) use avx512::*;
 
+#[cfg(not(all(
+    feature = "wide-poly",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
 use crate::clmul::wide::{Lanes64, TOP_NIBBLE_FOLD};
 use crate::packed::split::Lanes;
 
@@ -37,10 +53,22 @@ use crate::packed::split::Lanes;
 const SWAP_QUADWORDS: i32 = 0x4e;
 
 /// The truth table of `a ^ b ^ c` for a ternary logic instruction.
-#[cfg(target_feature = "avx512vl")]
+#[cfg(all(
+    target_feature = "avx512vl",
+    not(all(
+        feature = "wide-poly",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ))
+))]
 const XOR3: i32 = 0x96;
 
 /// The 256-bit register the `GF(2^64)` packings use, on every build.
+#[cfg(not(all(
+    feature = "wide-poly",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
 pub(crate) mod gf64 {
     use core::array;
 
@@ -116,6 +144,11 @@ impl Lanes for Reg {
 }
 
 // The 256-bit register as the backend of the `GF(2^64)` algebra.
+#[cfg(not(all(
+    feature = "wide-poly",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
 impl Lanes64 for avx2::Reg {
     #[inline(always)]
     fn zero() -> Self {

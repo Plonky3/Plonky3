@@ -9,6 +9,8 @@
 //! Basis change, Frobenius and any tabulated map therefore share one kernel.
 
 use super::{invert_byte, mul_bytes};
+#[cfg(target_arch = "aarch64")]
+mod neon;
 
 /// The quadword whose byte `k` is `1 << (7 - k)`.
 ///
@@ -380,6 +382,8 @@ fn mul_registers<'a, 'b, L: ByteLanes>(
 #[inline]
 pub(crate) fn mul_slice(dst: &mut [u8], src: &[u8]) {
     assert_eq!(dst.len(), src.len(), "elementwise product lengths differ");
+    #[cfg(target_arch = "aarch64")]
+    let (dst, src) = neon::mul_prefix(dst, src);
     let (dst, src) = mul_registers::<Wide>(dst, src);
     let (dst, src) = mul_registers::<Narrow>(dst, src);
     for (value, factor) in dst.iter_mut().zip(src) {
@@ -391,6 +395,45 @@ pub(crate) fn mul_slice(dst: &mut [u8], src: &[u8]) {
 #[inline]
 pub(crate) fn invert_slice(bytes: &mut [u8]) {
     map_slice(&Invert, bytes);
+}
+
+/// Shift byte polynomials into a sixteen-bit running sum.
+#[inline(always)]
+pub(super) fn add_power<const POWER: i32>(dst: &mut [u16], src: &[u8]) {
+    debug_assert_eq!(dst.len(), src.len());
+    #[cfg(target_arch = "aarch64")]
+    let covered = neon::add_power_prefix::<POWER>(dst, src);
+    #[cfg(not(target_arch = "aarch64"))]
+    let covered = 0;
+    for (sum, &byte) in dst[covered..].iter_mut().zip(&src[covered..]) {
+        *sum ^= u16::from(byte) << POWER;
+    }
+}
+
+/// Shift byte polynomials by a run-time generator power.
+#[inline(always)]
+pub(super) fn add_power_dynamic(dst: &mut [u16], src: &[u8], power: u8) {
+    debug_assert_eq!(dst.len(), src.len());
+    #[cfg(target_arch = "aarch64")]
+    let covered = neon::add_power_dynamic_prefix(dst, src, power);
+    #[cfg(not(target_arch = "aarch64"))]
+    let covered = 0;
+    for (sum, &byte) in dst[covered..].iter_mut().zip(&src[covered..]) {
+        *sum ^= u16::from(byte) << power;
+    }
+}
+
+/// Reduce sixteen-bit polynomials into their AES-field representatives.
+#[inline(always)]
+pub(super) fn reduce_polynomials(src: &[u16], dst: &mut [u8]) {
+    debug_assert_eq!(dst.len(), src.len());
+    #[cfg(target_arch = "aarch64")]
+    let covered = neon::reduce_prefix(src, dst);
+    #[cfg(not(target_arch = "aarch64"))]
+    let covered = 0;
+    for (out, &polynomial) in dst[covered..].iter_mut().zip(&src[covered..]) {
+        *out = polynomial as u8 ^ mul_bytes((polynomial >> 8) as u8, 0x1b);
+    }
 }
 
 #[cfg(test)]

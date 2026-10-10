@@ -20,7 +20,7 @@ use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
 
 use super::error::BusBindingError;
-use crate::selectors::periodic_table;
+use crate::selectors::{periodic_num_variables, periodic_table};
 
 /// Verifier-derived bus declarations and their checked physical layout.
 pub(crate) struct BusContext<F: Field, EF: ExtensionField<F>> {
@@ -146,6 +146,38 @@ where
                 } else {
                     periodic_table(*air, num_vars)
                 }
+            })
+            .collect()
+    }
+
+    /// Period vectors of every periodic column, for the AIRs whose declarations read one.
+    ///
+    /// An AIR whose declarations read none gets `None`, so its columns are never fetched.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a declaration does not fit its trace height, as [`Self::periodic_tables`] does.
+    pub(crate) fn period_vectors<A: BaseAir<F>>(
+        &self,
+        airs: &[&A],
+        num_variables: &[usize],
+    ) -> Vec<Option<Vec<Vec<F>>>> {
+        airs.iter()
+            .zip(num_variables)
+            .zip(&self.periodic_columns)
+            .map(|((air, &num_vars), read)| {
+                if read.is_empty() {
+                    return None;
+                }
+                let columns = air.periodic_columns();
+                if columns.is_empty() {
+                    return None;
+                }
+                // Reject a declaration the trace cannot hold, matching the verifier's own check.
+                let periods = columns.iter().map(Vec::len).collect::<Vec<_>>();
+                periodic_num_variables(air.num_periodic_columns(), &periods, num_vars)
+                    .expect("periodic column declaration must fit the trace height");
+                Some(columns.into_owned())
             })
             .collect()
     }
@@ -436,7 +468,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::borrow::Cow;
     use alloc::vec;
+    use alloc::vec::Vec;
 
     use p3_air::{Air, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
@@ -482,6 +516,35 @@ mod tests {
         }
     }
 
+    /// One main column, and a declaration reading a periodic column of four rows.
+    struct PeriodicAir;
+
+    impl BaseAir<BabyBear> for PeriodicAir {
+        fn width(&self) -> usize {
+            1
+        }
+
+        fn num_periodic_columns(&self) -> usize {
+            1
+        }
+
+        fn periodic_columns(&self) -> Cow<'_, [Vec<BabyBear>]> {
+            Cow::Owned(vec![(0..4).map(BabyBear::from_u64).collect()])
+        }
+    }
+
+    impl<AB: BusInteractionBuilder<F = BabyBear>> Air<AB> for PeriodicAir {
+        fn eval(&self, builder: &mut AB) {
+            let value: AB::Expr = builder.periodic_values()[0].into();
+            builder.push_bus_interaction(
+                BusName::new("image"),
+                BusDirection::Push,
+                [value],
+                BusActivation::Always,
+            );
+        }
+    }
+
     #[test]
     fn rejects_a_table_narrower_than_the_air_that_owns_it() {
         let context = BusContext::<BabyBear, BabyBear>::build(&[&TwoColumnAir], &[1])
@@ -511,6 +574,18 @@ mod tests {
 
         assert_eq!(context.main_columns(0), &[1]);
         assert!(context.preprocessed_columns(0).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "periodic column declaration must fit the trace height")]
+    fn rejects_a_period_longer_than_the_trace() {
+        // The prover reads row `r` of a periodic column as entry `r mod period`, through a mask.
+        // That holds only for a period dividing the height, so two rows cannot carry four.
+        let context = BusContext::<BabyBear, BabyBear>::build(&[&PeriodicAir], &[1])
+            .unwrap()
+            .unwrap();
+
+        context.period_vectors(&[&PeriodicAir], &[1]);
     }
 
     #[test]

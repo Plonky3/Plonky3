@@ -6,6 +6,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{Air, AirBuilder, RowWindow};
+use p3_bus::{BusActivation, BusDirection, BusInteractionRecorder, BusName, RecordToken};
 use p3_field::Field;
 use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
 
@@ -80,8 +81,8 @@ struct KernelSums<'a, R> {
 /// In each evaluation every asserted constraint contributes its quadratic part, or its whole
 /// value where the folder is built for whole values. The bits are summed across the lanes with
 /// the weights of a [`BitLaneSums`], then weighted by the constraint's descending alpha power, one
-/// sum per evaluation. Lookup declarations are dropped, as in
-/// [`SlicedFolder`](crate::sliced::SlicedFolder).
+/// sum per evaluation. Lookup declarations and bus tuples are dropped, and a bus declaration's
+/// Booleanity check is asserted, as in [`SlicedFolder`](crate::sliced::SlicedFolder).
 #[derive(Debug)]
 pub struct SlicedQuadraticFolder<'a, F, R> {
     /// Two-row main window holding the current and shifted-by-one rows.
@@ -375,5 +376,26 @@ where
 
     fn num_indexed_tables(&self) -> usize {
         0
+    }
+}
+
+/// Bus tuples are dropped: a declaration's Booleanity check is asserted before it is recorded.
+impl<'a, F, R> BusInteractionRecorder for SlicedQuadraticFolder<'a, F, R>
+where
+    F: Field,
+    R: Field,
+{
+    fn record_bus_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _token: RecordToken,
+        _bus: BusName<'_>,
+        _direction: BusDirection,
+        fields: impl IntoIterator<Item = E>,
+        _activation: BusActivation<Self::Expr>,
+    ) {
+        // The bus protocol evaluates its retained symbolic profile after commitment.
+        fields.into_iter().for_each(|field| {
+            let _ = field.into();
+        });
     }
 }

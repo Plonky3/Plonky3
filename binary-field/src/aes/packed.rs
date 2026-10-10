@@ -56,6 +56,65 @@ pub(super) const PACKING_WIDTH: usize = 16;
 #[must_use]
 pub struct PackedRijndael8b<const N: usize>([Rijndael8b; N]);
 
+/// Lane-wise sums weighted by powers of the polynomial generator, reducing only at the end.
+///
+/// A byte times `x^POWER`, for `POWER < 8`, has degree at most fourteen.
+/// XORing any number of such terms therefore fits in one sixteen-bit polynomial per lane.
+#[derive(Clone, Copy, Debug)]
+#[must_use]
+pub struct RijndaelPowerAccumulator<const N: usize>([u16; N]);
+
+impl<const N: usize> Default for RijndaelPowerAccumulator<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize> RijndaelPowerAccumulator<N> {
+    /// An empty sum in every lane.
+    #[inline]
+    pub const fn new() -> Self {
+        Self([0; N])
+    }
+
+    /// Add `values * x^POWER` to every lane without reducing the polynomial sum.
+    ///
+    /// # Panics
+    /// Panics unless `POWER` is between zero and seven.
+    #[inline(always)]
+    pub fn add<const POWER: i32>(&mut self, values: PackedRijndael8b<N>) {
+        match POWER {
+            0 => super::engine::add_power::<0>(&mut self.0, values.bytes()),
+            1 => super::engine::add_power::<1>(&mut self.0, values.bytes()),
+            2 => super::engine::add_power::<2>(&mut self.0, values.bytes()),
+            3 => super::engine::add_power::<3>(&mut self.0, values.bytes()),
+            4 => super::engine::add_power::<4>(&mut self.0, values.bytes()),
+            5 => super::engine::add_power::<5>(&mut self.0, values.bytes()),
+            6 => super::engine::add_power::<6>(&mut self.0, values.bytes()),
+            7 => super::engine::add_power::<7>(&mut self.0, values.bytes()),
+            _ => panic!("generator power must be between zero and seven"),
+        }
+    }
+
+    /// Add a generator-weighted term when its power is selected at run time.
+    ///
+    /// # Panics
+    /// Panics unless `power` is between zero and seven.
+    #[inline(always)]
+    pub fn add_power(&mut self, values: PackedRijndael8b<N>, power: u8) {
+        assert!(power < 8, "generator power must be between zero and seven");
+        super::engine::add_power_dynamic(&mut self.0, values.bytes(), power);
+    }
+
+    /// Reduce all polynomial sums modulo the AES-field modulus.
+    #[inline(always)]
+    pub fn finish(self) -> PackedRijndael8b<N> {
+        let mut out = PackedRijndael8b::ZERO;
+        super::engine::reduce_polynomials(&self.0, out.bytes_mut());
+        out
+    }
+}
+
 impl<const N: usize> Default for PackedRijndael8b<N> {
     #[inline]
     fn default() -> Self {
@@ -489,6 +548,85 @@ mod tests {
     use super::PackedRijndael8b;
     use crate::Rijndael8b;
     use crate::aes::{invert_byte, mul_bytes};
+
+    /// Exercise full vector blocks and scalar suffixes against field multiplication.
+    fn power_sums<const N: usize>() {
+        for byte in 0..=255 {
+            let values = PackedRijndael8b(core::array::from_fn(|i| {
+                Rijndael8b::from_byte((byte as u8).wrapping_add(i as u8))
+            }));
+            let mut sum = super::RijndaelPowerAccumulator::<N>::new();
+            let mut reference = [Rijndael8b::ZERO; N];
+            macro_rules! add {
+                ($power:literal) => {
+                    sum.add::<$power>(values);
+                    let mut dynamic = super::RijndaelPowerAccumulator::<N>::new();
+                    dynamic.add_power(values, $power);
+                    let mut fixed = super::RijndaelPowerAccumulator::<N>::new();
+                    fixed.add::<$power>(values);
+                    assert_eq!(dynamic.finish(), fixed.finish());
+                    for (out, &value) in reference.iter_mut().zip(&values.0) {
+                        *out += value * Rijndael8b::from_byte(1 << $power);
+                    }
+                    assert_eq!(sum.finish().0, reference);
+                };
+            }
+            add!(0);
+            add!(1);
+            add!(2);
+            add!(3);
+            add!(4);
+            add!(5);
+            add!(6);
+            add!(7);
+            // Repeated terms cancel in characteristic two.
+            add!(7);
+        }
+    }
+
+    #[test]
+    fn generator_power_sums_match_scalar_products() {
+        power_sums::<1>();
+        power_sums::<15>();
+        power_sums::<16>();
+        power_sums::<17>();
+        power_sums::<32>();
+        power_sums::<64>();
+        assert_eq!(
+            super::RijndaelPowerAccumulator::<16>::default().finish(),
+            Narrow::ZERO
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "generator power must be between zero and seven")]
+    fn generator_power_eight_is_refused() {
+        super::RijndaelPowerAccumulator::<16>::new().add::<8>(Narrow::ZERO);
+    }
+
+    #[test]
+    #[should_panic(expected = "generator power must be between zero and seven")]
+    fn negative_generator_power_is_refused() {
+        super::RijndaelPowerAccumulator::<16>::new().add::<-1>(Narrow::ZERO);
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_power_weighted_terms_match_reduced_sums(bytes in any::<[u8; 128]>()) {
+            let terms: [Narrow; 8] = core::array::from_fn(|row| {
+                PackedRijndael8b(core::array::from_fn(|lane| Rijndael8b::from_byte(bytes[16*row+lane])))
+            });
+            let mut sum = super::RijndaelPowerAccumulator::<16>::new();
+            sum.add::<0>(terms[0]); sum.add::<1>(terms[1]);
+            sum.add::<2>(terms[2]); sum.add::<3>(terms[3]);
+            sum.add::<4>(terms[4]); sum.add::<5>(terms[5]);
+            sum.add::<6>(terms[6]); sum.add::<7>(terms[7]);
+            let expected: [Rijndael8b; 16] = core::array::from_fn(|lane| {
+                (0..8).map(|row| terms[row].0[lane] * Rijndael8b::from_byte(1 << row)).sum()
+            });
+            prop_assert_eq!(sum.finish().0, expected);
+        }
+    }
 
     /// The block widths the crate exports, so every sweep length is covered.
     ///

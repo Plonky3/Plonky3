@@ -67,6 +67,17 @@ const ALPHA: u64 = clmul::tower_image_64(1 << 32);
 pub struct Poly64(u64);
 
 impl Poly64 {
+    /// Write `out[c] = sum_r weights[r] * rows[r * out.len() + c]`.
+    ///
+    /// The input matrix is row-major, with one row per weight.
+    /// Carryless products accumulate before one polynomial reduction per output column.
+    ///
+    /// # Panics
+    /// Panics unless `rows.len() == weights.len() * out.len()`.
+    pub fn columnwise_dot_product(weights: &[Self], rows: &[Self], out: &mut [Self]) {
+        clmul::column::dot_columns(weights, rows, out);
+    }
+
     /// The number of bits of an element.
     pub(crate) const BITS: usize = 64;
 
