@@ -17,9 +17,7 @@
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_field::{
-    Algebra, ExtensionField, Field, PackedField, PackedFieldExtension, PackedValue, dot_product,
-};
+use p3_field::{Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_util::log2_strict_usize;
 
 use super::packed_kernel::{compress_hi_dot_packed, compress_prefix_to_packed_packed};
@@ -166,7 +164,10 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             PolyMaybePacked::Packed(eq1) => {
                 // Reinterpret the flat scalar slice as packed SIMD elements.
                 // Compute packed dot product, then reduce lanes to a single scalar.
-                let sum = packed_mixed_dot::<F, EF>(eq1.as_slice(), F::Packing::pack_slice(chunk));
+                let sum = <EF::ExtensionPacking as Algebra<F::Packing>>::batched_linear_combination(
+                    eq1.as_slice(),
+                    F::Packing::pack_slice(chunk),
+                );
                 // Horizontal reduction: sum the W lanes of each packed result element.
                 EF::ExtensionPacking::to_ext_iter([sum]).sum()
             }
@@ -530,7 +531,10 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                 // then reduce the resulting packed value across its lanes.
                 if !packed.is_empty() {
                     let packed_sum =
-                        packed_mixed_dot::<F, EF>(&eq1.as_slice()[..packed.len()], packed);
+                        <EF::ExtensionPacking as Algebra<F::Packing>>::batched_linear_combination(
+                            &eq1.as_slice()[..packed.len()],
+                            packed,
+                        );
                     sum += EF::ExtensionPacking::to_ext_iter([packed_sum]).sum::<EF>();
                 }
 
@@ -568,85 +572,6 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             }
         }
     }
-}
-
-/// Packed inner product of extension weights against base values, reduced once per block.
-///
-/// ```text
-///     sum_i weights[i] * values[i]
-/// ```
-///
-/// Each block goes through `mixed_dot_product`, which a packing overrides with a delayed reduction.
-/// The iterator form reduces after every single product instead.
-///
-/// The base packing sets the block length, through its `DOT_PRODUCT_BLOCK`:
-/// - a Monty-31 packing sums eight 64-bit products and reduces once,
-/// - a Goldilocks packing on x86 delays the reduction over at most six terms, so it takes four,
-/// - a binary packing XORs eight carry-less products and reduces once.
-///
-/// A block length other than 1, 2, 4, 8 or 16 fails to compile.
-///
-/// # Panics
-///
-/// Panics if the two slices differ in length.
-#[inline]
-pub(crate) fn packed_mixed_dot<F, EF>(
-    weights: &[EF::ExtensionPacking],
-    values: &[F::Packing],
-) -> EF::ExtensionPacking
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    const {
-        assert!(
-            matches!(F::Packing::DOT_PRODUCT_BLOCK, 1 | 2 | 4 | 8 | 16),
-            "DOT_PRODUCT_BLOCK must be one of 1, 2, 4, 8 or 16"
-        );
-    }
-    // The block length is a constant of the packing, so the match folds away.
-    match F::Packing::DOT_PRODUCT_BLOCK {
-        1 => blocked_mixed_dot::<F, EF, 1>(weights, values),
-        2 => blocked_mixed_dot::<F, EF, 2>(weights, values),
-        4 => blocked_mixed_dot::<F, EF, 4>(weights, values),
-        8 => blocked_mixed_dot::<F, EF, 8>(weights, values),
-        16 => blocked_mixed_dot::<F, EF, 16>(weights, values),
-        _ => unreachable!(),
-    }
-}
-
-/// Packed inner product of extension weights against base values, in blocks of `BLOCK` terms.
-///
-/// # Panics
-///
-/// Panics if the two slices differ in length.
-#[inline]
-fn blocked_mixed_dot<F, EF, const BLOCK: usize>(
-    weights: &[EF::ExtensionPacking],
-    values: &[F::Packing],
-) -> EF::ExtensionPacking
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    assert_eq!(weights.len(), values.len());
-    let (weight_blocks, weight_tail) = weights.as_chunks::<BLOCK>();
-    let (value_blocks, value_tail) = values.as_chunks::<BLOCK>();
-
-    // Full blocks: one reduction per coordinate per block.
-    let body: EF::ExtensionPacking = weight_blocks
-        .iter()
-        .zip(value_blocks)
-        .map(|(w, v)| {
-            <EF::ExtensionPacking as Algebra<F::Packing>>::mixed_dot_product::<BLOCK>(w, v)
-        })
-        .sum();
-
-    // Tail: fewer than one block, reduced after each product.
-    body + dot_product::<EF::ExtensionPacking, _, _>(
-        weight_tail.iter().copied(),
-        value_tail.iter().copied(),
-    )
 }
 
 /// Adds one outer chunk of the successor decomposition from a stream of equality weights.
@@ -695,9 +620,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use p3_goldilocks::Goldilocks;
     use proptest::prelude::*;
-    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -785,52 +708,6 @@ mod tests {
             let expected = eval_reference(&chunk, point.as_slice());
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
             prop_assert_eq!(expected, unpacked.dot_with_base(&chunk));
-        }
-    }
-
-    /// Every supported block length against the dot product that reduces after each product.
-    fn check_blocked_mixed_dot<F, EF>(len: usize, seed: u64)
-    where
-        F: Field,
-        EF: ExtensionField<F>,
-        StandardUniform: Distribution<F> + Distribution<EF>,
-    {
-        let mut rng = SmallRng::seed_from_u64(seed);
-        let width = F::Packing::WIDTH;
-        let scalar_weights: Vec<EF> = (0..len * width).map(|_| rng.random()).collect();
-        let scalar_values: Vec<F> = (0..len * width).map(|_| rng.random()).collect();
-        let weights: Vec<EF::ExtensionPacking> = scalar_weights
-            .chunks_exact(width)
-            .map(EF::ExtensionPacking::from_ext_slice)
-            .collect();
-        let values = F::Packing::pack_slice(&scalar_values);
-
-        // Lanes of a packed sum, read back as scalars for comparison.
-        let lanes = |sum| EF::ExtensionPacking::to_ext_iter([sum]).collect::<Vec<EF>>();
-
-        // Reference: one product and one reduction at a time.
-        let expected = lanes(dot_product(weights.iter().copied(), values.iter().copied()));
-
-        // Each block length, then the one the packing picks, gives the same sum.
-        let sums = [
-            blocked_mixed_dot::<F, EF, 1>(&weights, values),
-            blocked_mixed_dot::<F, EF, 2>(&weights, values),
-            blocked_mixed_dot::<F, EF, 4>(&weights, values),
-            blocked_mixed_dot::<F, EF, 8>(&weights, values),
-            blocked_mixed_dot::<F, EF, 16>(&weights, values),
-            packed_mixed_dot::<F, EF>(&weights, values),
-        ];
-        for sum in sums {
-            assert_eq!(lanes(sum), expected);
-        }
-    }
-
-    proptest! {
-        #[test]
-        fn prop_blocked_mixed_dot_matches_eager(len in 0usize..=40, seed in any::<u64>()) {
-            // Lengths cross several blocks of every size, with and without a tail.
-            check_blocked_mixed_dot::<F, EF>(len, seed);
-            check_blocked_mixed_dot::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>(len, seed);
         }
     }
 

@@ -22,9 +22,9 @@ pub mod eq;
 mod packed_kernel;
 mod spread;
 
-use eq::{EqMaybePacked, packed_mixed_dot};
+use eq::EqMaybePacked;
 use itertools::Itertools;
-use p3_field::{ExtensionField, Field, PackedField, PackedFieldExtension, PackedValue};
+use p3_field::{Algebra, ExtensionField, Field, PackedField, PackedFieldExtension, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use spread::SpreadWeights;
@@ -660,7 +660,11 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
                 .zip(poly.as_slice().par_chunks_exact(suffix_rows))
                 .with_min_task_bytes(base_mul_acc_bytes::<EF>(suffix_rows, F::Packing::WIDTH))
                 .for_each(|(out, row)| {
-                    let sum = packed_mixed_dot::<F, EF>(&table, F::Packing::pack_slice(row));
+                    let sum =
+                        <EF::ExtensionPacking as Algebra<F::Packing>>::batched_linear_combination(
+                            &table,
+                            F::Packing::pack_slice(row),
+                        );
                     *out = EF::ExtensionPacking::to_ext_iter([sum]).sum();
                 });
             return;
