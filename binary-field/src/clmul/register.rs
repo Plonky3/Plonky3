@@ -23,6 +23,12 @@ pub(crate) trait Register128: Lanes64 {
     /// Then the nine schoolbook products beat Karatsuba's six, whose operand sums need shuffles.
     const CHEAP_MULTIPLY: bool;
 
+    /// Reduce a multiplication product, allowing a backend-specific scalar schedule.
+    #[inline(always)]
+    fn reduce_product(product: Self) -> u64 {
+        product.reduce_lane().lower()
+    }
+
     /// The value in the low quadword, and zero above it.
     fn lift(value: u64) -> Self;
 
@@ -58,7 +64,7 @@ fn reduce<R: Register128>(product: R) -> u64 {
 #[inline]
 pub(crate) fn poly_mul_64<R: Register128>(a: u64, b: u64) -> u64 {
     // The 128-bit product fills the register, then folds back into its low quadword.
-    reduce(R::lift(a).clmul::<LOW_BY_LOW>(R::lift(b)))
+    R::reduce_product(R::lift(a).clmul::<LOW_BY_LOW>(R::lift(b)))
 }
 
 /// Squaring in `GF(2^64)`, taking and returning the polynomial representation.
