@@ -32,6 +32,7 @@ Usage:
   python poseidon2/generate_constants.py --field mersenne31 --width 32 --format json
   python poseidon2/generate_constants.py --field goldilocks --width 8 -v
   python poseidon2/generate_constants.py --field babybear --width 16 --test-vector
+  python poseidon2/generate_constants.py --field goldilocks --width 12 --skip-matrix --check-test-vector
 """
 
 import argparse
@@ -1135,8 +1136,18 @@ def generate_round_constants_poseidon2(grain, p, n, t, R_F, R_P):
 # External Matrix (Deterministic)
 # =============================================================================
 
-# The fixed 4x4 M4 matrix used in Poseidon2
+# The 4x4 matrix M4 of Plonky3's default instances (`MDSMat4`, circ(2, 3, 1, 1)).
+# Every field this script supports uses it.
 M4 = [
+    [2, 3, 1, 1],
+    [1, 2, 3, 1],
+    [1, 1, 2, 3],
+    [3, 1, 1, 2],
+]
+
+# The 4x4 matrix of the Horizen Labs reference implementation (`HLMDSMat4`). Plonky3
+# uses it only for BN254, which this script does not generate.
+HL_M4 = [
     [5, 7, 1, 3],
     [4, 6, 1, 1],
     [1, 3, 5, 7],
@@ -1237,6 +1248,77 @@ def generate_internal_matrix(grain, t, n, p, verbose=False):
 
 
 # =============================================================================
+# Default Internal Diagonals
+# =============================================================================
+
+# The default instances do not use a Grain-sampled internal matrix. Each picks the
+# diagonal V of M_I = 1 + Diag(V) from values that multiply cheaply: small integers
+# and signed powers of two. These are the diagonals documented in each field's
+# poseidon2.rs (MATRIX_DIAG_*_GOLDILOCKS for Goldilocks, the shift tables for
+# Mersenne31). Each entry is (numerator, k) for the value numerator / 2^k.
+DEFAULT_INTERNAL_DIAGONALS = {
+    ("babybear", 16): [
+        (-2, 0), (1, 0), (2, 0), (1, 1), (3, 0), (4, 0), (-1, 1), (-3, 0),
+        (-4, 0), (1, 8), (1, 2), (1, 3), (1, 27), (-1, 8), (-1, 4), (-1, 27),
+    ],
+    ("babybear", 24): [
+        (-2, 0), (1, 0), (2, 0), (1, 1), (3, 0), (4, 0), (-1, 1), (-3, 0),
+        (-4, 0), (1, 8), (1, 2), (1, 3), (1, 4), (1, 7), (1, 9), (1, 27),
+        (-1, 8), (-1, 2), (-1, 3), (-1, 4), (-1, 5), (-1, 6), (-1, 7), (-1, 27),
+    ],
+    ("babybear", 32): [
+        (-2, 0), (1, 0), (2, 0), (1, 1), (3, 0), (4, 0), (-1, 1), (-3, 0),
+        (-4, 0), (1, 8), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7),
+        (1, 9), (1, 10), (1, 12), (1, 27), (-1, 8), (-1, 2), (-1, 3), (-1, 4),
+        (-1, 5), (-1, 6), (-1, 7), (-1, 9), (-1, 10), (-1, 12), (-1, 14), (-1, 27),
+    ],
+    ("koalabear", 16): [
+        (-2, 0), (1, 0), (2, 0), (1, 1), (3, 0), (4, 0), (-1, 1), (-3, 0),
+        (-4, 0), (1, 8), (1, 3), (1, 24), (-1, 8), (-1, 3), (-1, 4), (-1, 24),
+    ],
+    ("koalabear", 24): [
+        (-2, 0), (1, 0), (2, 0), (1, 1), (3, 0), (4, 0), (-1, 1), (-3, 0),
+        (-4, 0), (1, 8), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 24),
+        (-1, 8), (-1, 3), (-1, 4), (-1, 5), (-1, 6), (-1, 7), (-1, 9), (-1, 24),
+    ],
+    ("koalabear", 32): [
+        (-2, 0), (1, 0), (2, 0), (1, 1), (3, 0), (4, 0), (-1, 1), (-3, 0),
+        (-4, 0), (1, 8), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 10),
+        (1, 12), (1, 14), (1, 16), (1, 24), (-1, 8), (-1, 3), (-1, 4), (-1, 5),
+        (-1, 6), (-1, 7), (-1, 9), (-1, 10), (-1, 12), (-1, 14), (-1, 16), (-1, 24),
+    ],
+    ("goldilocks", 8): [
+        (-2, 0), (1, 0), (2, 0), (1, 1), (3, 0), (-1, 1), (-3, 0), (-4, 0),
+    ],
+    ("goldilocks", 12): [
+        (-2, 0), (1, 0), (2, 0), (1, 1), (3, 0), (4, 0), (-1, 1), (-3, 0),
+        (-4, 0), (1, 2), (-1, 2), (1, 3),
+    ],
+    ("goldilocks", 16): [
+        (-2, 0), (1, 0), (2, 0), (1, 1), (3, 0), (4, 0), (-1, 1), (-3, 0),
+        (-4, 0), (1, 3), (1, 4), (1, 5), (-1, 3), (-1, 4), (-1, 5), (1, 32),
+    ],
+}
+
+# Mersenne31's diagonal is [-2, 2^s for each shift] (POSEIDON2_INTERNAL_MATRIX_DIAG_*_SHIFTS).
+_MERSENNE31_SHIFTS = {
+    16: [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16],
+    24: list(range(23)),
+    32: list(range(31)),
+}
+for _t, _shifts in _MERSENNE31_SHIFTS.items():
+    DEFAULT_INTERNAL_DIAGONALS[("mersenne31", _t)] = [(-2, 0)] + [(1 << s, 0) for s in _shifts]
+
+
+def default_internal_diagonal(field_name, t, p):
+    """The diagonal V of the default instance's internal matrix, as field elements."""
+    return [
+        (numerator * pow(1 << k, p - 2, p)) % p
+        for numerator, k in DEFAULT_INTERNAL_DIAGONALS[(field_name, t)]
+    ]
+
+
+# =============================================================================
 # Poseidon2 Reference Permutation
 # =============================================================================
 
@@ -1309,6 +1391,41 @@ def poseidon2_permutation(
         state = mat_vec_mul(external_matrix, state, p)
 
     return state
+
+
+def reference_test_vector_output(field_name, t, security_level=128):
+    """Run the reference permutation of the default instance on its embedded test input.
+
+    The round constants come from the Grain LFSR, the external matrix from M4 and the
+    internal diagonal from DEFAULT_INTERNAL_DIAGONALS, so nothing here is copied from
+    the Rust test that produced the expected output.
+    """
+    vector = DEFAULT_POSEIDON2_TEST_VECTORS[(field_name, t)]
+    p = FIELDS[field_name]["prime"]
+    n = p.bit_length()
+    alpha = compute_alpha(p)
+    R_F, R_P = compute_round_numbers(p, t, alpha, security_level)
+    grain = GrainLFSR(n, t, R_F, R_P)
+    external_initial, internal, external_final = generate_round_constants_poseidon2(
+        grain, p, n, t, R_F, R_P
+    )
+    return poseidon2_permutation(
+        vector["input"],
+        generate_external_matrix(t, p),
+        default_internal_diagonal(field_name, t, p),
+        external_initial,
+        internal,
+        external_final,
+        alpha,
+        p,
+        t,
+    )
+
+
+def check_embedded_test_vector(field_name, t):
+    """True if the reference permutation reproduces the embedded expected output."""
+    vector = DEFAULT_POSEIDON2_TEST_VECTORS[(field_name, t)]
+    return reference_test_vector_output(field_name, t) == vector["expected"]
 
 
 # =============================================================================
@@ -1527,7 +1644,15 @@ def main():
         action="store_true",
         help=(
             "Print embedded canonical input/expected output for the default Poseidon2 permutation "
-            "(from Rust tests or documented one-shot derivations; not from the Python reference)"
+            "(from Rust tests or documented one-shot derivations; --check-test-vector recomputes it)"
+        ),
+    )
+    parser.add_argument(
+        "--check-test-vector",
+        action="store_true",
+        help=(
+            "Recompute the embedded test vector with the Python reference permutation "
+            "and exit 1 if it differs"
         ),
     )
     args = parser.parse_args()
@@ -1599,6 +1724,19 @@ def main():
     # --- Test vector (embedded Plonky3 literals; independent of --skip-matrix) ---
     if args.test_vector:
         print_embedded_poseidon2_test_vector(args.field, t, n)
+
+    if args.check_test_vector:
+        if (args.field, t) not in DEFAULT_POSEIDON2_TEST_VECTORS:
+            print(f"No embedded test vector for {args.field} width {t}.", file=sys.stderr)
+            sys.exit(1)
+        if not check_embedded_test_vector(args.field, t):
+            print(
+                f"The reference permutation does not reproduce the {args.field} width {t} "
+                "test vector.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"The reference permutation reproduces the {args.field} width {t} test vector.")
 
 
 if __name__ == "__main__":
