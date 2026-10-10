@@ -732,7 +732,7 @@ where
                 .base_opened_values
                 .quotient_chunks,
             zeta,
-        );
+        )?;
 
         // Recompose permutation openings into extension-field columns.
         //
