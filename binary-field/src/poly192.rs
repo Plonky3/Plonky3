@@ -270,6 +270,30 @@ impl Poly192MixedAccumulator {
 }
 
 impl Poly192 {
+    /// Multiply four independent pairs, preserving their input order.
+    ///
+    /// Uses four 256-bit coefficient lanes on AVX2 with VPCLMULQDQ, even when
+    /// `wide-poly` selects eight lanes for ordinary packed operations.
+    #[inline]
+    pub fn mul4(a: [Self; 4], b: [Self; 4]) -> [Self; 4] {
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "vpclmulqdq",
+            target_feature = "avx2"
+        ))]
+        {
+            crate::packed::poly192::mul4(a, b)
+        }
+        #[cfg(not(all(
+            target_arch = "x86_64",
+            target_feature = "vpclmulqdq",
+            target_feature = "avx2"
+        )))]
+        {
+            core::array::from_fn(|i| a[i] * b[i])
+        }
+    }
+
     /// The number of bits of an element.
     pub(crate) const BITS: usize = DEGREE * 64;
 
@@ -1098,8 +1122,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn four_products_preserve_corner_lanes() {
+        let corners = [0, 1, u64::MAX, 1 << 63, 0xf << 60];
+        for shift in 0..corners.len() {
+            let a = core::array::from_fn(|lane| {
+                Poly192::from_limbs(core::array::from_fn(|c| {
+                    corners[(shift + lane + c) % corners.len()]
+                }))
+            });
+            let b = core::array::from_fn(|lane| a[3 - lane]);
+            assert_eq!(Poly192::mul4(a, b), core::array::from_fn(|i| a[i] * b[i]));
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
+        #[test]
+        fn four_products_match_scalar_pairs(
+            a in any::<[[u64; 3]; 4]>(), b in any::<[[u64; 3]; 4]>()
+        ) {
+            let a = a.map(Poly192::from_limbs);
+            let b = b.map(Poly192::from_limbs);
+            prop_assert_eq!(Poly192::mul4(a,b), core::array::from_fn(|i| a[i] * b[i]));
+        }
+
 
         #[test]
         fn the_karatsuba_product_matches_the_schoolbook_one(a: [u64; 3], b: [u64; 3]) {
