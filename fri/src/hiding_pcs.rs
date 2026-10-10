@@ -17,6 +17,7 @@ use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_util::log2_strict_usize;
 use rand::distr::{Distribution, StandardUniform};
+use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
 use spin::Mutex;
 use tracing::info_span;
@@ -51,10 +52,15 @@ pub enum HidingFriProverError {
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
 ///
-/// The random codewords that blind the committed trace come from the caller-supplied `R`, so it is
-/// bounded by [`CryptoRng`]. That rules out generators known to be unsuitable for cryptographic
-/// use, but it does not replace proper seeding: a caller who seeds from a predictable source lets
-/// an observer reproduce the stream and strip the masks.
+/// Each call that draws masks seeds a private [`StdRng`] from the caller-supplied `R`, then draws every mask from it.
+///
+/// The shared generator is locked only for that seed, so the parallel work runs without the lock.
+///
+/// Every mask thus depends on `R`, which is why `R` is bounded by [`CryptoRng`].
+///
+/// That rules out generators known to be unsuitable for cryptographic use, but it does not replace proper seeding.
+///
+/// A caller who seeds `R` from a predictable source lets an observer reproduce the stream and strip the masks.
 ///
 /// # Hiding requires a large enough trace relative to the query budget
 ///
@@ -234,6 +240,11 @@ where
         for (_, mat) in &evaluations {
             self.check_hiding_budget(mat.height(), Challenge::DIMENSION, 1)?;
         }
+        // Fork a private RNG so the shared lock is released before any parallel work.
+        //
+        // Why: a waiting rayon worker may run a queued call on this same PCS.
+        // That call would spin forever on a lock its own thread still holds.
+        let mut rng = StdRng::from_rng(&mut *self.rng.lock());
         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> =
             info_span!("randomize polys").in_scope(|| {
                 evaluations
@@ -244,10 +255,8 @@ where
                         // To generate it, we add `w + 2 * num_random_codewords` columns to the original matrix, then reshape it by setting the width to `w + num_random_codewords`.
                         // All columns are added on the right hand side so, after reshaping, this has the net effect of adding `num_random_codewords` random columns on the right and interleaving the original trace with random rows.
 
-                        let mut random_evaluation = mat.with_random_cols(
-                            mat_width + 2 * self.num_random_codewords,
-                            &mut *self.rng.lock(),
-                        );
+                        let mut random_evaluation = mat
+                            .with_random_cols(mat_width + 2 * self.num_random_codewords, &mut rng);
                         random_evaluation.width = mat_width + self.num_random_codewords;
 
                         (domain, random_evaluation)
@@ -493,10 +502,15 @@ where
             .map(|i| cis[i] * last_chunk_ci_inv)
             .collect_vec();
 
-        let mut rng = self.rng.lock();
+        // Fork a private RNG so the shared lock is released before the parallel DFTs.
+        //
+        // Why: this runs inside the batch prover's parallel loop over AIR instances.
+        // A waiting rayon worker may run another instance's call on this same PCS.
+        // That call would spin forever on a lock its own thread still holds.
+        let mut rng = StdRng::from_rng(&mut *self.rng.lock());
         let randomized_evaluations: Vec<RowMajorMatrix<Val>> = evaluations
             .into_iter()
-            .map(|mat| mat.with_random_cols(self.num_random_codewords, &mut *rng))
+            .map(|mat| mat.with_random_cols(self.num_random_codewords, &mut rng))
             .collect();
         // Add random values to the LDE evaluations as described in https://eprint.iacr.org/2024/1037.pdf.
         // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
@@ -775,7 +789,10 @@ fn get_zp_cis<D: PolynomialSpace>(qc_domains: &[D]) -> Vec<p3_commit::Val<D>> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::boxed::Box;
     use alloc::vec;
+    use core::convert::Infallible;
+    use core::sync::atomic::AtomicUsize;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
@@ -785,8 +802,9 @@ mod tests {
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-    use rand::SeedableRng;
-    use rand::rngs::{SmallRng, StdRng};
+    use rand::rngs::SmallRng;
+    use rand::{SeedableRng, TryCryptoRng, TryRng};
+    use spin::Once;
 
     use super::*;
 
@@ -1633,7 +1651,8 @@ mod tests {
         domains: &[Domain],
         mats: &[RowMajorMatrix<Val>],
     ) -> Vec<RowMajorMatrix<Val>> {
-        let mut rng = StdRng::seed_from_u64(QUOTIENT_RNG_SEED);
+        // The prover draws its masks from a private RNG forked off the seeded one.
+        let mut rng = StdRng::from_rng(&mut StdRng::seed_from_u64(QUOTIENT_RNG_SEED));
 
         let cis = get_zp_cis(domains);
         let last_chunk = domains.len() - 1;
@@ -1761,5 +1780,200 @@ mod tests {
         // So it is the one place where the shared-transform rewrite could pick up the wrong
         // row order without any other test noticing.
         check_fused_quotient_ldes(&Radix2DitParallel::<Val>::default());
+    }
+
+    /// A lock check run from inside the parallel work of the object that owns the lock.
+    ///
+    /// The probed DFT lives inside the PCS it observes, so the check is armed after construction.
+    #[derive(Clone, Default)]
+    struct LockProbe {
+        /// Returns whether the observed lock is free; unset until armed.
+        is_free: Arc<Once<Box<dyn Fn() -> bool + Send + Sync>>>,
+        /// Number of checks run, so a test can prove the probe actually fired.
+        hits: Arc<AtomicUsize>,
+    }
+
+    impl LockProbe {
+        /// Arm the probe on `target`, through a weak handle so the two do not keep each other alive.
+        fn arm<T: Send + Sync + 'static>(&self, target: &Arc<T>, is_free: fn(&T) -> bool) {
+            let target = Arc::downgrade(target);
+            self.is_free.call_once(|| {
+                Box::new(move || target.upgrade().is_none_or(|target| is_free(&target)))
+            });
+        }
+
+        /// Fail if the observed lock is held; a no-op until armed.
+        fn assert_lock_free(&self) {
+            if let Some(is_free) = self.is_free.get() {
+                assert!(
+                    is_free(),
+                    "parallel work must not run under the mask RNG lock"
+                );
+                self.hits.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// A DFT that runs its probe before every transform.
+    ///
+    /// Every default method of the trait funnels into `dft_batch`, so this one hook sees them all.
+    #[derive(Clone, Default)]
+    struct ProbedDft {
+        inner: Dft,
+        probe: LockProbe,
+    }
+
+    impl TwoAdicSubgroupDft<Val> for ProbedDft {
+        type Evaluations = <Dft as TwoAdicSubgroupDft<Val>>::Evaluations;
+
+        fn dft_batch(&self, mat: RowMajorMatrix<Val>) -> Self::Evaluations {
+            self.probe.assert_lock_free();
+            self.inner.dft_batch(mat)
+        }
+    }
+
+    /// A shared generator that counts how many times it is drawn from.
+    struct CountingRng {
+        inner: StdRng,
+        draws: Arc<AtomicUsize>,
+    }
+
+    impl CountingRng {
+        /// Record one draw, then hand back the generator that serves it.
+        fn draw(&mut self) -> &mut StdRng {
+            self.draws.fetch_add(1, Ordering::Relaxed);
+            &mut self.inner
+        }
+    }
+
+    impl TryRng for CountingRng {
+        type Error = Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Infallible> {
+            self.draw().try_next_u32()
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Infallible> {
+            self.draw().try_next_u64()
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Infallible> {
+            self.draw().try_fill_bytes(dst)
+        }
+    }
+
+    impl TryCryptoRng for CountingRng {}
+
+    type ProbedPcs = HidingFriPcs<Val, ProbedDft, ValMmcs, ChallengeMmcs, CountingRng>;
+
+    /// A probed PCS, its armed lock probe, and the draw counter of its shared generator.
+    fn probed_pcs() -> (Arc<ProbedPcs>, LockProbe, Arc<AtomicUsize>) {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+        let fri_params = FriParameters {
+            log_blowup: QUOTIENT_LOG_BLOWUP,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 2,
+            batch_proof_of_work_bits: 0,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: ChallengeMmcs::new(val_mmcs.clone()),
+        };
+        let probe = LockProbe::default();
+        let draws = Arc::new(AtomicUsize::new(0));
+        let pcs = Arc::new(ProbedPcs::new(
+            ProbedDft {
+                inner: Dft::default(),
+                probe: probe.clone(),
+            },
+            val_mmcs,
+            fri_params,
+            NUM_RANDOM_CODEWORDS,
+            CountingRng {
+                inner: StdRng::seed_from_u64(QUOTIENT_RNG_SEED),
+                draws: draws.clone(),
+            },
+        ));
+        probe.arm(&pcs, |pcs| !pcs.rng.is_locked());
+        (pcs, probe, draws)
+    }
+
+    /// Commit a random trace of the given shape through the probed PCS.
+    fn probed_commit(pcs: &ProbedPcs, log_h: usize, width: usize) {
+        // The wrapper doubles the trace height, so the domain is twice the trace.
+        let domain = Pcs::<Challenge, Challenger>::natural_domain_for_degree(pcs, 2 << log_h);
+        let trace = RowMajorMatrix::<Val>::rand(&mut SmallRng::seed_from_u64(3), 1 << log_h, width);
+        Pcs::<Challenge, Challenger>::commit(pcs, [(domain, trace)]).unwrap();
+    }
+
+    /// Extend random quotient chunks of the given shape through the probed PCS.
+    fn probed_quotient_ldes(pcs: &ProbedPcs, log_h: usize, width: usize) {
+        let num_chunks = 2;
+        let trace_domain = Pcs::<Challenge, Challenger>::natural_domain_for_degree(pcs, 1 << log_h);
+        let mut rng = SmallRng::seed_from_u64(3);
+        let chunks = trace_domain
+            .create_disjoint_domain(num_chunks << log_h)
+            .split_domains(num_chunks)
+            .into_iter()
+            .map(|domain| {
+                let mat = RowMajorMatrix::<Val>::rand(&mut rng, domain.size(), width);
+                (domain, mat)
+            })
+            .collect_vec();
+        UnivariateStarkPcs::<Challenge, Challenger>::get_quotient_ldes(pcs, chunks, num_chunks)
+            .unwrap();
+    }
+
+    #[test]
+    fn commit_transforms_without_holding_the_rng_lock() {
+        // A rayon worker that waits inside a transform may run another commit on this PCS.
+        //
+        // That commit would spin forever if the transform ran under the mask lock.
+        let (pcs, probe, _) = probed_pcs();
+        probed_commit(&pcs, 4, 4);
+
+        // The check must have run, or the test would pass without probing anything.
+        assert!(probe.hits.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn quotient_ldes_transform_without_holding_the_rng_lock() {
+        // The batch prover calls this from a parallel loop over AIR instances.
+        //
+        // A worker waiting inside one instance's transform may run another instance's call.
+        //
+        // That call would spin forever if the transform ran under the mask lock.
+        let (pcs, probe, _) = probed_pcs();
+        probed_quotient_ldes(&pcs, 4, 4);
+
+        // The check must have run, or the test would pass without probing anything.
+        assert!(probe.hits.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn shared_rng_only_seeds_the_masks() {
+        // The masks are filled after a parallel row copy that no transform probe can observe.
+        //
+        // Drawing them from the shared generator would put that copy under its lock.
+        //
+        // So each call must draw a fixed seed from it, however large the input.
+        let (pcs, _, draws) = probed_pcs();
+        let draws_for = |run: &dyn Fn(&ProbedPcs)| {
+            let before = draws.load(Ordering::Relaxed);
+            run(&pcs);
+            draws.load(Ordering::Relaxed) - before
+        };
+
+        let small_commit = draws_for(&|pcs| probed_commit(pcs, 4, 2));
+        let large_commit = draws_for(&|pcs| probed_commit(pcs, 6, 8));
+        assert!(small_commit > 0);
+        assert_eq!(small_commit, large_commit);
+
+        let small_quotient = draws_for(&|pcs| probed_quotient_ldes(pcs, 4, 2));
+        let large_quotient = draws_for(&|pcs| probed_quotient_ldes(pcs, 6, 8));
+        assert!(small_quotient > 0);
+        assert_eq!(small_quotient, large_quotient);
     }
 }

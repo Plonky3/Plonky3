@@ -134,14 +134,21 @@ where
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
-        let mut rng = self.rng.lock();
-        let salted_inputs = inputs
-            .into_iter()
-            .map(|mat| {
-                let salts = RowMajorMatrix::rand(&mut *rng, mat.height(), SALT_ELEMS);
-                HorizontalPair::new(mat, salts)
-            })
-            .collect();
+        // Draw every salt under the lock, then release it before hashing.
+        //
+        // Why: tree building is parallel.
+        // A waiting rayon worker may run a queued commit on this same MMCS.
+        // That commit would spin forever on a lock its own thread still holds.
+        let salted_inputs = {
+            let mut rng = self.rng.lock();
+            inputs
+                .into_iter()
+                .map(|mat| {
+                    let salts = RowMajorMatrix::rand(&mut *rng, mat.height(), SALT_ELEMS);
+                    HorizontalPair::new(mat, salts)
+                })
+                .collect()
+        };
         self.inner.commit(salted_inputs)
     }
 
@@ -303,8 +310,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::boxed::Box;
     use alloc::string::ToString;
+    use alloc::sync::Arc;
     use alloc::vec;
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -312,10 +322,11 @@ mod tests {
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
-    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, TruncatedPermutation};
     use p3_util::assert_sync;
     use rand::SeedableRng;
     use rand::rngs::{SmallRng, StdRng};
+    use spin::Once;
 
     use super::MerkleTreeHidingMmcs;
     use crate::MerkleTreeError;
@@ -336,6 +347,127 @@ mod tests {
         8,
         SALT_ELEMS,
     >;
+
+    /// The same MMCS with a leaf hasher that checks the salt RNG lock on every call.
+    type ProbedMmcs = MerkleTreeHidingMmcs<
+        <F as Field>::Packing,
+        <F as Field>::Packing,
+        ProbedHasher<MyHash>,
+        MyCompress,
+        StdRng,
+        2,
+        8,
+        SALT_ELEMS,
+    >;
+
+    /// A lock check run from inside the parallel work of the object that owns the lock.
+    ///
+    /// The probed hasher lives inside the MMCS it observes, so the check is armed after construction.
+    #[derive(Clone, Default)]
+    struct LockProbe {
+        /// Returns whether the observed lock is free; unset until armed.
+        is_free: Arc<Once<Box<dyn Fn() -> bool + Send + Sync>>>,
+        /// Number of checks run, so a test can prove the probe actually fired.
+        hits: Arc<AtomicUsize>,
+    }
+
+    impl LockProbe {
+        /// Arm the probe on `target`, through a weak handle so the two do not keep each other alive.
+        fn arm<T: Send + Sync + 'static>(&self, target: &Arc<T>, is_free: fn(&T) -> bool) {
+            let target = Arc::downgrade(target);
+            self.is_free.call_once(|| {
+                Box::new(move || target.upgrade().is_none_or(|target| is_free(&target)))
+            });
+        }
+
+        /// Fail if the observed lock is held; a no-op until armed.
+        fn assert_lock_free(&self) {
+            if let Some(is_free) = self.is_free.get() {
+                assert!(
+                    is_free(),
+                    "parallel work must not run under the salt RNG lock"
+                );
+                self.hits.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// A leaf hasher that runs its probe before forwarding every call to `inner`.
+    #[derive(Clone)]
+    struct ProbedHasher<H> {
+        inner: H,
+        probe: LockProbe,
+    }
+
+    impl<H, Item, Out> CryptographicHasher<Item, Out> for ProbedHasher<H>
+    where
+        H: CryptographicHasher<Item, Out>,
+        Item: Clone,
+    {
+        const LANES: usize = H::LANES;
+
+        fn hash_iter<I>(&self, input: I) -> Out
+        where
+            I: IntoIterator<Item = Item>,
+        {
+            self.probe.assert_lock_free();
+            self.inner.hash_iter(input)
+        }
+
+        fn hash_iter_slices<'a, I>(&self, input: I) -> Out
+        where
+            I: IntoIterator<Item = &'a [Item]>,
+            Item: 'a,
+        {
+            self.probe.assert_lock_free();
+            self.inner.hash_iter_slices(input)
+        }
+
+        fn hash_slice(&self, input: &[Item]) -> Out {
+            self.probe.assert_lock_free();
+            self.inner.hash_slice(input)
+        }
+
+        fn hash_item(&self, input: Item) -> Out {
+            self.probe.assert_lock_free();
+            self.inner.hash_item(input)
+        }
+
+        fn hash_many(&self, input: &[Item], out: &mut [Out]) {
+            self.probe.assert_lock_free();
+            self.inner.hash_many(input, out);
+        }
+    }
+
+    #[test]
+    fn commit_hashes_without_holding_the_rng_lock() {
+        // A rayon worker that waits inside the tree build may run another commit on this MMCS.
+        //
+        // That commit would spin forever if the build ran under the salt lock.
+        //
+        // The leaf hasher runs inside the build, so it checks the lock directly.
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let probe = LockProbe::default();
+        let hash = ProbedHasher {
+            inner: MyHash::new(perm.clone()),
+            probe: probe.clone(),
+        };
+        let mmcs = Arc::new(ProbedMmcs::new(
+            hash,
+            MyCompress::new(perm),
+            0,
+            StdRng::seed_from_u64(0),
+        ));
+        probe.arm(&mmcs, |mmcs| !mmcs.rng.is_locked());
+
+        // Tall enough that the build hashes rows across several rayon tasks.
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 1 << 10, 8);
+        let _ = mmcs.commit(vec![mat]);
+
+        // The check must have run, or the test would pass without probing anything.
+        assert!(probe.hits.load(Ordering::Relaxed) > 0);
+    }
 
     #[test]
     #[should_panic]
