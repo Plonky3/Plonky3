@@ -1823,6 +1823,7 @@ fn the_example_computes_thirty() {
 }
 
 #[test]
+#[ignore = "proves the integer machine at 100-bit security, minutes unoptimized; run from heavy CI"]
 fn sub_slt_and_beq_prove() {
     let witness = witness(&ALU_CHECK, Forgery::Honest);
     let machine = Machine::new(&ALU_CHECK, witness.log_heights.clone());
@@ -1865,6 +1866,7 @@ fn the_honest_run_balances_and_proves_the_same_bytes_twice() {
 }
 
 #[test]
+#[ignore = "proves the integer machine at 100-bit security, minutes unoptimized; run from heavy CI"]
 fn a_stale_register_read_leaves_the_registers_unbalanced() {
     // The second add reads t0 = 0, left before the first add, so a0 ends at 27.
     assert_eq!(execute(&EXAMPLE, Forgery::StaleRead).output.old, 27);
@@ -1872,6 +1874,7 @@ fn a_stale_register_read_leaves_the_registers_unbalanced() {
 }
 
 #[test]
+#[ignore = "proves the integer machine at 100-bit security, minutes unoptimized; run from heavy CI"]
 fn a_load_returning_31_leaves_the_ram_unbalanced() {
     // The store left 30 in cell 0, but the load claims 31.
     assert_eq!(execute(&EXAMPLE, Forgery::LoadReturns31).output.old, 31);
@@ -1879,6 +1882,7 @@ fn a_load_returning_31_leaves_the_ram_unbalanced() {
 }
 
 #[test]
+#[ignore = "proves the integer machine at 100-bit security, minutes unoptimized; run from heavy CI"]
 fn a_product_of_seven_breaks_the_multiplier() {
     // The run is consistent with `2 * 3 = 7`, so only the circuit can refuse it.
     assert_eq!(execute(&EXAMPLE, Forgery::MulClaims7).output.old, 31);
@@ -1886,18 +1890,21 @@ fn a_product_of_seven_breaks_the_multiplier() {
 }
 
 #[test]
+#[ignore = "proves the integer machine at 100-bit security, minutes unoptimized; run from heavy CI"]
 fn a_branch_taken_on_equal_operands_breaks_the_alu() {
     // The branch rule refuses the jump, and the jump's state has no row to pull it.
     assert_refused(Forgery::BranchBack, &["alu"], &[STATE], UNBALANCED);
 }
 
 #[test]
+#[ignore = "proves the integer machine at 100-bit security, minutes unoptimized; run from heavy CI"]
 fn a_false_output_breaks_the_io_pin() {
     // The trace is honest; only the claimed output is wrong.
     assert_refused(Forgery::Output29, &["io"], &[], VIOLATED);
 }
 
 #[test]
+#[ignore = "proves the integer machine at 100-bit security, minutes unoptimized; run from heavy CI"]
 fn the_cost_report_matches_the_proof() {
     let machine = Machine::example();
     let witness = witness(&EXAMPLE, Forgery::Honest);

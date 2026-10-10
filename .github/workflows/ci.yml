@@ -650,3 +650,33 @@ jobs:
         run: >-
           python3 scripts/check.py lint --check fmt
           --packages "${{ needs.plan.outputs.packages }}"
+
+  # rust-cache saves an entry under a new key whenever a manifest changes. A run whose key has no
+  # entry yet restores the newest entry of the same job instead, which keeps the replaced entry
+  # recently used. Past the repository's cache limit, GitHub evicts the least recently used
+  # entries, which are then often current ones.
+  prune_caches:
+    name: Prune replaced caches
+    needs: [build_and_test, check_embedded, check_wasm32_simd128, lint]
+    # Caches are saved from main only, and this job runs once every job of the push has saved.
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      # A key ends in a hash of the manifests. Entries that differ only in that suffix belong to
+      # the same job, and every one but the newest has been replaced.
+      - name: Delete replaced Rust caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh cache list --ref refs/heads/main --key v0-rust- --limit 1000 \
+            --json id,key,createdAt \
+            --jq 'group_by(.key | sub("-[^-]*$"; "")) | .[] | sort_by(.createdAt) | .[:-1][] | "\(.id) \(.key)"' |
+          while read -r id key; do
+            echo "Deleting $key"
+            gh cache delete "$id" || echo "::warning::Could not delete $key"
+          done
