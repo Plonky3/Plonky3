@@ -32,13 +32,13 @@ pub struct LchNtt<F> {
 impl<F: ButterflyField> AdditiveNtt<F> for LchNtt<F> {
     fn shifted_ntt_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
         let width = mat.width();
-        transform::<F, false>(&mut mat.values, width, shift);
+        F::lch_transform::<false>(&mut mat.values, width, shift);
         mat
     }
 
     fn shifted_intt_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
         let width = mat.width();
-        transform::<F, true>(&mut mat.values, width, shift);
+        F::lch_transform::<true>(&mut mat.values, width, shift);
         mat
     }
 
@@ -53,18 +53,24 @@ impl<F: ButterflyField> AdditiveNtt<F> for LchNtt<F> {
         assert!(log_n <= 1 << F::LOG_BITS, "domain exceeds field dimension");
 
         // The zero tail starts where the message ends, which fixes the coset size.
-        transform_cosets(&mut mat.values, width, log_n - log_inv_rate);
+        F::lch_transform_cosets(&mut mat.values, width, log_n - log_inv_rate);
         mat
     }
 }
 
 /// Transform a row-major buffer of `width` columns in place, over the coset `shift + S_l`.
 ///
+/// The network runs in the level's own representation.
+///
 /// # Panics
 ///
 /// - Panics if the row count is not a power of two.
 /// - Panics if the domain dimension exceeds the bit width of the level.
-fn transform<F: ButterflyField, const INVERSE: bool>(values: &mut [F], width: usize, shift: F) {
+pub(crate) fn transform<F: ButterflyField, const INVERSE: bool>(
+    values: &mut [F],
+    width: usize,
+    shift: F,
+) {
     let log_n = log2_strict_usize(values.len() / width);
     assert!(log_n <= 1 << F::LOG_BITS, "domain exceeds field dimension");
     let twiddles = Twiddles::new(log_n, shift);
@@ -104,7 +110,13 @@ fn transform<F: ButterflyField, const INVERSE: bool>(values: &mut [F], width: us
 /// Coset `c` is the message transformed over `domain_point(c * 2^log_message) + S_log_message`.
 ///
 /// The subspace polynomials are linear, so every coset's blocks read the full network's twiddles.
-fn transform_cosets<F: ButterflyField>(values: &mut [F], width: usize, log_message: usize) {
+///
+/// The network runs in the level's own representation.
+pub(crate) fn transform_cosets<F: ButterflyField>(
+    values: &mut [F],
+    width: usize,
+    log_message: usize,
+) {
     let len = width << log_message;
 
     // A coset within one tile is cheap to copy and transform on its own.
@@ -151,6 +163,7 @@ mod tests {
         staged_runs,
     };
     use super::{ButterflyField, LchNtt, Twiddles};
+    use crate::butterfly::{ghash_transform, ghash_transform_cosets};
     use crate::domain::{domain_point, subspace_polynomial};
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
@@ -1253,13 +1266,165 @@ mod tests {
 
         let shift = sample::<BinaryField128>(0x0123_4567_89ab_cdef);
 
-        let tower = LchNtt::<BinaryField128>::default().shifted_ntt_batch(tower_coeffs, shift);
+        // The widest level may run its own transform in the GHASH basis, so the tower side calls the network directly.
+        let mut tower = tower_coeffs.values;
+        super::transform::<BinaryField128, false>(&mut tower, WIDTH, shift);
         let ghash =
             LchNtt::<Ghash128>::default().shifted_ntt_batch(ghash_coeffs, Ghash128::from(shift));
 
         // Converting before or after the transform must give the same values.
-        for (t, g) in tower.values.iter().zip(&ghash.values) {
+        for (t, g) in tower.iter().zip(&ghash.values) {
             assert_eq!(Ghash128::from(*t), *g);
+        }
+    }
+
+    /// Every twiddle of a stage lies in the smallest tower subfield that holds the transform's shift and the domain the stage spans.
+    ///
+    /// The widest level counts the stages whose twiddles can leave the byte map's subfield from this bound, without walking the twiddles.
+    #[test]
+    fn every_twiddle_lies_in_the_subfield_of_its_shift_and_domain() {
+        let bit_len = |x: u128| (u128::BITS - x.leading_zeros()) as usize;
+
+        // The tower subfield of `2^t` bits holds exactly the elements below `2^(2^t)`.
+        let subfield_bits = |log_n: usize, shift: BinaryField128| {
+            log_n.max(bit_len(shift.to_repr())).next_power_of_two()
+        };
+
+        // Every block twiddle of every stage, as the network seeds it, against that stage's bound.
+        let check = |log_n: usize, shift: BinaryField128, stage_bits: &dyn Fn(usize) -> usize| {
+            let twiddles = Twiddles::new(log_n, shift);
+            for stage in 0..log_n {
+                let bits = stage_bits(stage);
+                for block in 0..1usize << (log_n - 1 - stage) {
+                    let t = twiddles.at(stage, block).to_repr();
+                    assert!(
+                        bit_len(t) <= bits,
+                        "log_n={log_n} shift={:#x} stage={stage} block={block}: {t:#x} past {bits} bits",
+                        shift.to_repr()
+                    );
+                }
+            }
+        };
+
+        // Fixture state: no shift, a domain point within a nibble, a 17-bit shift, and one with bits throughout.
+        let shifts = [
+            BinaryField128::ZERO,
+            domain_point::<BinaryField128>(5),
+            BinaryField128::from_repr(0x1_2345),
+            sample::<BinaryField128>(SHIFTS[1]),
+        ];
+        for log_n in 0..=10 {
+            for shift in shifts {
+                // Stage `j` spans `S_(log_n - j)`, and `W_j` keeps the shift within its own subfield.
+                check(log_n, shift, &|stage| subfield_bits(log_n - stage, shift));
+            }
+
+            // The cosets of a padded transform start at domain points below the height, so the height bounds them.
+            //
+            // Stage `j` of a coset reads `W_j` of its start, a domain point below `2^(log_n - j)`.
+            for log_message in 0..=log_n {
+                for c in 0..1usize << (log_n - log_message) {
+                    check(log_message, domain_point(c << log_message), &|stage| {
+                        subfield_bits(log_n - stage, BinaryField128::ZERO)
+                    });
+                }
+            }
+        }
+    }
+
+    /// The widest level's own transform, and its run over `Ghash128`, against its network held in the tower basis.
+    ///
+    /// The level takes the `Ghash128` run only once enough stages hold a wide twiddle, on a build with a carryless multiply.
+    /// So the run is also called directly, which holds it to the tower result at every size.
+    #[test]
+    fn the_widest_level_transforms_as_its_tower_basis_network() {
+        type Transform = fn(&mut [BinaryField128], usize, BinaryField128);
+        let routes: [(&str, Transform, Transform); 2] = [
+            (
+                "level",
+                BinaryField128::lch_transform::<false>,
+                BinaryField128::lch_transform::<true>,
+            ),
+            ("ghash", ghash_transform::<false>, ghash_transform::<true>),
+        ];
+
+        // Fixture state: one row up to sixteen rows, then 2^11 and 2^14 rows.
+        //
+        // - Each tall height has a shape past one tile, so the blocked schedule runs.
+        // - Each also has a shape past the length at which a pool of up to 64 workers splits a change of basis.
+        for log_n in [0, 1, 2, 3, 4, 5, 11, 14] {
+            for width in [1usize, 3, 16] {
+                for shift_bits in SHIFTS {
+                    let shift = sample::<BinaryField128>(shift_bits);
+                    let coeffs = matrix::<BinaryField128>(log_n, width, 21).values;
+
+                    let mut evals = coeffs.clone();
+                    super::transform::<BinaryField128, false>(&mut evals, width, shift);
+
+                    // The inverse of arbitrary values, so it is not checked only as an undo.
+                    let mut expected = coeffs.clone();
+                    super::transform::<BinaryField128, true>(&mut expected, width, shift);
+
+                    for (route, forward, inverse) in routes {
+                        let label =
+                            format!("{route} log_n={log_n} width={width} shift={shift_bits:#x}");
+
+                        let mut actual = coeffs.clone();
+                        forward(&mut actual, width, shift);
+                        assert_eq!(actual, evals, "ntt {label}");
+
+                        let mut actual = coeffs.clone();
+                        inverse(&mut actual, width, shift);
+                        assert_eq!(actual, expected, "intt {label}");
+
+                        // And the inverse of the codeword returns the coefficients.
+                        let mut actual = evals.clone();
+                        inverse(&mut actual, width, shift);
+                        assert_eq!(actual, coeffs, "round trip {label}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The widest level's padded transform, and its run over `Ghash128`, against its network held in the tower basis.
+    ///
+    /// The level takes the `Ghash128` run only once its domain gives enough stages a wide twiddle, on a build with a carryless multiply.
+    /// So the run is also called directly, which holds it to the tower result at every size.
+    #[test]
+    fn the_widest_level_encodes_as_its_tower_basis_network() {
+        type Encode = fn(&mut [BinaryField128], usize, usize);
+        let routes: [(&str, Encode); 2] = [
+            ("level", BinaryField128::lch_transform_cosets),
+            ("ghash", ghash_transform_cosets),
+        ];
+
+        // Fixture state: one tile holds 2^9 rows of 16 columns.
+        //
+        //     log_message 0 ..= 4   tiny cosets, each copied from the message and transformed alone
+        //     log_message 9         a coset of exactly one tile, still copied
+        //     log_message 11        cosets past one tile, which share their first pass
+        assert_eq!(size_of::<BinaryField128>() * (16 << 9), DEEP_TILE_BYTES);
+        let shapes = (0..=4)
+            .flat_map(|log_message| [1usize, 3, 16].map(|width| (width, log_message)))
+            .chain([(16, 9), (16, 11)]);
+        for (width, log_message) in shapes {
+            for log_inv_rate in 0..=3 {
+                let mut padded = matrix::<BinaryField128>(log_message, width, 73).values;
+                padded.resize(padded.len() << log_inv_rate, BinaryField128::ZERO);
+
+                let mut expected = padded.clone();
+                super::transform_cosets::<BinaryField128>(&mut expected, width, log_message);
+
+                for (route, encode) in routes {
+                    let label = format!(
+                        "{route} log_message={log_message} width={width} rate={log_inv_rate}"
+                    );
+                    let mut actual = padded.clone();
+                    encode(&mut actual, width, log_message);
+                    assert_eq!(actual, expected, "{label}");
+                }
+            }
         }
     }
 }

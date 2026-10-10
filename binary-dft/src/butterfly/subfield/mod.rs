@@ -277,6 +277,42 @@ impl SubfieldScaled for BinaryField128 {
     }
 }
 
+/// The bit width of the widest twiddle the butterfly scales byte by byte, in a transform whose rows hold `row_bytes`.
+///
+/// - The register kernel's byte maps cover the one-, two- and four-byte subfields, on whole registers only.
+/// - A run's bytes past its last whole register take the typed product, where only one byte beats a carryless multiply.
+/// - A transform's runs are whole registers exactly when its rows are, so only then do the wider maps count.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "gfni",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+))]
+pub(super) const fn byte_map_twiddle_bits(row_bytes: usize) -> usize {
+    use core::arch::x86_64::__m512i;
+
+    use lanes::ByteRegister;
+
+    if row_bytes.is_multiple_of(<__m512i as ByteRegister>::BYTES) {
+        32
+    } else {
+        8
+    }
+}
+
+/// The bit width of the widest twiddle the butterfly scales byte by byte where the target multiplies carrylessly.
+///
+/// Only the one-byte product beats a carryless multiply, through the NEON byte map or the typed product, whatever the rows hold.
+#[cfg(not(all(
+    target_arch = "x86_64",
+    target_feature = "gfni",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
+pub(super) const fn byte_map_twiddle_bits(_row_bytes: usize) -> usize {
+    8
+}
+
 /// Run the leading whole registers through the byte map the twiddle's subfield allows.
 ///
 /// # Returns
@@ -476,7 +512,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::TwiddleWidth;
+    use super::{TwiddleWidth, byte_map_twiddle_bits};
 
     #[test]
     fn the_classification_follows_the_twiddle_magnitude() {
@@ -500,5 +536,16 @@ mod tests {
         );
         assert_eq!(TwiddleWidth::of(0x1_0000_0000), TwiddleWidth::Wide);
         assert_eq!(TwiddleWidth::of(u128::MAX), TwiddleWidth::Wide);
+    }
+
+    /// A row short of whole registers leaves bytes to the typed product, which only the one-byte subfield keeps cheap.
+    ///
+    /// Only a byte map wider than one byte can count more, and then only on rows of whole registers.
+    #[test]
+    fn a_row_short_of_whole_registers_counts_only_one_byte() {
+        // Fixture: one, two, three and five 16-byte elements, none a whole number of 64-byte registers.
+        for row_bytes in [16, 32, 48, 80] {
+            assert_eq!(byte_map_twiddle_bits(row_bytes), 8, "row_bytes={row_bytes}");
+        }
     }
 }

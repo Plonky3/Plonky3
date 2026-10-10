@@ -1,7 +1,7 @@
 //! The Lin-Chung-Han transform over `GF(2^128)`, carried out in its polynomial basis.
 
 mod plan;
-mod stages;
+pub(crate) mod stages;
 
 use p3_binary_field::{BinaryField128, poly_basis};
 use p3_commit::zero_padded;
@@ -223,7 +223,6 @@ mod tests {
         forward_below, padded_sharing_first_group,
     };
     use crate::domain::{domain_point, subspace_polynomial};
-    use crate::lch::LchNtt;
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
 
@@ -455,6 +454,18 @@ mod tests {
                 .collect(),
             width,
         )
+    }
+
+    /// The forward transform with its data and twiddles held in the tower basis throughout.
+    ///
+    /// `LchNtt` may run the widest level in the polynomial basis, so this calls the network directly.
+    fn tower_ntt(
+        mut mat: RowMajorMatrix<BinaryField128>,
+        shift: BinaryField128,
+    ) -> RowMajorMatrix<BinaryField128> {
+        let width = mat.width;
+        crate::lch::transform::<BinaryField128, false>(&mut mat.values, width, shift);
+        mat
     }
 
     /// One plan per branch of the cut, at every width.
@@ -779,16 +790,15 @@ mod tests {
         // The padded entry point plans one coset and reuses that plan for all of them, so a
         // run length suiting the full height but not the message height shows up here. The
         // tower transform stands in for the oracle, which these message heights are past, and
-        // `crate::lch`'s `check_matches_naive` is what pins it to the oracle.
+        // `crate::lch`'s tests pin it to the oracle.
         let poly = PolyBasisNtt;
-        let tower = LchNtt::<BinaryField128>::default();
         for width in ORACLE_WIDTHS {
             for log_message in [0, 1, 5, 9] {
                 for log_inv_rate in 0..=3 {
                     let mut mat = matrix(log_message, width, 23);
                     mat.values
                         .resize(mat.values.len() << log_inv_rate, BinaryField128::ZERO);
-                    let expected = tower.ntt_batch(mat.clone());
+                    let expected = tower_ntt(mat.clone(), BinaryField128::ZERO);
                     assert_eq!(
                         poly.ntt_batch_padded(mat, log_inv_rate),
                         expected,
@@ -897,7 +907,6 @@ mod tests {
         //
         // Rows of four and sixteen elements fill a cache line, and a single column is staged
         // from `STAGED_WORKERS` up, as it commits.
-        let tower = LchNtt::<BinaryField128>::default();
         for (width, log_message) in [(4, 14), (16, 12), (1, 17)] {
             let plan = Plan::for_workers(width, log_message, STAGED_WORKERS);
             let depth = plan
@@ -908,7 +917,7 @@ mod tests {
                 let mut mat = matrix(log_message, width, 29);
                 mat.values
                     .resize(mat.values.len() << log_inv_rate, BinaryField128::ZERO);
-                let expected = tower.ntt_batch(mat.clone());
+                let expected = tower_ntt(mat.clone(), BinaryField128::ZERO);
 
                 let mut values: Vec<u128> = mat.values.iter().map(|v| v.to_repr()).collect();
                 let message = values[..values.len() >> log_inv_rate].to_vec();
@@ -1071,7 +1080,7 @@ mod tests {
         for width in [1, 3, 16, 64] {
             let mat = matrix(12, width, 29);
             let shift = BinaryField128::from_repr((1 << 127) | 7919);
-            let expected = crate::LchNtt::default().shifted_ntt_batch(mat.clone(), shift);
+            let expected = tower_ntt(mat.clone(), shift);
             let actual = PolyBasisNtt.shifted_ntt_batch(mat.clone(), shift);
             assert_eq!(actual, expected);
             assert_eq!(PolyBasisNtt.shifted_intt_batch(actual, shift), mat);
@@ -1159,13 +1168,12 @@ mod tests {
     fn poly_basis_matches_the_tower_across_several_tasks() {
         // These heights take more than one butterfly task per stage, so a task seeds its
         // twiddle at a block index of its own rather than at zero. Every oracle test sits
-        // below them, so `LchNtt` stands in for the oracle here.
+        // below them, so the tower transform stands in for the oracle here.
         //
-        // An independent twiddle walk holds `LchNtt` itself at these heights, and it keeps its
-        // data in the tower basis and derives its twiddles separately, so it shares no
+        // An independent twiddle walk holds the tower transform itself at these heights, and it
+        // keeps its data in the tower basis and derives its twiddles separately, so it shares no
         // arithmetic with the transform under test.
         let poly = PolyBasisNtt;
-        let tower = LchNtt::<BinaryField128>::default();
         for width in ORACLE_WIDTHS {
             // The tall height is where the plan cuts deepest, and a tower transform of a
             // tall wide matrix is the most expensive thing here, so the narrow widths carry
@@ -1183,7 +1191,7 @@ mod tests {
                         shift_bits.to_le_bytes().into_iter().cycle(),
                     );
 
-                    let evals = tower.shifted_ntt_batch(coeffs.clone(), shift);
+                    let evals = tower_ntt(coeffs.clone(), shift);
                     assert_eq!(
                         poly.shifted_ntt_batch(coeffs.clone(), shift),
                         evals,
