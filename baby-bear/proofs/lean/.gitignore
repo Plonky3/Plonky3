@@ -1,0 +1,16 @@
+/llbc/
+/.lake/
+/aeneas-error.log
+
+# Not hax's defaults: the rest of what extract.sh regenerates, which is not
+# committed (see README.md). Each crate's `Extraction/` is rewritten by hax on
+# every run; the dependency roots and their `Verification/` stubs are hax's
+# create-once files, recreated when missing.
+/*/Extraction/
+/*/Extraction.lean
+/P3Monty31.lean
+/P3Monty31/Verification/
+/P3Mds.lean
+/P3Mds/Verification/
+/.pristine/
+/patches/__pycache__/
