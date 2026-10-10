@@ -121,6 +121,16 @@ where
 {
     type Repr = EF;
 
+    #[inline]
+    fn to_repr(value: EF) -> EF {
+        value
+    }
+
+    #[inline]
+    fn from_repr(value: EF) -> EF {
+        value
+    }
+
     fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
         state
             .round_poly_boolean_tensor()
