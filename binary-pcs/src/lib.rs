@@ -16,11 +16,14 @@ mod packing;
 mod params;
 mod pcs;
 mod proof;
+
 mod prover;
 #[cfg(test)]
 mod security_tests;
 #[cfg(test)]
 pub(crate) mod test_util;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod testing;
 pub mod transcript;
 mod verifier;
 pub mod whir;
