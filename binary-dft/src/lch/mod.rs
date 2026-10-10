@@ -1278,9 +1278,9 @@ mod tests {
         }
     }
 
-    /// Every twiddle of a transform lies in the smallest tower subfield that holds its shift and its domain.
+    /// Every twiddle of a stage lies in the smallest tower subfield that holds the transform's shift and the domain the stage spans.
     ///
-    /// The widest level picks the basis its network runs in from that subfield, without walking the twiddles.
+    /// The widest level counts the stages whose twiddles can leave the byte map's subfield from this bound, without walking the twiddles.
     #[test]
     fn every_twiddle_lies_in_the_subfield_of_its_shift_and_domain() {
         let bit_len = |x: u128| (u128::BITS - x.leading_zeros()) as usize;
@@ -1290,10 +1290,11 @@ mod tests {
             log_n.max(bit_len(shift.to_repr())).next_power_of_two()
         };
 
-        // Every block twiddle of every stage, as the network seeds it.
-        let check = |log_n: usize, shift: BinaryField128, bits: usize| {
+        // Every block twiddle of every stage, as the network seeds it, against that stage's bound.
+        let check = |log_n: usize, shift: BinaryField128, stage_bits: &dyn Fn(usize) -> usize| {
             let twiddles = Twiddles::new(log_n, shift);
             for stage in 0..log_n {
+                let bits = stage_bits(stage);
                 for block in 0..1usize << (log_n - 1 - stage) {
                     let t = twiddles.at(stage, block).to_repr();
                     assert!(
@@ -1314,14 +1315,18 @@ mod tests {
         ];
         for log_n in 0..=10 {
             for shift in shifts {
-                check(log_n, shift, subfield_bits(log_n, shift));
+                // Stage `j` spans `S_(log_n - j)`, and `W_j` keeps the shift within its own subfield.
+                check(log_n, shift, &|stage| subfield_bits(log_n - stage, shift));
             }
 
             // The cosets of a padded transform start at domain points below the height, so the height bounds them.
-            let bits = subfield_bits(log_n, BinaryField128::ZERO);
+            //
+            // Stage `j` of a coset reads `W_j` of its start, a domain point below `2^(log_n - j)`.
             for log_message in 0..=log_n {
                 for c in 0..1usize << (log_n - log_message) {
-                    check(log_message, domain_point(c << log_message), bits);
+                    check(log_message, domain_point(c << log_message), &|stage| {
+                        subfield_bits(log_n - stage, BinaryField128::ZERO)
+                    });
                 }
             }
         }
@@ -1329,7 +1334,7 @@ mod tests {
 
     /// The widest level's own transform, and its run over `Ghash128`, against its network held in the tower basis.
     ///
-    /// The level takes the `Ghash128` run only for a wide twiddle on a build with a carryless multiply.
+    /// The level takes the `Ghash128` run only once enough stages hold a wide twiddle, on a build with a carryless multiply.
     /// So the run is also called directly, which holds it to the tower result at every size.
     #[test]
     fn the_widest_level_transforms_as_its_tower_basis_network() {
@@ -1384,7 +1389,7 @@ mod tests {
 
     /// The widest level's padded transform, and its run over `Ghash128`, against its network held in the tower basis.
     ///
-    /// The level takes the `Ghash128` run only for a wide domain on a build with a carryless multiply.
+    /// The level takes the `Ghash128` run only once its domain gives enough stages a wide twiddle, on a build with a carryless multiply.
     /// So the run is also called directly, which holds it to the tower result at every size.
     #[test]
     fn the_widest_level_encodes_as_its_tower_basis_network() {

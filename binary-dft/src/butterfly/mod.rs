@@ -147,11 +147,11 @@ impl ButterflyField for Poly64 {
     }
 }
 
-// The widest byte-aligned level, whose network runs in the polynomial basis when a twiddle is wider than the byte map covers.
+// The widest byte-aligned level, whose network runs in the polynomial basis when enough stages hold a twiddle wider than the byte map covers.
 //
 // - A tower product by such a twiddle changes basis three times around one carryless product.
 // - Changing the whole buffer once each way costs two changes per element instead.
-// - The byte map scales by a twiddle it covers on every run with no change of basis, so a transform with only those stays put.
+// - The byte map scales by a twiddle it covers on every run with no change of basis, so a transform with only those, or too few stages of the others, stays put.
 // - The change of basis is a field isomorphism that sends the tower Cantor basis to the `Ghash128` one.
 // - So every twiddle and domain point maps to its image, and the network computes the image of the tower result.
 // - Changing that back gives the tower result exactly.
@@ -165,7 +165,7 @@ impl ButterflyField for BinaryField128 {
 
     fn lch_transform<const INVERSE: bool>(values: &mut [Self], width: usize, shift: Self) {
         let log_n = log2_strict_usize(values.len() / width);
-        if HAS_HARDWARE_CLMUL && has_wide_twiddles(width, log_n, shift) {
+        if HAS_HARDWARE_CLMUL && wide_stages_repay_conversion(width, log_n, shift) {
             ghash_transform::<INVERSE>(values, width, shift);
         } else {
             lch::transform::<Self, INVERSE>(values, width, shift);
@@ -175,7 +175,7 @@ impl ButterflyField for BinaryField128 {
     fn lch_transform_cosets(values: &mut [Self], width: usize, log_message: usize) {
         // Each coset's shift is a domain point below the height, so the subspace the height spans holds every coset.
         let log_n = log2_ceil_usize(values.len() / width);
-        if HAS_HARDWARE_CLMUL && has_wide_twiddles(width, log_n, Self::ZERO) {
+        if HAS_HARDWARE_CLMUL && wide_stages_repay_conversion(width, log_n, Self::ZERO) {
             ghash_transform_cosets(values, width, log_message);
         } else {
             lch::transform_cosets::<Self>(values, width, log_message);
@@ -183,17 +183,31 @@ impl ButterflyField for BinaryField128 {
     }
 }
 
-/// Whether a twiddle of the transform over `shift + S_l`, on rows of `width`, can lie past the subfield the byte map covers.
+/// Rows shorter than this many bytes repay the two changes of basis with fewer stages of wide twiddles.
 ///
-/// - Each twiddle is `W_j(shift)` plus a point of `S_l`, with `l = log_n`.
+/// - Measured on Sapphire Rapids, Zen 5 and Graviton4, running the network over `Ghash128` against the tower one.
+/// - On shorter rows the `Ghash128` route wins once one stage holds a wide twiddle.
+/// - On rows of this size and up it needs two.
+const SHORT_ROW_BYTES: usize = 64;
+
+/// Whether enough stages of the transform over `shift + S_l`, on rows of `width`, hold a twiddle past the byte map to repay the two changes of basis.
+///
+/// - Each twiddle of stage `j` is `W_j(shift)` plus a point of `S_(l - j)`, with `l = log_n`.
 /// - The first `2^t` Cantor basis vectors span the tower subfield of `2^t` bits, which each `W_j` maps into itself.
-/// - So every twiddle lies in the smallest tower subfield that holds both the shift and `S_l`.
-///
-/// That subfield fits within the byte map's exactly when both the shift and `S_l` do.
+/// - So a shift within the byte map's subfield leaves wide twiddles in the first `l - bits` stages only.
+/// - A shift past it keeps stage `j` wide while `W_j(shift)` is.
+/// - That is every stage for a shift of full width and fewer for one just past the byte map, so counting all of them overcounts only the latter.
 #[inline]
-fn has_wide_twiddles(width: usize, log_n: usize, shift: BinaryField128) -> bool {
-    let bits = byte_map_twiddle_bits(width * size_of::<BinaryField128>());
-    log_n > bits || shift.to_repr() >> bits != 0
+fn wide_stages_repay_conversion(width: usize, log_n: usize, shift: BinaryField128) -> bool {
+    let row_bytes = width * size_of::<BinaryField128>();
+    let bits = byte_map_twiddle_bits(row_bytes);
+    let wide_stages = if shift.to_repr() >> bits != 0 {
+        log_n
+    } else {
+        log_n.saturating_sub(bits)
+    };
+    let needed = if row_bytes < SHORT_ROW_BYTES { 1 } else { 2 };
+    wide_stages >= needed
 }
 
 /// The widest level's transform, with its network run over `Ghash128` between two changes of basis.
@@ -246,7 +260,7 @@ mod tests {
 
     use super::{
         BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, ButterflyField,
-        Ghash128, Poly64,
+        Ghash128, Poly64, byte_map_twiddle_bits, wide_stages_repay_conversion,
     };
 
     /// The twiddles a random search is unlikely to reach.
@@ -403,6 +417,33 @@ mod tests {
         let mut lo = [BinaryField32::ONE; 4];
         let mut hi = [BinaryField32::ONE; 3];
         BinaryField32::butterfly::<false>(&mut lo, &mut hi, BinaryField32::ONE);
+    }
+
+    /// The `Ghash128` route waits for two stages of wide twiddles on rows of 64 bytes and up, and for one below that.
+    ///
+    /// A single wide stage on such rows leaves the route slower than the tower network, so taking it there would regress those shapes.
+    #[test]
+    fn rows_of_64_bytes_and_up_need_two_wide_stages_for_the_ghash_route() {
+        // A shift of full width widens every stage, and the zero shift widens only the stages past the byte map's span.
+        let full = BinaryField128::from_repr(1 << 127);
+
+        // Fixture: rows of one and three elements fall short of 64 bytes, rows of four and sixteen reach it.
+        for (width, needed) in [(1, 1), (3, 1), (4, 2), (16, 2)] {
+            let bits = byte_map_twiddle_bits(width * size_of::<BinaryField128>());
+            for stages in 0..=3 {
+                let want = stages >= needed;
+                assert_eq!(
+                    wide_stages_repay_conversion(width, bits + stages, BinaryField128::ZERO),
+                    want,
+                    "width={width}, unshifted, wide stages={stages}"
+                );
+                assert_eq!(
+                    wide_stages_repay_conversion(width, stages, full),
+                    want,
+                    "width={width}, shifted, wide stages={stages}"
+                );
+            }
+        }
     }
 
     proptest! {
