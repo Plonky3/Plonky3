@@ -180,9 +180,8 @@ fn karatsuba<R: Register128>(a: &[u64; 3], b: &[u64; 3]) -> Unreduced<R> {
 /// Nine products `c_ij = a_i b_j`, straight from the loaded registers:
 ///
 /// ```text
-///     t    =  c_12 + c_21                        the y^3 term, folded twice
-///     r_0  =  c_00 + t
-///     r_1  =  c_01 + c_10 + c_22 + t
+///     r_0  =  c_00 + c_12 + c_21
+///     r_1  =  c_01 + c_10 + c_12 + c_21 + c_22
 ///     r_2  =  c_02 + c_11 + c_20 + c_22
 /// ```
 #[inline(always)]
@@ -208,11 +207,10 @@ fn schoolbook<R: Register128>(a: &[u64; 3], b: &[u64; 3]) -> Unreduced<R> {
     let c22 = third_a.clmul::<LOW_BY_LOW>(third_b);
 
     // y^3 = y + 1 and y^4 = y^2 + y, applied to the five degrees in y.
-    let t = c12.xor(c21);
     Unreduced([
-        c00.xor(t),
-        c01.xor3(c10, c22).xor(t),
-        c02.xor3(c11, c20).xor(c22),
+        c00.xor3(c12, c21),
+        c01.xor3(c10, c12.xor3(c21, c22)),
+        c02.xor3(c11, c20.xor(c22)),
     ])
 }
 
