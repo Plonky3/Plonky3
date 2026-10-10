@@ -21,6 +21,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUSTFLAGS: -C debuginfo=0
+  # rustc 1.101.0-nightly 32dba69d6 (2026-10-09) panics while type-checking p3-binary-field.
+  MIRI_TOOLCHAIN: nightly-2026-10-09
 
 jobs:
   plan:
@@ -387,12 +389,13 @@ jobs:
       #
       # Where the leg also sets PCLMULQDQ, the repeated-squaring kernel's basis test runs too.
       # The map is linear, so agreeing on the 64 basis vectors settles every input.
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         if: >-
           needs.plan.outputs.rust == 'true' &&
           matrix.gfni &&
           needs.plan.outputs.gfni == 'true'
         with:
+          toolchain: ${{ env.MIRI_TOOLCHAIN }}
           components: miri
 
       - name: Interpret binary-field (x86-64 GFNI)
@@ -403,10 +406,10 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
         run: |
-          cargo +nightly miri test --package p3-binary-field --lib \
+          cargo "+$MIRI_TOOLCHAIN" miri test --package p3-binary-field --lib \
             aes::packed::tests::every_width_agrees_with_the_scalar_routines_at_the_corners
           if grep -q pclmulqdq <<< "${{ matrix.features }}"; then
-            cargo +nightly miri test --package p3-binary-field --lib \
+            cargo "+$MIRI_TOOLCHAIN" miri test --package p3-binary-field --lib \
               clmul::x86_64::gfni::tests::the_matrix_product_is_exact_on_the_basis
           fi
 
@@ -419,12 +422,13 @@ jobs:
       # The proptests around them take minutes under interpretation, so they stay out.
       #
       # The `avx512vl` leg stays out too: the interpreter has no shim for its ternary logic op.
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         if: >-
           needs.plan.outputs.rust == 'true' &&
           matrix.miri_clmul &&
           needs.plan.outputs.gfni == 'true'
         with:
+          toolchain: ${{ env.MIRI_TOOLCHAIN }}
           components: miri
 
       - name: Interpret binary-field (x86-64 VPCLMULQDQ)
@@ -435,7 +439,7 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
         run: |
-          cargo +nightly miri test --package p3-binary-field --lib -- --exact \
+          cargo "+$MIRI_TOOLCHAIN" miri test --package p3-binary-field --lib -- --exact \
             packed::x86_64::ghash128::tests::the_register_matches_the_scalar_model_at_the_corners \
             packed::x86_64::ghash128::tests::bool_check_matches_the_general_product_in_every_lane \
             packed::x86_64::ghash128::tests::packed_field_tests::test_interleaves \
@@ -458,12 +462,13 @@ jobs:
       # The 512-bit arm stays build-only, since the interpreter has no shim for its ternary logic.
       #
       # One deterministic corner sweep rather than the module, as the proptests take minutes under interpretation.
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         if: >-
           needs.plan.outputs.rust == 'true' &&
           matrix.vpclmulqdq &&
           needs.plan.outputs.vpclmulqdq == 'true'
         with:
+          toolchain: ${{ env.MIRI_TOOLCHAIN }}
           components: miri
 
       - name: Interpret binary-dft (x86-64 AVX2 VPCLMULQDQ)
@@ -474,7 +479,7 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
         run: |
-          cargo +nightly miri test --package p3-binary-dft --lib \
+          cargo "+$MIRI_TOOLCHAIN" miri test --package p3-binary-dft --lib \
             butterfly::tests::the_polynomial_basis_level_agrees_with_the_element_loop_at_the_corners
 
   check_embedded:
