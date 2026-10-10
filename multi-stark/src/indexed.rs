@@ -131,6 +131,29 @@ impl IndexedPlan {
             .iter()
             .map(|&air| IndexedLookups::from_air::<F, EF, _>(air))
             .collect::<Result<Vec<_>, _>>()?;
+        Self::from_declared::<F>(&declared, num_variables)
+    }
+
+    /// Resolve declarations already extracted from each AIR of the batch, in caller order.
+    ///
+    /// Everything `build` does after its symbolic pass, for a caller that already ran it.
+    ///
+    /// # Errors
+    ///
+    /// The same as building the plan, except the column check, which extraction already ran.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the declarations and the trace heights disagree on length.
+    pub(crate) fn from_declared<F: Field>(
+        declared: &[IndexedLookups],
+        num_variables: &[usize],
+    ) -> Result<Option<Self>, IndexedLookupError> {
+        assert_eq!(
+            declared.len(),
+            num_variables.len(),
+            "every AIR must carry a trace height"
+        );
 
         if declared.iter().all(IndexedLookups::is_empty) {
             return Ok(None);

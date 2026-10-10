@@ -32,7 +32,7 @@ use crate::subfield::{SubfieldAcc, SubfieldVar};
 mod private {
     use alloc::vec::Vec;
 
-    use p3_field::{ExtensionField, Field};
+    use p3_field::{Algebra, ExtensionField, Field};
     use p3_multilinear_util::poly::Poly;
 
     use crate::rounds::{AirOpenings, RoundStateBase, RoundStateExt};
@@ -45,7 +45,13 @@ mod private {
     #[expect(private_interfaces)]
     pub trait Dispatch<F: Field, EF: ExtensionField<F>, A> {
         /// The field a folded stage computes its rounds in, isomorphic to the challenge field.
-        type Repr;
+        type Repr: Field + Algebra<F>;
+
+        /// Carry a challenge-field value into the representation field.
+        fn to_repr(value: EF) -> Self::Repr;
+
+        /// Carry a representation-field value back into the challenge field.
+        fn from_repr(value: Self::Repr) -> EF;
 
         /// Evaluate the first round polynomial of a newly activated stage.
         fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF>;
@@ -105,6 +111,16 @@ where
     EF::ExtensionPacking: From<EF> + From<F::Packing>,
 {
     type Repr = EF;
+
+    #[inline]
+    fn to_repr(value: EF) -> EF {
+        value
+    }
+
+    #[inline]
+    fn from_repr(value: EF) -> EF {
+        value
+    }
 
     fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
         state.round_poly(eq_suffix)
@@ -181,6 +197,16 @@ where
 {
     type Repr = EF;
 
+    #[inline]
+    fn to_repr(value: EF) -> EF {
+        value
+    }
+
+    #[inline]
+    fn from_repr(value: EF) -> EF {
+        value
+    }
+
     fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
         state
             .round_poly_sliced::<S, EF>(eq_suffix)
@@ -248,6 +274,7 @@ where
 /// In a stage that fits `S`, every pair of cells folds into `R` through two table lookups.
 /// Any other stage converts each cell pair and folds it with a product in `R`.
 /// A stage declaring a lookup runs its later rounds in `R` like any other.
+/// The bus family computes all of its rounds in `R`.
 ///
 /// `R::from` and `EF::from` must be mutually inverse field isomorphisms, and `R`'s embedding of
 /// the trace field must be the challenge field's followed by `R::from`. The interpolation steps
@@ -277,6 +304,16 @@ where
     EF::ExtensionPacking: From<EF> + From<F::Packing>,
 {
     type Repr = R;
+
+    #[inline]
+    fn to_repr(value: EF) -> R {
+        R::from(value)
+    }
+
+    #[inline]
+    fn from_repr(value: R) -> EF {
+        EF::from(value)
+    }
 
     fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
         let strategy = if LATE_MATERIALIZATION {

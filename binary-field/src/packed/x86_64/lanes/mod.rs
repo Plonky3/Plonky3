@@ -202,3 +202,55 @@ impl Lanes64 for avx2::Reg {
         avx2::shuffle_bytes(table, avx2::shr_64::<60>(self))
     }
 }
+
+// The 512-bit register as a second backend of the `GF(2^64)` algebra.
+//
+// The packings stay 256 bits wide, so no packed value lives here.
+//
+// A sum of products joins two 256-bit terms into one register, so each multiply serves both.
+//
+// Its halves fold back to 256 bits before the reduction, so the unpacks and shifts here only complete the trait.
+//
+// Three-way sums keep the default two exclusive ors.
+//
+// The compiler fuses them into one ternary logic op, and the interpreter the tests run under has no shim for that op.
+#[cfg(all(
+    target_feature = "avx512f",
+    not(all(feature = "wide-poly", target_feature = "avx512bw"))
+))]
+impl Lanes64 for avx512::Reg {
+    #[inline(always)]
+    fn zero() -> Self {
+        avx512::zero()
+    }
+
+    #[inline(always)]
+    fn xor(self, other: Self) -> Self {
+        avx512::xor(self, other)
+    }
+
+    #[inline(always)]
+    fn clmul<const IMM: i32>(self, other: Self) -> Self {
+        avx512::clmul::<IMM>(self, other)
+    }
+
+    #[inline(always)]
+    fn unpack_low(self, other: Self) -> Self {
+        avx512::unpack_low_64(self, other)
+    }
+
+    #[inline(always)]
+    fn unpack_high(self, other: Self) -> Self {
+        avx512::unpack_high_64(self, other)
+    }
+
+    #[inline(always)]
+    fn shl<const N: i32>(self) -> Self {
+        avx512::shl_64::<N>(self)
+    }
+
+    #[inline(always)]
+    fn shr<const N: i32>(self) -> Self {
+        avx512::shr_64::<N>(self)
+    }
+}

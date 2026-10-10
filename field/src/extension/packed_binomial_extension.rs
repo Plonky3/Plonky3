@@ -68,6 +68,9 @@ impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize>
 impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize> Algebra<PF>
     for PackedBinomialExtensionField<F, PF, D>
 {
+    // A blocked combination groups as many terms as the base packing reduces at once.
+    const BATCHED_LC_CHUNK: usize = PF::DOT_PRODUCT_BLOCK;
+
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[PF; N]) -> Self {
         Self::new(coordinatewise_dot_product(
