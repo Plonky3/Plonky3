@@ -10,7 +10,7 @@ mod subfield;
 
 use p3_binary_field::{
     BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
-    BinaryField128, Gf2, Ghash128, Poly64, TowerLevel,
+    BinaryField128, Gf2, Ghash128, Poly64, Rijndael8b, TowerLevel,
 };
 use p3_field::{PackedValue, PrimeCharacteristicRing};
 use subfield::coordinate_butterfly;
@@ -104,7 +104,7 @@ macro_rules! impl_butterfly_field {
 impl_butterfly_field!(coordinate_butterfly: BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128);
 
 // The sub-byte levels and the GHASH basis, which only have their packing.
-impl_butterfly_field!(plain_butterfly: Gf2, BinaryField2, BinaryField4, Ghash128);
+impl_butterfly_field!(plain_butterfly: Gf2, BinaryField2, BinaryField4, Ghash128, Rijndael8b);
 
 impl ButterflyField for Poly64 {
     #[inline]
