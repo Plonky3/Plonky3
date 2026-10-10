@@ -16,6 +16,19 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use core::ptr;
 
 use num_bigint::BigUint;
+#[cfg(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
+))]
+use p3_field::PackedValue;
 use p3_field::extension::HasFrobenius;
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_methods, impl_sub_assign,
@@ -109,14 +122,14 @@ impl Poly192 {
 
     /// The coordinates as raw bit patterns, borrowed in place.
     #[inline]
-    const fn limbs(&self) -> &[u64; DEGREE] {
+    pub(crate) const fn limbs(&self) -> &[u64; DEGREE] {
         // SAFETY: `Poly64` is `repr(transparent)` over `u64`, so the arrays share one layout.
         unsafe { &*ptr::from_ref(&self.0).cast() }
     }
 
     /// The element with the given raw coordinates.
     #[inline]
-    const fn from_limbs([a0, a1, a2]: [u64; DEGREE]) -> Self {
+    pub(crate) const fn from_limbs([a0, a1, a2]: [u64; DEGREE]) -> Self {
         // Every bit pattern is an element, so the coordinates wrap as they are.
         Self([Poly64::new(a0), Poly64::new(a1), Poly64::new(a2)])
     }
@@ -429,7 +442,25 @@ impl Algebra<Poly64> for Poly192 {
     /// Three products per term and one reduction per coordinate for the whole sum.
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Poly64; N]) -> Self {
-        // Three carryless products per term, three reductions for the whole sum.
+        #[cfg(any(
+            all(
+                target_arch = "x86_64",
+                target_feature = "vpclmulqdq",
+                any(target_feature = "avx2", target_feature = "avx512f")
+            ),
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes"
+            )
+        ))]
+        {
+            // Short arrays keep the scalar schedule; full groups fill the packed multiplier.
+            if N >= <Poly64 as Field>::Packing::WIDTH {
+                return crate::PackedPoly192::mixed_dot_scalar(a, f);
+            }
+        }
+        // Scalar arrays and the portable backend defer reduction through the existing dot kernel.
         Self::from_limbs(clmul::poly_dot_192_by_64(
             a.iter().zip(f).map(|(x, k)| (x.limbs(), k.as_bits())),
         ))
@@ -879,12 +910,19 @@ mod tests {
         }
 
         #[test]
-        fn the_mixed_dot_product_matches_the_sum_of_products(a: [[u64; 3]; 5], f: [u64; 5]) {
+        fn the_mixed_dot_product_matches_the_sum_of_products(a: [[u64; 3]; 17], f: [u64; 17]) {
             // The empty sum, a single term, and sums long enough to defer the reduction.
             check_mixed_dot_product::<0>(&a, &f);
             check_mixed_dot_product::<1>(&a, &f);
             check_mixed_dot_product::<2>(&a, &f);
+            check_mixed_dot_product::<3>(&a, &f);
+            check_mixed_dot_product::<4>(&a, &f);
             check_mixed_dot_product::<5>(&a, &f);
+            check_mixed_dot_product::<7>(&a, &f);
+            check_mixed_dot_product::<8>(&a, &f);
+            check_mixed_dot_product::<9>(&a, &f);
+            check_mixed_dot_product::<16>(&a, &f);
+            check_mixed_dot_product::<17>(&a, &f);
         }
 
         /// Scaling by a coefficient must agree with embedding the scalar first.

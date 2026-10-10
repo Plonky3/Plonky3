@@ -231,7 +231,7 @@ fn clmul_128x128(a: u128, b: u128) -> (u128, u128) {
 ///
 /// `g` is linear and the spill has degree at most 3, so both folds are one `g` of a sum.
 #[inline]
-const fn reduce_64(product: u128) -> u64 {
+pub(crate) const fn reduce_64(product: u128) -> u64 {
     let low = product as u64;
     let high = (product >> 64) as u64;
 
