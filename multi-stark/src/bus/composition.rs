@@ -11,14 +11,18 @@
 //!
 //! The first challenge that binds one of its table's row variables folds it in half.
 //! A shorter table therefore stays in place while it is dormant.
-//! The fold is a half-height challenge-field polynomial.
+//! The fold is a half-height polynomial over the representation field.
 //!
 //! Row selectors are never materialized; their closed form tracks the bound row variables.
+//!
+//! Every value is computed in the zerocheck backend's representation field `R`, which is
+//! isomorphic to the challenge field. Challenges cross into `R` once and round polynomials
+//! cross back once, so the composition is the one computed in the challenge field.
 
 use alloc::vec::Vec;
 
 use p3_bus::{BusDirection, BusEvaluation, BusReductionOutput};
-use p3_field::{ExtensionField, Field};
+use p3_field::{Algebra, ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -29,31 +33,35 @@ use crate::bus::BusContext;
 use crate::selectors::BoundaryEvals;
 
 /// Prover state for the mixed-height bus composition polynomial.
-pub(crate) struct BusCompositionProver<'a, F: Field, EF: ExtensionField<F>> {
+pub(crate) struct BusCompositionProver<'a, F: Field, EF: ExtensionField<F>, R> {
     /// Checked declarations and physical layout used by every evaluation.
     context: &'a BusContext<F, EF>,
     /// Tuple equality coefficients sampled after commitment.
-    fingerprint_weights: Vec<EF>,
+    fingerprint_weights: Vec<R>,
     /// Random tuple-fingerprint shift.
-    offset: EF,
+    offset: R,
     /// Source columns and selectors grouped once per AIR.
-    airs: Vec<AirState<'a, F, EF>>,
+    airs: Vec<AirState<'a, F, R>>,
     /// Maximum round degree, derived once from the public plan.
     degree: usize,
     /// Number of global variables already bound.
     round: usize,
+    /// The challenge field's isomorphism into the representation field.
+    to_repr: fn(EF) -> R,
+    /// The representation field's isomorphism back into the challenge field.
+    from_repr: fn(R) -> EF,
 }
 
 /// One bus term evaluated from an AIR's shared folded columns.
-struct CompositionTerm<EF> {
+struct CompositionTerm<R> {
     /// Coordinates of the symbolic declaration in the bus context.
     owner: p3_bus::BusBlockOwner,
     /// Named bus selecting the tuple-domain slots.
     bus: usize,
     /// Fixed coefficient from direction batching and ProductGKR block selection.
-    coefficient: EF,
+    coefficient: R,
     /// Cube sum of the unweighted row composition before this AIR activates.
-    row_claim: EF,
+    row_claim: R,
 }
 
 /// One source multilinear, read in place until one of its row variables is bound, then folded.
@@ -73,7 +81,7 @@ enum Source<'a, F: Field, EF> {
     Folded(Poly<EF>),
 }
 
-impl<F: Field, EF: ExtensionField<F>> Source<'_, F, EF> {
+impl<F: Field, EF: Field + Algebra<F>> Source<'_, F, EF> {
     /// The value at `row` of the current hypercube.
     #[inline]
     fn at(&self, row: usize) -> EF {
@@ -104,7 +112,7 @@ impl<F: Field, EF: ExtensionField<F>> Source<'_, F, EF> {
         }
     }
 
-    /// Binds the leading row variable, moving a column read in place into the challenge field.
+    /// Binds the leading row variable, moving a column read in place into `EF`.
     fn fold(&mut self, challenge: EF) {
         let folded = match self {
             Self::Committed(column) => {
@@ -128,7 +136,7 @@ impl<F: Field, EF: ExtensionField<F>> Source<'_, F, EF> {
 fn fold_in_half<F, EF>(half: usize, challenge: EF, cell: impl Fn(usize) -> F + Sync) -> Poly<EF>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    EF: Field + Algebra<F>,
 {
     // One item reads a pair of column cells and writes one folded entry.
     Poly::new((0..half).into_par_iter().map_collect_min_task_bytes(
@@ -141,46 +149,46 @@ where
 }
 
 /// Source multilinears shared by every bus term owned by one AIR.
-struct AirState<'a, F: Field, EF: ExtensionField<F>> {
+struct AirState<'a, F: Field, R> {
     /// Sources of the main columns this AIR's declarations read.
-    main: Vec<Source<'a, F, EF>>,
+    main: Vec<Source<'a, F, R>>,
     /// Column index of each of those, and the declared width they are placed into.
     main_layout: (Vec<usize>, usize),
     /// Sources of the preprocessed columns this AIR's declarations read.
-    preprocessed: Vec<Source<'a, F, EF>>,
+    preprocessed: Vec<Source<'a, F, R>>,
     /// Column index of each of those, and the declared width they are placed into.
     preprocessed_layout: (Vec<usize>, usize),
     /// Sources of the periodic columns this AIR's declarations read.
-    periodic: Vec<Source<'a, F, EF>>,
+    periodic: Vec<Source<'a, F, R>>,
     /// Column index of each of those, and the declared width they are placed into.
     periodic_layout: (Vec<usize>, usize),
     /// Folded boundary-selector values at the bound row variables.
-    boundary: BoundaryEvals<EF>,
+    boundary: BoundaryEvals<R>,
     /// Equality polynomial anchored at the ProductGKR row point.
-    equality: Poly<EF>,
+    equality: Poly<R>,
     /// Bus terms emitted by this AIR.
-    terms: Vec<CompositionTerm<EF>>,
+    terms: Vec<CompositionTerm<R>>,
     /// Number of global prefix variables absent from this AIR table.
     unused_prefix: usize,
     /// Evaluation of the fixed all-one-vertex selector on bound prefix coordinates.
-    prefix_evaluation: EF,
+    prefix_evaluation: R,
     /// Public inputs read by this block's symbolic expressions.
     public_values: Vec<F>,
 }
 
-impl<F, EF> AirState<'_, F, EF>
+impl<F, R> AirState<'_, F, R>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    R: Field + Algebra<F>,
 {
     /// Compute every term's initial cube sum in one pass over the shared AIR columns.
     ///
     /// The result is read only while the global prefix is still ahead of this table.
-    fn initialize_claims(
+    fn initialize_claims<EF: ExtensionField<F>>(
         &mut self,
         context: &BusContext<F, EF>,
-        fingerprint_weights: &[EF],
-        offset: EF,
+        fingerprint_weights: &[R],
+        offset: R,
     ) {
         let height = self.equality.as_slice().len();
 
@@ -215,10 +223,10 @@ where
             .par_fold_reduce(
                 || {
                     (
-                        EF::zero_vec(factors.len()),
-                        EF::zero_vec(main_width),
-                        EF::zero_vec(fixed_width),
-                        EF::zero_vec(periodic_width),
+                        R::zero_vec(factors.len()),
+                        R::zero_vec(main_width),
+                        R::zero_vec(fixed_width),
+                        R::zero_vec(periodic_width),
                         Vec::new(),
                     )
                 },
@@ -246,9 +254,9 @@ where
                     let weight = equality.as_slice()[row];
                     for (claim, factor) in claims.iter_mut().zip(&factors) {
                         let value = factor
-                            .evaluate::<EF>(&mut scratch, evaluation)
+                            .evaluate::<R>(&mut scratch, evaluation)
                             .expect("a planned expression resolves against its owning table");
-                        *claim += weight * (value - EF::ONE);
+                        *claim += weight * (value - R::ONE);
                     }
                     (claims, main, preprocessed, periodic, scratch)
                 },
@@ -267,10 +275,11 @@ where
     }
 }
 
-impl<'a, F, EF> BusCompositionProver<'a, F, EF>
+impl<'a, F, EF, R> BusCompositionProver<'a, F, EF, R>
 where
     F: Field,
     EF: ExtensionField<F>,
+    R: Field + Algebra<F>,
 {
     /// Build the formal polynomial whose cube sum must equal the ProductGKR claims.
     ///
@@ -278,6 +287,8 @@ where
     ///
     /// - `num_variables`: width of the shared cube, at least the tallest bus table.
     /// - `periodic`: the period vectors [`BusContext::period_vectors`] returns.
+    /// - `to_repr`, `from_repr`: mutually inverse field isomorphisms between the challenge
+    ///   field and the representation field, agreeing on the trace field.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         context: &'a BusContext<F, EF>,
@@ -288,9 +299,23 @@ where
         public_values: &[&[F]],
         direction_challenge: EF,
         num_variables: usize,
+        to_repr: fn(EF) -> R,
+        from_repr: fn(R) -> EF,
     ) -> Self {
         debug_assert!(num_variables >= context.max_num_variables());
-        let weights = output.challenges.fingerprint_weights();
+        // Sources, public values and plan constants enter `R` through its own embedding of `F`.
+        debug_assert!(
+            R::from(F::GENERATOR) == to_repr(EF::from(F::GENERATOR))
+                && from_repr(to_repr(EF::GENERATOR)) == EF::GENERATOR,
+            "the representation field must embed the trace field through the challenge field"
+        );
+        let weights: Vec<R> = output
+            .challenges
+            .fingerprint_weights()
+            .into_iter()
+            .map(to_repr)
+            .collect();
+        let offset = to_repr(output.challenges.offset);
         let mut airs = (0..tables.len()).map(|_| None).collect::<Vec<_>>();
 
         for direction in BusDirection::ALL {
@@ -304,7 +329,7 @@ where
                 let block_weight = share
                     .prefix_weight(&output.product.point)
                     .expect("a planned share addresses its own product-tree point");
-                let coefficient = direction_weight * block_weight;
+                let coefficient = to_repr(direction_weight * block_weight);
                 let state = airs[air].get_or_insert_with(|| {
                     // Column views read a packed Boolean table without expanding it first.
                     // Only the columns a declaration reads are kept, and they are read in place.
@@ -348,10 +373,13 @@ where
                         periodic_layout: (periodic_columns.to_vec(), periodic_width),
                         // No row variable is bound yet, so both prefix products are empty.
                         boundary: BoundaryEvals::at(&[]),
-                        equality: Poly::new(Point::new(row_point).equality_weights_msb()),
+                        equality: Poly::new(
+                            Point::new(row_point.iter().copied().map(to_repr).collect::<Vec<_>>())
+                                .equality_weights_msb(),
+                        ),
                         terms: Vec::new(),
                         unused_prefix: num_variables - share.row_variables,
-                        prefix_evaluation: EF::ONE,
+                        prefix_evaluation: R::ONE,
                         public_values: public_values[air].to_vec(),
                     }
                 });
@@ -365,7 +393,7 @@ where
                     owner: share.owner,
                     bus: share.bus,
                     coefficient,
-                    row_claim: EF::ZERO,
+                    row_claim: R::ZERO,
                 });
             }
         }
@@ -376,20 +404,22 @@ where
             .flatten()
             .filter(|air| air.unused_prefix > 0)
         {
-            air.initialize_claims(context, &weights, output.challenges.offset);
+            air.initialize_claims(context, &weights, offset);
         }
 
         Self {
             context,
             fingerprint_weights: weights,
-            offset: output.challenges.offset,
+            offset,
             airs: airs.into_iter().flatten().collect(),
             degree: context.composition_degree(),
             round: 0,
+            to_repr,
+            from_repr,
         }
     }
 
-    fn evaluate_air(&self, air: &AirState<'_, F, EF>, node: EF) -> EF {
+    fn evaluate_air(&self, air: &AirState<'_, F, R>, node: R) -> R {
         // Slot placement is settled once per term, outside the row loop below.
         let factors = air
             .terms
@@ -417,9 +447,9 @@ where
             .map_init(
                 || {
                     (
-                        EF::zero_vec(air.main_layout.1),
-                        EF::zero_vec(air.preprocessed_layout.1),
-                        EF::zero_vec(air.periodic_layout.1),
+                        R::zero_vec(air.main_layout.1),
+                        R::zero_vec(air.preprocessed_layout.1),
+                        R::zero_vec(air.periodic_layout.1),
                         Vec::new(),
                     )
                 },
@@ -452,23 +482,25 @@ where
                         .zip(&factors)
                         .map(|(term, factor)| {
                             let value = factor
-                                .evaluate::<EF>(scratch, evaluation)
+                                .evaluate::<R>(scratch, evaluation)
                                 .expect("a planned expression resolves against its folded table");
-                            term.coefficient * equality * (value - EF::ONE)
+                            term.coefficient * equality * (value - R::ONE)
                         })
-                        .sum::<EF>()
+                        .sum::<R>()
                 },
             )
             .sum()
     }
 }
 
-impl<F, EF> RoundProver<EF> for BusCompositionProver<'_, F, EF>
+impl<F, EF, R> RoundProver<EF> for BusCompositionProver<'_, F, EF, R>
 where
     F: Field,
     EF: ExtensionField<F>,
+    R: Field + Algebra<F>,
 {
     fn fold(&mut self, challenge: EF) {
+        let challenge = (self.to_repr)(challenge);
         // Dormant blocks evaluate one more coordinate of χ_k at the all-one vertex.
         for air in &mut self.airs {
             if self.round < air.unused_prefix {
@@ -494,7 +526,9 @@ where
         (0..self.degree)
             .map(RoundPolyInterpolator::<EF>::transmitted_node)
             .map(|node| {
-                self.airs
+                let node = (self.to_repr)(node);
+                let sum = self
+                    .airs
                     .iter()
                     .map(|air| {
                         let body = if self.round < air.unused_prefix {
@@ -503,14 +537,15 @@ where
                                 .terms
                                 .iter()
                                 .map(|term| term.coefficient * term.row_claim)
-                                .sum::<EF>()
+                                .sum::<R>()
                         } else {
                             // Active terms share one interpolation of their AIR columns.
                             self.evaluate_air(air, node)
                         };
                         air.prefix_evaluation * body
                     })
-                    .sum()
+                    .sum();
+                (self.from_repr)(sum)
             })
             .collect()
     }
@@ -524,10 +559,10 @@ mod tests {
     use p3_air::symbolic::AirLayout;
     use p3_air::{Air, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
-    use p3_binary_field::BinaryField128;
+    use p3_binary_field::{BinaryField128, Ghash128};
     use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName, BusSymbolicBuilder};
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
+    use p3_field::{Algebra, Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::generic_degree::RoundPolyInterpolator;
@@ -597,7 +632,7 @@ mod tests {
         rng: &mut SmallRng,
     ) where
         F: Field,
-        EF: ExtensionField<F>,
+        EF: Field + Algebra<F>,
         StandardUniform: Distribution<EF>,
     {
         let height = cells.len();
@@ -666,7 +701,7 @@ mod tests {
     fn assert_sources_fold_like_dense<F, EF>(rng: &mut SmallRng)
     where
         F: Field,
-        EF: ExtensionField<F>,
+        EF: Field + Algebra<F>,
         StandardUniform: Distribution<F> + Distribution<EF>,
     {
         for log_height in 0..=7 {
@@ -710,5 +745,7 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(0xB05);
         assert_sources_fold_like_dense::<BinaryField128, BinaryField128>(&mut rng);
         assert_sources_fold_like_dense::<BabyBear, BinomialExtensionField<BabyBear, 4>>(&mut rng);
+        // A representation backend keeps the same sources in another basis of the challenge field.
+        assert_sources_fold_like_dense::<BinaryField128, Ghash128>(&mut rng);
     }
 }
