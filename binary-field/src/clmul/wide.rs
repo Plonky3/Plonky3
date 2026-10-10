@@ -225,7 +225,7 @@ pub(crate) fn fold<L: Lanes64>(low: L, high: L) -> L {
 /// Addition of products is exclusive or, so a sum of them stays in this form.
 ///
 /// Reduction is `F_2`-linear, so a whole sum is reduced once at the end.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Wide<L> {
     /// The 128-bit products of the elements in even quadwords.
     pub(crate) even: L,
@@ -313,11 +313,19 @@ pub(crate) fn cubic_mul<L: Lanes64>(a: [L; 3], b: [L; 3]) -> [Wide<L>; 3] {
     let d02 = Wide::mul(a0.xor(a2), b0.xor(b2));
     let d12 = Wide::mul(a1.xor(a2), b1.xor(b2));
 
-    // The one sum two coordinates share.
-    let shared = c0.xor(d12);
+    fold_cubic([c0, c1, c2, d01, d02, d12], Wide::xor, Wide::xor3)
+}
 
-    // The folded coordinates r_0, r_1, r_2, still unreduced in the base field.
-    [shared.xor3(c1, c2), shared.xor(d01), c0.xor3(c1, d02)]
+/// Fold the six Karatsuba terms modulo `y^3 + y + 1`, before coefficient reduction.
+#[inline(always)]
+pub(crate) fn fold_cubic<V: Copy>(
+    terms: [V; 6],
+    xor: impl Fn(V, V) -> V,
+    xor3: impl Fn(V, V, V) -> V,
+) -> [V; 3] {
+    let [c0, c1, c2, d01, d02, d12] = terms;
+    let shared = xor(c0, d12);
+    [xor3(shared, c1, c2), xor(shared, d01), xor3(c0, c1, d02)]
 }
 
 /// The unreduced square in the cubic extension.

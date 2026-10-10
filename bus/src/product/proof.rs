@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
 use p3_field::ExtensionField;
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 use serde::{Deserialize, Serialize};
@@ -102,10 +103,19 @@ impl<EF> ProductGkrProof<EF> {
         }
 
         // Keep only explicit prefixes at every product level.
-        let all_layers = inputs
+        // A leaf moves two elements to be copied and fewer than two more to be reduced.
+        // Each tree is charged the average, so the gate sees every tree's bytes together.
+        let tree_bytes = inputs
             .iter()
-            .map(|input| ProductLayers::new(input, shape.log_height))
-            .collect::<Vec<_>>();
+            .map(|input| input.len() * 4 * size_of::<EF>())
+            .sum::<usize>()
+            .checked_div(inputs.len())
+            .unwrap_or(0);
+        let all_layers = inputs
+            .par_iter()
+            .map_collect_min_task_bytes(tree_bytes, |input| {
+                ProductLayers::new(input, shape.log_height)
+            });
         let roots = all_layers
             .iter()
             .map(ProductLayers::root)

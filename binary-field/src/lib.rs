@@ -22,8 +22,11 @@ mod subfield;
 mod tables;
 mod tower;
 mod transcript;
+mod unreduced;
 
-pub use aes::{ByteMatrix, LinearizedPoly8b, PackedRijndael8b, Rijndael8b};
+pub use aes::{
+    ByteMatrix, LinearizedPoly8b, PackedRijndael8b, Rijndael8b, RijndaelPowerAccumulator,
+};
 pub use bitslice::{
     Divisible, M128, M256, M512, PackedGf2, PackedGf2x8, PackedGf2x16, PackedGf2x32, PackedGf2x64,
     PackedGf2x128, PackedGf2x256, PackedGf2x512, Underlier, Word,
@@ -57,10 +60,11 @@ pub use packed::PackedGhash128;
         target_feature = "aes"
     )
 ))]
-pub use packed::{PackedPoly64, PackedPoly192};
+pub use packed::{PackedPoly64, PackedPoly192, PackedPoly192Unreduced};
 pub use poly64::Poly64;
-pub use poly192::Poly192;
+pub use poly192::{Poly192, Poly192MixedAccumulator};
 pub use tower::{
     BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
     BinaryField128, TowerLevel,
 };
+pub use unreduced::Poly192Unreduced;

@@ -42,6 +42,12 @@ impl<F: Field> IdentityPrefix<F> {
         Self::new(values)
     }
 
+    /// Bytes one fold moves: two reads and one write per folded row.
+    #[inline]
+    const fn fold_bytes(&self) -> usize {
+        3 * self.values.len().div_ceil(2) * size_of::<F>()
+    }
+
     /// Binds the lowest remaining variable.
     fn fold(&mut self, logical_len: usize, challenge: F) {
         debug_assert!(self.values.len() <= logical_len);
@@ -120,22 +126,34 @@ struct RadixFourState<F> {
 impl<F: Field> RadixFourState<F> {
     /// Splits an interleaved product level into four child tables.
     fn new(values: &IdentityPrefix<F>, logical_len: usize) -> Self {
-        let mut children: [Vec<F>; 4] = core::array::from_fn(|_| Vec::new());
-        for (index, &value) in values.values.iter().enumerate() {
-            let slot = index % 4;
-            let row = index / 4;
-            debug_assert!(row < logical_len);
-            children[slot].push(value);
-        }
-        let children = children.map(IdentityPrefix::new);
+        let values = &values.values;
+        debug_assert!(values.len().div_ceil(4) <= logical_len);
+
+        // Slot `s` gathers explicit entries `s, s + 4, s + 8, ...`, reading and writing each once.
+        let children = core::array::from_fn(|slot| {
+            let rows = (values.len() + 3 - slot) / 4;
+            IdentityPrefix::new(
+                (0..rows)
+                    .into_par_iter()
+                    .map_collect_min_task_bytes(2 * size_of::<F>(), |row| values[4 * row + slot]),
+            )
+        });
         Self { children }
+    }
+
+    /// Bytes one fold of every child moves.
+    fn fold_bytes(&self) -> usize {
+        self.children.iter().map(IdentityPrefix::fold_bytes).sum()
     }
 
     /// Binds one parent variable in every child multilinear.
     fn fold(&mut self, challenge: F, logical_len: usize) {
-        for child in &mut self.children {
-            child.fold(logical_len, challenge);
-        }
+        // Each child is charged the average, so the gate sees the whole fold, and still splits its
+        // own rows when they pay.
+        let child_bytes = self.fold_bytes() / 4;
+        self.children
+            .par_iter_mut()
+            .for_each_min_task_bytes(child_bytes, |child| child.fold(logical_len, challenge));
     }
 
     /// Reads the four terminal child claims after every parent variable is bound.
@@ -153,10 +171,18 @@ pub(super) struct RadixFourBatch<F> {
 impl<F: Field> RadixFourBatch<F> {
     /// Creates the batched states from one retained level per tree.
     pub(super) fn new(layers: &[ProductLayers<F>], depth: usize, logical_len: usize) -> Self {
-        let states = layers
+        // A tree reads its retained level once and writes it back as four children.
+        let tree_bytes = layers
             .iter()
-            .map(|layers| layers.radix_four_state(depth, logical_len))
-            .collect();
+            .map(|layers| 2 * layers.layers[depth].values.len() * size_of::<F>())
+            .sum::<usize>()
+            .checked_div(layers.len())
+            .unwrap_or(0);
+        let states = layers
+            .par_iter()
+            .map_collect_min_task_bytes(tree_bytes, |layers| {
+                layers.radix_four_state(depth, logical_len)
+            });
         Self { states }
     }
 
@@ -170,38 +196,37 @@ impl<F: Field> RadixFourBatch<F> {
         debug_assert!(logical_len >= 2);
         debug_assert_eq!(equality.len(), logical_len);
 
-        // Node one is omitted because the running sum reconstructs it.
-        let nodes = [0, 2, 3, 4, 5].map(F::interpolation_node);
+        let nodes = RoundNodes::<F>::new();
+        // Tree `i` is weighted by the `i`-th power of the batching challenge.
+        let powers = batching.powers().collect_n(self.states.len());
         let accumulate = |evaluations: &mut [F; ROUND_POLY_LEN], row: usize| {
-            let eq_zero = equality[2 * row];
-            let eq_one = equality[2 * row + 1];
+            let eq_values = nodes.line(equality[2 * row], equality[2 * row + 1]);
+            let mut batched = [F::ZERO; ROUND_POLY_LEN];
 
-            for (node_index, node) in nodes.into_iter().enumerate() {
-                let eq_value = interpolate_pair([eq_zero, eq_one], node);
-                let mut power = F::ONE;
-                let mut batched_product = F::ZERO;
-
-                for state in &self.states {
-                    let product = state
-                        .children
-                        .iter()
-                        .map(|child| {
-                            let zero = child.get(2 * row);
-                            let one = child.get(2 * row + 1);
-                            interpolate_pair([zero, one], node)
-                        })
-                        .product::<F>();
-                    batched_product += power * product;
-                    power *= batching;
+            for (state, &power) in self.states.iter().zip(&powers) {
+                let [first, rest @ ..] = &state.children;
+                let mut product = nodes.line(first.get(2 * row), first.get(2 * row + 1));
+                for child in rest {
+                    let values = nodes.line(child.get(2 * row), child.get(2 * row + 1));
+                    for (product, value) in product.iter_mut().zip(values) {
+                        *product *= value;
+                    }
                 }
+                for (batched, product) in batched.iter_mut().zip(product) {
+                    *batched += power * product;
+                }
+            }
 
-                evaluations[node_index] += eq_value * batched_product;
+            for ((evaluation, eq_value), batched) in
+                evaluations.iter_mut().zip(eq_values).zip(batched)
+            {
+                *evaluation += eq_value * batched;
             }
         };
 
-        // A row reads two equality values and eight child values per tree, once per node.
+        // A row reads two equality and eight child values per tree, and uses each at every node.
         let rows = logical_len / 2;
-        let row_bytes = nodes.len() * (2 + 8 * self.states.len()) * size_of::<F>();
+        let row_bytes = ROUND_POLY_LEN * (2 + 8 * self.states.len()) * size_of::<F>();
 
         // Each task sums one run of rows, so only its partial message crosses threads.
         let task_rows = min_task_len(rows, row_bytes);
@@ -225,13 +250,209 @@ impl<F: Field> RadixFourBatch<F> {
 
     /// Binds one parent variable across every tree in the batch.
     pub(super) fn fold(&mut self, challenge: F, logical_len: usize) {
-        for state in &mut self.states {
-            state.fold(challenge, logical_len);
-        }
+        // Each tree is charged the average, so the gate sees the whole fold, and still splits its
+        // children when they pay.
+        let tree_bytes = self
+            .states
+            .iter()
+            .map(RadixFourState::fold_bytes)
+            .sum::<usize>()
+            .checked_div(self.states.len())
+            .unwrap_or(0);
+        self.states
+            .par_iter_mut()
+            .for_each_min_task_bytes(tree_bytes, |state| state.fold(challenge, logical_len));
     }
 
     /// Collects the terminal child claims in tree order.
     pub(super) fn children(&self) -> Vec<[F; 4]> {
         self.states.iter().map(RadixFourState::children).collect()
+    }
+}
+
+/// The transmitted round-message nodes, with each line evaluated by as few products as possible.
+struct RoundNodes<F> {
+    /// Node one is omitted because the running sum reconstructs it.
+    nodes: [F; ROUND_POLY_LEN],
+    /// Whether a node equals its predecessor plus one, so its value is one slope further.
+    unit_steps: [bool; ROUND_POLY_LEN],
+}
+
+impl<F: Field> RoundNodes<F> {
+    /// Enumerates the nodes and marks every unit step between neighbours.
+    fn new() -> Self {
+        let nodes = [0, 2, 3, 4, 5].map(F::interpolation_node);
+        let unit_steps =
+            core::array::from_fn(|index| index > 0 && nodes[index] == nodes[index - 1] + F::ONE);
+        Self { nodes, unit_steps }
+    }
+
+    /// Evaluates the line through `zero` and `one` at every node.
+    #[inline]
+    fn line(&self, zero: F, one: F) -> [F; ROUND_POLY_LEN] {
+        let slope = one - zero;
+        let mut values = [zero; ROUND_POLY_LEN];
+        for index in 0..ROUND_POLY_LEN {
+            values[index] = if self.unit_steps[index] {
+                values[index - 1] + slope
+            } else if self.nodes[index] == F::ZERO {
+                zero
+            } else {
+                zero + self.nodes[index] * slope
+            };
+        }
+        values
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_binary_field::{BinaryField128, Ghash128};
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::{RngExt, SeedableRng};
+    use rand_xoshiro::Xoroshiro128Plus;
+
+    use super::*;
+    use crate::product::math::fold_dense;
+
+    type BabyBearQuartic = BinomialExtensionField<BabyBear, 4>;
+
+    /// Interpolates every line separately at every node, as an obvious reference.
+    fn per_node_round<F: Field>(
+        batch: &RadixFourBatch<F>,
+        equality: &[F],
+        logical_len: usize,
+        batching: F,
+    ) -> [F; ROUND_POLY_LEN] {
+        let nodes = [0, 2, 3, 4, 5].map(F::interpolation_node);
+        let mut evaluations = [F::ZERO; ROUND_POLY_LEN];
+        for row in 0..logical_len / 2 {
+            for (node_index, node) in nodes.into_iter().enumerate() {
+                let eq_value = interpolate_pair([equality[2 * row], equality[2 * row + 1]], node);
+                let mut power = F::ONE;
+                let mut batched_product = F::ZERO;
+                for state in &batch.states {
+                    let product = state
+                        .children
+                        .iter()
+                        .map(|child| {
+                            interpolate_pair([child.get(2 * row), child.get(2 * row + 1)], node)
+                        })
+                        .product::<F>();
+                    batched_product += power * product;
+                    power *= batching;
+                }
+                evaluations[node_index] += eq_value * batched_product;
+            }
+        }
+        evaluations
+    }
+
+    /// Checks every node of random lines, after pinning which nodes take the slope step.
+    fn check_lines<F: Field>(rng: &mut Xoroshiro128Plus, unit_steps: [bool; ROUND_POLY_LEN])
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let nodes = RoundNodes::<F>::new();
+        assert_eq!(nodes.unit_steps, unit_steps);
+        for _ in 0..32 {
+            let zero = rng.random::<F>();
+            let one = rng.random::<F>();
+            let expected = [0, 2, 3, 4, 5]
+                .map(|index| interpolate_pair([zero, one], F::interpolation_node(index)));
+            assert_eq!(nodes.line(zero, one), expected);
+        }
+    }
+
+    /// Checks every round message of every radix-four layer against the per-node reference.
+    fn check_rounds<F: Field>(rng: &mut Xoroshiro128Plus, log_height: usize, prefix_lens: &[usize])
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let inputs = prefix_lens
+            .iter()
+            .map(|&len| (0..len).map(|_| rng.random::<F>()).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let layers = inputs
+            .iter()
+            .map(|input| ProductLayers::new(input, log_height))
+            .collect::<Vec<_>>();
+
+        // Every retained even depth with at least one parent variable is a child level.
+        for depth in (0..=log_height - 3).step_by(2) {
+            let mut logical_len = 1usize << (log_height - depth - 2);
+            let mut batch = RadixFourBatch::new(&layers, depth, logical_len);
+            let mut equality = (0..logical_len)
+                .map(|_| rng.random::<F>())
+                .collect::<Vec<_>>();
+            let batching = rng.random::<F>();
+
+            // Folding between rounds walks every child prefix down to a single row.
+            while logical_len >= 2 {
+                assert_eq!(
+                    batch.round(&equality, logical_len, batching),
+                    per_node_round(&batch, &equality, logical_len, batching),
+                );
+                let challenge = rng.random::<F>();
+                batch.fold(challenge, logical_len);
+                fold_dense(&mut equality, challenge);
+                logical_len /= 2;
+            }
+        }
+    }
+
+    #[test]
+    fn slope_steps_match_interpolation_at_every_node() {
+        // In characteristic two only nodes 3 and 5 are one past their predecessors.
+        // In a prime field nodes 3, 4 and 5 all are, and node 2 never is in either.
+        // Each field therefore checks both the slope step and the direct product.
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0001);
+        check_lines::<BinaryField128>(&mut rng, [false, false, true, false, true]);
+        check_lines::<Ghash128>(&mut rng, [false, false, true, false, true]);
+        check_lines::<BabyBearQuartic>(&mut rng, [false, false, true, true, true]);
+    }
+
+    #[test]
+    fn child_split_matches_an_interleaved_walk() {
+        // Lengths through seventeen end each slot on a full, partial or missing final row.
+        // Every third entry is one, so trailing identities are trimmed from some children.
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0003);
+        for len in 0..=17usize {
+            let values = (0..len)
+                .map(|index| {
+                    if index % 3 == 2 {
+                        BabyBear::ONE
+                    } else {
+                        rng.random::<BabyBear>()
+                    }
+                })
+                .collect::<Vec<_>>();
+            let state = RadixFourState::new(&IdentityPrefix::new(values.clone()), len.div_ceil(4));
+
+            let mut expected: [Vec<BabyBear>; 4] = Default::default();
+            for (index, &value) in values.iter().enumerate() {
+                expected[index % 4].push(value);
+            }
+            for (child, expected) in state.children.iter().zip(expected) {
+                assert_eq!(child.values, IdentityPrefix::new(expected).values);
+            }
+        }
+    }
+
+    #[test]
+    fn round_messages_match_the_per_node_reference() {
+        // Unequal, empty and non-multiple-of-four prefixes leave children of different lengths.
+        // Several trees fix the batching power each tree must receive.
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0002);
+        let shapes: [&[usize]; 3] = [&[77], &[128, 0], &[13, 128, 91]];
+        for prefix_lens in shapes {
+            check_rounds::<BinaryField128>(&mut rng, 7, prefix_lens);
+            check_rounds::<BabyBearQuartic>(&mut rng, 7, prefix_lens);
+        }
     }
 }

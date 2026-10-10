@@ -1,3 +1,4 @@
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -38,7 +39,7 @@ use crate::transcript::{WhirProverTranscript, WhirShape};
 type WhirRoundState<EF, F, MT> = RoundState<
     EF,
     F,
-    <MT as Mmcs<F>>::ProverData<DenseMatrix<F>>,
+    Arc<<MT as Mmcs<F>>::ProverData<DenseMatrix<F>>>,
     <MT as Mmcs<F>>::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
 >;
 
@@ -159,13 +160,37 @@ where
     /// - `layout`: the committed stacked layout, holding the claims to batch.
     /// - `prover_data`: Merkle prover data behind the initial commitment.
     /// - `num_opening_claims`: opening claims the caller bound before this run.
-    #[instrument(skip_all)]
     pub fn prove(
         &self,
         initial_ood_answers: Vec<EF>,
         challenger: &mut Challenger,
         layout: L,
         prover_data: MT::ProverData<DenseMatrix<F>>,
+        num_opening_claims: usize,
+    ) -> Result<WhirProof<F, EF, MT>, WhirConfigError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        self.prove_shared(
+            initial_ood_answers,
+            challenger,
+            layout,
+            Arc::new(prover_data),
+            num_opening_claims,
+        )
+    }
+
+    /// [`Self::prove`] over Merkle prover data that other owners may share.
+    ///
+    /// Clones share the data; the run drops its reference once a later round replaces the initial
+    /// commitment, or when the run ends.
+    #[instrument(name = "prove", skip_all)]
+    pub(crate) fn prove_shared(
+        &self,
+        initial_ood_answers: Vec<EF>,
+        challenger: &mut Challenger,
+        layout: L,
+        prover_data: Arc<MT::ProverData<DenseMatrix<F>>>,
         num_opening_claims: usize,
     ) -> Result<WhirProof<F, EF, MT>, WhirConfigError>
     where
