@@ -277,6 +277,9 @@ impl_packed_value!(PackedGoldilocksAVX2, Goldilocks, WIDTH);
 
 unsafe impl PackedField for PackedGoldilocksAVX2 {
     type Scalar = Goldilocks;
+
+    // `dot_product` delays the reduction for 2 to 6 terms, and 4 is the largest power of two there.
+    const DOT_PRODUCT_BLOCK: usize = 4;
 }
 
 impl_packed_field_pow_2!(
