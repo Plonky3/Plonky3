@@ -993,6 +993,7 @@ mod tests {
     use super::*;
     use crate::params::BinaryPcsParams;
     use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
+    use crate::testing::assert_boolean_multilinear_commit_contract;
 
     /// A verifying transcript with the commitment's binding already replayed.
     fn replayed(
@@ -1058,6 +1059,24 @@ mod tests {
                 })
                 .collect::<Vec<EF>>(),
         )
+    }
+
+    /// The commit phase must bind the root the verifier binds.
+    ///
+    /// `BooleanPcs` is the sibling of the schemes `p3-commit`'s multilinear helper covers: it
+    /// commits bits rather than field elements, so the same obligation is checked through
+    /// `commit_bits`.
+    #[test]
+    fn commit_bits_binds_what_the_verifier_binds() {
+        const LOG_BITS: usize = 13;
+
+        let pcs = boolean_pcs(LOG_BITS);
+        assert_boolean_multilinear_commit_contract::<_, _, EF, _>(
+            &pcs,
+            &challenger(),
+            &witness(0xB00C, LOG_BITS),
+            &witness(0xB00D, LOG_BITS),
+        );
     }
 
     #[test]
