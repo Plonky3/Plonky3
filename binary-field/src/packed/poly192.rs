@@ -31,7 +31,7 @@ use super::gf64::{self as lanes, Reg, WIDTH_64};
 use super::poly64::PackedPoly64;
 use crate::clmul::wide::{Lanes64, Wide, cubic_mul, cubic_mul_base, cubic_square};
 use crate::clmul::{poly_dot_192_by_64, raw_product_64, reduce_64};
-use crate::{Gf2, Poly64, Poly192};
+use crate::{Gf2, Poly64, Poly192, Poly192Unreduced};
 
 /// The number of coordinates over the coefficient field.
 const DEGREE: usize = 3;
@@ -41,6 +41,55 @@ const DEGREE: usize = 3;
 #[repr(transparent)]
 #[must_use]
 pub struct PackedPoly192([PackedPoly64; DEGREE]);
+
+/// Lane-wise extension products whose coefficient reductions remain deferred.
+#[derive(Clone, Copy, Debug)]
+#[must_use]
+pub struct PackedPoly192Unreduced(
+    /// Even and odd polynomial products of each coordinate.
+    [Wide<Reg>; DEGREE],
+);
+
+impl Default for PackedPoly192Unreduced {
+    fn default() -> Self {
+        Self([Wide::zero(); DEGREE])
+    }
+}
+
+impl Add for PackedPoly192Unreduced {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: Self) -> Self {
+        Self(core::array::from_fn(|i| self.0[i].xor(rhs.0[i])))
+    }
+}
+
+impl AddAssign for PackedPoly192Unreduced {
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl PackedPoly192Unreduced {
+    /// Reduce each lane, preserving the selected packing's lane order.
+    #[inline]
+    pub fn reduce(self) -> PackedPoly192 {
+        PackedPoly192::reduce(self.0)
+    }
+
+    /// Sum every lane without reducing, so partial sums can still be combined.
+    #[inline]
+    pub fn sum_lanes(self) -> Poly192Unreduced {
+        Poly192Unreduced(self.0.map(|sum| {
+            let both = sum.even.xor(sum.odd);
+            // SAFETY: a register is WIDTH_64/2 unrestricted 128-bit polynomial lanes.
+            let lanes: [u128; WIDTH_64 / 2] = unsafe { core::mem::transmute(both) };
+            lanes.into_iter().fold(0, |sum, lane| sum ^ lane)
+        }))
+    }
+}
 
 /// Coordinate sums whose 128-bit polynomial lanes remain in the selected vector registers.
 #[derive(Clone, Copy, Debug)]
@@ -113,6 +162,18 @@ impl PackedMixedAccumulator {
 }
 
 impl PackedPoly192 {
+    /// Multiply each lane without reducing its coefficient-field coordinates.
+    #[inline]
+    pub fn mul_unreduced(self, rhs: Self) -> PackedPoly192Unreduced {
+        PackedPoly192Unreduced(cubic_mul(self.to_vectors(), rhs.to_vectors()))
+    }
+
+    /// Multiply each lane by its coefficient-field weight without reducing.
+    #[inline]
+    pub fn mul_base_unreduced(self, rhs: PackedPoly64) -> PackedPoly192Unreduced {
+        PackedPoly192Unreduced(cubic_mul_base(self.to_vectors(), rhs.to_vector()))
+    }
+
     /// Sum scalar extension-by-base products across packed lanes before reducing.
     #[inline]
     pub(crate) fn mixed_dot_scalar(a: &[Poly192], f: &[Poly64]) -> Poly192 {
@@ -563,7 +624,7 @@ impl PackedFieldExtension<Poly64, Poly192> for PackedPoly192 {
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_field::{PackedFieldExtension, PrimeCharacteristicRing};
+    use p3_field::{PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
     use p3_field_testing::{
         test_add_assign_lane_ext, test_batched_linear_combination_ext, test_packed_extension,
         test_ring_axioms_proptest_char2, test_ring_with_eq_char2,
@@ -571,7 +632,7 @@ mod tests {
     use proptest::prelude::*;
 
     use crate::packed::gf64::WIDTH_64;
-    use crate::{PackedPoly64, PackedPoly192, Poly64, Poly192};
+    use crate::{PackedPoly64, PackedPoly192, PackedPoly192Unreduced, Poly64, Poly192};
 
     /// A packing of the given elements.
     fn packed(values: &[Poly192]) -> PackedPoly192 {
@@ -646,6 +707,28 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[test]
+        fn deferred_products_keep_lanes_and_horizontal_sums(
+            a in any::<[[[u64; 3]; WIDTH_64]; 3]>(),
+            b in any::<[[[u64; 3]; WIDTH_64]; 3]>(),
+            k in any::<[[u64; WIDTH_64]; 3]>(),
+        ) {
+            let mut sum = PackedPoly192Unreduced::default();
+            let mut expected = alloc::vec![Poly192::ZERO; WIDTH_64];
+            for group in 0..3 {
+                let (a, b) = (elements(a[group]), elements(b[group]));
+                let k = PackedPoly64::from_fn(|lane| Poly64::new(k[group][lane]));
+                sum += packed(&a).mul_unreduced(packed(&b));
+                sum += packed(&a).mul_base_unreduced(k);
+                for lane in 0..WIDTH_64 {
+                    expected[lane] += a[lane] * b[lane] + a[lane] * k.as_slice()[lane];
+                }
+            }
+            prop_assert_eq!(&unpacked(sum.reduce()), &expected);
+            prop_assert_eq!(sum.sum_lanes().reduce(), expected.into_iter().sum::<Poly192>());
+            prop_assert_eq!(unpacked((sum + sum).reduce()), alloc::vec![Poly192::ZERO; WIDTH_64]);
+        }
 
         #[test]
         fn the_transpose_round_trips(raw in any::<[[u64; 3]; WIDTH_64]>()) {
