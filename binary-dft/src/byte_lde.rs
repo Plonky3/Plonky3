@@ -195,7 +195,7 @@ impl RijndaelLde {
     /// # Panics
     /// Panics unless both inputs contain one complete row per weight and the
     /// output has `row_len()` elements.
-    #[inline]
+    #[inline(always)]
     pub fn weighted_product_sum(&self, a: &[u8], b: &[u8], weights: &[F8], out: &mut [F8]) {
         assert_eq!(a.len(), b.len(), "input matrices differ in size");
         assert_eq!(a.len() % self.n_chunks, 0, "incomplete Boolean row");
@@ -211,6 +211,15 @@ impl RijndaelLde {
             target_feature = "aes"
         ))]
         if self.ell == 64 {
+            if weights.len() == 8
+                && weights
+                    .iter()
+                    .enumerate()
+                    .all(|(i, weight)| weight.to_byte() == 1 << i)
+            {
+                self.power_product_sum_neon64(a, b, out);
+                return;
+            }
             self.weighted_product_sum_neon64(a, b, weights, out);
             return;
         }
@@ -245,6 +254,38 @@ impl RijndaelLde {
             for j in done..self.ell {
                 out[j] += a_col[j] * b_col[j] * weight;
             }
+        }
+    }
+
+    /// Sum eight generator-weighted row products with only one final weight reduction.
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    #[inline(always)]
+    fn power_product_sum_neon64(&self, a: &[u8], b: &[u8], out: &mut [F8]) {
+        use p3_binary_field::{PackedRijndael8b, RijndaelPowerAccumulator};
+        let mut sums = [RijndaelPowerAccumulator::<16>::new(); 4];
+        for (power, (a, b)) in a
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<8>().0)
+            .enumerate()
+        {
+            let a = self.lookup_neon64(a);
+            let b = self.lookup_neon64(b);
+            // SAFETY: both representations are sixteen unrestricted bytes per block.
+            // PackedValue and the scalar's transparent representation guarantee this layout.
+            let a: [PackedRijndael8b<16>; 4] = unsafe { core::mem::transmute(a) };
+            let b: [PackedRijndael8b<16>; 4] = unsafe { core::mem::transmute(b) };
+            for i in 0..4 {
+                sums[i].add_power(a[i] * b[i], power as u8);
+            }
+        }
+        for (chunk, sum) in out.as_chunks_mut::<16>().0.iter_mut().zip(sums) {
+            chunk.copy_from_slice(sum.finish().as_slice());
         }
     }
 
@@ -668,6 +709,32 @@ mod tests {
             prop_assert_eq!(&got[1..=table.row_len()],&expected);
             prop_assert_eq!(got[0],guard);
             prop_assert_eq!(got[table.row_len()+1],guard);
+        }
+
+        #[test]
+        fn generator_weighted_rows_match_independent_extensions(
+            source in any::<u8>(), target in any::<u8>(),
+            a in any::<[u8;64]>(), b in any::<[u8;64]>()
+        ) {
+            let table = RijndaelLde::new(6, F8::from_byte(source), F8::from_byte(target));
+            let weights = core::array::from_fn::<_,8,_>(|i| F8::from_byte(1 << i));
+            let guard = F8::from_byte(0xa5);
+            let mut got = [guard; 66];
+            table.weighted_product_sum(&a, &b, &weights, &mut got[1..65]);
+            let mut expected = [F8::ZERO;64];
+            for row in 0..8 {
+                let extend = |bytes:&[u8]| {
+                    let mut values:Vec<_> = bytes.iter().flat_map(|&byte|(0..8).map(move|bit|F8::from_byte((byte>>bit)&1))).collect();
+                    table.source().inverse(&mut values);
+                    table.target().forward(&mut values);
+                    values
+                };
+                let (x,y) = (extend(&a[8*row..8*row+8]), extend(&b[8*row..8*row+8]));
+                for j in 0..64 { expected[j] += x[j]*y[j]*weights[row]; }
+            }
+            prop_assert_eq!(&got[1..65], &expected);
+            prop_assert_eq!(got[0], guard);
+            prop_assert_eq!(got[65], guard);
         }
 
         #[test]
