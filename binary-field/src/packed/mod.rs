@@ -2,7 +2,9 @@
 //!
 //! On `x86_64` a packing exists where the multiply reaches more than one 128-bit lane.
 //!
-//! There, `GF(2^128)` takes the widest such register, and `GF(2^64)` and `GF(2^192)` stay at 256 bits.
+//! There, `GF(2^128)` takes the widest such register, and `GF(2^64)` and `GF(2^192)` default to 256 bits.
+//!
+//! The `wide-poly` feature selects 512-bit polynomial packings with AVX-512F/BW and VPCLMULQDQ.
 //!
 //! On AArch64 the multiply reaches one 128-bit lane.
 //!
@@ -43,7 +45,7 @@ mod aarch64;
         target_feature = "aes"
     )
 ))]
-mod poly192;
+pub(crate) mod poly192;
 #[cfg(any(
     all(
         target_arch = "x86_64",
@@ -168,7 +170,7 @@ pub use poly64::PackedPoly64;
         target_feature = "aes"
     )
 ))]
-pub use poly192::PackedPoly192;
+pub use poly192::{PackedPoly192, PackedPoly192Unreduced};
 pub(crate) use selected::*;
 #[cfg(all(
     target_arch = "x86_64",
@@ -181,4 +183,26 @@ pub use x86_64::PackedGhash128;
     target_feature = "vpclmulqdq",
     any(target_feature = "avx2", target_feature = "avx512f")
 ))]
+#[cfg(not(all(
+    feature = "wide-poly",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
 use x86_64::lanes::gf64;
+
+#[cfg(all(
+    feature = "wide-poly",
+    target_arch = "x86_64",
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "vpclmulqdq"
+))]
+mod avx512_poly;
+#[cfg(all(
+    feature = "wide-poly",
+    target_arch = "x86_64",
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "vpclmulqdq"
+))]
+use avx512_poly::gf64;

@@ -16,6 +16,9 @@ criterion.workspace = true
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 
+# Select eight polynomial-field lanes on AVX-512 builds for throughput-oriented row kernels.
+wide-poly = []
+
 [dependencies]
 p3-challenger.workspace = true
 p3-field.workspace = true

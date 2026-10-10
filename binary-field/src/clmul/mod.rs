@@ -22,6 +22,7 @@ mod basis;
     target_feature = "avx512vbmi"
 ))]
 mod bit_plane;
+pub(crate) mod column;
 mod gf192;
 mod gf64;
 mod powers;
@@ -200,6 +201,13 @@ use portable::clmul_64x64;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 use x86_64::clmul_64x64;
 
+/// A polynomial product whose base-field reduction can be delayed across sums.
+#[allow(clippy::missing_const_for_fn)]
+#[inline]
+pub(crate) fn raw_product_64(a: u64, b: u64) -> u128 {
+    clmul_64x64(a, b)
+}
+
 /// The `256`-bit carryless product of two 128-bit polynomials, as `(low, high)`.
 ///
 /// Schoolbook over the 64-bit halves: four independent products, no dependency between them.
@@ -230,7 +238,7 @@ fn clmul_128x128(a: u128, b: u128) -> (u128, u128) {
 ///
 /// `g` is linear and the spill has degree at most 3, so both folds are one `g` of a sum.
 #[inline]
-const fn reduce_64(product: u128) -> u64 {
+pub(crate) const fn reduce_64(product: u128) -> u64 {
     let low = product as u64;
     let high = (product >> 64) as u64;
 
