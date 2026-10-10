@@ -24,34 +24,50 @@ pub(super) fn mul_prefix<'a, 'b>(dst: &'a mut [u8], src: &'b [u8]) -> (&'a mut [
                 vreinterpret_p8_u8(vget_low_u8(b_reg)),
             );
             let hi = vmull_high_p8(vreinterpretq_p8_u8(a_reg), vreinterpretq_p8_u8(b_reg));
-            let product = vcombine_u8(
-                reduce(vreinterpretq_u16_p16(lo)),
-                reduce(vreinterpretq_u16_p16(hi)),
-            );
+            let product = reduce(vreinterpretq_u16_p16(lo), vreinterpretq_u16_p16(hi));
             vst1q_u8(a.as_mut_ptr(), product);
         }
     }
     (tail, rest)
 }
 
-/// Reduce eight degree-at-most-fourteen products modulo x^8 + x^4 + x^3 + x + 1.
+/// The AES modulus maps a high byte to its product by `0x1b`.
+const fn reduction_table(high_nibble: bool) -> [u8; 16] {
+    let mut table = [0; 16];
+    let mut i = 0;
+    while i < 16 {
+        let byte = if high_nibble { (i as u8) << 4 } else { i as u8 };
+        table[i] = crate::aes::mul_bytes(byte, 0x1b);
+        i += 1;
+    }
+    table
+}
+
+/// Images of the high byte's low nibble under coefficient reduction.
+const LOW_NIBBLE: [u8; 16] = reduction_table(false);
+/// Images of the high byte's high nibble under coefficient reduction.
+const HIGH_NIBBLE: [u8; 16] = reduction_table(true);
+
+/// Reduce sixteen polynomial products with two register-resident nibble lookups.
 #[inline(always)]
-unsafe fn reduce(product: uint16x8_t) -> uint8x8_t {
-    // SAFETY: these baseline NEON operations use registers only.
+unsafe fn reduce(lo: uint16x8_t, hi: uint16x8_t) -> uint8x16_t {
+    // SAFETY: NEON is an AArch64 baseline feature; both tables hold sixteen bytes.
     unsafe {
-        // Why: x^8 equals 0x1b in the AES field.
-        let fold = |high| {
-            veorq_u16(
-                veorq_u16(high, vshlq_n_u16::<1>(high)),
-                veorq_u16(vshlq_n_u16::<3>(high), vshlq_n_u16::<4>(high)),
-            )
-        };
-        let first = veorq_u16(
-            vandq_u16(product, vdupq_n_u16(0xff)),
-            fold(vshrq_n_u16::<8>(product)),
+        let low = vcombine_u8(vmovn_u16(lo), vmovn_u16(hi));
+        let high = vcombine_u8(vshrn_n_u16::<8>(lo), vshrn_n_u16::<8>(hi));
+        let low_image = vqtbl1q_u8(
+            vld1q_u8(LOW_NIBBLE.as_ptr()),
+            vandq_u8(high, vdupq_n_u8(15)),
         );
-        // The first fold has degree at most ten, so its second spill folds entirely below degree eight.
-        vmovn_u16(veorq_u16(first, fold(vshrq_n_u16::<8>(first))))
+        let high_image = vqtbl1q_u8(vld1q_u8(HIGH_NIBBLE.as_ptr()), vshrq_n_u8::<4>(high));
+        #[cfg(target_feature = "sha3")]
+        {
+            veor3q_u8(low, low_image, high_image)
+        }
+        #[cfg(not(target_feature = "sha3"))]
+        {
+            veorq_u8(low, veorq_u8(low_image, high_image))
+        }
     }
 }
 
