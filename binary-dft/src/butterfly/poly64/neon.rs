@@ -16,28 +16,34 @@ pub(super) fn butterfly<const INVERSE: bool>(
     // The module is only compiled when the carryless-multiply feature is enabled.
     unsafe {
         let twiddle = vdupq_n_u64(t.to_bits());
-        for start in (0..covered).step_by(8) {
-            // Four independent chains expose multiplication latency to the instruction scheduler.
-            let count = (covered - start).min(8) / 2;
-            let mut low = [vdupq_n_u64(0); 4];
-            let mut high = low;
-            let mut products = low;
-            for pair in 0..count {
-                low[pair] = vld1q_u64(lo.as_ptr().add(start + 2 * pair).cast());
-                high[pair] = vld1q_u64(hi.as_ptr().add(start + 2 * pair).cast());
-                if INVERSE {
-                    high[pair] = veorq_u64(high[pair], low[pair]);
-                }
-                products[pair] = multiply(high[pair], twiddle);
+        let bulk = covered / 8 * 8;
+        for start in (0..bulk).step_by(8) {
+            // Constant bounds let all four pairs stay in registers, without initializing tail slots.
+            let mut low: [uint64x2_t; 4] =
+                core::array::from_fn(|pair| vld1q_u64(lo.as_ptr().add(start + 2 * pair).cast()));
+            let mut high: [uint64x2_t; 4] =
+                core::array::from_fn(|pair| vld1q_u64(hi.as_ptr().add(start + 2 * pair).cast()));
+            if INVERSE {
+                high = core::array::from_fn(|pair| veorq_u64(high[pair], low[pair]));
             }
-            for pair in 0..count {
-                low[pair] = veorq_u64(low[pair], products[pair]);
-                if !INVERSE {
-                    high[pair] = veorq_u64(high[pair], low[pair]);
-                }
+            let products: [uint64x2_t; 4] = high.map(|value| multiply(value, twiddle));
+            low = core::array::from_fn(|pair| veorq_u64(low[pair], products[pair]));
+            if !INVERSE {
+                high = core::array::from_fn(|pair| veorq_u64(high[pair], low[pair]));
+            }
+            for pair in 0..4 {
                 vst1q_u64(lo.as_mut_ptr().add(start + 2 * pair).cast(), low[pair]);
                 vst1q_u64(hi.as_mut_ptr().add(start + 2 * pair).cast(), high[pair]);
             }
+        }
+        for start in (bulk..covered).step_by(2) {
+            let low = vld1q_u64(lo.as_ptr().add(start).cast());
+            let high = vld1q_u64(hi.as_ptr().add(start).cast());
+            let high = if INVERSE { veorq_u64(high, low) } else { high };
+            let low = veorq_u64(low, multiply(high, twiddle));
+            let high = if INVERSE { high } else { veorq_u64(high, low) };
+            vst1q_u64(lo.as_mut_ptr().add(start).cast(), low);
+            vst1q_u64(hi.as_mut_ptr().add(start).cast(), high);
         }
     }
     covered
