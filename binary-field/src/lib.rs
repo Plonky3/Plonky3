@@ -59,7 +59,7 @@ pub use packed::PackedGhash128;
 ))]
 pub use packed::{PackedPoly64, PackedPoly192};
 pub use poly64::Poly64;
-pub use poly192::Poly192;
+pub use poly192::{Poly192, Poly192MixedAccumulator};
 pub use tower::{
     BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
     BinaryField128, TowerLevel,

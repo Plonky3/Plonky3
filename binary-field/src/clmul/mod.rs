@@ -201,6 +201,13 @@ use portable::clmul_64x64;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 use x86_64::clmul_64x64;
 
+/// A polynomial product whose base-field reduction can be delayed across sums.
+#[allow(clippy::missing_const_for_fn)]
+#[inline]
+pub(crate) fn raw_product_64(a: u64, b: u64) -> u128 {
+    clmul_64x64(a, b)
+}
+
 /// The `256`-bit carryless product of two 128-bit polynomials, as `(low, high)`.
 ///
 /// Schoolbook over the 64-bit halves: four independent products, no dependency between them.

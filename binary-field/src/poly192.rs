@@ -55,6 +55,20 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
+)))]
+use crate::clmul::raw_product_64;
+use crate::clmul::reduce_64;
 use crate::gf2::characteristic_two_methods;
 use crate::{Gf2, Poly64, clmul};
 
@@ -71,6 +85,189 @@ const DEGREE: usize = 3;
 #[repr(transparent)]
 #[must_use]
 pub struct Poly192([Poly64; DEGREE]);
+
+/// A weighted extension-field sum whose three coordinate reductions are delayed until completion.
+///
+/// Chunks and partial sums can be combined without reducing each intermediate result.
+/// Binary-field reduction preserves XOR, so the final value equals reducing every product first.
+#[derive(Clone, Copy, Debug, Default)]
+#[must_use]
+pub struct Poly192MixedAccumulator {
+    /// Raw polynomial sums in the selected vector registers.
+    #[cfg(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "vpclmulqdq",
+            any(target_feature = "avx2", target_feature = "avx512f")
+        ),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        )
+    ))]
+    coordinates: crate::packed::poly192::PackedMixedAccumulator,
+    /// Scalar polynomial sums on targets without a polynomial packing.
+    #[cfg(not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "vpclmulqdq",
+            any(target_feature = "avx2", target_feature = "avx512f")
+        ),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        )
+    )))]
+    coordinates: [u128; DEGREE],
+}
+
+impl Poly192MixedAccumulator {
+    /// An empty weighted sum.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add `sum_i values[i] * weights[i]`, leaving each coordinate unreduced.
+    #[inline]
+    pub fn add_dot_product<const N: usize>(
+        &mut self,
+        values: &[Poly192; N],
+        weights: &[Poly64; N],
+    ) {
+        #[cfg(any(
+            all(
+                target_arch = "x86_64",
+                target_feature = "vpclmulqdq",
+                any(target_feature = "avx2", target_feature = "avx512f")
+            ),
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes"
+            )
+        ))]
+        self.coordinates.add_dot(values, weights);
+        #[cfg(not(any(
+            all(
+                target_arch = "x86_64",
+                target_feature = "vpclmulqdq",
+                any(target_feature = "avx2", target_feature = "avx512f")
+            ),
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes"
+            )
+        )))]
+        for (value, weight) in values.iter().zip(weights) {
+            for (sum, coordinate) in self.coordinates.iter_mut().zip(value.limbs()) {
+                *sum ^= raw_product_64(*coordinate, weight.to_bits());
+            }
+        }
+    }
+
+    /// Add one complete packing without unpacking its values first.
+    #[inline]
+    pub fn add_packed_dot_product(
+        &mut self,
+        values: <Poly192 as ExtensionField<Poly64>>::ExtensionPacking,
+        weights: <Poly64 as Field>::Packing,
+    ) {
+        #[cfg(any(
+            all(
+                target_arch = "x86_64",
+                target_feature = "vpclmulqdq",
+                any(target_feature = "avx2", target_feature = "avx512f")
+            ),
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes"
+            )
+        ))]
+        self.coordinates.add_packed(values, weights);
+        #[cfg(not(any(
+            all(
+                target_arch = "x86_64",
+                target_feature = "vpclmulqdq",
+                any(target_feature = "avx2", target_feature = "avx512f")
+            ),
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes"
+            )
+        )))]
+        self.add_dot_product(&[values], &[weights]);
+    }
+
+    /// Add another partial weighted sum without reducing either one.
+    #[inline]
+    pub fn merge(&mut self, other: Self) {
+        #[cfg(any(
+            all(
+                target_arch = "x86_64",
+                target_feature = "vpclmulqdq",
+                any(target_feature = "avx2", target_feature = "avx512f")
+            ),
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes"
+            )
+        ))]
+        self.coordinates.merge(other.coordinates);
+        #[cfg(not(any(
+            all(
+                target_arch = "x86_64",
+                target_feature = "vpclmulqdq",
+                any(target_feature = "avx2", target_feature = "avx512f")
+            ),
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes"
+            )
+        )))]
+        for (sum, term) in self.coordinates.iter_mut().zip(other.coordinates) {
+            *sum ^= term;
+        }
+    }
+
+    /// Complete the sum with one base-field reduction per coordinate.
+    #[inline]
+    pub fn finish(self) -> Poly192 {
+        #[cfg(any(
+            all(
+                target_arch = "x86_64",
+                target_feature = "vpclmulqdq",
+                any(target_feature = "avx2", target_feature = "avx512f")
+            ),
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes"
+            )
+        ))]
+        let coordinates = self.coordinates.coordinates();
+        #[cfg(not(any(
+            all(
+                target_arch = "x86_64",
+                target_feature = "vpclmulqdq",
+                any(target_feature = "avx2", target_feature = "avx512f")
+            ),
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes"
+            )
+        )))]
+        let coordinates = self.coordinates;
+        Poly192::from_limbs(coordinates.map(reduce_64))
+    }
+}
 
 impl Poly192 {
     /// The number of bits of an element.
@@ -624,10 +821,13 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_field::extension::HasFrobenius;
-    use p3_field::{Algebra, BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
+    use p3_field::{
+        Algebra, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
+        PrimeCharacteristicRing,
+    };
     use proptest::prelude::*;
 
-    use super::{DEGREE, Poly192};
+    use super::{DEGREE, Poly192, Poly192MixedAccumulator};
     use crate::Poly64;
 
     /// Seven elements whose twenty-one coordinates are all distinct, so any reordering shows.
@@ -702,6 +902,53 @@ mod tests {
     /// An element from three raw bit patterns.
     fn element(a: [u64; 3]) -> Poly192 {
         Poly192::new(a.map(Poly64::new))
+    }
+
+    /// One packed batch agrees with individual terms, merged batches and cancellation.
+    fn check_mixed_accumulator<const N: usize>(a: &[[u64; 3]; 17], f: &[u64; 17]) {
+        let values: [Poly192; N] = core::array::from_fn(|i| element(a[i]));
+        let weights: [Poly64; N] = core::array::from_fn(|i| Poly64::new(f[i]));
+        let expected = values
+            .iter()
+            .zip(weights)
+            .map(|(&value, weight)| value * weight)
+            .sum();
+        let mut batch = Poly192MixedAccumulator::new();
+        batch.add_dot_product(&values, &weights);
+        assert_eq!(batch.finish(), expected);
+
+        // Prepacked groups preserve the same sum, including a final scalar tail.
+        type BasePacking = <Poly64 as Field>::Packing;
+        type Packing = <Poly192 as ExtensionField<Poly64>>::ExtensionPacking;
+        let width = BasePacking::WIDTH;
+        let done = N / width * width;
+        let mut packed = Poly192MixedAccumulator::new();
+        for start in (0..done).step_by(width) {
+            let values = <Packing as PackedFieldExtension<Poly64, Poly192>>::from_ext_slice(
+                &values[start..start + width],
+            );
+            let weights = BasePacking::from_fn(|lane| weights[start + lane]);
+            packed.add_packed_dot_product(values, weights);
+        }
+        for (&value, &weight) in values[done..].iter().zip(&weights[done..]) {
+            packed.add_dot_product(&[value], &[weight]);
+        }
+        assert_eq!(packed.finish(), expected);
+
+        // Individual terms form two independently accumulated halves.
+        let mut left = Poly192MixedAccumulator::default();
+        let mut right = Poly192MixedAccumulator::new();
+        for (i, (&value, &weight)) in values.iter().zip(&weights).enumerate() {
+            let sum = if i < N / 2 { &mut left } else { &mut right };
+            sum.add_dot_product(&[value], &[weight]);
+        }
+        left.merge(right);
+        assert_eq!(left.finish(), expected);
+
+        // A sum merged with itself cancels before its final reduction.
+        let copy = batch;
+        batch.merge(copy);
+        assert_eq!(batch.finish(), Poly192::ZERO);
     }
 
     /// The `j`-th vector of the basis over the coefficient field.
@@ -907,6 +1154,22 @@ mod tests {
         fn the_frobenius_is_the_power_map_it_claims_to_be(a: [u64; 3]) {
             let x = element(a);
             prop_assert_eq!(x.frobenius(), x.exp_power_of_2(64));
+        }
+
+        #[test]
+        fn mixed_accumulators_preserve_batching_and_merging(a: [[u64; 3]; 17], f: [u64; 17]) {
+            // Boundaries cover scalar, two-, four- and eight-lane groups and their tails.
+            check_mixed_accumulator::<0>(&a, &f);
+            check_mixed_accumulator::<1>(&a, &f);
+            check_mixed_accumulator::<2>(&a, &f);
+            check_mixed_accumulator::<3>(&a, &f);
+            check_mixed_accumulator::<4>(&a, &f);
+            check_mixed_accumulator::<5>(&a, &f);
+            check_mixed_accumulator::<7>(&a, &f);
+            check_mixed_accumulator::<8>(&a, &f);
+            check_mixed_accumulator::<9>(&a, &f);
+            check_mixed_accumulator::<16>(&a, &f);
+            check_mixed_accumulator::<17>(&a, &f);
         }
 
         #[test]
