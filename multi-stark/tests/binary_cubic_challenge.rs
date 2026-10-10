@@ -43,8 +43,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::{Commitment, MultiStarkConfig, PcsError, PcsProverError, ProverData};
 use p3_multi_stark::{
-    MultiStarkProof, ProverInstance, ProverInstances, VerifierInstance, VerifierInstances, prove,
-    security_report, setup, verify,
+    BooleanTensorBackend, MultiStarkProof, ProverInstance, ProverInstances, VerifierInstance,
+    VerifierInstances, prove, prove_with_backend, security_report, setup, verify,
 };
 use p3_security::ErrorBits;
 use p3_sumcheck::PrescribedPointPcs;
@@ -503,6 +503,65 @@ fn the_machine_proves_with_bit_packed_tables() {
     let config = PackedConfig::new(&traces.shapes());
     let (proof, _) = prove_and_verify(&config, &chips, &traces);
     assert!(proof.indexed.is_some());
+}
+
+#[test]
+fn boolean_tensor_produces_the_generic_cubic_proof() {
+    struct ProductAir;
+    impl BaseAir<F> for ProductAir {
+        fn width(&self) -> usize {
+            3
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            vec![]
+        }
+    }
+    impl<AB: AirBuilder<F = F>> Air<AB> for ProductAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let row = main.current_slice();
+            builder.assert_eq(row[2], row[0] * row[1]);
+        }
+    }
+    let mut rng = SmallRng::seed_from_u64(0xC0B1C);
+    let words = (0..16)
+        .flat_map(|_| {
+            let a: u64 = rng.random();
+            let b: u64 = rng.random();
+            [a, b, a & b]
+        })
+        .collect();
+    let table = Table::from_packed_bits(RowMajorMatrix::new(words, 3), 10);
+    let config = PackedConfig::new(&[table.shape()]);
+    let (pk, vk) = setup(&config, &[&ProductAir], &mut challenger()).unwrap();
+    let instances = || {
+        ProverInstances::new(vec![ProverInstance::new(
+            &ProductAir,
+            table.clone(),
+            &pk,
+            &[],
+        )])
+    };
+    let generic = prove(&config, instances(), 0, &mut challenger()).unwrap();
+    let tensor = prove_with_backend::<_, _, BooleanTensorBackend>(
+        &config,
+        instances(),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    assert_eq!(
+        postcard::to_allocvec(&tensor).unwrap(),
+        postcard::to_allocvec(&generic).unwrap()
+    );
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&ProductAir, &vk, 10, &[])]),
+        &tensor,
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
 }
 
 #[test]

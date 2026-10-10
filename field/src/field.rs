@@ -510,6 +510,22 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
         (i < Self::DIMENSION).then(|| Self::from_basis_coefficients_fn(|j| F::from_bool(i == j)))
     }
 
+    /// Borrow a slice's basis coefficients when their storage is contiguous.
+    ///
+    /// The returned slice concatenates [`Self::as_basis_coefficients_slice`] for each element,
+    /// in order, and borrows the input storage. Implementations with padding or another layout
+    /// can retain the default `None`; callers must then use coefficient iteration.
+    ///
+    /// Support must be a property of the type's layout: an implementation must return `Some`
+    /// for every input slice, including empty slices, or `None` for every input slice. It must
+    /// not depend on the slice's contents, length, or address, and must remain stable when the
+    /// input storage moves or this method is called again.
+    #[must_use]
+    #[inline]
+    fn flatten_slice_to_base(_values: &[Self]) -> Option<&[F]> {
+        None
+    }
+
     /// Convert from a vector of `Self` to a vector of `F` by flattening the basis coefficients.
     ///
     /// Depending on the `BasedVectorSpace` this may be essentially a no-op and should certainly
@@ -643,6 +659,11 @@ impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     #[inline]
     fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = F>>(mut iter: I) -> Option<Self> {
         (iter.len() == 1).then(|| iter.next().unwrap()) // Unwrap will not panic as we know the length is 1.
+    }
+
+    #[inline]
+    fn flatten_slice_to_base(values: &[Self]) -> Option<&[F]> {
+        Some(values)
     }
 
     #[inline]
@@ -1109,6 +1130,18 @@ pub trait Field:
     ) -> Option<impl Fn(&[u64; 64], &mut Vec<Self>) + Send + Sync + 'static> {
         let _ = weights;
         None::<fn(&[u64; 64], &mut Vec<Self>)>
+    }
+
+    /// Prepares a target-specific expansion of 16 bit-plane words into 64 weighted sums.
+    ///
+    /// As with [`Self::prepare_bit_plane_expansion`], each input word holds one bit per output
+    /// lane. Unsupported fields and targets return `None` to retain the portable path.
+    #[must_use]
+    fn prepare_bit_plane_expansion_16(
+        weights: &[Self; 16],
+    ) -> Option<impl Fn(&[u64; 16], &mut Vec<Self>) + Send + Sync + 'static> {
+        let _ = weights;
+        None::<fn(&[u64; 16], &mut Vec<Self>)>
     }
 
     /// Check if the given field element is equal to the unique additive identity (ZERO).

@@ -142,6 +142,21 @@ pub trait AirBuilder: Sized {
         }
     }
 
+    /// Assert `filter * value == 0` for every value, in array order.
+    ///
+    /// A folder may factor the shared filter out of its weighted sum. This remains equivalent
+    /// for arbitrary filters; a zero filter still declares every constraint in the array.
+    fn assert_zeros_with_filter<const N: usize, I: Into<Self::Expr>, J: Into<Self::Expr>>(
+        &mut self,
+        filter: J,
+        array: [I; N],
+    ) {
+        let filter = filter.into();
+        for value in array {
+            self.assert_zero(filter.clone() * value.into());
+        }
+    }
+
     /// Assert that a given array consists of only boolean values.
     fn assert_bools<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         let zero_array = array.map(|x| x.into().bool_check());

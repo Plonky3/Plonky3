@@ -138,7 +138,7 @@ mod kernel_tests {
     use p3_baby_bear::BabyBear;
     use p3_binary_field::{Ghash128, Poly64, Poly192};
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{Field, PrimeCharacteristicRing, RawDataSerializable};
+    use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing, RawDataSerializable};
     use proptest::prelude::*;
     use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
@@ -154,8 +154,7 @@ mod kernel_tests {
 
     /// `powers` laid out for the kernel, however few they are.
     fn prepared<R: Field>(powers: &[R], generator: R) -> PreparedPowers<R> {
-        let basis =
-            kernel::coordinate_basis::<R>().expect("the kernel takes a 128-bit binary field");
+        let basis = kernel::coordinate_basis::<R>().expect("the kernel takes this binary field");
         PreparedPowers(kernel::Prepared::new(powers, generator, Arc::from(basis)))
     }
 
@@ -283,26 +282,34 @@ mod kernel_tests {
 
     /// One four-cell bit evaluation of `Columns(width)` against random powers and lane weights,
     /// with the kernel and without it.
-    fn quadratic_folder_sums(
+    fn quadratic_folder_sums<T: Field, R: Field>(
         seed: u64,
         width: usize,
         whole: [bool; SLICED_CELLS],
+        zero_cells: [bool; SLICED_CELLS],
     ) -> (
-        SlicedEvaluation<[Ghash128; SLICED_CELLS]>,
-        SlicedEvaluation<[Ghash128; SLICED_CELLS]>,
-    ) {
+        SlicedEvaluation<[R; SLICED_CELLS]>,
+        SlicedEvaluation<[R; SLICED_CELLS]>,
+    )
+    where
+        StandardUniform: Distribution<R>,
+    {
         let mut rng = SmallRng::seed_from_u64(seed);
         let local = (0..width)
-            .map(|_| SlicedBit::<F>::new(core::array::from_fn(|_| rng.random())))
+            .map(|_| {
+                SlicedBit::<T>::new(core::array::from_fn(|cell| {
+                    if zero_cells[cell] {
+                        0
+                    } else {
+                        rng.random::<u64>()
+                    }
+                }))
+            })
             .collect::<Vec<_>>();
-        let weights = (0..SLICED_LANES)
-            .map(|_| rng.random())
-            .collect::<Vec<Ghash128>>();
+        let weights = (0..SLICED_LANES).map(|_| rng.random()).collect::<Vec<R>>();
         let lanes = BitLaneSums::new(&weights);
-        let powers = (0..2 * width)
-            .map(|_| rng.random())
-            .collect::<Vec<Ghash128>>();
-        let prepared = prepared(&powers, Ghash128::ZERO);
+        let powers = (0..2 * width).map(|_| rng.random()).collect::<Vec<R>>();
+        let prepared = prepared(&powers, R::ZERO);
         let boundary = BoundaryEvals {
             first: SlicedBit::default(),
             last: SlicedBit::default(),
@@ -324,7 +331,7 @@ mod kernel_tests {
             width in 1_usize..40,
             whole in prop::array::uniform4(any::<bool>()),
         ) {
-            let (kernel, lanes) = quadratic_folder_sums(seed, width, whole);
+            let (kernel, lanes) = quadratic_folder_sums::<F, Ghash128>(seed, width, whole, [false; SLICED_CELLS]);
             prop_assert!(!kernel.poisoned && !lanes.poisoned);
             prop_assert_eq!(kernel.value, lanes.value);
         }
@@ -414,12 +421,192 @@ mod kernel_tests {
     fn a_field_of_another_size_or_characteristic_has_no_coordinate_basis() {
         assert_eq!(Poly64::NUM_BYTES, 8);
         assert!(kernel::coordinate_basis::<Poly64>().is_none());
-        assert_eq!(Poly192::NUM_BYTES, 24);
-        assert!(kernel::coordinate_basis::<Poly192>().is_none());
         // Sixteen bytes, but odd characteristic.
         type Quartic = BinomialExtensionField<BabyBear, 4>;
         assert_eq!(Quartic::NUM_BYTES, 16);
         assert!(kernel::coordinate_basis::<Quartic>().is_none());
+    }
+
+    fn encoding_192(value: Poly192) -> [u64; 3] {
+        let mut words = [0; 3];
+        for (i, byte) in value.into_bytes().into_iter().enumerate() {
+            words[i / 8] |= u64::from(byte) << (8 * (i % 8));
+        }
+        words
+    }
+
+    #[test]
+    fn cubic_coordinate_basis_covers_every_limb_and_rejects_nonlinear_encodings() {
+        let basis = kernel::coordinate_basis::<Poly192>().unwrap();
+        assert_eq!(basis.len(), 192);
+        for (bit, &element) in basis.iter().enumerate() {
+            let mut unit = [0u64; 3];
+            unit[bit / 64] = 1 << (bit % 64);
+            assert_eq!(encoding_192(element), unit);
+        }
+        assert!(kernel::basis_under_192::<Poly192>(encoding_192).is_some());
+        assert!(
+            kernel::basis_under_192::<Poly192>(|x| {
+                let mut words = encoding_192(x);
+                words[2] ^= 1;
+                words
+            })
+            .is_none()
+        );
+        assert!(
+            kernel::basis_under_192::<Poly192>(|x| {
+                let mut words = encoding_192(x);
+                words[2] ^= (words[0] & (words[0] >> 1) & 1) << 63;
+                words
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn cubic_preparation_is_limited_to_the_bit_folder_threshold() {
+        let mut rng = SmallRng::seed_from_u64(0x192);
+        let mut powers = |len| (0..len).map(|_| rng.random()).collect::<Vec<Poly192>>();
+        let airs = [
+            powers(MIN_BIT_CONSTRAINTS - 1),
+            powers(MIN_BIT_CONSTRAINTS),
+            Vec::new(),
+        ];
+        let bits = PreparedPowers::per_air_bits(&airs);
+        assert!(bits[0].is_none());
+        assert!(bits[1].is_some());
+        assert!(bits[2].is_none());
+        assert!(
+            PreparedPowers::per_air(&airs, Poly192::ZERO)
+                .iter()
+                .all(Option::is_none)
+        );
+        assert_eq!(size_of::<PreparedSums>(), 1344);
+    }
+
+    #[test]
+    fn cubic_prepared_sums_match_a_raw_lane_oracle() {
+        let mut rng = SmallRng::seed_from_u64(0x192_128);
+        for count in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 65] {
+            let weights = (0..64).map(|_| rng.random()).collect::<Vec<Poly192>>();
+            let generator: Poly192 = rng.random();
+            let lanes = LaneSums::new(&weights, generator);
+            let powers = (0..count).map(|_| rng.random()).collect::<Vec<Poly192>>();
+            let prepared = prepared(&powers, generator);
+            for all_zero in [false, true] {
+                let mut sums = PreparedSums::new();
+                let mut expected = Poly192::ZERO;
+                let mut active = false;
+                for index in 0..count + 3 {
+                    let (low, high) = if all_zero {
+                        (0, 0)
+                    } else {
+                        planes(&mut rng, index)
+                    };
+                    sums.add(&prepared, index, low, high);
+                    if let Some(&power) = powers.get(index) {
+                        active |= low != 0 || high != 0;
+                        for (lane, &weight) in weights.iter().enumerate() {
+                            let value = Poly192::from_bool((low >> lane) & 1 == 1)
+                                + generator * Poly192::from_bool((high >> lane) & 1 == 1);
+                            expected += power * weight * value;
+                        }
+                    }
+                }
+                assert_eq!(sums.finish(&prepared, &lanes), expected, "count {count}");
+                assert_eq!(sums.has_extra_sums(), active);
+            }
+        }
+    }
+
+    #[test]
+    fn cubic_bit_contraction_preserves_upper_coordinates_and_the_last_lane() {
+        let mut weights = [Poly192::ZERO; SLICED_LANES];
+        weights[63] = Poly192::ONE;
+        let lanes = BitLaneSums::new(&weights);
+        for bit in [0, 63, 64, 127, 128, 191] {
+            let power = Poly192::from_basis_coefficients_fn(|coefficient| {
+                if coefficient == bit / 64 {
+                    Poly64::new(1 << (bit % 64))
+                } else {
+                    Poly64::ZERO
+                }
+            });
+            let prepared = prepared(&[power], Poly192::ZERO);
+            let mut sums = PreparedSums::new();
+            sums.add_bits(&prepared, 0, 1 << 63);
+            assert_eq!(sums.finish_bits(&prepared, &lanes), power);
+            assert!(sums.has_extra_sums());
+        }
+    }
+
+    #[test]
+    fn bit_prepared_sums_match_raw_lanes_across_ring_boundaries() {
+        fn check<R: Field>()
+        where
+            StandardUniform: Distribution<R>,
+        {
+            let mut rng = SmallRng::seed_from_u64(0xB175_0192);
+            for count in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 65] {
+                let weights = (0..64).map(|_| rng.random()).collect::<Vec<R>>();
+                let lanes = BitLaneSums::new(&weights);
+                let powers = (0..count).map(|_| rng.random()).collect::<Vec<R>>();
+                let prepared = prepared(&powers, R::ZERO);
+                for all_zero in [false, true] {
+                    let mut sums = PreparedSums::new();
+                    let mut expected = R::ZERO;
+                    for index in 0..count + 3 {
+                        let bits = if all_zero || (index / 8) % 3 == 1 {
+                            0
+                        } else if index % 3 == 0 {
+                            1 << (index % 64)
+                        } else if index % 3 == 1 {
+                            u64::MAX
+                        } else {
+                            rng.random::<u64>()
+                        };
+                        sums.add_bits(&prepared, index, bits);
+                        if let Some(&power) = powers.get(index) {
+                            for (lane, &weight) in weights.iter().enumerate() {
+                                if (bits >> lane) & 1 != 0 {
+                                    expected += power * weight;
+                                }
+                            }
+                        }
+                    }
+                    assert_eq!(sums.finish_bits(&prepared, &lanes), expected);
+                }
+            }
+        }
+        check::<Ghash128>();
+        check::<Poly192>();
+    }
+
+    #[test]
+    fn past_end_bit_constraints_do_not_activate_cubic_sums() {
+        let prepared = prepared(&[Poly192::ONE], Poly192::ZERO);
+        let lanes = BitLaneSums::new(&[Poly192::ONE; SLICED_LANES]);
+        let mut sums = PreparedSums::new();
+        sums.add_bits(&prepared, 0, 0);
+        sums.add_bits(&prepared, 1, u64::MAX);
+        assert_eq!(sums.finish_bits(&prepared, &lanes), Poly192::ZERO);
+        assert!(!sums.has_extra_sums());
+    }
+
+    #[test]
+    fn cubic_four_cell_folders_match_without_the_kernel() {
+        for width in [9, 1280] {
+            for whole in [[false; 4], [true; 4], [true, false, true, false]] {
+                let (kernel, scalar) = quadratic_folder_sums::<Poly64, Poly192>(
+                    0xC0B1C + width as u64,
+                    width,
+                    whole,
+                    [true, false, false, false],
+                );
+                assert!(!kernel.poisoned && !scalar.poisoned);
+                assert_eq!(kernel.value, scalar.value);
+            }
+        }
     }
 
     #[test]

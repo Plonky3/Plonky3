@@ -533,6 +533,10 @@ impl<R: Field> PreparedPowers<R> {
     /// constraints to repay the kernel's fixed cost per evaluation.
     #[must_use]
     pub(crate) fn per_air(alpha_powers: &[Vec<R>], generator: R) -> Vec<Option<Self>> {
+        // The two-plane folder's crossover has only been measured for 128-bit fields.
+        if R::NUM_BYTES != 16 {
+            return alpha_powers.iter().map(|_| None).collect();
+        }
         kernel::Prepared::per_air(alpha_powers, generator, MIN_CONSTRAINTS)
             .into_iter()
             .map(|prepared| prepared.map(Self))
@@ -540,6 +544,8 @@ impl<R: Field> PreparedPowers<R> {
     }
 
     /// Lay out powers for the single-plane folder, using its measured activation threshold.
+    ///
+    /// This also accepts a characteristic-two field with a linear 24-byte encoding.
     #[must_use]
     pub(crate) fn per_air_bits(alpha_powers: &[Vec<R>]) -> Vec<Option<Self>> {
         kernel::Prepared::per_air(alpha_powers, R::ZERO, MIN_BIT_CONSTRAINTS)
@@ -880,6 +886,7 @@ where
 mod kernel {
     use alloc::boxed::Box;
     use alloc::sync::Arc;
+    use alloc::vec;
     use alloc::vec::Vec;
     use core::arch::x86_64::*;
 
@@ -898,6 +905,11 @@ mod kernel {
 
     /// Bytes of an element's encoding, one coordinate per bit.
     const BYTES: usize = COORDINATES / 8;
+
+    /// Additional coordinates of a cubic extension over a 64-bit base field.
+    const EXTRA_BYTES: usize = 8;
+    const WIDE_BYTES: usize = BYTES + EXTRA_BYTES;
+    const WIDE_COORDINATES: usize = WIDE_BYTES * 8;
 
     /// Words one register holds.
     const REGISTER_WORDS: usize = 8;
@@ -967,11 +979,11 @@ mod kernel {
         ///
         /// Matrix `p` of a plane takes a lane byte whose bit `k` is constraint `7 - k`'s lane
         /// bit, and returns coordinate byte `p` of the sum of the powers it picks.
-        blocks: Vec<[[u64; BYTES]; 2]>,
+        blocks: Vec<u64>,
         /// Number of powers.
         len: usize,
         /// `basis[b]`: the element whose encoding sets coordinate `b` alone, one for every AIR.
-        basis: Arc<[R; COORDINATES]>,
+        basis: Arc<[R]>,
     }
 
     impl<R: Field> Prepared<R> {
@@ -1000,20 +1012,41 @@ mod kernel {
         /// Lay out `alpha_powers` and their products with `generator`, whatever their number.
         ///
         /// `basis` must be what [`coordinate_basis`] returns for `R`.
-        pub(super) fn new(alpha_powers: &[R], generator: R, basis: Arc<[R; COORDINATES]>) -> Self {
-            let blocks = alpha_powers
-                .par_chunks(BLOCK)
-                .map(|powers| {
-                    let low =
-                        core::array::from_fn(|j| powers.get(j).map_or(0, |&p| coordinates(p)));
-                    let high = core::array::from_fn(|j| {
-                        powers.get(j).map_or(0, |&p| coordinates(generator * p))
-                    });
+        pub(super) fn new(alpha_powers: &[R], generator: R, basis: Arc<[R]>) -> Self {
+            let bytes = R::NUM_BYTES;
+            assert!(matches!(bytes, BYTES | WIDE_BYTES));
+            assert_eq!(basis.len(), bytes * 8);
+            let mut blocks = vec![0; alpha_powers.len().div_ceil(BLOCK) * 2 * bytes];
+            blocks
+                .par_chunks_mut(2 * bytes)
+                .zip(alpha_powers.par_chunks(BLOCK))
+                .for_each(|(block, powers)| {
                     // SAFETY: this module is compiled only where the build enables every target
-                    // feature the kernel names.
-                    unsafe { [block_matrices(&low), block_matrices(&high)] }
-                })
-                .collect();
+                    // feature the kernels name. Each matrix occupies exactly `bytes` words.
+                    unsafe {
+                        if bytes == BYTES {
+                            let low = core::array::from_fn(|j| {
+                                powers.get(j).map_or(0, |&p| coordinates(p))
+                            });
+                            let high = core::array::from_fn(|j| {
+                                powers.get(j).map_or(0, |&p| coordinates(generator * p))
+                            });
+                            block[..bytes].copy_from_slice(&block_matrices(&low));
+                            block[bytes..].copy_from_slice(&block_matrices(&high));
+                        } else {
+                            let low = core::array::from_fn(|j| {
+                                powers.get(j).map_or([0; 3], |&p| coordinates_192(p))
+                            });
+                            let high = core::array::from_fn(|j| {
+                                powers
+                                    .get(j)
+                                    .map_or([0; 3], |&p| coordinates_192(generator * p))
+                            });
+                            block[..bytes].copy_from_slice(&block_matrices_192(&low));
+                            block[bytes..].copy_from_slice(&block_matrices_192(&high));
+                        }
+                    }
+                });
             Self {
                 blocks,
                 len: alpha_powers.len(),
@@ -1040,13 +1073,17 @@ mod kernel {
     ///
     /// # Returns
     ///
-    /// `None` unless `R` has characteristic two and a sixteen-byte encoding that passes the
+    /// `None` unless `R` has characteristic two and a 16- or 24-byte encoding that passes the
     /// checks of [`basis_under`].
-    pub(super) fn coordinate_basis<R: Field>() -> Option<Box<[R; COORDINATES]>> {
-        if R::NUM_BYTES != BYTES || R::ONE + R::ONE != R::ZERO {
+    pub(super) fn coordinate_basis<R: Field>() -> Option<Box<[R]>> {
+        if R::ONE + R::ONE != R::ZERO {
             return None;
         }
-        basis_under(coordinates::<R>)
+        match R::NUM_BYTES {
+            BYTES => basis_under(coordinates::<R>).map(|basis| -> Box<[R]> { basis }),
+            WIDE_BYTES => basis_under_192(coordinates_192::<R>).map(|basis| -> Box<[R]> { basis }),
+            _ => None,
+        }
     }
 
     /// The elements whose images under `encode` are the unit vectors.
@@ -1104,6 +1141,61 @@ mod kernel {
         basis.into_boxed_slice().try_into().ok()
     }
 
+    /// A 24-byte encoding as three little-endian coordinate words.
+    fn coordinates_192<R: Field>(value: R) -> [u64; 3] {
+        let mut words = [0; 3];
+        for (i, byte) in value.into_bytes().into_iter().enumerate() {
+            words[i / 8] |= u64::from(byte) << (8 * (i % 8));
+        }
+        words
+    }
+
+    /// The same admission and basis recovery as [`basis_under`], over three coordinate words.
+    pub(super) fn basis_under_192<R: Field>(
+        encode: impl Fn(R) -> [u64; 3],
+    ) -> Option<Box<[R; WIDE_COORDINATES]>> {
+        if encode(R::ZERO) != [0; 3] {
+            return None;
+        }
+        let mut rows = R::GENERATOR
+            .powers()
+            .take(WIDE_COORDINATES)
+            .map(|power| (encode(power), power))
+            .collect::<Vec<_>>();
+        if !rows.windows(2).all(|pair| {
+            encode(pair[0].1 + pair[1].1) == core::array::from_fn(|i| pair[0].0[i] ^ pair[1].0[i])
+        }) {
+            return None;
+        }
+        for bit in 0..WIDE_COORDINATES {
+            let limb = bit / 64;
+            let mask = 1u64 << (bit % 64);
+            let pivot = (bit..WIDE_COORDINATES).find(|&row| rows[row].0[limb] & mask != 0)?;
+            rows.swap(bit, pivot);
+            let (unit, element) = rows[bit];
+            for (row, (bits, value)) in rows.iter_mut().enumerate() {
+                if row != bit && bits[limb] & mask != 0 {
+                    for (word, pivot) in bits.iter_mut().zip(unit) {
+                        *word ^= pivot;
+                    }
+                    *value += element;
+                }
+            }
+        }
+        let basis = rows
+            .into_iter()
+            .map(|(_, element)| element)
+            .collect::<Vec<_>>();
+        if !basis.iter().enumerate().all(|(bit, &element)| {
+            let mut unit = [0; 3];
+            unit[bit / 64] = 1 << (bit % 64);
+            encode(element) == unit
+        }) {
+            return None;
+        }
+        basis.into_boxed_slice().try_into().ok()
+    }
+
     /// The matrices adding the eight powers with coordinates `powers`, one per coordinate byte.
     ///
     /// ```text
@@ -1136,6 +1228,34 @@ mod kernel {
         matrices
     }
 
+    /// The 24 coordinate-byte matrices of eight 192-bit powers.
+    #[target_feature(enable = "avx512f,avx512bw,gfni")]
+    fn block_matrices_192(powers: &[[u64; 3]; BLOCK]) -> [u64; WIDE_BYTES] {
+        let mut gathered = [0u64; WIDE_BYTES];
+        for (j, power) in powers.iter().enumerate() {
+            for (i, row) in gathered.iter_mut().enumerate() {
+                let byte = (power[i / 8] >> (8 * (i % 8))) as u8;
+                *row |= u64::from(byte) << (8 * j);
+            }
+        }
+        let mut matrices = [0; WIDE_BYTES];
+        for (matrix, gathered) in matrices
+            .as_chunks_mut::<REGISTER_WORDS>()
+            .0
+            .iter_mut()
+            .zip(gathered.as_chunks::<REGISTER_WORDS>().0)
+        {
+            store(
+                matrix,
+                _mm512_gf2p8affine_epi64_epi8::<0>(
+                    _mm512_set1_epi64(REVERSED as i64),
+                    load(gathered),
+                ),
+            );
+        }
+        matrices
+    }
+
     /// Blocks whose planes wait at once.
     ///
     /// A block is added once the next one fills. Its words have left the store buffer by then,
@@ -1144,6 +1264,11 @@ mod kernel {
 
     /// Words of the ring each plane waits in, one block after another.
     const RING: usize = WAITING * BLOCK;
+
+    /// The cubic field's extra rows retain the head's register alignment when allocated.
+    #[derive(Debug)]
+    #[repr(C, align(64))]
+    struct ExtraSums([[u64; REGISTER_WORDS]; EXTRA_BYTES]);
 
     /// Running sums of one evaluation's constraints against a [`PreparedPowers`] layout.
     ///
@@ -1164,6 +1289,9 @@ mod kernel {
         planes: [[u64; RING]; 2],
         /// Whether a block has reached the sums, which are all zero until one does.
         carried: bool,
+        /// Only active 192-bit evaluations allocate the extra coordinate rows. This pointer
+        /// fits the original struct's tail padding, preserving the 128-bit stack footprint.
+        extra: Option<Box<ExtraSums>>,
     }
 
     impl PreparedSums {
@@ -1173,7 +1301,13 @@ mod kernel {
                 sums: [[0; REGISTER_WORDS]; BYTES],
                 planes: [[0; RING]; 2],
                 carried: false,
+                extra: None,
             }
+        }
+
+        #[cfg(test)]
+        pub(super) const fn has_extra_sums(&self) -> bool {
+            self.extra.is_some()
         }
 
         /// Add constraint `index` with planes `low` and `high`.
@@ -1181,22 +1315,44 @@ mod kernel {
         /// Filling a block adds the one before it. A constraint past the prepared powers adds
         /// nothing, and the folder's count check rejects it.
         #[inline]
-        pub(crate) fn add<R>(
+        pub(crate) fn add<R: Field>(
             &mut self,
             prepared: &PreparedPowers<R>,
             index: usize,
             low: u64,
             high: u64,
         ) {
+            self.add_planes(prepared, index, [low, high]);
+        }
+
+        /// Add a Boolean constraint for [`Self::finish_bits`], without recording a high plane.
+        #[inline]
+        pub(crate) fn add_bits<R: Field>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            index: usize,
+            bits: u64,
+        ) {
+            self.add_planes(prepared, index, [bits]);
+        }
+
+        #[inline]
+        fn add_planes<R: Field, const N: usize>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            index: usize,
+            planes: [u64; N],
+        ) {
             if index >= prepared.0.len {
                 return;
             }
-            self.planes[0][index % RING] = low;
-            self.planes[1][index % RING] = high;
+            for (ring, plane) in self.planes.iter_mut().zip(planes) {
+                ring[index % RING] = plane;
+            }
             if index % BLOCK == BLOCK - 1 && index >= BLOCK {
                 // SAFETY: this module is compiled only where the build enables every target
                 // feature the kernel names.
-                unsafe { self.flush(&prepared.0, index / BLOCK - 1) };
+                unsafe { self.flush::<R, N>(&prepared.0, index / BLOCK - 1) };
             }
         }
 
@@ -1209,20 +1365,20 @@ mod kernel {
             prepared: &PreparedPowers<R>,
             lanes: &LaneSums<R>,
         ) -> R {
-            self.finish_with(prepared, |plane| plane_sum(lanes, plane))
+            self.finish_with::<R, 2>(prepared, |plane| plane_sum(lanes, plane))
         }
 
-        /// [`Self::finish`], for values with only a low bit plane.
+        /// [`Self::finish`], for values added through [`Self::add_bits`].
         pub(crate) fn finish_bits<R: Field>(
             &mut self,
             prepared: &PreparedPowers<R>,
             lanes: &BitLaneSums<R>,
         ) -> R {
-            self.finish_with(prepared, |plane| lanes.sum(plane))
+            self.finish_with::<R, 1>(prepared, |plane| lanes.sum(plane))
         }
 
         /// Finish the byte-sliced sums, contracting every coordinate plane through `plane_sum`.
-        fn finish_with<R: Field>(
+        fn finish_with<R: Field, const N: usize>(
             &mut self,
             prepared: &PreparedPowers<R>,
             plane_sum: impl FnMut(u64) -> R,
@@ -1233,10 +1389,10 @@ mod kernel {
             // the kernel names.
             unsafe {
                 if full > 0 {
-                    self.flush(prepared, full - 1);
+                    self.flush::<R, N>(prepared, full - 1);
                 }
                 if !prepared.len.is_multiple_of(BLOCK) {
-                    self.flush(prepared, full);
+                    self.flush::<R, N>(prepared, full);
                 }
             }
             if !self.carried {
@@ -1244,42 +1400,106 @@ mod kernel {
             }
             // SAFETY: this module is compiled only where the build enables every target feature
             // the kernel names.
-            unsafe { self.contract(&prepared.basis, plane_sum) }
+            unsafe {
+                match R::NUM_BYTES {
+                    BYTES => self.contract(
+                        prepared
+                            .basis
+                            .as_ref()
+                            .try_into()
+                            .expect("128 coordinate basis elements"),
+                        plane_sum,
+                    ),
+                    WIDE_BYTES => self.contract_192(
+                        prepared
+                            .basis
+                            .as_ref()
+                            .try_into()
+                            .expect("192 coordinate basis elements"),
+                        plane_sum,
+                    ),
+                    _ => unreachable!("only 128- and 192-bit fields are prepared"),
+                }
+            }
         }
 
         /// Add block `block` to the sums through its matrices, and clear its planes.
         ///
         /// A plane on which the whole block vanishes adds nothing.
         #[target_feature(enable = "avx512f,avx512bw,gfni")]
-        fn flush<R>(&mut self, prepared: &Prepared<R>, block: usize) {
+        fn flush<R: Field, const N: usize>(&mut self, prepared: &Prepared<R>, block: usize) {
             let at = block % WAITING;
-            let planes = [0, 1].map(|plane| load(&self.planes[plane].as_chunks::<BLOCK>().0[at]));
+            let planes: [_; N] =
+                core::array::from_fn(|plane| load(&self.planes[plane].as_chunks::<BLOCK>().0[at]));
             if planes
                 .iter()
                 .all(|&words| _mm512_test_epi64_mask(words, words) == 0)
             {
                 return;
             }
-            for ring in &mut self.planes {
+            for ring in &mut self.planes[..N] {
                 ring.as_chunks_mut::<BLOCK>().0[at] = [0; BLOCK];
             }
-            let matrices = &prepared.blocks[block];
+            let bytes = R::NUM_BYTES;
+            let matrices = &prepared.blocks[block * 2 * bytes..(block + 1) * 2 * bytes];
+            if bytes == BYTES {
+                // Sixteen sums fit beside the lane bytes. Keep this loop in the flush so
+                // extending the kernel to wider fields does not add a call and spills here.
+                let mut sums = self.sums.map(|words| load(&words));
+                for (plane, &words) in planes.iter().enumerate() {
+                    if _mm512_test_epi64_mask(words, words) == 0 {
+                        continue;
+                    }
+                    let lanes = lane_bytes(words);
+                    let matrices = &matrices[plane * bytes..(plane + 1) * bytes];
+                    for (sum, &matrix) in sums.iter_mut().zip(matrices) {
+                        let picked = _mm512_gf2p8affine_epi64_epi8::<0>(
+                            lanes,
+                            _mm512_set1_epi64(matrix as i64),
+                        );
+                        *sum = _mm512_xor_si512(*sum, picked);
+                    }
+                }
+                for (words, sum) in self.sums.iter_mut().zip(sums) {
+                    store(words, sum);
+                }
+                self.carried = true;
+                return;
+            }
+            let active = planes.map(|words| _mm512_test_epi64_mask(words, words) != 0);
+            let lanes = core::array::from_fn(|i| {
+                if active[i] {
+                    lane_bytes(planes[i])
+                } else {
+                    _mm512_setzero_si512()
+                }
+            });
+            accumulate_bytes(
+                &mut self.sums,
+                core::array::from_fn(|plane| {
+                    matrices[plane * bytes..plane * bytes + BYTES]
+                        .try_into()
+                        .unwrap()
+                }),
+                &lanes,
+                active,
+            );
+            if bytes == WIDE_BYTES {
+                let extra = self
+                    .extra
+                    .get_or_insert_with(|| Box::new(ExtraSums([[0; REGISTER_WORDS]; EXTRA_BYTES])));
+                accumulate_bytes(
+                    &mut extra.0,
+                    core::array::from_fn(|plane| {
+                        matrices[plane * bytes + BYTES..(plane + 1) * bytes]
+                            .try_into()
+                            .unwrap()
+                    }),
+                    &lanes,
+                    active,
+                );
+            }
             self.carried = true;
-            let mut sums = self.sums.map(|words| load(&words));
-            for (&words, matrices) in planes.iter().zip(matrices) {
-                if _mm512_test_epi64_mask(words, words) == 0 {
-                    continue;
-                }
-                let lanes = lane_bytes(words);
-                for (sum, &matrix) in sums.iter_mut().zip(matrices) {
-                    let picked =
-                        _mm512_gf2p8affine_epi64_epi8::<0>(lanes, _mm512_set1_epi64(matrix as i64));
-                    *sum = _mm512_xor_si512(*sum, picked);
-                }
-            }
-            for (words, sum) in self.sums.iter_mut().zip(sums) {
-                store(words, sum);
-            }
         }
 
         /// `sum_lane w(lane) * A(lane)` from the coordinate bytes of every lane's sum.
@@ -1302,6 +1522,59 @@ mod kernel {
                 }
             }
             R::dot_product(basis, &sums)
+        }
+
+        /// Contract all three coordinate words of a cubic field after at least one active block.
+        #[target_feature(enable = "avx512f,avx512bw")]
+        fn contract_192<R: Field>(
+            &self,
+            basis: &[R; WIDE_COORDINATES],
+            mut plane_sum: impl FnMut(u64) -> R,
+        ) -> R {
+            let extra = self
+                .extra
+                .as_ref()
+                .expect("an active 192-bit sum has its extra rows");
+            let mut sums = [R::ZERO; WIDE_COORDINATES];
+            for (bytes, sums) in self
+                .sums
+                .iter()
+                .chain(&extra.0)
+                .zip(sums.as_chunks_mut::<8>().0.iter_mut())
+            {
+                let bytes = load(bytes);
+                for (bit, sum) in sums.iter_mut().enumerate() {
+                    let plane = _mm512_test_epi8_mask(bytes, _mm512_set1_epi8((1u8 << bit) as i8));
+                    *sum = plane_sum(plane);
+                }
+            }
+            R::dot_product(basis, &sums)
+        }
+    }
+
+    /// Accumulate a bounded group of coordinate rows without keeping all 24 sums in registers.
+    #[target_feature(enable = "avx512f,avx512bw,gfni")]
+    fn accumulate_bytes<const B: usize, const N: usize>(
+        words: &mut [[u64; REGISTER_WORDS]; B],
+        matrices: [&[u64; B]; N],
+        lanes: &[__m512i; N],
+        active: [bool; N],
+    ) {
+        let mut sums = words.map(|row| load(&row));
+        for plane in 0..N {
+            if !active[plane] {
+                continue;
+            }
+            for (sum, &matrix) in sums.iter_mut().zip(matrices[plane]) {
+                let picked = _mm512_gf2p8affine_epi64_epi8::<0>(
+                    lanes[plane],
+                    _mm512_set1_epi64(matrix as i64),
+                );
+                *sum = _mm512_xor_si512(*sum, picked);
+            }
+        }
+        for (words, sum) in words.iter_mut().zip(sums) {
+            store(words, sum);
         }
     }
 
@@ -1411,6 +1684,16 @@ mod kernel {
             _index: usize,
             _low: u64,
             _high: u64,
+        ) {
+            match prepared.0.0 {}
+        }
+
+        /// Never called: no prepared layout exists.
+        pub(crate) fn add_bits<R>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            _index: usize,
+            _bits: u64,
         ) {
             match prepared.0.0 {}
         }

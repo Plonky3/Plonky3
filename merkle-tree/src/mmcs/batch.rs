@@ -11,7 +11,7 @@ use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
-use super::{check_widths, validate_commit_reachable_heights};
+use super::{check_widths, collect_opening_row, validate_commit_reachable_heights};
 use crate::MerkleTreeError::{
     CapMismatch, EmptyBatch, IndexOutOfBounds, WrongBatchSize, WrongHeight,
 };
@@ -92,7 +92,7 @@ where
                 let log2_height = log2_ceil_usize(matrix.height());
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
-                matrix.row(reduced_index).unwrap().into_iter().collect()
+                collect_opening_row(matrix.row(reduced_index).unwrap(), matrix.width())
             })
             .collect_vec();
 
@@ -335,6 +335,55 @@ mod tests {
     type MyCompress4 = TruncatedPermutation<PermWide, 4, 8, 32>;
     type MyMmcs4 =
         MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress4, 4, 8>;
+
+    #[test]
+    fn opening_row_reuses_owned_buffer() {
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        struct OwningRows {
+            row: Vec<u64>,
+            pointer: AtomicUsize,
+        }
+        impl Matrix<u64> for OwningRows {
+            fn width(&self) -> usize {
+                self.row.len()
+            }
+
+            fn height(&self) -> usize {
+                1
+            }
+
+            unsafe fn row_unchecked(
+                &self,
+                _r: usize,
+            ) -> impl IntoIterator<Item = u64, IntoIter = impl Iterator<Item = u64> + Send + Sync>
+            {
+                let row = self.row.clone();
+                self.pointer.store(row.as_ptr() as usize, Ordering::Relaxed);
+                row
+            }
+        }
+        let matrix = OwningRows {
+            row: (0..48).collect(),
+            pointer: AtomicUsize::new(0),
+        };
+        let values = super::collect_opening_row(matrix.row(0).unwrap(), matrix.width());
+        assert_eq!(
+            values.as_ptr() as usize,
+            matrix.pointer.load(Ordering::Relaxed)
+        );
+        assert_eq!(values, matrix.row);
+    }
+
+    #[test]
+    fn opening_row_reserves_width_without_iterator_hint() {
+        for width in [0, 1, 13, 48] {
+            let mut row = 0..width;
+            let values = super::collect_opening_row(core::iter::from_fn(|| row.next()), width);
+            assert_eq!(values.capacity(), width);
+            assert!(values.into_iter().eq(0..width));
+        }
+    }
 
     #[test]
     fn commit_single_1x8() {

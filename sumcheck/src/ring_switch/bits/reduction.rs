@@ -82,6 +82,28 @@ const fn compact_size_floor(requested_k: usize, log_chunk: usize) -> usize {
     requested_k + log_chunk + COMPACT_MIN_BLOCK_BITS
 }
 
+/// Add the successor weights within one nonempty column, preserving its original entries.
+fn add_successor_weights<R: Field>(entries: &mut [R], alpha: R, alpha_squared: R) {
+    let last = entries.len() - 1;
+    let boundary = alpha_squared * entries[last];
+    let packed_alpha = R::Packing::broadcast(alpha);
+    let width = R::Packing::WIDTH;
+    let mut end = entries.len();
+
+    // Descend so every source is still original. Copy the shifted packed source before
+    // borrowing its overlapping destination; packed values have scalar alignment.
+    while end > width {
+        let start = end - width;
+        let previous = *R::Packing::from_slice(&entries[start - 1..end - 1]);
+        *R::Packing::from_slice_mut(&mut entries[start..end]) += packed_alpha * previous;
+        end = start;
+    }
+    for row in (1..end).rev() {
+        entries[row] += alpha * entries[row - 1];
+    }
+    entries[last] += boundary;
+}
+
 /// Bind prefix variables in one task-owned buffer without invoking Rayon recursively.
 fn bind_scratch_prefix<R: Field>(values: &mut Vec<R>, challenges: &[R]) {
     for &challenge in challenges {
@@ -1143,7 +1165,6 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchBatch<'
             .kept_row_variables()
             .expect("a batch carries alpha only for a reduction sending successor elements");
         let column = 1usize << kept;
-        let max = column - 1;
         let alpha = R::from(alpha);
         let alpha_squared = alpha.square();
 
@@ -1162,17 +1183,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchBatch<'
             .par_chunks_mut(stride)
             .for_each(|part| {
                 for entries in part.chunks_mut(column) {
-                    for row in (0..column).rev() {
-                        let settled = entries[row];
-                        let mut value = settled;
-                        if row != 0 {
-                            value += alpha * entries[row - 1];
-                        }
-                        if row == max {
-                            value += alpha_squared * settled;
-                        }
-                        entries[row] = value;
-                    }
+                    add_successor_weights(entries, alpha, alpha_squared);
                 }
             });
         table
@@ -1213,7 +1224,6 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchBatch<'
         let column = 1usize << kept;
         let alpha = R::from(alpha);
         let alpha_squared = alpha.square();
-        let max = column - 1;
         // A column fits inside the tail: the kept-row clause of `compact_depth_is_eligible` keeps
         // the compact head off the kept row coordinates, so the tail keeps at least the kept rows.
         // Every chunk below is therefore exactly `stride` long and splits into whole columns.
@@ -1231,17 +1241,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchBatch<'
             .par_chunks_mut(stride)
             .for_each(|part| {
                 for entries in part.chunks_mut(column) {
-                    for row in (0..column).rev() {
-                        let settled = entries[row];
-                        let mut value = settled;
-                        if row != 0 {
-                            value += alpha * entries[row - 1];
-                        }
-                        if row == max {
-                            value += alpha_squared * settled;
-                        }
-                        entries[row] = value;
-                    }
+                    add_successor_weights(entries, alpha, alpha_squared);
                 }
             });
         table
@@ -2034,6 +2034,99 @@ mod tests {
     /// A fresh wide-field sponge for representation differential checks.
     fn wide_challenger() -> WideChal {
         WideChal::from_hasher(Vec::new(), Keccak256Hash)
+    }
+
+    #[test]
+    fn successor_weight_sweep_matches_out_of_place_formula() {
+        fn check<R: Field>()
+        where
+            rand::distr::StandardUniform: rand::distr::Distribution<R>,
+        {
+            let mut rng = SmallRng::seed_from_u64(0x5CC3550);
+            for len in [1, 2, 3, 4, 5, 8, 9, 16, 33, 4096] {
+                let original: Vec<R> = (0..len).map(|_| rng.random()).collect();
+                for alpha in [R::ZERO, R::ONE, rng.random()] {
+                    let expected: Vec<R> = (0..len)
+                        .map(|row| {
+                            original[row]
+                                + if row == 0 {
+                                    R::ZERO
+                                } else {
+                                    alpha * original[row - 1]
+                                }
+                                + if row == len - 1 {
+                                    alpha.square() * original[row]
+                                } else {
+                                    R::ZERO
+                                }
+                        })
+                        .collect();
+                    let mut actual = original.clone();
+                    add_successor_weights(&mut actual, alpha, alpha.square());
+                    assert_eq!(actual, expected, "length {len}");
+                }
+            }
+        }
+        check::<Ghash128>();
+        check::<BinaryField128>();
+        check::<BinaryField16>();
+        check::<p3_binary_field::Poly192>();
+        check::<p3_baby_bear::BabyBear>();
+    }
+
+    #[test]
+    fn packed_successor_weights_preserve_dense_and_compact_transcripts() {
+        let witness = bits(0x5CC3551, 512);
+        let packing = BitPacking::<BinaryField128>::new(&witness).unwrap();
+        let absorbed = BitRingSwitch::<BinaryField128>::ABSORBED;
+        let point = Point::<BinaryField128>::rand(
+            &mut SmallRng::seed_from_u64(0x5CC3552),
+            packing.num_variables() + absorbed,
+        );
+        let row_variables = absorbed + 3;
+        let reduction =
+            BitRingSwitch::<BinaryField128>::with_successor(&point, row_variables).unwrap();
+        assert_eq!(reduction.fixed_prefix().0, 0);
+        assert!(reduction.compact_depth_is_eligible(packing.num_variables(), 2, true));
+        let current = embedded_over::<BinaryField128>(&witness).eval_base(&point);
+        let next = dense_successor_claim(&witness, &point, row_variables);
+        let mut tower_challenger = wide_challenger();
+        let tower = reduction.prove_with_compact_depth::<BinaryField128, _, _>(
+            &packing,
+            &mut tower_challenger,
+            0,
+            true,
+        );
+        let tower_next: BinaryField128 = tower_challenger.sample();
+        for depth in [0, 2] {
+            let mut poly_challenger = wide_challenger();
+            let poly = reduction.prove_with_compact_depth::<Ghash128, _, _>(
+                &packing,
+                &mut poly_challenger,
+                depth,
+                true,
+            );
+            let poly_next: BinaryField128 = poly_challenger.sample();
+            assert_eq!(poly.0.tensor, tower.0.tensor);
+            assert_eq!(poly.0.successor, tower.0.successor);
+            assert_eq!(
+                poly.0.sumcheck.polynomial_evaluations,
+                tower.0.sumcheck.polynomial_evaluations
+            );
+            assert_eq!(
+                poly.0.sumcheck.pow_witnesses,
+                tower.0.sumcheck.pow_witnesses
+            );
+            assert_eq!(poly.0.final_eval, tower.0.final_eval);
+            assert_eq!(poly.1, tower.1);
+            assert_eq!(poly.2, tower.2);
+            assert_eq!(poly_next, tower_next);
+            assert!(
+                reduction
+                    .verify_readings(&poly.0, Some(current), Some(next), &mut wide_challenger())
+                    .is_ok()
+            );
+        }
     }
 
     /// A random bit witness of the given byte length.

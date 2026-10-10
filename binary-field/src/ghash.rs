@@ -315,7 +315,8 @@ impl Field for Ghash128 {
             target_feature = "avx512vbmi"
         ))]
         {
-            let prepared = clmul::PreparedBitPlaneExpansion::new(weights.map(|weight| weight.0));
+            let prepared =
+                clmul::PreparedBitPlaneExpansion::<8>::new(&weights.map(|weight| weight.0));
             Some(move |words: &[u64; 64], output: &mut Vec<Self>| {
                 prepared.append(words, output);
             })
@@ -330,6 +331,37 @@ impl Field for Ghash128 {
         {
             let _ = weights;
             None::<fn(&[u64; 64], &mut Vec<Self>)>
+        }
+    }
+
+    #[inline]
+    fn prepare_bit_plane_expansion_16(
+        weights: &[Self; 16],
+    ) -> Option<impl Fn(&[u64; 16], &mut Vec<Self>) + Send + Sync + 'static> {
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ))]
+        {
+            let prepared =
+                clmul::PreparedBitPlaneExpansion::<2>::new(&weights.map(|weight| weight.0));
+            Some(move |words: &[u64; 16], output: &mut Vec<Self>| {
+                prepared.append(words, output);
+            })
+        }
+        #[cfg(not(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        )))]
+        {
+            let _ = weights;
+            None::<fn(&[u64; 16], &mut Vec<Self>)>
         }
     }
 
@@ -605,6 +637,7 @@ mod tests {
     fn bit_plane_expansion_is_disabled_without_required_gfni_features() {
         let weights = [Ghash128::ZERO; 64];
         assert!(Ghash128::prepare_bit_plane_expansion(&weights).is_none());
+        assert!(Ghash128::prepare_bit_plane_expansion_16(&[Ghash128::ZERO; 16]).is_none());
     }
 
     #[cfg(all(
@@ -633,6 +666,65 @@ mod tests {
                     .map(|(&weight, _)| weight)
                     .sum()
             })
+        }
+
+        #[test]
+        fn bit_plane_expansion_16_matches_every_corner_lane_and_appends() {
+            let mut state = 0xc011_8a8e_51ed_5eed_1234_5678_9abc_def0;
+            let weights = core::array::from_fn(|_| Ghash128::from_repr(next_word(&mut state)));
+            let expand = Ghash128::prepare_bit_plane_expansion_16(&weights)
+                .expect("the GFNI target must provide the 16-corner expansion");
+            let mut output = Vec::with_capacity(64);
+            for corner in 0..16 {
+                for lane in 0..64 {
+                    let mut words = [0; 16];
+                    words[corner] = 1 << lane;
+                    output.clear();
+                    expand(&words, &mut output);
+                    assert_eq!(output.len(), 64);
+                    for (index, &value) in output.iter().enumerate() {
+                        let expected = if index == lane {
+                            weights[corner]
+                        } else {
+                            Ghash128::ZERO
+                        };
+                        assert_eq!(
+                            value, expected,
+                            "corner {corner}, lane {lane}, output {index}"
+                        );
+                    }
+                }
+            }
+
+            let mut cases = Vec::from([[0; 16], [u64::MAX; 16]]);
+            cases.extend((0..32).map(|_| core::array::from_fn(|_| next_word(&mut state) as u64)));
+            // Reuse one allocation so the four prefixes cover every cache-line offset.
+            let mut output = Vec::with_capacity(4 + 64 * cases.len());
+            for prefix_len in 0..4 {
+                let prefix = Ghash128::from_repr(0xfeed_face);
+                output.clear();
+                output.resize(prefix_len, prefix);
+                for words in &cases {
+                    expand(words, &mut output);
+                }
+                assert!(output[..prefix_len].iter().all(|&value| value == prefix));
+                assert_eq!(output.len(), prefix_len + 64 * cases.len());
+                for (case, words) in cases.iter().enumerate() {
+                    for lane in 0..64 {
+                        let expected: Ghash128 = weights
+                            .iter()
+                            .zip(words)
+                            .filter(|(_, word)| (*word >> lane) & 1 == 1)
+                            .map(|(&weight, _)| weight)
+                            .sum();
+                        assert_eq!(
+                            output[prefix_len + 64 * case + lane],
+                            expected,
+                            "prefix {prefix_len}, case {case}, lane {lane}"
+                        );
+                    }
+                }
+            }
         }
 
         #[test]

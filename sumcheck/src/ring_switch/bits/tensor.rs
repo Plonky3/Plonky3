@@ -183,6 +183,33 @@ impl<EF: BitCoordinates, R: BitCoordinates> BitTensor<EF, R> {
     /// That is one multiplication per coordinate, whatever the element was accumulated from.
     /// A zero row scales to nothing, so its multiplication is never formed.
     pub fn add_scaled_columns(&mut self, other: &Self, a: EF) {
+        if a == EF::ZERO {
+            return;
+        }
+        if a == EF::ONE {
+            *self += other;
+            return;
+        }
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw"
+        ))]
+        if Self::DIMENSION == 128
+            && Coefficients::<R>::DIMENSION == 128
+            && other.rows.iter().all(|&row| row != R::ZERO)
+        {
+            // The sum of these exterior products is exactly the scalar row expansion below.
+            // Sparse tensors retain that expansion, which skips their zero rows cheaply.
+            let images: [EF; 128] = core::array::from_fn(|u| {
+                let mut basis = Coefficients::<EF>::zero();
+                basis.set(u);
+                a * basis.element()
+            });
+            *self += super::products::LeftFactors::new(&images).sum(&other.rows, &mut None);
+            return;
+        }
         for (u, &row) in other.rows.iter().enumerate() {
             if row != R::ZERO {
                 let mut basis = Coefficients::<EF>::zero();
@@ -698,5 +725,47 @@ mod tests {
             left += &right;
             prop_assert_eq!(left.rows(), expected.as_slice());
         }
+    }
+    fn check_column_scaling<EF: BitCoordinates, R: BitCoordinates>()
+    where
+        rand::distr::StandardUniform: rand::distr::Distribution<EF> + rand::distr::Distribution<R>,
+    {
+        let mut rng = SmallRng::seed_from_u64(0x5ca1e);
+        let dimension = Coefficients::<EF>::DIMENSION;
+        let destination =
+            BitTensor::<EF, R>::try_from((0..dimension).map(|_| rng.random()).collect::<Vec<_>>())
+                .unwrap();
+        for nonzero in [0, 1, dimension / 2, dimension - 1, dimension] {
+            let mut rows = alloc::vec![R::ZERO; dimension];
+            for row in rows.iter_mut().take(nonzero) {
+                *row = rng.random();
+                if *row == R::ZERO {
+                    *row = R::ONE;
+                }
+            }
+            let source = BitTensor::<EF, R>::try_from(rows).unwrap();
+            let original_source = source.clone();
+            for scale in [EF::ZERO, EF::ONE, rng.random()] {
+                let mut actual = destination.clone();
+                actual.add_scaled_columns(&source, scale);
+                for column in 0..Coefficients::<R>::DIMENSION {
+                    assert_eq!(
+                        actual.column(column),
+                        destination.column(column) + scale * source.column(column)
+                    );
+                }
+                assert_eq!(source, original_source);
+            }
+        }
+    }
+
+    #[test]
+    fn column_scaling_matches_independent_column_readings() {
+        use p3_binary_field::{Ghash128, Poly64, Poly192};
+        check_column_scaling::<BinaryField128, BinaryField128>();
+        check_column_scaling::<BinaryField128, Ghash128>();
+        check_column_scaling::<BinaryField16, BinaryField16>();
+        check_column_scaling::<Poly192, Ghash128>();
+        check_column_scaling::<BinaryField128, Poly64>();
     }
 }

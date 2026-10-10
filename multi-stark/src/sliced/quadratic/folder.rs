@@ -254,7 +254,7 @@ impl<'a, F: Field, R: Field> SlicedQuadraticFolder<'a, F, R> {
         }
         if let Some(kernel) = &mut self.kernel {
             for (sums, bits) in kernel.sums.iter_mut().zip(bits) {
-                sums.add(kernel.prepared, self.constraint_index, bits, 0);
+                sums.add_bits(kernel.prepared, self.constraint_index, bits);
             }
         }
     }

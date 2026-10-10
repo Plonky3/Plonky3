@@ -722,6 +722,13 @@ impl BasedVectorSpace<Poly64> for Poly192 {
         })
     }
 
+    #[inline]
+    fn flatten_slice_to_base(values: &[Self]) -> Option<&[Poly64]> {
+        // SAFETY: `Self` is transparent over `[Poly64; DEGREE]`, with the same alignment
+        // and contiguous coefficients in exactly the order used by this basis.
+        Some(unsafe { p3_util::as_base_slice(values) })
+    }
+
     /// A whole vector of elements is one contiguous run of coordinates, so the allocation is
     /// reused as it is.
     #[inline]

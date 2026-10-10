@@ -52,6 +52,19 @@ pub use error::{MerkleTreeError, PrunedProofError};
 pub(crate) use geometry::{check_widths, validate_commit_reachable_heights};
 pub use pruned::PrunedBatchOpening;
 
+/// Materialize a row whose width is known even when its iterator has no size hint.
+fn collect_opening_row<T>(row: impl IntoIterator<Item = T>, width: usize) -> Vec<T> {
+    let row = row.into_iter();
+    // Keep `collect` specializations, including taking ownership of an existing Vec buffer.
+    if row.size_hint().0 == width {
+        row.collect()
+    } else {
+        let mut values = Vec::with_capacity(width);
+        values.extend(row);
+        values
+    }
+}
+
 /// A Merkle Tree-based commitment scheme for multiple matrices of potentially differing heights.
 ///
 /// `MerkleTreeMmcs` generalizes a classical Merkle Tree to support committing to a list of
@@ -442,7 +455,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                         let log2_height = log2_ceil_usize(matrix.height());
                         let bits_reduced = log_max_height - log2_height;
                         let reduced_index = index >> bits_reduced;
-                        matrix.row(reduced_index).unwrap().into_iter().collect()
+                        collect_opening_row(matrix.row(reduced_index).unwrap(), matrix.width())
                     })
                     .collect();
 
