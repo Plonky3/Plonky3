@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use core::arch::x86_64::*;
 
 use p3_binary_field::Rijndael8b as F8;
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 
 use crate::BasisNtt;
 
@@ -186,16 +186,159 @@ impl RijndaelLde {
         self.apply_scalar(bytes, out);
     }
 
+    /// Extend matching Boolean rows, then sum their weighted pointwise products.
+    ///
+    /// Inputs are row-major packed bits, with `input_bytes()` bytes per row.
+    /// For output point `j`, the result is `sum_r weights[r] * LDE(a[r])[j] * LDE(b[r])[j]`.
+    /// No intermediate columns or heap allocations are exposed to the caller.
+    ///
+    /// # Panics
+    /// Panics unless both inputs contain one complete row per weight and the
+    /// output has `row_len()` elements.
+    #[inline]
+    pub fn weighted_product_sum(&self, a: &[u8], b: &[u8], weights: &[F8], out: &mut [F8]) {
+        assert_eq!(a.len(), b.len(), "input matrices differ in size");
+        assert_eq!(a.len() % self.n_chunks, 0, "incomplete Boolean row");
+        assert_eq!(
+            a.len() / self.n_chunks,
+            weights.len(),
+            "one weight per row required"
+        );
+        assert_eq!(out.len(), self.ell, "output length differs from domain");
+        #[cfg(all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ))]
+        if self.ell == 64 {
+            self.weighted_product_sum_neon64(a, b, weights, out);
+            return;
+        }
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw"
+        ))]
+        if self.ell == 64 {
+            self.weighted_product_sum_zmm(a, b, weights, out);
+            return;
+        }
+        type Packing = <F8 as Field>::Packing;
+        out.fill(F8::ZERO);
+        let mut a_col = [F8::ZERO; 128];
+        let mut b_col = [F8::ZERO; 128];
+        for ((a, b), &weight) in a
+            .chunks_exact(self.n_chunks)
+            .zip(b.chunks_exact(self.n_chunks))
+            .zip(weights)
+        {
+            self.apply(a, &mut a_col[..self.ell]);
+            self.apply(b, &mut b_col[..self.ell]);
+            let done = self.ell / Packing::WIDTH * Packing::WIDTH;
+            for start in (0..done).step_by(Packing::WIDTH) {
+                let a = *Packing::from_slice(&a_col[start..start + Packing::WIDTH]);
+                let b = *Packing::from_slice(&b_col[start..start + Packing::WIDTH]);
+                *Packing::from_slice_mut(&mut out[start..start + Packing::WIDTH]) +=
+                    a * b * Packing::from(weight);
+            }
+            for j in done..self.ell {
+                out[j] += a_col[j] * b_col[j] * weight;
+            }
+        }
+    }
+
+    /// Keep the two extended rows and their weighted sum in ZMM registers.
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ))]
+    #[inline]
+    fn weighted_product_sum_zmm(&self, a: &[u8], b: &[u8], weights: &[F8], out: &mut [F8]) {
+        type Packing = <F8 as Field>::Packing;
+        let mut sum = Packing::ZERO;
+        for ((a, b), &weight) in a
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<8>().0)
+            .zip(weights)
+        {
+            // SAFETY: the compile-time feature gate enables AVX-512. PackedValue
+            // represents sixty-four unrestricted scalar bytes, just as each ZMM does.
+            let (a, b): (Packing, Packing) = unsafe {
+                (
+                    core::mem::transmute::<__m512i, Packing>(self.apply_zmm(a)),
+                    core::mem::transmute::<__m512i, Packing>(self.apply_zmm(b)),
+                )
+            };
+            sum += a * b * Packing::from(weight);
+        }
+        out.copy_from_slice(sum.as_slice());
+    }
+
+    /// Fuse extension lookup, packed multiplication, and the weighted sum on ARM.
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    #[inline]
+    fn weighted_product_sum_neon64(&self, a: &[u8], b: &[u8], weights: &[F8], out: &mut [F8]) {
+        type Packing = <F8 as Field>::Packing;
+        let mut sums = [Packing::ZERO; 4];
+        for ((a, b), &weight) in a
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<8>().0)
+            .zip(weights)
+        {
+            let a = self.lookup_neon64(a);
+            let b = self.lookup_neon64(b);
+            // SAFETY: PackedValue guarantees the packing represents sixteen scalar bytes.
+            // F8 is transparent over u8 and every byte is a valid element. Both types
+            // are sixteen bytes under this module's ARM AES feature gate.
+            let a: [Packing; 4] = unsafe {
+                core::mem::transmute::<[core::arch::aarch64::uint8x16_t; 4], [Packing; 4]>(a)
+            };
+            let b: [Packing; 4] = unsafe {
+                core::mem::transmute::<[core::arch::aarch64::uint8x16_t; 4], [Packing; 4]>(b)
+            };
+            let weight = Packing::from(weight);
+            sums = core::array::from_fn(|i| sums[i] + a[i] * b[i] * weight);
+        }
+        for (chunk, sum) in out.as_chunks_mut::<16>().0.iter_mut().zip(sums) {
+            chunk.copy_from_slice(sum.as_slice());
+        }
+    }
+
     /// Extend a 64-bit Boolean row while keeping its four output vectors in registers.
     #[cfg(target_arch = "aarch64")]
     #[inline]
     fn apply_neon64(&self, bytes: &[u8], out: &mut [F8]) {
         use core::arch::aarch64::*;
-
-        assert_eq!(bytes.len(), 8);
         assert_eq!(out.len(), 64);
-        // SAFETY: NEON is part of the aarch64 baseline. Each lookup is a complete
-        // 64-byte table row; the checked output holds four unaligned vector stores.
+        let sums = self.lookup_neon64(bytes);
+        // SAFETY: the checked output holds four unaligned vector stores; F8 is a byte.
+        unsafe {
+            for (i, sum) in sums.into_iter().enumerate() {
+                vst1q_u8(out.as_mut_ptr().cast::<u8>().add(16 * i), sum);
+            }
+        }
+    }
+
+    /// The four vectors of one Boolean extension, before any output store.
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn lookup_neon64(&self, bytes: &[u8]) -> [core::arch::aarch64::uint8x16_t; 4] {
+        use core::arch::aarch64::*;
+        assert_eq!(bytes.len(), 8);
+        assert_eq!(self.ell, 64);
+        // SAFETY: NEON is part of the aarch64 baseline. Each table lookup covers
+        // a complete 64-byte row inside the constructor's 256-row table.
         unsafe {
             let base = self.data.as_ptr().cast::<u8>();
             let row = base.add(bytes[0] as usize * 64);
@@ -212,9 +355,7 @@ impl RijndaelLde {
                     veorq_u8(sums[i], value)
                 });
             }
-            for (i, sum) in sums.into_iter().enumerate() {
-                vst1q_u8(out.as_mut_ptr().cast::<u8>().add(16 * i), sum);
-            }
+            sums
         }
     }
 
@@ -499,6 +640,36 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn weighted_sum_matches_independent_extensions(
+            k in 3usize..=7, count in 0usize..=8,
+            source in any::<u8>(), target in any::<u8>(),
+            a in any::<[u8;128]>(), b in any::<[u8;128]>(), w in any::<[u8;8]>()
+        ) {
+            let table=RijndaelLde::new(k,F8::from_byte(source),F8::from_byte(target));
+            let bytes=count*table.input_bytes();
+            let weights=w.map(F8::from_byte);
+            let guard=F8::from_byte(0xa5);
+            let mut got=vec![guard;table.row_len()+2];
+            table.weighted_product_sum(&a[..bytes],&b[..bytes],&weights[..count],&mut got[1..=table.row_len()]);
+            let mut expected=vec![F8::ZERO;table.row_len()];
+            for (row, &weight) in weights.iter().enumerate().take(count) {
+                let extend=|data:&[u8]| {
+                    let mut values:Vec<_>=data.iter().flat_map(|&byte|(0..8).map(move|bit|F8::from_byte((byte>>bit)&1))).collect();
+                    table.source().inverse(&mut values);
+                    table.target().forward(&mut values);
+                    values
+                };
+                let start=row*table.input_bytes();
+                let end=start+table.input_bytes();
+                let (x,y)=(extend(&a[start..end]),extend(&b[start..end]));
+                for j in 0..table.row_len(){expected[j]+=x[j]*y[j]*weight;}
+            }
+            prop_assert_eq!(&got[1..=table.row_len()],&expected);
+            prop_assert_eq!(got[0],guard);
+            prop_assert_eq!(got[table.row_len()+1],guard);
+        }
+
         #[test]
         fn packed_extension_matches_interpolation(k in 3usize..=7, source in any::<u8>(), target in any::<u8>(), bytes in prop::array::uniform16(any::<u8>())) {
             check(k, source, target, &bytes[..(1 << k)/8]);
