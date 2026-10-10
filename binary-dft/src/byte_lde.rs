@@ -147,6 +147,11 @@ impl RijndaelLde {
     #[inline]
     pub fn apply(&self, bytes: &[u8], out: &mut [F8]) {
         #[cfg(target_arch = "aarch64")]
+        if self.ell == 64 {
+            self.apply_neon64(bytes, out);
+            return;
+        }
+        #[cfg(target_arch = "aarch64")]
         if self.ell >= 16 {
             // SAFETY: aarch64 statically guarantees NEON; ell ≥ 16 ⇒ at least
             // one 128-bit chunk; method validates slice lengths.
@@ -179,6 +184,38 @@ impl RijndaelLde {
             return;
         }
         self.apply_scalar(bytes, out);
+    }
+
+    /// Extend a 64-bit Boolean row while keeping its four output vectors in registers.
+    #[cfg(target_arch = "aarch64")]
+    #[inline]
+    fn apply_neon64(&self, bytes: &[u8], out: &mut [F8]) {
+        use core::arch::aarch64::*;
+
+        assert_eq!(bytes.len(), 8);
+        assert_eq!(out.len(), 64);
+        // SAFETY: NEON is part of the aarch64 baseline. Each lookup is a complete
+        // 64-byte table row; the checked output holds four unaligned vector stores.
+        unsafe {
+            let base = self.data.as_ptr().cast::<u8>();
+            let row = base.add(bytes[0] as usize * 64);
+            let mut sums: [uint8x16_t; 4] = core::array::from_fn(|i| vld1q_u8(row.add(16 * i)));
+            for (b, &byte) in bytes.iter().enumerate().skip(1) {
+                let row = base.add(byte as usize * 64);
+                sums = core::array::from_fn(|i| {
+                    let value = vld1q_u8(row.add(16 * (i ^ (b >> 1))));
+                    let value = if b & 1 == 0 {
+                        value
+                    } else {
+                        vextq_u8::<8>(value, value)
+                    };
+                    veorq_u8(sums[i], value)
+                });
+            }
+            for (i, sum) in sums.into_iter().enumerate() {
+                vst1q_u8(out.as_mut_ptr().cast::<u8>().add(16 * i), sum);
+            }
+        }
     }
 
     /// [`apply`](Self::apply) at the protocol's `ell = 64`, one register wide.
