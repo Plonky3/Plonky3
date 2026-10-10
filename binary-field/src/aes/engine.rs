@@ -9,6 +9,8 @@
 //! Basis change, Frobenius and any tabulated map therefore share one kernel.
 
 use super::{invert_byte, mul_bytes};
+#[cfg(target_arch = "aarch64")]
+mod neon;
 
 /// The quadword whose byte `k` is `1 << (7 - k)`.
 ///
@@ -380,6 +382,8 @@ fn mul_registers<'a, 'b, L: ByteLanes>(
 #[inline]
 pub(crate) fn mul_slice(dst: &mut [u8], src: &[u8]) {
     assert_eq!(dst.len(), src.len(), "elementwise product lengths differ");
+    #[cfg(target_arch = "aarch64")]
+    let (dst, src) = neon::mul_prefix(dst, src);
     let (dst, src) = mul_registers::<Wide>(dst, src);
     let (dst, src) = mul_registers::<Narrow>(dst, src);
     for (value, factor) in dst.iter_mut().zip(src) {
