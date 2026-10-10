@@ -233,6 +233,7 @@ mod tests {
         forward_below, padded_sharing_first_group,
     };
     use crate::domain::{domain_point, subspace_polynomial};
+    use crate::lch::LchNtt;
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
 
