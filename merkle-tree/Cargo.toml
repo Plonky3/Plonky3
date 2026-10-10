@@ -29,6 +29,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-blake2s = { path = "../blake2s" }
 p3-blake3 = { path = "../blake3" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-keccak = { path = "../keccak" }
@@ -61,6 +62,10 @@ harness = false
 
 [[bench]]
 name = "verify_batch"
+harness = false
+
+[[bench]]
+name = "blake2s_verify"
 harness = false
 
 [lints]
