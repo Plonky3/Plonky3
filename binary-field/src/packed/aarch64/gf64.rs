@@ -2,7 +2,9 @@
 //!
 //! The lane operations are the ones the scalar kernels already run on.
 
-use core::arch::aarch64::{uint64x2_t, uint64x2x3_t, vld3q_u64, vst3q_u64, vzip1q_u64, vzip2q_u64};
+use core::arch::aarch64::{
+    uint64x2_t, uint64x2x3_t, vextq_u64, vld1q_u64, vst3q_u64, vzip1q_u64, vzip2q_u64,
+};
 
 /// The register one packed value occupies.
 pub(crate) type Reg = uint64x2_t;
@@ -29,7 +31,7 @@ pub(crate) fn interleave_64(a: Reg, b: Reg, block_len: usize) -> (Reg, Reg) {
 
 /// Two consecutive three-quadword elements, as three coordinate registers.
 ///
-/// `LD3` de-interleaves by quadword as it loads:
+/// Three ordinary loads and register shuffles de-interleave the coordinates:
 ///
 /// ```text
 ///     memory      [ a_0 a_1 a_2 b_0 b_1 b_2 ]
@@ -44,8 +46,17 @@ pub(crate) fn interleave_64(a: Reg, b: Reg, block_len: usize) -> (Reg, Reg) {
 #[inline(always)]
 pub(crate) unsafe fn gather_3(from: *const u64) -> [Reg; 3] {
     // SAFETY: the readability of the six quadwords is the caller's obligation.
-    let uint64x2x3_t(c0, c1, c2) = unsafe { vld3q_u64(from) };
-    [c0, c1, c2]
+    unsafe {
+        let low = vld1q_u64(from);
+        let middle = vld1q_u64(from.add(2));
+        let high = vld1q_u64(from.add(4));
+        let crossed = vextq_u64::<1>(middle, middle);
+        [
+            vzip1q_u64(low, crossed),
+            vextq_u64::<1>(low, high),
+            vzip2q_u64(crossed, high),
+        ]
+    }
 }
 
 /// Three coordinate registers, written back as two consecutive elements by one `ST3`.

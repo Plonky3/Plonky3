@@ -417,7 +417,7 @@ jobs:
       #
       # The interpreter has shims for the 256- and 512-bit `vpclmulqdq` and for every lane move the packings use.
       #
-      # So the corner differentials, the interleaves, the transposes and the shared extension suite run here, on every host.
+      # So the corner differentials, the paired dot products at every length, the interleaves, the transposes and the shared extension suite run here, on every host.
       #
       # The proptests around them take minutes under interpretation, so they stay out.
       #
@@ -444,8 +444,10 @@ jobs:
             packed::x86_64::ghash128::tests::bool_check_matches_the_general_product_in_every_lane \
             packed::x86_64::ghash128::tests::packed_field_tests::test_interleaves \
             packed::poly64::tests::every_lane_matches_the_scalar_field_at_the_corners \
+            packed::poly64::tests::every_dot_product_length_matches_the_sum_of_products \
             packed::poly64::tests::packed_field_tests::test_interleaves \
             packed::poly192::tests::every_lane_matches_the_scalar_field_at_the_corners \
+            packed::poly192::tests::every_dot_product_length_matches_the_sum_of_products \
             packed::poly192::tests::the_shared_packed_extension_suite_passes \
             packed::x86_64::lanes::triples::tests::the_plans_round_trip_at_both_widths
 

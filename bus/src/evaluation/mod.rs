@@ -4,7 +4,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
-use p3_field::{ExtensionField, Field};
+use p3_field::{Algebra, ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 
 mod error;
@@ -205,7 +205,7 @@ pub struct BusFactorPlan<'a, F: Field, EF> {
 impl<F, EF> BusFactorPlan<'_, F, EF>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    EF: Field + Algebra<F>,
 {
     /// Evaluate the leaf factor at one resolved point.
     ///
@@ -222,8 +222,8 @@ where
         values: BusEvaluation<'_, F, A>,
     ) -> Result<EF, BusEvaluationError>
     where
-        A: ExtensionField<F>,
-        EF: ExtensionField<A>,
+        A: Field + Algebra<F>,
+        EF: Algebra<A>,
     {
         scratch.clear();
         scratch.reserve(self.nodes.len());
@@ -290,7 +290,7 @@ impl BusPlan {
     ) -> Result<BusFactorPlan<'a, F, EF>, BusEvaluationError>
     where
         F: Field,
-        EF: ExtensionField<F>,
+        EF: Field + Algebra<F>,
     {
         // The plan fixes both the bus-local payload width and the padded fingerprint width.
         let domain = self
@@ -643,5 +643,138 @@ mod boundary_tests {
         let baseline = plan.compile_factor(0, &always, &weights, F::ZERO).unwrap();
         assert_eq!(compiled.nodes.len(), baseline.nodes.len() + 1);
         assert!(matches!(compiled.nodes.last(), Some(BusNode::IsLastRow)));
+    }
+}
+
+#[cfg(test)]
+mod isomorphism_tests {
+    use alloc::string::ToString;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use p3_air::symbolic::{BaseEntry, SymbolicVariable};
+    use p3_binary_field::{BinaryField8, BinaryField128, Ghash128, TowerLevel};
+    use p3_field::PrimeCharacteristicRing;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+    use crate::{BusDirection, BusPlanInput};
+
+    type F = BinaryField8;
+
+    /// One planned declaration over a byte-sized trace field, and the public value it reads.
+    struct Declaration {
+        plan: BusPlan,
+        interaction: SymbolicBusInteraction<F>,
+        public: [F; 1],
+    }
+
+    impl Declaration {
+        /// A selected declaration reading columns, a constant, a public value and a selector.
+        ///
+        /// ```text
+        ///     payload  = (main[0] * main[1] - c, public[0] * periodic[0] + is_transition)
+        ///     selector = main[2]
+        /// ```
+        fn new(public: F) -> Self {
+            let variable =
+                |entry, index| SymbolicExpression::from(SymbolicVariable::new(entry, index));
+            let main = |index| variable(BaseEntry::Main { offset: 0 }, index);
+            let constant = SymbolicExpression::from(F::from_repr(0x5c));
+            let payload = vec![
+                main(0) * main(1) - constant,
+                variable(BaseEntry::Public, 0) * variable(BaseEntry::Periodic, 0)
+                    + SymbolicExpr::Leaf(BaseLeaf::IsTransition),
+            ];
+            let interaction = SymbolicBusInteraction {
+                bus_name: "basis".to_string(),
+                direction: BusDirection::Push,
+                fields: payload,
+                activation: BusActivation::Boolean(main(2)),
+            };
+            let plan = BusPlan::build(&[BusPlanInput {
+                log_height: 2,
+                interactions: core::slice::from_ref(&interaction),
+            }])
+            .unwrap()
+            .unwrap();
+            Self {
+                plan,
+                interaction,
+                public: [public],
+            }
+        }
+
+        /// The leaf factor at one point of `A`, with weights and shift in `EF`.
+        ///
+        /// The point lists the three main columns, the periodic column, then the three selectors.
+        fn factor<A, EF>(&self, weights: &[EF], offset: EF, point: &[A]) -> EF
+        where
+            A: Field + Algebra<F>,
+            EF: Field + Algebra<F> + Algebra<A>,
+        {
+            self.plan
+                .compile_factor(0, &self.interaction, weights, offset)
+                .unwrap()
+                .evaluate(
+                    &mut Vec::new(),
+                    BusEvaluation {
+                        main: &point[..3],
+                        preprocessed: &[],
+                        public: &self.public,
+                        periodic: &point[3..4],
+                        is_first_row: point[4],
+                        is_last_row: point[5],
+                        is_transition: point[6],
+                    },
+                )
+                .unwrap()
+        }
+    }
+
+    #[test]
+    fn factor_evaluation_commutes_with_a_change_of_basis() {
+        // Invariant: a factor is built from sums, products and embedded trace-field constants
+        // only. Moving the weights, the shift and the point into an isomorphic field therefore
+        // moves the factor the same way. A backend relies on this to evaluate the bus in its
+        // own representation of the challenge field.
+        //
+        //     Ghash128(factor over the tower)  =  factor over Ghash128
+        let mut rng = SmallRng::seed_from_u64(0xBA515);
+        let declaration = Declaration::new(rng.random());
+
+        for _ in 0..16 {
+            let weights: Vec<BinaryField128> = (0..declaration.plan.fingerprint_width())
+                .map(|_| rng.random())
+                .collect();
+            let offset: BinaryField128 = rng.random();
+            let poly_weights: Vec<Ghash128> = weights.iter().copied().map(Ghash128::from).collect();
+            let poly_offset = Ghash128::from(offset);
+
+            // A folded point lies in the challenge field.
+            let point: Vec<BinaryField128> = (0..7).map(|_| rng.random()).collect();
+            let poly_point: Vec<Ghash128> = point.iter().copied().map(Ghash128::from).collect();
+            assert_eq!(
+                Ghash128::from(declaration.factor(&weights, offset, &point)),
+                declaration.factor(&poly_weights, poly_offset, &poly_point),
+            );
+
+            // A Boolean row stays in the trace field, whichever field the weights live in.
+            let row = rng.random_range(0..4usize);
+            let point = [
+                rng.random(),
+                rng.random(),
+                F::from_bool(rng.random()),
+                rng.random(),
+                F::from_bool(row == 0),
+                F::from_bool(row == 3),
+                F::from_bool(row < 3),
+            ];
+            assert_eq!(
+                Ghash128::from(declaration.factor(&weights, offset, &point)),
+                declaration.factor(&poly_weights, poly_offset, &point),
+            );
+        }
     }
 }

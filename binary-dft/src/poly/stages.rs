@@ -110,13 +110,13 @@ pub(super) fn copy_coset(dst: &mut [u128], src: &[u128]) {
 pub(super) type Conversion = fn(&mut [u128]);
 
 /// Tower-basis bit patterns to polynomial coordinates.
-pub(super) const INTO_POLY: Conversion = poly_basis::from_tower_slice;
+pub(crate) const INTO_POLY: Conversion = poly_basis::from_tower_slice;
 
 /// Polynomial coordinates to tower-basis bit patterns.
-pub(super) const INTO_TOWER: Conversion = poly_basis::to_tower_slice;
+pub(crate) const INTO_TOWER: Conversion = poly_basis::to_tower_slice;
 
 /// Change the basis of a whole matrix, in a pass of its own.
-pub(super) fn convert(values: &mut [u128], conversion: Conversion) {
+pub(crate) fn convert(values: &mut [u128], conversion: Conversion) {
     // A conversion does several dependent lookups per element, so it repays the pool sooner than a butterfly.
     //
     // A task is a whole grain, so every task still reaches the blocked kernel.

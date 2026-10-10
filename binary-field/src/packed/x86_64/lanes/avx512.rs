@@ -5,6 +5,11 @@ use core::arch::x86_64::{
     _mm512_setzero_si512, _mm512_shuffle_epi32, _mm512_storeu_si512, _mm512_unpacklo_epi64,
     _mm512_xor_si512,
 };
+// Only the paired sums of products on the 256-bit packings need these.
+#[cfg(not(all(feature = "wide-poly", target_feature = "avx512bw")))]
+use core::arch::x86_64::{
+    _mm512_set1_epi64, _mm512_sllv_epi64, _mm512_srlv_epi64, _mm512_unpackhi_epi64,
+};
 
 use p3_field::interleave::{interleave_u128, interleave_u256};
 
@@ -34,6 +39,31 @@ pub(crate) fn xor(a: Reg, b: Reg) -> Reg {
 #[inline(always)]
 pub(crate) fn unpack_low_64(a: Reg, b: Reg) -> Reg {
     unsafe { _mm512_unpacklo_epi64(a, b) }
+}
+
+/// The high quadword of each operand, paired within each lane.
+#[cfg(not(all(feature = "wide-poly", target_feature = "avx512bw")))]
+#[inline(always)]
+pub(crate) fn unpack_high_64(a: Reg, b: Reg) -> Reg {
+    unsafe { _mm512_unpackhi_epi64(a, b) }
+}
+
+/// Each quadword shifted left.
+#[cfg(not(all(feature = "wide-poly", target_feature = "avx512bw")))]
+#[inline(always)]
+pub(crate) fn shl_64<const N: i32>(a: Reg) -> Reg {
+    // The immediate form takes an unsigned count, which a signed const parameter cannot become.
+    //
+    // A splat count lowers to that immediate form all the same.
+    unsafe { _mm512_sllv_epi64(a, _mm512_set1_epi64(i64::from(N))) }
+}
+
+/// Each quadword shifted right.
+#[cfg(not(all(feature = "wide-poly", target_feature = "avx512bw")))]
+#[inline(always)]
+pub(crate) fn shr_64<const N: i32>(a: Reg) -> Reg {
+    // A splat count, as for the left shift.
+    unsafe { _mm512_srlv_epi64(a, _mm512_set1_epi64(i64::from(N))) }
 }
 
 /// The carryless product of one quadword of each operand, in every lane.

@@ -60,8 +60,14 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
     row.chaining_values =
         array::from_fn(|i| array::from_fn(|j| u32_to_bits_le(input[16 + 4 * i + j])));
 
-    row.counter_low = u32_to_bits_le(counter as u32);
-    row.counter_hi = u32_to_bits_le(counter.wrapping_shr(32) as u32);
+    // Widen before shifting so the high word is zero on 32-bit targets.
+    let counter = counter as u64;
+    let counter_low = counter as u32;
+    let counter_hi = (counter >> 32) as u32;
+
+    // Use the same words in the counter columns and the compression state.
+    row.counter_low = u32_to_bits_le(counter_low);
+    row.counter_hi = u32_to_bits_le(counter_hi);
     row.block_len = u32_to_bits_le(block_len as u32);
 
     row.initial_row0 = array::from_fn(|i| {
@@ -85,12 +91,7 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
             (IV[2][0] as u32) + ((IV[2][1] as u32) << 16),
             (IV[3][0] as u32) + ((IV[3][1] as u32) << 16),
         ],
-        [
-            counter as u32,
-            counter.wrapping_shr(32) as u32,
-            block_len as u32,
-            0,
-        ],
+        [counter_low, counter_hi, block_len as u32, 0],
     ];
 
     generate_trace_row_for_round(&mut row.full_rounds[0], &mut state, &m_vec); // round 1
@@ -244,4 +245,89 @@ fn save_state_to_trace<R: PrimeCharacteristicRing>(
         ]
     });
     trace.row3 = array::from_fn(|i| u32_to_bits_le(state[3][i])); // Store all 32 bits unpacked.
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+    use core::array;
+    use core::borrow::{Borrow, BorrowMut};
+
+    use blake3::platform::Platform;
+    use p3_air::check_constraints;
+    use p3_air::utils::u32_to_bits_le;
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::Matrix;
+
+    use super::{generate_trace_rows, generate_trace_rows_for_perm};
+    use crate::{Blake3Air, Blake3Cols, NUM_BLAKE3_COLS};
+
+    #[test]
+    fn trace_counter_words_match_row_indices() {
+        // Fixture: eight rows exercise both zero and nonzero row indices.
+        let trace = generate_trace_rows::<BabyBear>(vec![[0; 24]; 8], 0);
+
+        // The AIR ties the counter columns to the first compression round.
+        check_constraints(&Blake3Air {}, &trace, &[]);
+
+        for counter in 0..trace.height() {
+            // Row indices below 2^32 have no high counter bits.
+            let row = trace.row_slice(counter).unwrap();
+            let row: &Blake3Cols<BabyBear> = (*row).borrow();
+            assert_eq!(row.counter_low, u32_to_bits_le(counter as u32));
+            assert_eq!(row.counter_hi, [BabyBear::ZERO; 32]);
+        }
+    }
+
+    #[test]
+    fn trace_counter_boundaries_match_reference_compression() {
+        // Distinct message and chaining words exercise every output word.
+        let input: [u32; 24] = array::from_fn(|i| (i as u32).wrapping_mul(0x9e37_79b9));
+        let chaining_value = array::from_fn(|i| input[16 + i]);
+        let block = array::from_fn(|i| input[i / 4].to_le_bytes()[i % 4]);
+
+        // Reuse one row instead of allocating a trace with billions of rows.
+        let mut trace = generate_trace_rows::<BabyBear>(vec![input], 0);
+        for counter in [
+            0,
+            1,
+            5,
+            0xffff_ffff,
+            0x1_0000_0000,
+            0x1234_5678_9abc_def0,
+            u64::MAX,
+        ] {
+            // A row index must fit the target's pointer width.
+            let Ok(row_index) = usize::try_from(counter) else {
+                continue;
+            };
+
+            // Generate the full witness at each counter boundary.
+            let row: &mut Blake3Cols<BabyBear> = trace.values[..NUM_BLAKE3_COLS].borrow_mut();
+            generate_trace_rows_for_perm(row, input, row_index, 64);
+
+            // Decode the expected words from bytes independently of the shift.
+            let bytes = counter.to_le_bytes();
+            let low = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+            let high = u32::from_le_bytes(bytes[4..].try_into().unwrap());
+            assert_eq!(row.counter_low, u32_to_bits_le(low));
+            assert_eq!(row.counter_hi, u32_to_bits_le(high));
+
+            // Compare all 16 output words with upstream BLAKE3 compression.
+            let expected = Platform::Portable.compress_xof(&chaining_value, &block, 64, counter, 0);
+            for (bits, bytes) in row
+                .outputs
+                .iter()
+                .flatten()
+                .zip(expected.as_chunks::<4>().0)
+            {
+                let word = u32::from_le_bytes(*bytes);
+                assert_eq!(*bits, u32_to_bits_le(word), "counter {counter:#x}");
+            }
+
+            // Counter columns and round witnesses must satisfy the AIR together.
+            check_constraints(&Blake3Air {}, &trace, &[]);
+        }
+    }
 }

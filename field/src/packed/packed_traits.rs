@@ -291,6 +291,24 @@ pub unsafe trait PackedField:
 {
     type Scalar: Field;
 
+    /// Terms a blocked dot product over this packing should group per call to `dot_product`.
+    ///
+    /// A caller splitting a long dot product into fixed blocks sizes them by this.
+    ///
+    /// A packing sets it to the longest power of two its `dot_product` sums with one reduction.
+    ///
+    /// Must be one of 1, 2, 4, 8 or 16.
+    const DOT_PRODUCT_BLOCK: usize = 8;
+
+    /// Lanes one multiplication of this packing computes at once.
+    ///
+    /// It equals `WIDTH` for a packing backed by a vector multiply.
+    ///
+    /// A packing that multiplies lane by lane sets it to 1.
+    ///
+    /// A caller can then skip packing values whose products gain nothing from it.
+    const MUL_LANES: usize = Self::WIDTH;
+
     /// Construct an iterator which returns powers of `base` packed into packed field elements.
     ///
     /// E.g. if `Self::WIDTH = 4`, returns: `[base^0, base^1, base^2, base^3], [base^4, base^5, base^6, base^7], ...`.

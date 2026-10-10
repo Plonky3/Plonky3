@@ -8,18 +8,26 @@
 mod poly64;
 mod subfield;
 
+use p3_binary_field::poly_basis::HAS_HARDWARE_CLMUL;
 use p3_binary_field::{
     BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
     BinaryField128, Gf2, Ghash128, Poly64, Rijndael8b, TowerLevel,
 };
 use p3_field::{PackedValue, PrimeCharacteristicRing};
-use subfield::coordinate_butterfly;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
+use subfield::{byte_map_twiddle_bits, coordinate_butterfly};
+
+use crate::lch;
+use crate::poly::stages::{INTO_POLY, INTO_TOWER, convert};
 
 /// A field the additive transform has a butterfly kernel for.
 ///
 /// Every tower level implements it.
 ///
 /// The levels differ in how much of the twiddle's structure their kernel exploits.
+///
+/// A level runs the transform network in its own representation, unless an isomorphic one has
+/// cheaper products. The result is the same either way.
 pub trait ButterflyField: TowerLevel {
     /// Whether the transform driver should group three stages for this backend.
     ///
@@ -47,6 +55,32 @@ pub trait ButterflyField: TowerLevel {
     #[inline]
     fn butterfly_radix8<const INVERSE: bool>(rows: &mut [&mut [Self]; 8], t: &[Self; 7]) {
         radix8::<Self, INVERSE>(rows, t);
+    }
+
+    /// Run the Lin-Chung-Han transform in place, over a row-major buffer of `width` columns and
+    /// the coset `shift + S_l`.
+    ///
+    /// The inverse flag recovers the coefficients from the evaluations instead.
+    ///
+    /// # Panics
+    ///
+    /// - Panics if the row count is not a power of two.
+    /// - Panics if the domain dimension exceeds the bit width of the level.
+    #[inline]
+    fn lch_transform<const INVERSE: bool>(values: &mut [Self], width: usize, shift: Self) {
+        lch::transform::<Self, INVERSE>(values, width, shift);
+    }
+
+    /// Run the forward Lin-Chung-Han transform in place, over a row-major buffer of `width`
+    /// columns whose leading `2^log_message` rows hold the message and the rest zeros.
+    ///
+    /// # Panics
+    ///
+    /// - Panics if the buffer is not a whole number of message-sized cosets.
+    /// - Panics if the dimension of the domain the cosets cover exceeds the bit width of the level.
+    #[inline]
+    fn lch_transform_cosets(values: &mut [Self], width: usize, log_message: usize) {
+        lch::transform_cosets::<Self>(values, width, log_message);
     }
 }
 
@@ -157,7 +191,7 @@ macro_rules! impl_butterfly_field {
 }
 
 // The byte-aligned tower levels, whose bytes are their subfield coordinates.
-impl_butterfly_field!(coordinate_butterfly: BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128);
+impl_butterfly_field!(coordinate_butterfly: BinaryField8, BinaryField16, BinaryField32, BinaryField64);
 
 // The sub-byte levels and the GHASH basis, which only have their packing.
 impl_butterfly_field!(plain_butterfly: Gf2, BinaryField2, BinaryField4, Ghash128, Rijndael8b);
@@ -180,6 +214,109 @@ impl ButterflyField for Poly64 {
     }
 }
 
+// The widest byte-aligned level, whose network runs in the polynomial basis when enough stages hold a twiddle wider than the byte map covers.
+//
+// - A tower product by such a twiddle changes basis three times around one carryless product.
+// - Changing the whole buffer once each way costs two changes per element instead.
+// - The byte map scales by a twiddle it covers on every run with no change of basis, so a transform with only those, or too few stages of the others, stays put.
+// - The change of basis is a field isomorphism that sends the tower Cantor basis to the `Ghash128` one.
+// - So every twiddle and domain point maps to its image, and the network computes the image of the tower result.
+// - Changing that back gives the tower result exactly.
+//
+// Without a carryless multiply a `Ghash128` product is bit-serial, so the network stays in the tower basis.
+impl ButterflyField for BinaryField128 {
+    #[inline]
+    fn butterfly<const INVERSE: bool>(lo: &mut [Self], hi: &mut [Self], t: Self) {
+        coordinate_butterfly::<Self, INVERSE>(lo, hi, t);
+    }
+
+    fn lch_transform<const INVERSE: bool>(values: &mut [Self], width: usize, shift: Self) {
+        let log_n = log2_strict_usize(values.len() / width);
+        if HAS_HARDWARE_CLMUL && wide_stages_repay_conversion(width, log_n, shift) {
+            ghash_transform::<INVERSE>(values, width, shift);
+        } else {
+            lch::transform::<Self, INVERSE>(values, width, shift);
+        }
+    }
+
+    fn lch_transform_cosets(values: &mut [Self], width: usize, log_message: usize) {
+        // Each coset's shift is a domain point below the height, so the subspace the height spans holds every coset.
+        let log_n = log2_ceil_usize(values.len() / width);
+        if HAS_HARDWARE_CLMUL && wide_stages_repay_conversion(width, log_n, Self::ZERO) {
+            ghash_transform_cosets(values, width, log_message);
+        } else {
+            lch::transform_cosets::<Self>(values, width, log_message);
+        }
+    }
+}
+
+/// Rows shorter than this many bytes repay the two changes of basis with fewer stages of wide twiddles.
+///
+/// - Measured on Sapphire Rapids, Zen 5 and Graviton4, running the network over `Ghash128` against the tower one.
+/// - On shorter rows the `Ghash128` route wins once one stage holds a wide twiddle.
+/// - On rows of this size and up it needs two.
+const SHORT_ROW_BYTES: usize = 64;
+
+/// Whether enough stages of the transform over `shift + S_l`, on rows of `width`, hold a twiddle past the byte map to repay the two changes of basis.
+///
+/// - Each twiddle of stage `j` is `W_j(shift)` plus a point of `S_(l - j)`, with `l = log_n`.
+/// - The first `2^t` Cantor basis vectors span the tower subfield of `2^t` bits, which each `W_j` maps into itself.
+/// - So a shift within the byte map's subfield leaves wide twiddles in the first `l - bits` stages only.
+/// - A shift past it keeps stage `j` wide while `W_j(shift)` is.
+/// - That is every stage for a shift of full width and fewer for one just past the byte map, so counting all of them overcounts only the latter.
+#[inline]
+fn wide_stages_repay_conversion(width: usize, log_n: usize, shift: BinaryField128) -> bool {
+    let row_bytes = width * size_of::<BinaryField128>();
+    let bits = byte_map_twiddle_bits(row_bytes);
+    let wide_stages = if shift.to_repr() >> bits != 0 {
+        log_n
+    } else {
+        log_n.saturating_sub(bits)
+    };
+    let needed = if row_bytes < SHORT_ROW_BYTES { 1 } else { 2 };
+    wide_stages >= needed
+}
+
+/// The widest level's transform, with its network run over `Ghash128` between two changes of basis.
+pub(crate) fn ghash_transform<const INVERSE: bool>(
+    values: &mut [BinaryField128],
+    width: usize,
+    shift: BinaryField128,
+) {
+    let words = BinaryField128::as_repr_slice_mut(values);
+    convert(words, INTO_POLY);
+    lch::transform::<Ghash128, INVERSE>(as_ghash(words), width, Ghash128::from(shift));
+    convert(words, INTO_TOWER);
+}
+
+/// The widest level's padded transform, with its network run over `Ghash128` between two changes of basis.
+pub(crate) fn ghash_transform_cosets(
+    values: &mut [BinaryField128],
+    width: usize,
+    log_message: usize,
+) {
+    let words = BinaryField128::as_repr_slice_mut(values);
+
+    // Every coset is written from the message, so the zero tail needs no change of basis.
+    convert(&mut words[..width << log_message], INTO_POLY);
+
+    // Each coset's shift is a domain point, and those of `Ghash128` are the images of the tower's.
+    lch::transform_cosets::<Ghash128>(as_ghash(words), width, log_message);
+    convert(words, INTO_TOWER);
+}
+
+/// Polynomial coordinates read in place as the `Ghash128` elements they are.
+#[inline]
+const fn as_ghash(words: &mut [u128]) -> &mut [Ghash128] {
+    // SAFETY: `Ghash128` is `#[repr(transparent)]` over `u128`.
+    //
+    // - A run of one is therefore a run of the other, of the same length and alignment.
+    // - Every `u128` is a canonical `Ghash128`, so every word read through the view is a valid element.
+    // - Every element written through the view is a `u128`, so the words stay initialised.
+    // - The view borrows the same words exclusively for the same lifetime.
+    unsafe { core::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<Ghash128>(), words.len()) }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
@@ -190,7 +327,7 @@ mod tests {
 
     use super::{
         BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, ButterflyField,
-        Ghash128, Poly64,
+        Ghash128, Poly64, byte_map_twiddle_bits, wide_stages_repay_conversion,
     };
 
     #[test]
@@ -426,6 +563,33 @@ mod tests {
         let mut lo = [BinaryField32::ONE; 4];
         let mut hi = [BinaryField32::ONE; 3];
         BinaryField32::butterfly::<false>(&mut lo, &mut hi, BinaryField32::ONE);
+    }
+
+    /// The `Ghash128` route waits for two stages of wide twiddles on rows of 64 bytes and up, and for one below that.
+    ///
+    /// A single wide stage on such rows leaves the route slower than the tower network, so taking it there would regress those shapes.
+    #[test]
+    fn rows_of_64_bytes_and_up_need_two_wide_stages_for_the_ghash_route() {
+        // A shift of full width widens every stage, and the zero shift widens only the stages past the byte map's span.
+        let full = BinaryField128::from_repr(1 << 127);
+
+        // Fixture: rows of one and three elements fall short of 64 bytes, rows of four and sixteen reach it.
+        for (width, needed) in [(1, 1), (3, 1), (4, 2), (16, 2)] {
+            let bits = byte_map_twiddle_bits(width * size_of::<BinaryField128>());
+            for stages in 0..=3 {
+                let want = stages >= needed;
+                assert_eq!(
+                    wide_stages_repay_conversion(width, bits + stages, BinaryField128::ZERO),
+                    want,
+                    "width={width}, unshifted, wide stages={stages}"
+                );
+                assert_eq!(
+                    wide_stages_repay_conversion(width, stages, full),
+                    want,
+                    "width={width}, shifted, wide stages={stages}"
+                );
+            }
+        }
     }
 
     proptest! {

@@ -841,6 +841,8 @@ impl<'a, A> AirZerocheck<'a, A> {
                 public_values,
                 lambda,
                 log_height,
+                B::to_repr,
+                B::from_repr,
             );
             (prover, claim)
         });

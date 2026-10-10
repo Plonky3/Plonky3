@@ -146,6 +146,15 @@ impl<F: Field> Lookups<F> {
     {
         let mut builder = InteractionSymbolicBuilder::<F, EF>::new(AirLayout::from_air(air));
         air.eval(&mut builder);
+        Self::from_builder(&builder)
+    }
+
+    /// Extract lookups from a builder that already evaluated one AIR.
+    pub fn from_builder<EF>(builder: &InteractionSymbolicBuilder<F, EF>) -> Self
+    where
+        EF: ExtensionField<F>,
+        F: Clone + Send + Sync,
+    {
         Self::from_interactions(
             builder.global_interactions(),
             builder.local_interactions(),

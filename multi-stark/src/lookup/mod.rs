@@ -151,6 +151,25 @@ impl<F: Field> LookupPlan<F> {
             .iter()
             .map(|&air| Lookups::from_air::<EF, _>(air))
             .collect::<Vec<_>>();
+        Self::from_lookups(lookups, num_variables)
+    }
+
+    /// Resolve lookups already extracted from each AIR of the batch, in caller order.
+    ///
+    /// Everything `build` does after its symbolic pass, for a caller that already ran it.
+    ///
+    /// # Errors
+    ///
+    /// The same as building the plan.
+    ///
+    /// # Panics
+    ///
+    /// The same as building the plan.
+    pub(crate) fn from_lookups(
+        lookups: Vec<Lookups<F>>,
+        num_variables: &[usize],
+    ) -> Result<Option<Self>, LookupError> {
+        assert_eq!(lookups.len(), num_variables.len());
         if F::ONE + F::ONE == F::ZERO
             && lookups
                 .iter()
@@ -742,11 +761,13 @@ where
 /// Returns an error when a characteristic-two AIR declares an active lookup.
 /// Returns an error when the reduction fails its own consistency checks.
 ///
+/// `lookups` holds what each of the verifier's own AIRs declares, in caller order.
+///
 /// # Panics
 ///
-/// Panics if the AIR and trace-height slices disagree on length.
-pub(crate) fn verify_lookup<F, EF, A, Challenger>(
-    airs: &[&A],
+/// Panics if the lookups and the trace heights disagree on length.
+pub(crate) fn verify_lookup<F, EF, Challenger>(
+    lookups: Vec<Lookups<F>>,
     num_variables: &[usize],
     proof: Option<&FractionGkrProof<EF>>,
     challenger: &mut Challenger,
@@ -754,14 +775,11 @@ pub(crate) fn verify_lookup<F, EF, A, Challenger>(
 where
     F: TranscriptField,
     EF: ExtensionField<F>,
-    A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
     Challenger: FieldChallenger<F>,
 {
-    assert_eq!(airs.len(), num_variables.len());
-
     // Rebuild the layout from the verifier's own AIRs and trace heights.
     // No layout metadata from the proof is trusted.
-    let plan = LookupPlan::build::<EF, A>(airs, num_variables)?;
+    let plan = LookupPlan::from_lookups(lookups, num_variables)?;
 
     // A lookup proof exists exactly when at least one AIR emits a tuple.
     let (plan, proof) = match (plan, proof) {
@@ -821,6 +839,16 @@ mod tests {
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
+
+    /// What each AIR declares, extracted the way the verifier does it.
+    fn declared<A>(airs: &[&A]) -> Vec<Lookups<F>>
+    where
+        A: Air<InteractionSymbolicBuilder<F, EF>>,
+    {
+        airs.iter()
+            .map(|&air| Lookups::from_air::<EF, _>(air))
+            .collect()
+    }
     type Perm = Poseidon2BabyBear<16>;
     type Challenger = DuplexChallenger<F, Perm, 16, 8>;
     use super::test_field::Tiny;
@@ -1197,8 +1225,8 @@ mod tests {
         let air = ExcessiveMultiplicityAir;
         let mut challenger = challenger();
         assert!(matches!(
-            verify_lookup::<F, EF, _, _>(
-                &[&air],
+            verify_lookup::<F, EF, _>(
+                declared(&[&air]),
                 &[test_lookup_num_variables()],
                 Some(&FractionGkrProof {
                     root_denominator: EF::ONE,
@@ -1235,8 +1263,8 @@ mod tests {
         let lookup_proof = lookup_proof.unwrap();
 
         let mut verifier_challenger = challenger();
-        let verifier = verify_lookup::<F, EF, _, _>(
-            &[&air],
+        let verifier = verify_lookup::<F, EF, _>(
+            declared(&[&air]),
             &[main.num_variables()],
             Some(&lookup_proof),
             &mut verifier_challenger,
@@ -1357,8 +1385,8 @@ mod tests {
         );
 
         let mut verifier_challenger = challenger();
-        let verifier_lookup = verify_lookup::<F, EF, _, _>(
-            &[&air],
+        let verifier_lookup = verify_lookup::<F, EF, _>(
+            declared(&[&air]),
             &[main.num_variables()],
             Some(&lookup_proof),
             &mut verifier_challenger,
@@ -1480,8 +1508,8 @@ mod tests {
 
         let check = |air: &PermutationSumAir| {
             let mut verifier_challenger = challenger();
-            let lookup = verify_lookup::<F, EF, _, _>(
-                &[air],
+            let lookup = verify_lookup::<F, EF, _>(
+                declared(&[air]),
                 &[main.num_variables()],
                 Some(&lookup_proof),
                 &mut verifier_challenger,
@@ -1550,8 +1578,8 @@ mod tests {
 
         let log_heights = tables.iter().map(Table::num_variables).collect::<Vec<_>>();
         let mut verifier_challenger = challenger();
-        let verifier_lookup = verify_lookup::<F, EF, _, _>(
-            &air_refs,
+        let verifier_lookup = verify_lookup::<F, EF, _>(
+            declared(&air_refs),
             &log_heights,
             Some(&lookup_proof),
             &mut verifier_challenger,
@@ -1609,8 +1637,8 @@ mod tests {
         );
 
         let mut verifier_challenger = challenger();
-        let verifier_lookup = verify_lookup::<F, EF, _, _>(
-            &airs,
+        let verifier_lookup = verify_lookup::<F, EF, _>(
+            declared(&airs),
             &[tall.num_variables(), short.num_variables()],
             Some(&lookup_proof),
             &mut verifier_challenger,
@@ -1704,8 +1732,8 @@ mod tests {
         // Mutation: the perturbed claim must come back as a rejection, not a panic.
         let mut verifier_challenger = challenger();
         assert!(matches!(
-            verify_lookup::<F, EF, _, _>(
-                &[&air],
+            verify_lookup::<F, EF, _>(
+                declared(&[&air]),
                 &[main.num_variables()],
                 Some(&proof),
                 &mut verifier_challenger,

@@ -186,6 +186,9 @@ impl_packed_value!(PackedGhash128, Ghash128, WIDTH);
 // Arithmetic acts independently on each 128-bit field element.
 unsafe impl PackedField for PackedGhash128 {
     type Scalar = Ghash128;
+
+    // `PMULL` multiplies one 128-bit element per instruction, so each lane runs its own product.
+    const MUL_LANES: usize = 1;
 }
 
 // SAFETY: the width is two, a power of two.

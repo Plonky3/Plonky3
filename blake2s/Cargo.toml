@@ -17,9 +17,8 @@ criterion.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
 
-blake2.workspace = true
-
 [dev-dependencies]
+blake2.workspace = true
 hex-literal.workspace = true
 proptest.workspace = true
 

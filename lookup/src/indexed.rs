@@ -138,10 +138,28 @@ impl IndexedLookups {
     {
         let layout = AirLayout::from_air(air);
         let builder = InteractionSymbolicBuilder::<F, EF>::from_air(air, layout);
+        Self::from_builder(&builder, &layout)
+    }
+
+    /// Extract every indexed declaration from a builder that already evaluated one AIR.
+    ///
+    /// The layout is the one the builder evaluated against.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a declaration names a column the AIR does not have.
+    pub fn from_builder<F, EF>(
+        builder: &InteractionSymbolicBuilder<F, EF>,
+        layout: &AirLayout,
+    ) -> Result<Self, IndexedLookupError>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
         Self::new(
             builder.indexed_reads().to_vec(),
             builder.indexed_tables().to_vec(),
-            &layout,
+            layout,
         )
     }
 

@@ -141,14 +141,20 @@ unsafe fn multiply(value: uint64x2_t, twiddle: uint64x2_t) -> uint64x2_t {
         let b = vreinterpretq_p64_u64(twiddle);
         let p0 = vreinterpretq_u64_p128(vmull_p64(vgetq_lane_p64::<0>(a), vgetq_lane_p64::<0>(b)));
         let p1 = vreinterpretq_u64_p128(vmull_high_p64(a, b));
-        let low = vzip1q_u64(p0, p1);
-        let high = vzip2q_u64(p0, p1);
-        // Why: the modulus factors as x^64 + (1 + x) * (1 + x^3).
-        // The high half has degree at most 62, so its first doubling loses no bit.
-        let a = veorq_u64(high, vshlq_n_u64::<1>(high));
-        let spill = vshrq_n_u64::<61>(a);
-        let c = xor3(a, spill, vshlq_n_u64::<1>(spill));
-        xor3(low, c, vshlq_n_u64::<3>(c))
+        let tail = vreinterpretq_p64_u64(vdupq_n_u64(0x1b));
+        let t0 = vreinterpretq_u64_p128(vmull_high_p64(vreinterpretq_p64_u64(p0), tail));
+        let t1 = vreinterpretq_u64_p128(vmull_high_p64(vreinterpretq_p64_u64(p1), tail));
+        let u0 = vreinterpretq_u64_p128(vmull_high_p64(vreinterpretq_p64_u64(t0), tail));
+        let u1 = vreinterpretq_u64_p128(vmull_high_p64(vreinterpretq_p64_u64(t1), tail));
+        let (mut e0, mut e1) = (xor3(p0, t0, u0), xor3(p1, t1, u1));
+        // Keep the reductions separate until their low lanes are interleaved.
+        core::arch::asm!(
+            "/* {0:v} {1:v} */",
+            inout(vreg) e0,
+            inout(vreg) e1,
+            options(pure, nomem, nostack, preserves_flags)
+        );
+        vzip1q_u64(e0, e1)
     }
 }
 

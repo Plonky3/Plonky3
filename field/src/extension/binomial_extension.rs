@@ -633,7 +633,9 @@ pub fn binomial_mul_by_scalar<F: Field, R: Algebra<F>, const D: usize>(
     // Both copies of `b` are lifted into `R` once, so every row below is plain moves.
     //
     // The constant coefficient never wraps, so its scaled slot is left unused.
-    let b_lift: [R; D] = b.map(R::from);
+    //
+    // Why `from_fn` and not `map`: `map` can stay out of line, and its result then reloads through a blocked store forward.
+    let b_lift: [R; D] = array::from_fn(|i| R::from(b[i]));
     let wb: [R; D] = array::from_fn(|i| R::from(if i == 0 { F::ZERO } else { b[i] * w }));
 
     for (k, c) in res.iter_mut().enumerate() {

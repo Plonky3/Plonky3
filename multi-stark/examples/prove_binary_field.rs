@@ -200,6 +200,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use p3_binary_field::{BinaryField2, Ghash128};
     use p3_binary_pcs::{BinaryPcsError, BinaryPcsProof};
     use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName};
@@ -267,12 +269,49 @@ mod tests {
         }
     }
 
+    /// The push end of the binary bus, squaring a periodic column rather than a committed one.
+    ///
+    /// The column repeats `2, 3, 4, 5`, and its one committed column is the selector.
+    struct PeriodicBusAir;
+
+    impl BaseAir<F> for PeriodicBusAir {
+        fn width(&self) -> usize {
+            1
+        }
+
+        fn num_periodic_columns(&self) -> usize {
+            1
+        }
+
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            Cow::Owned(vec![(2..6).map(F::from_repr).collect()])
+        }
+    }
+
+    impl<AB> Air<AB> for PeriodicBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let value: AB::Expr = builder.periodic_values()[0].into();
+            let selector: AB::Expr = builder.main().current_slice()[0].into();
+            builder.push_bus_interaction(
+                BusName::new("binary-selected-square"),
+                BusDirection::Push,
+                [value.clone() * value],
+                BusActivation::Boolean(selector),
+            );
+        }
+    }
+
     /// Either the recurrence or one end of the binary bus, so both fit one batch.
     enum LiftedAir {
         /// The nonlinear recurrence, which declares no bus.
         Recurrence,
         /// One end of the selected-square bus.
         Bus(BinaryBusAir),
+        /// The push end of the selected-square bus, reading a periodic column.
+        PeriodicBus(PeriodicBusAir),
     }
 
     impl BaseAir<F> for LiftedAir {
@@ -280,6 +319,7 @@ mod tests {
             match self {
                 Self::Recurrence => BaseAir::<F>::width(&RecurrenceAir),
                 Self::Bus(air) => air.width(),
+                Self::PeriodicBus(air) => air.width(),
             }
         }
 
@@ -287,6 +327,21 @@ mod tests {
             match self {
                 Self::Recurrence => BaseAir::<F>::num_public_values(&RecurrenceAir),
                 Self::Bus(air) => air.num_public_values(),
+                Self::PeriodicBus(air) => air.num_public_values(),
+            }
+        }
+
+        fn num_periodic_columns(&self) -> usize {
+            match self {
+                Self::PeriodicBus(air) => air.num_periodic_columns(),
+                _ => 0,
+            }
+        }
+
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            match self {
+                Self::PeriodicBus(air) => air.periodic_columns(),
+                _ => Cow::Borrowed(&[]),
             }
         }
     }
@@ -299,6 +354,7 @@ mod tests {
             match self {
                 Self::Recurrence => RecurrenceAir.eval(builder),
                 Self::Bus(air) => air.eval(builder),
+                Self::PeriodicBus(air) => air.eval(builder),
             }
         }
     }
@@ -329,6 +385,44 @@ mod tests {
             ]);
         }
         Table::new(RowMajorMatrix::new(rows, 2).transpose())
+    }
+
+    /// Proves one statement with every backend and checks the proofs are byte-identical.
+    ///
+    /// Returns the proof of the generic backend.
+    fn prove_with_every_backend<'a>(
+        config: &Config,
+        instances: impl Fn() -> ProverInstances<'a, Config, LiftedAir>,
+    ) -> MultiStarkProof<Config> {
+        let generic =
+            prove_with_backend::<_, _, GenericBackend>(config, instances(), 0, &mut challenger())
+                .unwrap();
+        let expected = postcard::to_allocvec(&generic).unwrap();
+        let subfield = prove_with_backend::<_, _, SubfieldBackend<BinaryField2>>(
+            config,
+            instances(),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        assert_eq!(postcard::to_allocvec(&subfield).unwrap(), expected);
+        let repr = prove_with_backend::<_, _, ReprBackend<BinaryField2, Ghash128>>(
+            config,
+            instances(),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        assert_eq!(postcard::to_allocvec(&repr).unwrap(), expected);
+        let late = prove_with_backend::<_, _, ReprBackend<BinaryField2, Ghash128, true>>(
+            config,
+            instances(),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        assert_eq!(postcard::to_allocvec(&late).unwrap(), expected);
+        generic
     }
 
     struct Fixture {
@@ -665,6 +759,95 @@ mod tests {
                 VerifierInstance::new(&pull, &vk, log_height, &[]),
             ]),
             &generic,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn lifted_binary_bus_proofs_match_across_backends() {
+        // The representation backends compute the bus family in the polynomial basis.
+        // Converting a challenge in, or a round value out, with anything but the isomorphism
+        // changes a round polynomial, and so the proof.
+        //
+        // Push at 3 and pull at 2 under a recurrence at 5: both shares are lifted. Each starts
+        // dormant, from a claim read off its rows in place, then folds once its rows are bound.
+        let live = 4;
+        let config = config(6);
+        let (table, public) = trace(5);
+        let recurrence = LiftedAir::Recurrence;
+        let push = LiftedAir::Bus(BinaryBusAir {
+            direction: BusDirection::Push,
+        });
+        let pull = LiftedAir::Bus(BinaryBusAir {
+            direction: BusDirection::Pull,
+        });
+        let airs = [&recurrence, &push, &pull];
+        let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
+        let proof = prove_with_every_backend(&config, || {
+            ProverInstances::new(vec![
+                ProverInstance::new(airs[0], table.clone(), &pk, &public),
+                ProverInstance::new(airs[1], binary_bus_table(3, live), &pk, &[]),
+                ProverInstance::new(airs[2], binary_bus_table(2, live), &pk, &[]),
+            ])
+        });
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(airs[0], &vk, 5, &public),
+                VerifierInstance::new(airs[1], &vk, 3, &[]),
+                VerifierInstance::new(airs[2], &vk, 2, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn periodic_binary_bus_proofs_match_across_backends() {
+        // A periodic source enters the representation field like a committed one, read in place
+        // from one period, and must leave every round polynomial as the generic backend's.
+        //
+        // The push end selects rows 4 and 6 of 8, in the second period, so its dormant claim
+        // reads the period wrapped around: it squares 2 and 4. The pull end selects rows 0 and 2
+        // of 4, which hold 2 and 4 as well. Push at 3 and pull at 2 under a recurrence at 5.
+        let config = config(6);
+        let (table, public) = trace(5);
+        let recurrence = LiftedAir::Recurrence;
+        let push = LiftedAir::PeriodicBus(PeriodicBusAir);
+        let pull = LiftedAir::Bus(BinaryBusAir {
+            direction: BusDirection::Pull,
+        });
+        let airs = [&recurrence, &push, &pull];
+        let selectors = (0usize..8)
+            .map(|row| F::from_bool(row >= 4 && row.is_multiple_of(2)))
+            .collect::<Vec<_>>();
+        let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
+        let proof = prove_with_every_backend(&config, || {
+            ProverInstances::new(vec![
+                ProverInstance::new(airs[0], table.clone(), &pk, &public),
+                ProverInstance::new(
+                    airs[1],
+                    Table::new(RowMajorMatrix::new(selectors.clone(), 1).transpose()),
+                    &pk,
+                    &[],
+                ),
+                ProverInstance::new(airs[2], binary_bus_table(2, 4), &pk, &[]),
+            ])
+        });
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(airs[0], &vk, 5, &public),
+                VerifierInstance::new(airs[1], &vk, 3, &[]),
+                VerifierInstance::new(airs[2], &vk, 2, &[]),
+            ]),
+            &proof,
             0,
             &mut challenger(),
         )
