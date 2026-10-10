@@ -241,13 +241,29 @@ where
                     let base = Out(out.as_mut_ptr());
                     pieces.run(|i, piece| {
                         let start = i * pieces.piece;
-                        for (j, item) in piece.into_iter().enumerate() {
-                            // SAFETY: piece `i` alone writes slots `start..start + piece.len()`, all below `len`.
+                        // A producer is a safe trait, so its item count is checked, not trusted.
+                        //
+                        // Piece `i` owns slots `start..start + expected`, all below `len`.
+                        let expected = pieces.piece.min(len - start);
+                        let mut items = piece.into_iter();
+                        let mut written = 0;
+                        for item in items.by_ref().take(expected) {
+                            // SAFETY: `written < expected`, so the slot is in piece `i`'s own range.
                             // A panic leaks the slots written so far.
-                            unsafe { base.at(start + j).write(map_op(item)) };
+                            unsafe { base.at(start + written).write(map_op(item)) };
+                            written += 1;
                         }
+                        // A miscounted piece panics here, before `set_len` runs.
+                        assert_eq!(
+                            written, expected,
+                            "producer yielded fewer items than its length"
+                        );
+                        assert!(
+                            items.next().is_none(),
+                            "producer yielded more items than its length"
+                        );
                     });
-                    // SAFETY: the pieces tile `0..len`, and each wrote every slot of its range.
+                    // SAFETY: the pieces tile `0..len`, and each checked it wrote every slot of its range.
                     unsafe { out.set_len(len) };
                     out
                 }
@@ -310,8 +326,12 @@ where
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
+    use core::ops::Range;
     use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::panic::AssertUnwindSafe;
 
+    use rayon::ThreadPoolBuilder;
+    use rayon::iter::plumbing::{Consumer, Producer, ProducerCallback, UnindexedConsumer, bridge};
     use rayon::prelude::*;
 
     use super::{fold_reduce, for_each, map_collect};
@@ -358,6 +378,83 @@ mod tests {
             );
             assert_eq!(got, (0..n).collect::<Vec<_>>(), "n = {n}");
         }
+    }
+
+    /// A safe iterator that claims `claimed` items but yields `actual`.
+    struct Miscounted {
+        claimed: usize,
+        actual: usize,
+    }
+
+    impl ParallelIterator for Miscounted {
+        type Item = usize;
+
+        fn drive_unindexed<C: UnindexedConsumer<usize>>(self, consumer: C) -> C::Result {
+            bridge(self, consumer)
+        }
+
+        fn opt_len(&self) -> Option<usize> {
+            Some(self.claimed)
+        }
+    }
+
+    impl IndexedParallelIterator for Miscounted {
+        fn len(&self) -> usize {
+            self.claimed
+        }
+
+        fn drive<C: Consumer<usize>>(self, consumer: C) -> C::Result {
+            bridge(self, consumer)
+        }
+
+        fn with_producer<CB: ProducerCallback<usize>>(self, callback: CB) -> CB::Output {
+            callback.callback(MiscountedProducer(0..self.actual))
+        }
+    }
+
+    /// The producer behind [`Miscounted`]: it splits its true range, so only the last piece is off.
+    struct MiscountedProducer(Range<usize>);
+
+    impl Producer for MiscountedProducer {
+        type Item = usize;
+        type IntoIter = Range<usize>;
+
+        fn into_iter(self) -> Range<usize> {
+            self.0
+        }
+
+        fn split_at(self, index: usize) -> (Self, Self) {
+            let mid = (self.0.start + index).min(self.0.end);
+            (Self(self.0.start..mid), Self(mid..self.0.end))
+        }
+    }
+
+    #[test]
+    fn map_collect_rejects_a_miscounted_producer() {
+        // More than one worker, so the loop is cut into pieces rather than collected whole.
+        let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        let claimed = 1000;
+
+        // One item short would leave a slot uninitialised; one extra would write past the capacity.
+        for actual in [claimed - 1, claimed + 1] {
+            // The pool is only borrowed, and a failed loop leaves it usable.
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                pool.install(|| map_collect(Miscounted { claimed, actual }, |i| vec![i]))
+            }));
+            assert!(result.is_err(), "actual = {actual}");
+        }
+
+        // An honest count still collects every item in order.
+        let out = pool.install(|| {
+            map_collect(
+                Miscounted {
+                    claimed,
+                    actual: claimed,
+                },
+                |i| i,
+            )
+        });
+        assert_eq!(out, (0..claimed).collect::<Vec<_>>());
     }
 
     #[test]
