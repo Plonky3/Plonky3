@@ -517,7 +517,7 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
             ]
         ]
     if command == "slow-regressions":
-        return [
+        regressions = [
             [
                 "cargo",
                 "test",
@@ -702,6 +702,12 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
                 "--exact",
             ],
         ]
+        # A selection keeps only the regressions of the packages it names.
+        return [
+            regression
+            for regression in regressions
+            if packages is None or regression[regression.index("-p") + 1] in packages
+        ]
     raise AssertionError(f"unhandled command: {command}")
 
 
@@ -805,9 +811,11 @@ def parser() -> argparse.ArgumentParser:
     whir = subparsers.add_parser("whir-exhaustive", help="run the ignored exhaustive WHIR sweep")
     whir.add_argument("--parallel", action="store_true")
     subparsers.add_parser("binary-large", help="run the ignored binary PCS 2^16 round trip")
-    subparsers.add_parser(
+    slow = subparsers.add_parser(
         "slow-regressions", help="run the ignored compute-heavy regression tests"
     )
+    slow.add_argument("--package", action="append", metavar="NAME")
+    slow.add_argument("--packages")
     return result
 
 
