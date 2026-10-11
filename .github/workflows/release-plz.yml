@@ -67,7 +67,7 @@ jobs:
                 fi
                 ;;
             esac
-            sleep 30
+            sleep 60
           done
           echo "::error::Timed out (30 min) waiting for CI on $SHA."
           exit 1
