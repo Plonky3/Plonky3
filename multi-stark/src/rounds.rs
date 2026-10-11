@@ -1961,13 +1961,26 @@ where
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
     {
+        let lookup = [EF::ZERO, r, EF::ONE - r, EF::ONE];
         self.fold_columns(
             r,
             |column| {
                 if let Some(values) = column.as_dense() {
                     PolyView::new(values).fix_prefix_var_to_packed(r)
                 } else {
-                    let half = column.len() / 2;
+                    let ColumnView::Boolean {
+                        words,
+                        column: index,
+                        len,
+                    } = column
+                    else {
+                        unreachable!()
+                    };
+                    let half = len / 2;
+                    let bit = |row: usize| {
+                        ((words.values[(row / 64) * words.width + index] >> (row % 64)) & 1)
+                            as usize
+                    };
                     // Invariant: the low half holds at least one full lane group.
                     // Halves are powers of two, so one group then divides the half exactly.
                     debug_assert!(
@@ -1980,9 +1993,7 @@ where
                             .step_by(F::Packing::WIDTH)
                             .map(|start| {
                                 EF::ExtensionPacking::from_ext_fn(|lane| {
-                                    let lo = column.value(start + lane);
-                                    let hi = column.value(start + half + lane);
-                                    r * EF::from(hi - lo) + EF::from(lo)
+                                    lookup[2 * bit(start + lane) + bit(start + half + lane)]
                                 })
                             })
                             .collect(),
@@ -1993,14 +2004,22 @@ where
                 if let Some(values) = column.as_dense() {
                     PolyView::new(values).fix_prefix_var(r)
                 } else {
-                    let half = column.len() / 2;
+                    let ColumnView::Boolean {
+                        words,
+                        column: index,
+                        len,
+                    } = column
+                    else {
+                        unreachable!()
+                    };
+                    let half = len / 2;
+                    let bit = |row: usize| {
+                        ((words.values[(row / 64) * words.width + index] >> (row % 64)) & 1)
+                            as usize
+                    };
                     Poly::new(
                         (0..half)
-                            .map(|row| {
-                                let lo = column.value(row);
-                                let hi = column.value(row + half);
-                                EF::from(lo) + r * EF::from(hi - lo)
-                            })
+                            .map(|row| lookup[2 * bit(row) + bit(row + half)])
                             .collect(),
                     )
                 }
@@ -3165,3 +3184,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "rounds/boolean_fold_tests.rs"]
+mod boolean_fold_tests;

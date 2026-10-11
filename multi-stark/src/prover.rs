@@ -1924,20 +1924,10 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn a_bus_over_packed_boolean_tables_proves_and_verifies() {
+    fn check_bus_over_packed_boolean_tables<A: ProverAir<F, EF>>(push: &A, pull: &A) {
         // Every cell is a bit, so squaring the payload is the identity and both sides match.
         let height = packed_floor();
         let log_height = log2_strict_usize(height);
-        let push = ConditionalBusAir {
-            direction: BusDirection::Push,
-            conditional: true,
-        };
-        let pull = ConditionalBusAir {
-            direction: BusDirection::Pull,
-            conditional: true,
-        };
-
         // Alternating payload bits under a selector that silences every fourth row.
         // Rows past the table height are absent from the word, which the layout requires.
         let words = (0..height.div_ceil(64))
@@ -1972,31 +1962,79 @@ mod tests {
         assert!(retained.packed_bits().is_some());
 
         let mut config = config(log_height + 2, FOLDING);
-        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        // Public prove uses GenericBackend, exercising the ordinary packed first fold.
+        let (pk, vk) = setup(&config, &[push, pull], &mut challenger()).unwrap();
+        // The same PCS configuration first exposes its normal dense retained tables.
+        let dense = || {
+            Table::new(RowMajorMatrix::new(
+                packed()
+                    .columns()
+                    .flat_map(|column| column.values())
+                    .collect(),
+                height,
+            ))
+        };
+        let reference = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(push, dense(), &pk, &[]),
+                ProverInstance::new(pull, dense(), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
         config.committed_table_override = Some(retained);
 
         let proof = prove(
             &config,
             ProverInstances::new(vec![
-                ProverInstance::new(&push, packed(), &pk, &[]),
-                ProverInstance::new(&pull, packed(), &pk, &[]),
+                ProverInstance::new(push, packed(), &pk, &[]),
+                ProverInstance::new(pull, packed(), &pk, &[]),
             ]),
             0,
             &mut challenger(),
         )
         .unwrap();
 
+        assert_eq!(
+            postcard::to_allocvec(&proof).unwrap(),
+            postcard::to_allocvec(&reference).unwrap()
+        );
+
         verify(
             &config,
             VerifierInstances::new(vec![
-                VerifierInstance::new(&push, &vk, log_height, &[]),
-                VerifierInstance::new(&pull, &vk, log_height, &[]),
+                VerifierInstance::new(push, &vk, log_height, &[]),
+                VerifierInstance::new(pull, &vk, log_height, &[]),
             ]),
             &proof,
             0,
             &mut challenger(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_bus_over_packed_boolean_tables_proves_and_verifies() {
+        check_bus_over_packed_boolean_tables(
+            &ConditionalBusAir {
+                direction: BusDirection::Push,
+                conditional: true,
+            },
+            &ConditionalBusAir {
+                direction: BusDirection::Pull,
+                conditional: true,
+            },
+        );
+    }
+
+    #[test]
+    fn an_affine_bus_has_identical_dense_and_packed_proofs() {
+        check_bus_over_packed_boolean_tables(
+            &ConditionalOnlyBusAir(BusDirection::Push),
+            &ConditionalOnlyBusAir(BusDirection::Pull),
+        );
     }
 
     #[test]
