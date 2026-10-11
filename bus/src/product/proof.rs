@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
-use p3_field::ExtensionField;
+use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
@@ -59,36 +59,16 @@ pub struct ProductGkrOutput<EF> {
     pub values: Vec<EF>,
 }
 
-impl<EF> ProductGkrProof<EF> {
-    /// Proves several product trees in one transcript.
-    ///
-    /// Each slice is an arbitrary leaf prefix.
-    /// Every omitted suffix value is the multiplicative identity.
-    ///
-    /// An output value for a prefix of length `n` is
-    /// `sum_(i < n) eq(point, i) * input[i] + sum_(i >= n) eq(point, i)`.
-    /// A caller must authenticate them against committed leaf polynomials.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the input count or a prefix length disagrees with the supplied statement shape.
-    /// Panics when a shared-root statement is false.
-    pub fn prove<F, Challenger>(
-        inputs: &[&[EF]],
-        shape: ProductGkrShape,
-        challenger: &mut Challenger,
-    ) -> (Self, ProductGkrOutput<EF>)
-    where
-        F: TranscriptField,
-        EF: ExtensionField<F>,
-        Challenger: FieldChallenger<F>,
-    {
-        // Prover input errors are programming errors.
-        // The verifier handles the corresponding proof errors without panicking.
-        assert!(
-            has_distinct_round_nodes::<EF>(),
-            "product GKR requires six distinct challenge-field interpolation nodes"
-        );
+/// Product layers and roots bound to one validated statement shape.
+pub(crate) struct PreparedProductGkr<EF> {
+    shape: ProductGkrShape,
+    all_layers: Vec<ProductLayers<EF>>,
+    roots: Vec<EF>,
+}
+
+impl<EF: Field> PreparedProductGkr<EF> {
+    /// Prepare layers without asserting the shared-root relation or touching a transcript.
+    pub(crate) fn new(inputs: &[&[EF]], shape: ProductGkrShape) -> Self {
         assert_eq!(
             inputs.len(),
             shape.num_trees,
@@ -120,6 +100,85 @@ impl<EF> ProductGkrProof<EF> {
             .iter()
             .map(ProductLayers::root)
             .collect::<Vec<_>>();
+        Self {
+            shape,
+            all_layers,
+            roots,
+        }
+    }
+
+    pub(crate) fn roots(&self) -> &[EF] {
+        &self.roots
+    }
+
+    /// Prove a statement whose roots have already been checked by the bus reduction.
+    pub(crate) fn prove<F, Challenger>(
+        self,
+        challenger: &mut Challenger,
+    ) -> (ProductGkrProof<EF>, ProductGkrOutput<EF>)
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F>,
+    {
+        // Prover input errors are programming errors.
+        // The verifier handles the corresponding proof errors without panicking.
+        assert!(
+            has_distinct_round_nodes::<EF>(),
+            "product GKR requires six distinct challenge-field interpolation nodes"
+        );
+        ProductGkrProof::prove_inner::<F, Challenger>(self, challenger)
+    }
+}
+
+impl<EF> ProductGkrProof<EF> {
+    /// Proves several product trees in one transcript.
+    ///
+    /// Each slice is an arbitrary leaf prefix.
+    /// Every omitted suffix value is the multiplicative identity.
+    ///
+    /// An output value for a prefix of length `n` is
+    /// `sum_(i < n) eq(point, i) * input[i] + sum_(i >= n) eq(point, i)`.
+    /// A caller must authenticate them against committed leaf polynomials.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the input count or a prefix length disagrees with the supplied statement shape.
+    /// Panics when a shared-root statement is false.
+    pub fn prove<F, Challenger>(
+        inputs: &[&[EF]],
+        shape: ProductGkrShape,
+        challenger: &mut Challenger,
+    ) -> (Self, ProductGkrOutput<EF>)
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F>,
+    {
+        // Prover input errors are programming errors.
+        // The verifier handles the corresponding proof errors without panicking.
+        assert!(
+            has_distinct_round_nodes::<EF>(),
+            "product GKR requires six distinct challenge-field interpolation nodes"
+        );
+        Self::prove_inner::<F, Challenger>(PreparedProductGkr::new(inputs, shape), challenger)
+    }
+
+    /// Run the transcript after the statement and product layers have been checked.
+    fn prove_inner<F, Challenger>(
+        prepared: PreparedProductGkr<EF>,
+        challenger: &mut Challenger,
+    ) -> (Self, ProductGkrOutput<EF>)
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F>,
+    {
+        let PreparedProductGkr {
+            shape,
+            all_layers,
+            roots,
+        } = prepared;
         let root_messages = shape
             .root_shape
             .encode(&roots)

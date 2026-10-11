@@ -5,7 +5,6 @@ use alloc::vec::Vec;
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
 use p3_field::{ExtensionField, Field};
-use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 mod error;
@@ -14,6 +13,7 @@ mod transcript;
 pub use error::BusArgumentError;
 
 use self::transcript::{BusProverTranscript, BusVerifierTranscript};
+use crate::product::PreparedProductGkr;
 use crate::{BusDirection, BusPlan, ProductGkrOutput, ProductGkrProof};
 
 /// Verifier challenges defining every bus leaf factor.
@@ -99,28 +99,14 @@ impl BusPlan {
             return Err(error);
         }
 
-        // Shared-root encoding is a statement, so reject a false witness explicitly.
-        let push_root = pushes
-            .par_iter()
-            .with_min_task::<EF>()
-            .copied()
-            .product::<EF>();
-        let pull_root = pulls
-            .par_iter()
-            .with_min_task::<EF>()
-            .copied()
-            .product::<EF>();
-        if push_root != pull_root {
+        // Reuse the product layers' roots for the shared-root witness check.
+        let prepared =
+            PreparedProductGkr::new(&[pushes.as_slice(), pulls.as_slice()], self.product_shape());
+        if prepared.roots()[0] != prepared.roots()[1] {
             transcript.abort();
             return Err(BusArgumentError::UnbalancedProducts);
         }
-        let (product, output) = transcript.product(|challenger| {
-            ProductGkrProof::prove::<F, _>(
-                &[pushes.as_slice(), pulls.as_slice()],
-                self.product_shape(),
-                challenger,
-            )
-        });
+        let (product, output) = transcript.product(|challenger| prepared.prove::<F, _>(challenger));
         transcript.finish();
 
         Ok((
@@ -237,6 +223,72 @@ mod tests {
                     actual,
                 })
             );
+        }
+    }
+
+    #[test]
+    fn invalid_leaves_stop_before_the_product_transcript() {
+        use p3_binary_field::{BinaryChallenger, BinaryField128 as F};
+        use p3_challenger::{CanSample, HashChallenger};
+        use p3_keccak::Keccak256Hash;
+
+        use crate::{BusActivation, BusPlanInput, SymbolicBusInteraction};
+
+        type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
+        let interactions = BusDirection::ALL.map(|direction| SymbolicBusInteraction::<F> {
+            bus_name: "rejection".into(),
+            direction,
+            fields: vec![F::ZERO.into()],
+            activation: BusActivation::Always,
+        });
+        let plan = BusPlan::build(&[BusPlanInput {
+            log_height: 1,
+            interactions: &interactions,
+        }])
+        .unwrap()
+        .unwrap();
+        let mismatch = |direction, actual| BusArgumentError::LeafCountMismatch {
+            direction,
+            expected: 2,
+            actual,
+        };
+        let cases = [
+            (
+                [vec![F::ONE], vec![F::ONE; 2]],
+                mismatch(BusDirection::Push, 1),
+            ),
+            (
+                [vec![F::ONE; 3], vec![F::ONE; 2]],
+                mismatch(BusDirection::Push, 3),
+            ),
+            (
+                [vec![F::ONE; 2], vec![F::ONE; 3]],
+                mismatch(BusDirection::Pull, 3),
+            ),
+            (
+                [vec![F::ONE], vec![F::ONE; 3]],
+                mismatch(BusDirection::Push, 1),
+            ),
+            (
+                [vec![F::ZERO, F::ONE], vec![F::ONE; 2]],
+                BusArgumentError::UnbalancedProducts,
+            ),
+        ];
+        for (leaves, expected_error) in cases {
+            let mut expected = Challenger::from_hasher(Vec::new(), Keccak256Hash);
+            {
+                let mut transcript = BusProverTranscript::<_, F, F>::new(&mut expected, &plan);
+                transcript.challenges();
+                transcript.abort();
+            }
+            let mut actual = Challenger::from_hasher(Vec::new(), Keccak256Hash);
+            assert_eq!(
+                plan.prove::<F, F, _>(|_| leaves, &mut actual).unwrap_err(),
+                expected_error,
+            );
+            let actual: [F; 16] = actual.sample_array();
+            let expected: [F; 16] = expected.sample_array();
+            assert_eq!(actual, expected);
         }
     }
 }
