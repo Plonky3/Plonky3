@@ -171,15 +171,11 @@ fn pack_block(
                 // The row kind is one-hot, so exactly one flag column takes a bit.
                 block[words.flags.trailing_zeros() as usize] |= 1u64 << (row - block_start);
 
-                // A lane's cells are its bits, so its columns take them in one sweep.
+                // Gather each lane's 64 row words into its output region, then transpose
+                // them below so word `bit` holds that state bit across all 64 rows.
                 let shift = row - block_start;
-                let mut column = KECCAK_BINARY_ROWS_PER_PERM;
-                for &lane in &words.state {
-                    let columns = &mut block[column..column + u64::BITS as usize];
-                    for (index, word) in columns.iter_mut().enumerate() {
-                        *word |= ((lane >> index) & 1) << shift;
-                    }
-                    column += u64::BITS as usize;
+                for (lane, &state) in words.state.iter().enumerate() {
+                    block[KECCAK_BINARY_ROWS_PER_PERM + lane * BITS_PER_WORD + shift] = state;
                 }
             }
         }
@@ -188,6 +184,32 @@ fn pack_block(
     // The state of a padding row is zero.
     for row in block_start.max(num_perm_rows)..block_end {
         block[OUTPUT_FLAG_COLUMN] |= 1u64 << (row - block_start);
+    }
+
+    // Padding rows and bits beyond the trace height were left zero in the output buffer.
+    // Each lane occupies exactly 64 columns, so the transpose needs no extra allocation.
+    for rows in block[KECCAK_BINARY_ROWS_PER_PERM..]
+        .as_chunks_mut::<BITS_PER_WORD>()
+        .0
+    {
+        transpose_bits(rows);
+    }
+}
+
+/// Transpose a 64-by-64 bit matrix: output word `b`, bit `r` is input word `r`, bit `b`.
+fn transpose_bits(rows: &mut [u64; 64]) {
+    let mut width = 32;
+    let mut mask = 0x0000_0000_ffff_ffff_u64;
+    while width != 0 {
+        for base in (0..64).step_by(2 * width) {
+            for row in base..base + width {
+                let swap = ((rows[row] >> width) ^ rows[row + width]) & mask;
+                rows[row] ^= swap << width;
+                rows[row + width] ^= swap;
+            }
+        }
+        width >>= 1;
+        mask ^= mask << width;
     }
 }
 
