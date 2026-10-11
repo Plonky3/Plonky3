@@ -186,17 +186,20 @@ impl<F: Field> RadixFourBatch<F> {
         Self { states }
     }
 
-    /// Computes one degree-five batched sumcheck message.
+    /// Computes one degree-five batched sumcheck message. The equality polynomial
+    /// is split into current-coordinate endpoints and normalized suffix weights.
     pub(super) fn round(
         &self,
         equality: &[F],
+        equality_pair: [F; 2],
         logical_len: usize,
         batching: F,
     ) -> [F; ROUND_POLY_LEN] {
         debug_assert!(logical_len >= 2);
-        debug_assert_eq!(equality.len(), logical_len);
+        debug_assert_eq!(equality.len(), logical_len / 2);
 
         let nodes = RoundNodes::<F>::new();
+        let eq_values = nodes.line(equality_pair[0], equality_pair[1]);
         let Some((first_tree, other_trees)) = self.states.split_first() else {
             return [F::ZERO; ROUND_POLY_LEN];
         };
@@ -205,7 +208,6 @@ impl<F: Field> RadixFourBatch<F> {
             .shifted_powers(batching)
             .collect_n(other_trees.len());
         let accumulate = |evaluations: &mut [F; ROUND_POLY_LEN], row: usize| {
-            let eq_values = nodes.line(equality[2 * row], equality[2 * row + 1]);
             let tree_product = |state: &RadixFourState<F>| {
                 let [first, rest @ ..] = &state.children;
                 let mut product = nodes.line(first.get(2 * row), first.get(2 * row + 1));
@@ -224,20 +226,18 @@ impl<F: Field> RadixFourBatch<F> {
                 }
             }
 
-            for ((evaluation, eq_value), batched) in
-                evaluations.iter_mut().zip(eq_values).zip(batched)
-            {
-                *evaluation += eq_value * batched;
+            for (evaluation, batched) in evaluations.iter_mut().zip(batched) {
+                *evaluation += equality[row] * batched;
             }
         };
 
-        // A row reads two equality and eight child values per tree, and uses each at every node.
+        // A row reads one equality weight and eight child values per tree.
         let rows = logical_len / 2;
-        let row_bytes = ROUND_POLY_LEN * (2 + 8 * self.states.len()) * size_of::<F>();
+        let row_bytes = ROUND_POLY_LEN * (1 + 8 * self.states.len()) * size_of::<F>();
 
         // Each task sums one run of rows, so only its partial message crosses threads.
         let task_rows = min_task_len(rows, row_bytes);
-        (0..rows.div_ceil(task_rows))
+        let mut evaluations = (0..rows.div_ceil(task_rows))
             .into_par_iter()
             .map_collect_min_task_bytes(task_rows * row_bytes, |task| {
                 let mut evaluations = [F::ZERO; ROUND_POLY_LEN];
@@ -252,7 +252,11 @@ impl<F: Field> RadixFourBatch<F> {
                     *evaluation += partial;
                 }
                 evaluations
-            })
+            });
+        for (evaluation, eq_value) in evaluations.iter_mut().zip(eq_values) {
+            *evaluation *= eq_value;
+        }
+        evaluations
     }
 
     /// Binds one parent variable across every tree in the batch.
@@ -320,12 +324,13 @@ mod tests {
     use p3_binary_field::{BinaryField128, Ghash128};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_multilinear_util::point::Point;
     use rand::distr::{Distribution, StandardUniform};
     use rand::{RngExt, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
-    use crate::product::math::fold_dense;
+    use crate::product::math::{fold_dense, sum_adjacent};
 
     type BabyBearQuartic = BinomialExtensionField<BabyBear, 4>;
 
@@ -392,25 +397,59 @@ mod tests {
 
         // Every retained even depth with at least one parent variable is a child level.
         for depth in (0..=log_height - 3).step_by(2) {
-            let mut logical_len = 1usize << (log_height - depth - 2);
-            let mut batch = RadixFourBatch::new(&layers, depth, logical_len);
-            let mut equality = (0..logical_len)
-                .map(|_| rng.random::<F>())
-                .collect::<Vec<_>>();
-            let batching = rng.random::<F>();
+            let variables = log_height - depth - 2;
+            for anchor_kind in 0..4 {
+                let anchor = (0..variables)
+                    .map(|index| match anchor_kind {
+                        0 => F::ZERO,
+                        1 => F::ONE,
+                        2 => F::from_bool(index % 2 != 0),
+                        _ => rng.random::<F>(),
+                    })
+                    .collect::<Vec<_>>();
+                for challenge_kind in 0..3 {
+                    let mut logical_len = 1usize << variables;
+                    let mut batch = RadixFourBatch::new(&layers, depth, logical_len);
+                    let mut equality = Point::new(anchor.as_slice()).equality_weights_lsb();
+                    let mut suffix = Point::new(&anchor[1..]).equality_weights_lsb();
+                    let mut prefix = F::ONE;
+                    let batching = rng.random::<F>();
 
-            // Folding between rounds walks every child prefix down to a single row.
-            while logical_len >= 2 {
-                for batching in [F::ZERO, F::ONE, batching] {
-                    assert_eq!(
-                        batch.round(&equality, logical_len, batching),
-                        per_node_round(&batch, &equality, logical_len, batching),
-                    );
+                    // Keep the fully materialized equality table as the independent reference.
+                    for (round, &coordinate) in anchor.iter().enumerate() {
+                        let one = prefix * coordinate;
+                        let pair = [prefix - one, one];
+                        for (weights, &weight) in equality.as_chunks::<2>().0.iter().zip(&suffix) {
+                            assert_eq!(weights, &[weight * pair[0], weight * pair[1]]);
+                        }
+                        for batching in [F::ZERO, F::ONE, batching] {
+                            assert_eq!(
+                                batch.round(&suffix, pair, logical_len, batching),
+                                per_node_round(&batch, &equality, logical_len, batching),
+                                "depth={depth} len={logical_len} anchor={anchor_kind} challenge={challenge_kind}",
+                            );
+                        }
+                        let challenge = match challenge_kind {
+                            0 => F::ZERO,
+                            1 => F::ONE,
+                            _ => rng.random::<F>(),
+                        };
+                        batch.fold(challenge, logical_len);
+                        fold_dense(&mut equality, challenge);
+                        prefix = interpolate_pair(pair, challenge);
+                        logical_len /= 2;
+                        if logical_len > 1 {
+                            sum_adjacent(&mut suffix);
+                            // Check the normalized table even when the accumulated prefix is zero.
+                            assert_eq!(
+                                suffix,
+                                Point::new(&anchor[round + 2..]).equality_weights_lsb(),
+                            );
+                        } else {
+                            assert_eq!(equality, [prefix]);
+                        }
+                    }
                 }
-                let challenge = rng.random::<F>();
-                batch.fold(challenge, logical_len);
-                fold_dense(&mut equality, challenge);
-                logical_len /= 2;
             }
         }
     }
@@ -463,6 +502,13 @@ mod tests {
             check_rounds::<BinaryField128>(&mut rng, 7, prefix_lens);
             check_rounds::<Ghash128>(&mut rng, 7, prefix_lens);
             check_rounds::<BabyBearQuartic>(&mut rng, 7, prefix_lens);
+        }
+        for log_height in [3, 4, 6] {
+            let capacity = 1usize << log_height;
+            let prefix_lens = [capacity, 0, capacity - 1];
+            check_rounds::<BinaryField128>(&mut rng, log_height, &prefix_lens);
+            check_rounds::<Ghash128>(&mut rng, log_height, &prefix_lens);
+            check_rounds::<BabyBearQuartic>(&mut rng, log_height, &prefix_lens);
         }
     }
 }
