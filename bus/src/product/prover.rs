@@ -231,8 +231,18 @@ impl<F: Field> RadixFourBatch<F> {
             }
         };
 
-        // A row reads one equality weight and eight child values per tree.
-        let rows = logical_len / 2;
+        // Past every explicit child prefix, all tree products are constant one.
+        // Keep a partial final pair in the active rows.
+        let rows = self
+            .states
+            .iter()
+            .flat_map(|state| &state.children)
+            .map(|child| child.values.len())
+            .max()
+            .unwrap_or(0)
+            .div_ceil(2);
+        debug_assert!(rows <= equality.len());
+        // An active row reads one equality weight and eight child values per tree.
         let row_bytes = ROUND_POLY_LEN * (1 + 8 * self.states.len()) * size_of::<F>();
 
         // Each task sums one run of rows, so only its partial message crosses threads.
@@ -253,6 +263,17 @@ impl<F: Field> RadixFourBatch<F> {
                 }
                 evaluations
             });
+        if rows < equality.len() {
+            let tail_weight: F = equality[rows..]
+                .par_iter()
+                .with_min_task::<F>()
+                .copied()
+                .sum();
+            let tail = tail_weight * (F::ONE + powers.iter().copied().sum::<F>());
+            for evaluation in &mut evaluations {
+                *evaluation += tail;
+            }
+        }
         for (evaluation, eq_value) in evaluations.iter_mut().zip(eq_values) {
             *evaluation *= eq_value;
         }
@@ -318,6 +339,7 @@ impl<F: Field> RoundNodes<F> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
@@ -390,6 +412,16 @@ mod tests {
             .iter()
             .map(|&len| (0..len).map(|_| rng.random::<F>()).collect::<Vec<_>>())
             .collect::<Vec<_>>();
+        check_input_rounds(rng, log_height, &inputs);
+    }
+
+    fn check_input_rounds<F: Field>(
+        rng: &mut Xoroshiro128Plus,
+        log_height: usize,
+        inputs: &[Vec<F>],
+    ) where
+        StandardUniform: Distribution<F>,
+    {
         let layers = inputs
             .iter()
             .map(|input| ProductLayers::new(input, log_height))
@@ -510,5 +542,37 @@ mod tests {
             check_rounds::<Ghash128>(&mut rng, log_height, &prefix_lens);
             check_rounds::<BabyBearQuartic>(&mut rng, log_height, &prefix_lens);
         }
+    }
+
+    fn check_identity_tails<F: Field>(rng: &mut Xoroshiro128Plus)
+    where
+        StandardUniform: Distribution<F>,
+    {
+        // Put the longest prefix in each child slot, including in a later tree.
+        // Odd lengths keep one partial pair; zero and full lengths cover both extremes.
+        for child_len in [0, 1, 2, 3, 31, 32] {
+            for slot in 0..4 {
+                for trees in 1..=3 {
+                    let mut inputs = vec![vec![F::ONE; 128]; trees];
+                    if child_len > 0 {
+                        let last = 4 * (child_len - 1) + slot;
+                        inputs[trees - 1][last] = F::interpolation_node(2);
+                        if last > 4 {
+                            // A zero product and interior identities must not move the tail cut.
+                            inputs[trees - 1][slot] = F::ZERO;
+                        }
+                    }
+                    check_input_rounds(rng, 7, &inputs);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn identity_tails_match_the_full_domain_reference() {
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0005);
+        check_identity_tails::<BinaryField128>(&mut rng);
+        check_identity_tails::<Ghash128>(&mut rng);
+        check_identity_tails::<BabyBearQuartic>(&mut rng);
     }
 }
