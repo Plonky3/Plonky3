@@ -480,15 +480,19 @@ pub(crate) fn dot_product_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
 
 #[inline]
 pub(crate) fn dot_product_128(pairs: impl Iterator<Item = (u128, u128)>) -> u128 {
-    // Short dot products do not reliably amortize the composite path's final work.
+    // An exact two-term hint or a lower bound of eight selects the composite path.
+    // An inexact two-term hint can still contain a slower three-to-seven-term batch.
     #[cfg(all(
         target_arch = "aarch64",
         target_endian = "little",
         target_feature = "aes",
         target_feature = "sha3"
     ))]
-    if pairs.size_hint().0 >= 8 {
-        return composite_dot_product_128(pairs);
+    {
+        let (lower, upper) = pairs.size_hint();
+        if lower >= 8 || (lower == 2 && upper == Some(2)) {
+            return composite_dot_product_128(pairs);
+        }
     }
     let (low, high) = pairs.fold((0, 0), |(low, high), (a, b)| {
         let (lo, hi) = clmul_128x128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
@@ -672,13 +676,21 @@ mod tests {
                     super::basis::tower_to_poly_128(pair.0),
                     super::basis::tower_to_poly_128(pair.1),
                 ));
-                let mut terms = [(0, 0); 8];
-                terms[0] = pair;
-                assert_eq!(super::dot_product_128(terms.into_iter()), expected);
-                terms[7] = pair;
-                assert_eq!(super::dot_product_128(terms.into_iter()), 0);
-                terms[0] = (0, 0);
-                assert_eq!(super::dot_product_128(terms.into_iter()), expected);
+                for length in [2, 8] {
+                    let mut terms = [(0, 0); 8];
+                    terms[0] = pair;
+                    assert_eq!(
+                        super::dot_product_128(terms[..length].iter().copied()),
+                        expected
+                    );
+                    terms[length - 1] = pair;
+                    assert_eq!(super::dot_product_128(terms[..length].iter().copied()), 0);
+                    terms[0] = (0, 0);
+                    assert_eq!(
+                        super::dot_product_128(terms[..length].iter().copied()),
+                        expected
+                    );
+                }
             }
         }
     }
