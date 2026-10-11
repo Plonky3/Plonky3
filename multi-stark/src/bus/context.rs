@@ -11,8 +11,9 @@ use alloc::vec::Vec;
 use p3_air::symbolic::{AirLayout, BaseEntry, BaseLeaf, SymbolicExpr};
 use p3_air::{Air, BaseAir};
 use p3_bus::{
-    BusActivation, BusBlock, BusBlockOwner, BusBoundary, BusDirection, BusEvaluation, BusPlan,
-    BusPlanInput, BusSymbolicBuilder, SymbolicBusInteraction,
+    BusActivation, BusAffineExpression, BusBlock, BusBlockOwner, BusBoundary, BusDirection,
+    BusEvaluation, BusFactorPlan, BusPlan, BusPlanInput, BusSymbolicBuilder,
+    SymbolicBusInteraction,
 };
 use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
@@ -43,6 +44,70 @@ impl<F: Field> RowSelector<'_, F> {
             Self::Boundary(boundary) => !boundary.contains_row(row, height),
             Self::Column(column) => column.value(row).is_zero(),
         }
+    }
+}
+
+/// An affine expression bound to the original, validated column views.
+struct AffineRow<'a, F: Field, EF: Field> {
+    constant: EF,
+    columns: Vec<(ColumnView<'a, F>, EF)>,
+    first_row: EF,
+    last_row: EF,
+    transition: EF,
+}
+
+impl<'a, F: Field, EF: ExtensionField<F>> AffineRow<'a, F, EF> {
+    fn bind(
+        expression: BusAffineExpression<EF>,
+        sources: [(&[usize], &[ColumnView<'a, F>]); 3],
+    ) -> Option<Self> {
+        let mut columns = Vec::with_capacity(
+            expression.main.len() + expression.preprocessed.len() + expression.periodic.len(),
+        );
+        for (coefficients, (indices, views)) in [
+            expression.main,
+            expression.preprocessed,
+            expression.periodic,
+        ]
+        .into_iter()
+        .zip(sources)
+        {
+            for (index, coefficient) in coefficients {
+                let position = indices.binary_search(&index).ok()?;
+                columns.push((*views.get(position)?, coefficient));
+            }
+        }
+        Some(Self {
+            constant: expression.constant,
+            columns,
+            first_row: expression.first_row,
+            last_row: expression.last_row,
+            transition: expression.transition,
+        })
+    }
+
+    fn evaluate(&self, row: usize, height: usize) -> EF {
+        let mut value = self.constant;
+        for &(column, coefficient) in &self.columns {
+            value += match column {
+                ColumnView::Dense(values) => coefficient * values[row],
+                ColumnView::Boolean { words, column, len } => {
+                    assert!(row < len, "column row out of bounds");
+                    let bit = (words.values[(row / 64) * words.width + column] >> (row % 64)) & 1;
+                    [EF::ZERO, coefficient][bit as usize]
+                }
+            };
+        }
+        if row == 0 {
+            value += self.first_row;
+        }
+        if row + 1 == height {
+            value += self.last_row;
+        }
+        if row + 1 < height {
+            value += self.transition;
+        }
+        value
     }
 }
 
@@ -422,6 +487,68 @@ where
         })
     }
 
+    /// Prepare a Boolean affine evaluator only when columns and live rows provide reuse.
+    #[inline(never)]
+    fn try_affine_leaves(
+        factor: &BusFactorPlan<'_, F, EF>,
+        public: &[F],
+        sources: [(&[usize], &[ColumnView<'_, F>]); 3],
+        selector: &RowSelector<'_, F>,
+        height: usize,
+    ) -> Option<Vec<EF>> {
+        if height < 8 || matches!(selector, RowSelector::Boundary(_)) {
+            return None;
+        }
+        let columns = || sources.iter().flat_map(|(_, columns)| columns.iter());
+        if columns()
+            .filter(|column| matches!(column, ColumnView::Boolean { .. }))
+            .take(8)
+            .count()
+            < 8
+        {
+            return None;
+        }
+        // Inspect all original views before consulting zero-pruned coefficients.
+        if sources
+            .iter()
+            .any(|(indices, columns)| indices.len() != columns.len())
+            || columns().any(|column| column.len() != height)
+        {
+            return None;
+        }
+        if let RowSelector::Column(column) = selector
+            && column
+                .values()
+                .filter(|value| !value.is_zero())
+                .take(8)
+                .count()
+                < 8
+        {
+            return None;
+        }
+        let affine = factor.affine(public).ok().flatten()?;
+        let difference = AffineRow::bind(affine.factor_minus_one, sources)?;
+        let activation = match affine.activation {
+            Some(expression) => Some(AffineRow::bind(expression, sources)?),
+            None => None,
+        };
+        Some(
+            (0..height)
+                .into_par_iter()
+                .map(|row| {
+                    if selector.is_inactive(row, height) {
+                        return EF::ONE;
+                    }
+                    let difference = difference.evaluate(row, height);
+                    EF::ONE
+                        + activation.as_ref().map_or(difference, |activation| {
+                            difference * activation.evaluate(row, height)
+                        })
+                })
+                .collect(),
+        )
+    }
+
     /// Materialize one aligned block from the exact tables committed by this proof.
     #[allow(clippy::too_many_arguments)]
     fn materialize_block(
@@ -485,6 +612,29 @@ where
             }
             _ => RowSelector::General,
         };
+
+        // Dense tables cannot use the Boolean coefficient lookup. Check table storage
+        // before scanning the declaration's columns or preparing affine coefficients.
+        let has_packed_sources = tables[air].packed_bits().is_some()
+            || preprocessed[air].is_some_and(|table| table.packed_bits().is_some())
+            || periodic[air]
+                .as_ref()
+                .is_some_and(|table| table.packed_bits().is_some());
+        if has_packed_sources
+            && let Some(leaves) = Self::try_affine_leaves(
+                &factor,
+                public,
+                [
+                    (main_indices.as_slice(), main_columns.as_slice()),
+                    (fixed_indices.as_slice(), fixed_columns.as_slice()),
+                    (periodic_indices.as_slice(), periodic_columns.as_slice()),
+                ],
+                &selector,
+                height,
+            )
+        {
+            return leaves;
+        }
 
         // Boolean rows stay in the base field, so every tuple term is a cheap mixed product.
         (0..height)
@@ -552,7 +702,7 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use super::{BusBindingError, BusContext};
+    use super::{BusBindingError, BusContext, RowSelector};
 
     struct EmptyAir;
 
@@ -997,5 +1147,354 @@ mod tests {
                 BusEvaluationError::MainColumn { column: 1 }
             ))
         );
+    }
+
+    mod affine_rows {
+        extern crate std;
+
+        use alloc::borrow::Cow;
+        use alloc::vec;
+        use alloc::vec::Vec;
+
+        use p3_air::{Air, BaseAir, WindowAccess};
+        use p3_bus::{
+            BusActivation, BusBoundary, BusChallenges, BusDirection, BusEvaluation,
+            BusInteractionBuilder, BusName,
+        };
+        use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
+        use p3_matrix::dense::RowMajorMatrix;
+        use p3_sumcheck::layout::Table;
+
+        use super::BusContext;
+
+        struct AffineAir {
+            single_row: bool,
+            nonlinear: bool,
+            selector: u8,
+        }
+        impl<F: Field> BaseAir<F> for AffineAir {
+            fn width(&self) -> usize {
+                10
+            }
+            fn preprocessed_width(&self) -> usize {
+                2
+            }
+            fn num_public_values(&self) -> usize {
+                2
+            }
+            fn num_periodic_columns(&self) -> usize {
+                1
+            }
+            fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+                Cow::Owned(vec![if self.single_row {
+                    vec![F::ONE]
+                } else {
+                    vec![F::ZERO, F::ONE]
+                }])
+            }
+        }
+        impl<AB> Air<AB> for AffineAir
+        where
+            AB: BusInteractionBuilder,
+            AB::F: Field,
+            AB::Expr: From<AB::PeriodicVar>,
+        {
+            fn eval(&self, b: &mut AB) {
+                let main = b.main();
+                let row = main.current_slice();
+                let prep = b.preprocessed().clone();
+                let fixed = prep.current_slice();
+                let public: Vec<AB::Expr> =
+                    b.public_values().iter().copied().map(Into::into).collect();
+                let periodic: AB::Expr = b.periodic_values()[0].into();
+                let mut fields: Vec<AB::Expr> = (0..9)
+                    .map(|i| row[i] * AB::F::interpolation_node(i + 2))
+                    .collect();
+                fields.push(row[0] * public[0].clone() + fixed[0] + periodic.clone());
+                fields.push(if self.nonlinear {
+                    row[0] * row[1] * public[1].clone()
+                } else {
+                    row[2] - row[3]
+                });
+                fields.push(
+                    b.is_first_row()
+                        + b.is_last_row() * AB::F::interpolation_node(2)
+                        + b.is_transition() * AB::F::interpolation_node(3),
+                );
+                let activation = match self.selector {
+                    0 => BusActivation::Always,
+                    1 => BusActivation::Boundary(BusBoundary::First),
+                    2 => BusActivation::Boundary(BusBoundary::Last),
+                    3 => BusActivation::Boolean(fixed[1].into()),
+                    _ => BusActivation::Boolean(fixed[1] + periodic),
+                };
+                b.push_bus_interaction(
+                    BusName::new("affine-edge"),
+                    BusDirection::Push,
+                    fields,
+                    activation,
+                );
+            }
+        }
+        fn tables<F: Field>(log: usize) -> (Table<F>, Table<F>) {
+            let height = 1usize << log;
+            let mut words = vec![0u64; 10 * height.div_ceil(64)];
+            for row in 0..height {
+                for col in 0..10 {
+                    let x = (row as u64).wrapping_mul(0x9e3779b97f4a7c15)
+                        ^ (col as u64 + 17).wrapping_mul(0xbf58476d1ce4e5b9);
+                    words[(row / 64) * 10 + col] |= ((x ^ (x >> 29) ^ (x >> 47)) & 1) << (row % 64);
+                }
+            }
+            let main = Table::from_packed_bits(RowMajorMatrix::new(words, 10), log);
+            let fixed = Table::new(RowMajorMatrix::new(
+                (0..2)
+                    .flat_map(|col| {
+                        (0..height).map(move |row| {
+                            if col == 0 {
+                                F::interpolation_node(3 + row % 7)
+                            } else {
+                                [F::ZERO, F::ONE, F::interpolation_node(2)][row % 3]
+                            }
+                        })
+                    })
+                    .collect(),
+                height,
+            ));
+            (main, fixed)
+        }
+        fn challenges<F: Field, EF: ExtensionField<F>>(
+            width: usize,
+            mode: usize,
+        ) -> BusChallenges<EF> {
+            let value = |j: usize| match mode {
+                0 => EF::ZERO,
+                1 => EF::ONE,
+                _ => <EF as BasedVectorSpace<F>>::from_basis_coefficients_fn(|i| {
+                    F::interpolation_node(17 + j * 3 + i)
+                }),
+            };
+            BusChallenges {
+                fingerprint: (0..width.ilog2() as usize).map(value).collect(),
+                offset: value(7),
+            }
+        }
+        fn check_fields<F: Field, EF: ExtensionField<F>>() {
+            for log in [0, 3, 6] {
+                for nonlinear in [false, true] {
+                    for selector in 0..5 {
+                        let air = AffineAir {
+                            single_row: log == 0,
+                            nonlinear,
+                            selector,
+                        };
+                        let context = BusContext::<F, EF>::build(&[&air], &[log])
+                            .unwrap()
+                            .unwrap();
+                        let periodic = context.periodic_tables(&[&air], &[log]);
+                        let (main, fixed) = tables::<F>(log);
+                        let height = 1usize << log;
+                        for public_mode in 0..3 {
+                            for challenge_mode in 0..3 {
+                                let public =
+                                    [F::interpolation_node(2), F::interpolation_node(public_mode)];
+                                let ch = challenges::<F, EF>(
+                                    context.plan().fingerprint_width(),
+                                    challenge_mode,
+                                );
+                                let actual = context.materialize(
+                                    &[&main],
+                                    &[Some(&fixed)],
+                                    &periodic,
+                                    &[&public],
+                                    &ch,
+                                );
+                                // Expand every original column independently of coefficient/source pruning.
+                                let weights = ch.fingerprint_weights();
+                                let block = &context.plan().blocks(BusDirection::Push)[0];
+                                let factor = context
+                                    .plan()
+                                    .compile_factor(
+                                        block.bus,
+                                        context.interaction(block.owner),
+                                        &weights,
+                                        ch.offset,
+                                    )
+                                    .unwrap();
+                                assert_eq!(actual[0].len(), height);
+                                assert!(actual[1].is_empty());
+                                for (row, &leaf) in actual[0].iter().enumerate() {
+                                    let main_row: Vec<F> =
+                                        main.columns().map(|c| c.value(row)).collect();
+                                    let fixed_row: Vec<F> =
+                                        fixed.columns().map(|c| c.value(row)).collect();
+                                    let periodic_row: Vec<F> = periodic[0]
+                                        .as_ref()
+                                        .unwrap()
+                                        .columns()
+                                        .map(|c| c.value(row))
+                                        .collect();
+                                    let reference = factor
+                                        .evaluate(
+                                            &mut Vec::new(),
+                                            BusEvaluation {
+                                                main: &main_row,
+                                                preprocessed: &fixed_row,
+                                                public: &public,
+                                                periodic: &periodic_row,
+                                                is_first_row: F::from_bool(row == 0),
+                                                is_last_row: F::from_bool(row + 1 == height),
+                                                is_transition: F::from_bool(row + 1 < height),
+                                            },
+                                        )
+                                        .unwrap();
+                                    assert_eq!(
+                                        leaf, reference,
+                                        "log={log}, row={row}, nonlinear={nonlinear}, selector={selector}, public={public_mode}, challenge={challenge_mode}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #[test]
+        fn affine_rows_cover_distinct_source_and_challenge_fields() {
+            check_fields::<p3_binary_field::BinaryField32, p3_binary_field::BinaryField128>();
+            check_fields::<p3_binary_field::Poly64, p3_binary_field::Poly192>();
+            check_fields::<
+                p3_baby_bear::BabyBear,
+                p3_field::extension::BinomialExtensionField<p3_baby_bear::BabyBear, 4>,
+            >();
+        }
+        #[test]
+        fn zero_coefficients_do_not_hide_incomplete_sources() {
+            use p3_binary_field::BinaryField128 as F;
+
+            use self::std::panic::{AssertUnwindSafe, catch_unwind};
+            let air = AffineAir {
+                single_row: false,
+                nonlinear: false,
+                selector: 0,
+            };
+            let context = BusContext::<F, F>::build(&[&air], &[6]).unwrap().unwrap();
+            let periodic = context.periodic_tables(&[&air], &[6]);
+            let (main, fixed) = tables::<F>(6);
+            let (short_main, short_fixed) = tables::<F>(3);
+            let public = [F::ZERO; 2];
+            // Zero weights prune affine coefficients; the original graph still reads its sources.
+            let ch = challenges::<F, F>(context.plan().fingerprint_width(), 0);
+            for (main, fixed) in [
+                (&main, None),
+                (&short_main, Some(&fixed)),
+                (&main, Some(&short_fixed)),
+            ] {
+                assert!(
+                    catch_unwind(AssertUnwindSafe(|| {
+                        context.materialize(&[main], &[fixed], &periodic, &[&public], &ch)
+                    }))
+                    .is_err()
+                );
+            }
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    context.materialize(&[&main], &[Some(&fixed)], &periodic, &[&[]], &ch)
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    mod affine_routing {
+        use alloc::string::ToString;
+        use alloc::vec;
+        use alloc::vec::Vec;
+
+        use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpression, SymbolicVariable};
+        use p3_binary_field::{BinaryField32 as F, BinaryField128 as EF};
+        use p3_bus::{
+            BusActivation, BusBoundary, BusDirection, BusPlan, BusPlanInput, SymbolicBusInteraction,
+        };
+        use p3_field::{Field, PrimeCharacteristicRing};
+        use p3_matrix::dense::RowMajorMatrix;
+        use p3_sumcheck::layout::{ColumnView, Table};
+
+        use super::{BusContext, RowSelector};
+
+        #[test]
+        fn packed_affine_route_requires_reused_columns_and_live_rows() {
+            let main_indices: Vec<_> = (0..8).collect();
+            let fixed_indices = [0];
+            let packed = Table::<F>::from_packed_bits(RowMajorMatrix::new(vec![0x55; 8], 8), 3);
+            let packed_views: Vec<_> = packed.columns().collect();
+            let dense = [F::ZERO; 8];
+            let mut narrow_views = packed_views.clone();
+            narrow_views[7] = ColumnView::Dense(&dense);
+            let variable = |entry, index| {
+                SymbolicExpression::<F>::from(SymbolicVariable::<F>::new(entry, index))
+            };
+            let mut fields = (0..8)
+                .map(|i| variable(BaseEntry::Main { offset: 0 }, i))
+                .collect::<Vec<_>>();
+            fields.extend(
+                [
+                    BaseLeaf::IsFirstRow,
+                    BaseLeaf::IsLastRow,
+                    BaseLeaf::IsTransition,
+                ]
+                .map(SymbolicExpression::Leaf),
+            );
+            for boundary in [false, true] {
+                let interactions = [SymbolicBusInteraction {
+                    bus_name: "route".to_string(),
+                    direction: BusDirection::Push,
+                    fields: fields.clone(),
+                    activation: if boundary {
+                        BusActivation::Boundary(BusBoundary::First)
+                    } else {
+                        BusActivation::Boolean(variable(BaseEntry::Preprocessed { offset: 0 }, 0))
+                    },
+                }];
+                let plan = BusPlan::build(&[BusPlanInput {
+                    log_height: 3,
+                    interactions: &interactions,
+                }])
+                .unwrap()
+                .unwrap();
+                let weights = (0..plan.fingerprint_width())
+                    .map(|i| EF::interpolation_node(17 + i))
+                    .collect::<Vec<_>>();
+                let factor = plan
+                    .compile_factor(0, &interactions[0], &weights, EF::interpolation_node(31))
+                    .unwrap();
+                for active in [7, 8] {
+                    let mut selectors = [F::ONE; 8];
+                    if active == 7 {
+                        selectors[7] = F::ZERO;
+                    }
+                    let fixed = [ColumnView::Dense(&selectors)];
+                    let selector = if boundary {
+                        RowSelector::Boundary(BusBoundary::First)
+                    } else {
+                        RowSelector::Column(fixed[0])
+                    };
+                    for (views, packed_count) in [(&packed_views, 8), (&narrow_views, 7)] {
+                        let result = BusContext::<F, EF>::try_affine_leaves(
+                            &factor,
+                            &[],
+                            [(&main_indices, views), (&fixed_indices, &fixed), (&[], &[])],
+                            &selector,
+                            8,
+                        );
+                        assert_eq!(
+                            result.is_some(),
+                            !boundary && active == 8 && packed_count == 8,
+                            "boundary={boundary}, active={active}, packed={packed_count}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
