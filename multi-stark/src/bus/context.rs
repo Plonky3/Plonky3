@@ -8,16 +8,16 @@
 
 use alloc::vec::Vec;
 
-use p3_air::symbolic::AirLayout;
+use p3_air::symbolic::{AirLayout, BaseEntry, BaseLeaf, SymbolicExpr};
 use p3_air::{Air, BaseAir};
 use p3_bus::{
-    BusBlock, BusBlockOwner, BusDirection, BusEvaluation, BusPlan, BusPlanInput,
-    BusSymbolicBuilder, SymbolicBusInteraction,
+    BusActivation, BusBlock, BusBlockOwner, BusBoundary, BusDirection, BusEvaluation, BusPlan,
+    BusPlanInput, BusSymbolicBuilder, SymbolicBusInteraction,
 };
 use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
-use p3_sumcheck::layout::Table;
+use p3_sumcheck::layout::{ColumnView, Table};
 
 use super::error::BusBindingError;
 use crate::selectors::{periodic_num_variables, periodic_table};
@@ -27,6 +27,23 @@ struct DeclarationSources {
     main: Vec<usize>,
     preprocessed: Vec<usize>,
     periodic: Vec<usize>,
+}
+
+/// Cheap row selectors; more general expressions keep the full factor evaluator.
+enum RowSelector<'a, F: Field> {
+    General,
+    Boundary(BusBoundary),
+    Column(ColumnView<'a, F>),
+}
+
+impl<F: Field> RowSelector<'_, F> {
+    fn is_inactive(&self, row: usize, height: usize) -> bool {
+        match self {
+            Self::General => false,
+            Self::Boundary(boundary) => !boundary.contains_row(row, height),
+            Self::Column(column) => column.value(row).is_zero(),
+        }
+    }
 }
 
 /// Verifier-derived bus declarations and their checked physical layout.
@@ -449,6 +466,26 @@ where
         let public = public_values[air];
         let height = 1usize << block.log_height;
 
+        // Resolve this after compiling the factor and its source views. Only exact zero
+        // suppresses a row; a non-Boolean nonzero value keeps its original interpolation.
+        let selector = match &interaction.activation {
+            BusActivation::Boundary(boundary) => RowSelector::Boundary(*boundary),
+            BusActivation::Boolean(SymbolicExpr::Leaf(BaseLeaf::Variable(variable))) => {
+                let column = match variable.entry {
+                    BaseEntry::Main { offset: 0 } => Some(tables[air].column(variable.index)),
+                    BaseEntry::Preprocessed { offset: 0 } => {
+                        preprocessed[air].map(|table| table.column(variable.index))
+                    }
+                    BaseEntry::Periodic => periodic[air]
+                        .as_ref()
+                        .map(|table| table.column(variable.index)),
+                    _ => None,
+                };
+                column.map_or(RowSelector::General, RowSelector::Column)
+            }
+            _ => RowSelector::General,
+        };
+
         // Boolean rows stay in the base field, so every tuple term is a cheap mixed product.
         (0..height)
             .into_par_iter()
@@ -462,6 +499,9 @@ where
                     )
                 },
                 |(main, fixed, periodic, scratch), row| {
+                    if selector.is_inactive(row, height) {
+                        return EF::ONE;
+                    }
                     // Unread columns keep their zero, which no planned expression names.
                     for (&index, column) in main_indices.iter().zip(&main_columns) {
                         main[index] = column.value(row);
@@ -635,6 +675,7 @@ mod tests {
 
     struct SparseSourcesAir {
         detailed: bool,
+        single_row: bool,
     }
 
     impl<F: Field> BaseAir<F> for SparseSourcesAir {
@@ -656,11 +697,17 @@ mod tests {
 
         fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
             if self.detailed {
-                Cow::Owned(vec![
+                let mut columns = vec![
                     vec![F::ZERO, F::ONE],
                     vec![F::ONE, F::ONE, F::ZERO, F::ZERO],
                     vec![F::ZERO, F::ONE, F::ONE, F::ZERO],
-                ])
+                ];
+                if self.single_row {
+                    for column in &mut columns {
+                        column.truncate(1);
+                    }
+                }
+                Cow::Owned(columns)
             } else {
                 Cow::Borrowed(&[])
             }
@@ -726,6 +773,17 @@ mod tests {
                 [main[4].clone() + fixed[4].clone()],
                 BusActivation::Boolean(periodic[1].clone()),
             );
+            for (name, selector) in [
+                ("main_selected", main[5].clone()),
+                ("fixed_selected", fixed[0].clone()),
+            ] {
+                builder.push_bus_interaction(
+                    BusName::new(name),
+                    BusDirection::Push,
+                    [main[1].clone() * main[7].clone() + fixed[3].clone()],
+                    BusActivation::Boolean(selector),
+                );
+            }
             builder.push_bus_interaction(
                 BusName::new("boundary"),
                 BusDirection::Push,
@@ -742,17 +800,43 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug)]
+    enum SourceMode {
+        DenseBits,
+        PackedBits,
+        Native,
+    }
+
     fn source_table<F: Field>(
         width: usize,
         log_height: usize,
-        packed: bool,
+        mode: SourceMode,
         rng: &mut SmallRng,
-    ) -> Table<F> {
+    ) -> Table<F>
+    where
+        StandardUniform: Distribution<F>,
+    {
         let height = 1usize << log_height;
+        if matches!(mode, SourceMode::Native) {
+            // Include zero, one, and non-Boolean activations in the same table.
+            let nonboolean = core::iter::repeat_with(|| rng.random::<F>())
+                .find(|value| !value.is_zero() && !value.is_one())
+                .unwrap();
+            return Table::new(RowMajorMatrix::new(
+                (0..width * height)
+                    .map(|i| match i % 3 {
+                        0 => F::ZERO,
+                        1 => F::ONE,
+                        _ => nonboolean,
+                    })
+                    .collect(),
+                height,
+            ));
+        }
         let bits = (0..width * height)
             .map(|_| rng.random::<bool>())
             .collect::<Vec<_>>();
-        if packed {
+        if matches!(mode, SourceMode::PackedBits) {
             let mut words = vec![0; width * height.div_ceil(64)];
             for column in 0..width {
                 for row in 0..height {
@@ -770,15 +854,20 @@ mod tests {
         }
     }
 
-    fn check_materialized_sources<F: Field>()
+    fn check_materialized_sources<F: Field>(heights: [usize; 2])
     where
         StandardUniform: Distribution<F>,
     {
         let airs = [
-            &SparseSourcesAir { detailed: true },
-            &SparseSourcesAir { detailed: false },
+            &SparseSourcesAir {
+                detailed: true,
+                single_row: heights[0] == 0,
+            },
+            &SparseSourcesAir {
+                detailed: false,
+                single_row: heights[1] == 0,
+            },
         ];
-        let heights = [4, 2];
         let context = BusContext::<F, F>::build(&airs, &heights).unwrap().unwrap();
         let periodic = context.periodic_tables(&airs, &heights);
         let mut rng = SmallRng::seed_from_u64(0x50_75_ce);
@@ -791,12 +880,21 @@ mod tests {
             offset: rng.random::<F>(),
         };
         let weights = challenges.fingerprint_weights();
-        for packed in [false, true] {
+        for mode in [
+            SourceMode::DenseBits,
+            SourceMode::PackedBits,
+            SourceMode::Native,
+        ] {
             let tables = [
-                source_table(8, heights[0], packed, &mut rng),
-                source_table(4, heights[1], packed, &mut rng),
+                source_table(8, heights[0], mode, &mut rng),
+                source_table(4, heights[1], mode, &mut rng),
             ];
-            let fixed = source_table(5, heights[0], !packed, &mut rng);
+            let fixed_mode = match mode {
+                SourceMode::DenseBits => SourceMode::PackedBits,
+                SourceMode::PackedBits => SourceMode::DenseBits,
+                SourceMode::Native => SourceMode::Native,
+            };
+            let fixed = source_table(5, heights[0], fixed_mode, &mut rng);
             let table_refs = [&tables[0], &tables[1]];
             let fixed_refs = [Some(&fixed), None];
             assert_eq!(
@@ -849,15 +947,55 @@ mod tests {
                         );
                     }
                 }
-                assert_eq!(actual, expected, "packed={packed}, direction={direction:?}");
+                assert_eq!(
+                    actual, expected,
+                    "mode={mode:?}, heights={heights:?}, direction={direction:?}"
+                );
             }
         }
     }
 
     #[test]
     fn materialized_leaves_match_full_rows_for_disjoint_declarations() {
-        check_materialized_sources::<p3_binary_field::BinaryField128>();
-        check_materialized_sources::<p3_binary_field::Ghash128>();
-        check_materialized_sources::<BabyBear>();
+        for heights in [[4, 2], [0, 0]] {
+            check_materialized_sources::<p3_binary_field::BinaryField128>(heights);
+            check_materialized_sources::<p3_binary_field::Ghash128>(heights);
+            check_materialized_sources::<BabyBear>(heights);
+        }
+    }
+
+    #[test]
+    fn inactive_selectors_do_not_hide_missing_payload_columns() {
+        struct SelectedAir;
+
+        impl BaseAir<BabyBear> for SelectedAir {
+            fn width(&self) -> usize {
+                2
+            }
+        }
+
+        impl<AB: BusInteractionBuilder<F = BabyBear>> Air<AB> for SelectedAir {
+            fn eval(&self, builder: &mut AB) {
+                let main = builder.main();
+                let row = main.current_slice();
+                builder.push_bus_interaction(
+                    BusName::new("selected"),
+                    BusDirection::Push,
+                    [row[1]],
+                    BusActivation::Boolean(row[0].into()),
+                );
+            }
+        }
+
+        let context = BusContext::<BabyBear, BabyBear>::build(&[&SelectedAir], &[1])
+            .unwrap()
+            .unwrap();
+        let narrow = Table::new(RowMajorMatrix::new(vec![BabyBear::ZERO; 2], 2));
+        assert_eq!(
+            context.check_tables(&[&narrow], &[None], &[&[]]),
+            Err(BusBindingError::Evaluation(
+                BusEvaluationError::MainColumn { column: 1 }
+            ))
+        );
     }
 }
