@@ -269,11 +269,21 @@ impl<F: Field> RadixFourBatch<F> {
                 evaluations
             });
         if rows < equality.len() {
-            let tail_weight: F = equality[rows..]
-                .par_iter()
-                .with_min_task::<F>()
-                .copied()
-                .sum();
+            // Normalized suffix weights sum to one. Read the shorter side.
+            let tail_weight: F = if rows < equality.len() - rows {
+                F::ONE
+                    - equality[..rows]
+                        .par_iter()
+                        .with_min_task::<F>()
+                        .copied()
+                        .sum::<F>()
+            } else {
+                equality[rows..]
+                    .par_iter()
+                    .with_min_task::<F>()
+                    .copied()
+                    .sum()
+            };
             let tail = tail_weight * (F::ONE + powers.iter().copied().sum::<F>());
             for evaluation in &mut evaluations {
                 *evaluation += tail;
@@ -555,7 +565,7 @@ mod tests {
     {
         // Put the longest prefix in each child slot, including in a later tree.
         // Odd lengths keep one partial pair; zero and full lengths cover both extremes.
-        for child_len in [0, 1, 2, 3, 31, 32] {
+        for child_len in [0, 1, 2, 3, 15, 16, 17, 31, 32] {
             for slot in 0..4 {
                 for trees in 1..=3 {
                     let mut inputs = vec![vec![F::ONE; 128]; trees];
