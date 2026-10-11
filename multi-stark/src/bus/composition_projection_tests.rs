@@ -23,6 +23,12 @@ enum Kind {
     Repeated,
     Nonlinear,
     Selectors,
+    Shared,
+    Distinct,
+    TooMany,
+    SharedBoundary,
+    NonlinearActivation,
+    Cancellation,
 }
 
 struct ProjectionAir {
@@ -76,6 +82,16 @@ where
             .collect::<Vec<AB::Expr>>();
         let name = BusName::new(self.name);
         match self.kind {
+            Kind::Cancellation => {
+                for direction in BusDirection::ALL {
+                    builder.push_bus_interaction(
+                        name,
+                        direction,
+                        values[..self.width - 1].iter().cloned(),
+                        BusActivation::Boolean(values[self.width - 1].clone()),
+                    );
+                }
+            }
             Kind::Conditional => builder.push_bus_interaction(
                 name,
                 BusDirection::Push,
@@ -108,6 +124,56 @@ where
                         BusDirection::Push,
                         [values[0].clone()],
                         BusActivation::Always,
+                    );
+                }
+            }
+            Kind::Shared | Kind::Distinct | Kind::TooMany | Kind::NonlinearActivation => {
+                let selectors = match self.kind {
+                    Kind::Distinct => 2,
+                    Kind::TooMany => 3,
+                    _ => 1,
+                };
+                let payloads = self.width - selectors;
+                for (index, value) in values[..payloads].iter().enumerate() {
+                    let mut selector = values[payloads + index % selectors].clone();
+                    if matches!(self.kind, Kind::NonlinearActivation) && index + 1 == payloads {
+                        selector = selector.clone() * selector;
+                    }
+                    // Named domains and directions do not prevent grouping when
+                    // the activation polynomial and AIR row point agree.
+                    let (bus, direction, fields) = if index % 2 == 0 {
+                        (name, BusDirection::Push, vec![value.clone()])
+                    } else {
+                        let public: AB::Expr = builder.public_values()[0].into();
+                        (
+                            BusName::new("shared-pair"),
+                            BusDirection::Pull,
+                            vec![value.clone(), value.clone() + public],
+                        )
+                    };
+                    builder.push_bus_interaction(
+                        bus,
+                        direction,
+                        fields,
+                        BusActivation::Boolean(selector),
+                    );
+                }
+            }
+            Kind::SharedBoundary => {
+                for (index, value) in values.iter().enumerate() {
+                    // Extraction cancels the repeated column before activation hashing.
+                    let activation = if index == 0 {
+                        BusActivation::Boundary(BusBoundary::First)
+                    } else {
+                        BusActivation::Boolean(
+                            builder.is_first_row() + value.clone() - value.clone(),
+                        )
+                    };
+                    builder.push_bus_interaction(
+                        name,
+                        BusDirection::Push,
+                        [value.clone()],
+                        activation,
                     );
                 }
             }
@@ -176,13 +242,25 @@ where
     StandardUniform: Distribution<F> + Distribution<EF>,
 {
     let fixtures = [
-        (4, "eligible", Kind::Conditional, 7, true),
-        (3, "narrow", Kind::Conditional, 4, false),
-        (128, "repeated", Kind::Repeated, 3, false),
-        (4, "nonlinear", Kind::Nonlinear, 5, false),
-        (8, "selectors", Kind::Selectors, 2, true),
-        (4, "single-row", Kind::Always, 0, false),
-        (4, "always", Kind::Always, 5, true),
+        (4, "eligible", Kind::Conditional, 7, Some(2)),
+        (16, "short-wide", Kind::Conditional, 2, Some(2)),
+        (3, "narrow", Kind::Conditional, 4, None),
+        (128, "repeated", Kind::Repeated, 3, None),
+        (4, "nonlinear", Kind::Nonlinear, 5, None),
+        (8, "selectors", Kind::Selectors, 2, Some(6)),
+        (4, "single-row", Kind::Always, 0, None),
+        (4, "always", Kind::Always, 5, Some(1)),
+        (8, "shared", Kind::Shared, 3, Some(2)),
+        (8, "distinct", Kind::Distinct, 4, Some(4)),
+        (8, "too-many", Kind::TooMany, 4, None),
+        (8, "shared-boundary", Kind::SharedBoundary, 5, Some(2)),
+        (
+            8,
+            "nonlinear-activation",
+            Kind::NonlinearActivation,
+            3,
+            None,
+        ),
     ];
     let airs = fixtures
         .iter()
@@ -223,63 +301,89 @@ where
                 values: Vec::new(),
             },
         };
-        let direction = rng.random();
-        for num_variables in [7, 9] {
-            let make = || {
-                BusCompositionProver::new(
-                    &context,
-                    &output,
-                    &table_refs,
-                    &fixed_refs,
-                    &periodic,
-                    &public_values,
-                    direction,
-                    num_variables,
-                    to_repr,
-                    from_repr,
-                )
-            };
-            let mut projected = make();
-            let mut generic = make();
-            for (index, (actual, reference)) in
-                projected.airs.iter().zip(&mut generic.airs).enumerate()
-            {
-                assert_eq!(
-                    actual.projected.is_some(),
-                    fixtures[index].4,
-                    "projection choice for {}",
-                    fixtures[index].1
-                );
-                reference.projected = None;
-                // Projection may release its now-unused owned period vectors.
-                reference.periodic = context
-                    .periodic_columns(index)
-                    .iter()
-                    .map(|&column| Source::Periodic {
-                        period: periodic[index].as_ref().unwrap()[column].clone(),
-                        height: 1 << heights[index],
-                    })
-                    .collect();
-                if reference.unused_prefix > 0 {
-                    reference.initialize_claims(
+        for direction in [EF::ZERO, -EF::ONE, rng.random()] {
+            for num_variables in [7, 9] {
+                let make = || {
+                    BusCompositionProver::new(
                         &context,
-                        &generic.fingerprint_weights,
-                        generic.offset,
+                        &output,
+                        &table_refs,
+                        &fixed_refs,
+                        &periodic,
+                        &public_values,
+                        direction,
+                        num_variables,
+                        to_repr,
+                        from_repr,
+                    )
+                };
+                let mut projected = make();
+                let mut generic = make();
+                for (index, (actual, reference)) in
+                    projected.airs.iter().zip(&mut generic.airs).enumerate()
+                {
+                    assert_eq!(
+                        actual.projected.is_some(),
+                        fixtures[index].4.is_some(),
+                        "projection choice for {}",
+                        fixtures[index].1
                     );
-                    for (term, original) in actual.terms.iter().zip(&reference.terms) {
-                        assert_eq!(term.row_claim, original.row_claim);
+                    if let Some(projection) = &actual.projected {
+                        let tables = projection
+                            .groups
+                            .iter()
+                            .map(|group| 1 + usize::from(group.activation.is_some()))
+                            .sum::<usize>();
+                        assert_eq!(Some(tables), fixtures[index].4);
+                        assert!(
+                            tables
+                                <= (actual.main.len()
+                                    + actual.preprocessed.len()
+                                    + context.periodic_columns(index).len())
+                                    / 2
+                        );
+                    }
+                    reference.projected = None;
+                    // Projection may release its now-unused owned period vectors.
+                    reference.periodic = context
+                        .periodic_columns(index)
+                        .iter()
+                        .map(|&column| Source::Periodic {
+                            period: periodic[index].as_ref().unwrap()[column].clone(),
+                            height: 1 << heights[index],
+                        })
+                        .collect();
+                    if reference.unused_prefix > 0 {
+                        reference.initialize_claims(
+                            &context,
+                            &generic.fingerprint_weights,
+                            generic.offset,
+                        );
+                        let weighted_claim = |air: &AirState<'_, F, R>| {
+                            air.terms
+                                .iter()
+                                .map(|term| term.coefficient * term.row_claim)
+                                .sum::<R>()
+                        };
+                        assert_eq!(
+                            actual.projected.as_ref().map_or_else(
+                                || weighted_claim(actual),
+                                |projection| projection.row_claim
+                            ),
+                            weighted_claim(reference),
+                        );
                     }
                 }
-            }
-            for round in 0..num_variables {
-                assert_eq!(
-                    projected.round_poly(),
-                    generic.round_poly(),
-                    "round {round}, packed {packed}"
-                );
-                let challenge = rng.random();
-                projected.fold(challenge);
-                generic.fold(challenge);
+                for round in 0..num_variables {
+                    assert_eq!(
+                        projected.round_poly(),
+                        generic.round_poly(),
+                        "round {round}, packed {packed}"
+                    );
+                    let challenge = rng.random();
+                    projected.fold(challenge);
+                    generic.fold(challenge);
+                }
             }
         }
     }
@@ -294,4 +398,88 @@ fn affine_projection_preserves_every_round_and_bounds_its_table_storage() {
     check::<BinaryField128, BinaryField128, Ghash128>(Ghash128::from, BinaryField128::from);
     type EF = BinomialExtensionField<BabyBear, 4>;
     check::<BabyBear, EF, EF>(core::convert::identity, core::convert::identity);
+}
+
+fn check_cancellation<F, EF, R>(to_repr: fn(EF) -> R, from_repr: fn(R) -> EF)
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    R: Field + Algebra<F>,
+    StandardUniform: Distribution<F> + Distribution<EF>,
+{
+    let air = ProjectionAir {
+        width: 4,
+        name: "cancel",
+        kind: Kind::Cancellation,
+    };
+    let context = BusContext::<F, EF>::build(&[&air], &[3]).unwrap().unwrap();
+    let mut rng = SmallRng::seed_from_u64(0xcace_11ed);
+    let output = BusReductionOutput {
+        challenges: BusChallenges {
+            fingerprint: (0..log2_strict_usize(context.plan().fingerprint_width()))
+                .map(|_| rng.random())
+                .collect(),
+            offset: rng.random(),
+        },
+        product: ProductGkrOutput {
+            roots: Vec::new(),
+            point: (0..context.plan().security_geometry().log_logical_leaf_count())
+                .map(|_| rng.random())
+                .collect(),
+            values: Vec::new(),
+        },
+    };
+    for packed in [false, true] {
+        let table = table(4, 3, packed, &mut rng);
+        let make = || {
+            BusCompositionProver::new(
+                &context,
+                &output,
+                &[&table],
+                &[None],
+                &[None],
+                &[&[F::GENERATOR]],
+                -EF::ONE,
+                5,
+                to_repr,
+                from_repr,
+            )
+        };
+        let mut projected = make();
+        let mut generic = make();
+        let projection = projected.airs[0].projected.as_ref().unwrap();
+        assert_eq!(projection.groups.len(), 1);
+        assert_eq!(projection.row_claim, R::ZERO);
+        assert!(
+            projection.groups[0]
+                .difference
+                .as_slice()
+                .iter()
+                .all(|&x| x == R::ZERO)
+        );
+        generic.airs[0].projected = None;
+        generic.airs[0].initialize_claims(&context, &generic.fingerprint_weights, generic.offset);
+        for _ in 0..5 {
+            let round = projected.round_poly();
+            assert!(round.iter().all(|&x| x == EF::ZERO));
+            assert_eq!(round, generic.round_poly());
+            let challenge = rng.random();
+            projected.fold(challenge);
+            generic.fold(challenge);
+        }
+    }
+}
+
+#[test]
+fn grouped_bus_terms_cancel_at_every_round() {
+    check_cancellation::<BinaryField128, BinaryField128, BinaryField128>(
+        core::convert::identity,
+        core::convert::identity,
+    );
+    check_cancellation::<BinaryField128, BinaryField128, Ghash128>(
+        Ghash128::from,
+        BinaryField128::from,
+    );
+    type EF = BinomialExtensionField<BabyBear, 4>;
+    check_cancellation::<BabyBear, EF, EF>(core::convert::identity, core::convert::identity);
 }

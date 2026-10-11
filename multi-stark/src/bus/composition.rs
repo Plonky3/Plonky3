@@ -7,7 +7,8 @@
 //! The family runs inside the zerocheck sumcheck, over the same cube and challenges.
 //! Its terminal expression is checked against the same openings the AIR constraints read.
 //!
-//! Wide affine declarations project their columns into separate factor and activation tables.
+//! Wide affine declarations sharing an activation combine their weighted factors before
+//! projecting into separate factor and activation tables.
 //! Projection is used only when those full-height tables fit within the generic path's first
 //! half-height fold. Other declarations read their committed columns or period vectors in place.
 //!
@@ -21,9 +22,12 @@
 //! isomorphic to the challenge field. Challenges cross into `R` once and round polynomials
 //! cross back once, so the composition is the one computed in the challenge field.
 
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use hashbrown::HashMap;
+use hashbrown::hash_map::Entry;
 use p3_bus::{BusActivation, BusAffineExpression, BusDirection, BusEvaluation, BusReductionOutput};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
@@ -67,10 +71,80 @@ struct CompositionTerm<R> {
     row_claim: R,
 }
 
-/// Separate multilinears for the affine factor difference and its activation.
+/// Separate multilinears for a weighted affine factor difference and its activation.
 struct ProjectedTerm<R> {
     difference: Poly<R>,
     activation: Option<Poly<R>>,
+}
+
+/// Groups belonging to one AIR, with the fixed term coefficients already absorbed.
+struct ProjectedAir<R> {
+    groups: Vec<ProjectedTerm<R>>,
+    /// Weighted cube sum used while this AIR is dormant.
+    row_claim: R,
+}
+
+/// Sparse weighted sum without repeatedly copying a growing coefficient vector.
+struct AffineSum<R> {
+    expression: BusAffineExpression<R>,
+    columns: [BTreeMap<usize, R>; 3],
+}
+
+impl<R: Field> AffineSum<R> {
+    fn new(mut expression: BusAffineExpression<R>, weight: R) -> Self {
+        let columns = [
+            core::mem::take(&mut expression.main),
+            core::mem::take(&mut expression.preprocessed),
+            core::mem::take(&mut expression.periodic),
+        ]
+        .map(|entries| {
+            entries
+                .into_iter()
+                .map(|(column, coefficient)| (column, weight * coefficient))
+                .collect()
+        });
+        expression.constant *= weight;
+        expression.first_row *= weight;
+        expression.last_row *= weight;
+        expression.transition *= weight;
+        Self {
+            expression,
+            columns,
+        }
+    }
+
+    fn add(&mut self, expression: BusAffineExpression<R>, weight: R) {
+        self.expression.constant += weight * expression.constant;
+        self.expression.first_row += weight * expression.first_row;
+        self.expression.last_row += weight * expression.last_row;
+        self.expression.transition += weight * expression.transition;
+        for (sum, entries) in self.columns.iter_mut().zip([
+            expression.main,
+            expression.preprocessed,
+            expression.periodic,
+        ]) {
+            for (column, coefficient) in entries {
+                *sum.entry(column).or_insert(R::ZERO) += weight * coefficient;
+            }
+        }
+    }
+
+    fn finish(mut self) -> BusAffineExpression<R> {
+        for (entries, sum) in [
+            &mut self.expression.main,
+            &mut self.expression.preprocessed,
+            &mut self.expression.periodic,
+        ]
+        .into_iter()
+        .zip(self.columns)
+        {
+            *entries = sum
+                .into_iter()
+                .filter(|&(_, coefficient)| coefficient != R::ZERO)
+                .collect();
+        }
+        self.expression
+    }
 }
 
 impl<R: Field> ProjectedTerm<R> {
@@ -236,8 +310,8 @@ struct AirState<'a, F: Field, R> {
     equality: Poly<R>,
     /// Bus terms emitted by this AIR.
     terms: Vec<CompositionTerm<R>>,
-    /// Optional compact affine representation, in the same order as `terms`.
-    projected: Option<Vec<ProjectedTerm<R>>>,
+    /// Optional compact affine representation, grouped by exact activation expression.
+    projected: Option<ProjectedAir<R>>,
     /// Number of global prefix variables absent from this AIR table.
     unused_prefix: usize,
     /// Evaluation of the fixed all-one-vertex selector on bound prefix coordinates.
@@ -260,54 +334,130 @@ where
         offset: R,
     ) {
         let sources = self.main.len() + self.preprocessed.len() + self.periodic.len();
-        let projections = self.terms.len()
-            + self
-                .terms
-                .iter()
-                .filter(|term| {
-                    !matches!(
-                        context.interaction(term.owner).activation,
-                        BusActivation::Always
-                    )
-                })
-                .count();
+        let mut always = false;
+        let mut conditional = false;
+        for term in &self.terms {
+            if matches!(
+                context.interaction(term.owner).activation,
+                BusActivation::Always
+            ) {
+                always = true;
+            } else {
+                conditional = true;
+            }
+        }
+        let minimum_projections = usize::from(always) + 2 * usize::from(conditional);
         // Poly folding retains its allocation, so compare full projected capacity to
         // half-height source capacity. A one-row table never needs a source fold.
-        if self.equality.as_slice().len() == 1 || projections > sources / 2 {
+        if self.equality.as_slice().len() == 1 || minimum_projections > sources / 2 {
             return;
         }
-        let Some(expressions) = self
-            .terms
-            .iter()
-            .map(|term| {
-                context
-                    .plan()
-                    .compile_factor(
-                        term.bus,
-                        context.interaction(term.owner),
-                        fingerprint_weights,
-                        offset,
-                    )
-                    .expect("a checked bus plan compiles against its own declarations")
-                    .affine(&self.public_values)
-                    .expect("a planned expression resolves its public inputs")
-            })
-            .collect::<Option<Vec<_>>>()
-        else {
-            return;
+        let affine = |term: &CompositionTerm<R>| {
+            context
+                .plan()
+                .compile_factor(
+                    term.bus,
+                    context.interaction(term.owner),
+                    fingerprint_weights,
+                    offset,
+                )
+                .expect("a checked bus plan compiles against its own declarations")
+                .affine(&self.public_values)
+                .expect("a planned expression resolves its public inputs")
         };
-        self.projected = Some(
-            expressions
-                .iter()
-                .map(|factor| ProjectedTerm {
-                    difference: self.materialize_affine(&factor.factor_minus_one),
+        if let [term] = self.terms.as_slice() {
+            let Some(mut factor) = affine(term) else {
+                return;
+            };
+            // With no terms to combine, skip sparse aggregation and weight
+            // whichever is shorter: the affine coefficients or the row table.
+            let expression = &mut factor.factor_minus_one;
+            let scale_rows = self.equality.as_slice().len()
+                < expression.main.len()
+                    + expression.preprocessed.len()
+                    + expression.periodic.len()
+                    + 4;
+            if !scale_rows && term.coefficient != R::ONE {
+                for coefficient in [
+                    &mut expression.constant,
+                    &mut expression.first_row,
+                    &mut expression.last_row,
+                    &mut expression.transition,
+                ] {
+                    *coefficient *= term.coefficient;
+                }
+                for (_, coefficient) in expression
+                    .main
+                    .iter_mut()
+                    .chain(&mut expression.preprocessed)
+                    .chain(&mut expression.periodic)
+                {
+                    *coefficient *= term.coefficient;
+                }
+            }
+            let mut difference = self.materialize_affine(&factor.factor_minus_one);
+            if scale_rows && term.coefficient != R::ONE {
+                for value in difference.as_mut_slice() {
+                    *value *= term.coefficient;
+                }
+            }
+            self.projected = Some(ProjectedAir {
+                groups: vec![ProjectedTerm {
+                    difference,
                     activation: factor
                         .activation
                         .as_ref()
                         .map(|expression| self.materialize_affine(expression)),
+                }],
+                row_claim: R::ZERO,
+            });
+            self.periodic.clear();
+            return;
+        }
+        // All terms share this AIR's row point. For each identical activation S,
+        // sum_i c_i * eq * D_i * S = eq * (sum_i c_i * D_i) * S.
+        // Keep None distinct from Some(1), and retain even zero aggregate groups:
+        // the table count can only increase, so exceeding the bound can abort early.
+        let mut groups = HashMap::new();
+        let mut projections = 0;
+        for term in &self.terms {
+            let Some(factor) = affine(term) else {
+                return;
+            };
+            let index = groups.len();
+            match groups.entry(factor.activation) {
+                Entry::Occupied(mut entry) => {
+                    let (_, difference): &mut (usize, AffineSum<R>) = entry.get_mut();
+                    difference.add(factor.factor_minus_one, term.coefficient);
+                }
+                Entry::Vacant(entry) => {
+                    projections += 1 + usize::from(entry.key().is_some());
+                    if projections > sources / 2 {
+                        return;
+                    }
+                    entry.insert((
+                        index,
+                        AffineSum::new(factor.factor_minus_one, term.coefficient),
+                    ));
+                }
+            }
+        }
+        // Never let hash iteration order determine evaluation order. No source is
+        // changed until every declaration passes extraction and the storage bound.
+        let mut groups = groups.into_iter().collect::<Vec<_>>();
+        groups.sort_unstable_by_key(|(_, (index, _))| *index);
+        self.projected = Some(ProjectedAir {
+            groups: groups
+                .into_iter()
+                .map(|(activation, (_, difference))| ProjectedTerm {
+                    difference: self.materialize_affine(&difference.finish()),
+                    activation: activation
+                        .as_ref()
+                        .map(|expression| self.materialize_affine(expression)),
                 })
                 .collect(),
-        );
+            row_claim: R::ZERO,
+        });
         // Borrowed committed views cost no column buffers. Period vectors are owned.
         self.periodic.clear();
     }
@@ -365,7 +515,7 @@ where
         Poly::new(values)
     }
 
-    /// Compute every term's initial cube sum in one pass over the shared AIR columns.
+    /// Compute initial cube sums in one pass over this AIR's active representation.
     ///
     /// The result is read only while the global prefix is still ahead of this table.
     fn initialize_claims<EF: ExtensionField<F>>(
@@ -376,13 +526,18 @@ where
     ) {
         let height = self.equality.as_slice().len();
 
-        if let Some(projected) = &self.projected {
-            for (term, projection) in self.terms.iter_mut().zip(projected) {
-                term.row_claim = (0..height)
-                    .into_par_iter()
-                    .map(|row| self.equality.as_slice()[row] * projection.at(row))
-                    .sum();
-            }
+        if let Some(projected) = &mut self.projected {
+            projected.row_claim = (0..height)
+                .into_par_iter()
+                .map(|row| {
+                    self.equality.as_slice()[row]
+                        * projected
+                            .groups
+                            .iter()
+                            .map(|group| group.at(row))
+                            .sum::<R>()
+                })
+                .sum();
             return;
         }
 
@@ -622,13 +777,12 @@ where
                 .into_par_iter()
                 .map(|row| {
                     let equality = interpolate_poly(&air.equality, row, half, node);
-                    air.terms
-                        .iter()
-                        .zip(projected)
-                        .map(|(term, projection)| {
-                            term.coefficient * equality * projection.interpolate(row, half, node)
-                        })
-                        .sum::<R>()
+                    equality
+                        * projected
+                            .groups
+                            .iter()
+                            .map(|group| group.interpolate(row, half, node))
+                            .sum::<R>()
                 })
                 .sum();
         }
@@ -719,7 +873,7 @@ where
                 continue;
             }
             if let Some(projected) = &mut air.projected {
-                for projection in projected {
+                for projection in &mut projected.groups {
                     projection.fold(challenge);
                 }
             } else {
@@ -750,11 +904,15 @@ where
                     .map(|air| {
                         let body = if self.round < air.unused_prefix {
                             // χ_k contributes the current node; its remaining cube sum is one.
-                            node * air
-                                .terms
-                                .iter()
-                                .map(|term| term.coefficient * term.row_claim)
-                                .sum::<R>()
+                            node * air.projected.as_ref().map_or_else(
+                                || {
+                                    air.terms
+                                        .iter()
+                                        .map(|term| term.coefficient * term.row_claim)
+                                        .sum::<R>()
+                                },
+                                |projected| projected.row_claim,
+                            )
                         } else {
                             // Active terms share one interpolation of their AIR columns.
                             self.evaluate_air(air, node)

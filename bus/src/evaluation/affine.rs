@@ -11,7 +11,7 @@ use super::{BusEvaluationError, BusFactorPlan, BusNode};
 ///
 /// Column entries are sorted by their original indices, with duplicates merged
 /// and zero coefficients omitted. Public inputs have been absorbed into constants.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct BusAffineExpression<R> {
     /// Constant term, including any fixed public-input contribution.

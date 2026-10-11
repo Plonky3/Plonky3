@@ -2067,6 +2067,39 @@ mod tests {
         );
     }
 
+    struct GroupedAffineBusAir(BusDirection);
+
+    impl BaseAir<F> for GroupedAffineBusAir {
+        fn width(&self) -> usize {
+            4
+        }
+    }
+
+    impl<AB: BusInteractionBuilder<F = F>> Air<AB> for GroupedAffineBusAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let row = main.current_slice();
+            for &value in &row[..3] {
+                builder.push_bus_interaction(
+                    BusName::new("grouped-affine"),
+                    self.0,
+                    [value.into()],
+                    BusActivation::Boolean(row[3].into()),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn grouped_affine_buses_have_identical_dense_and_packed_proofs() {
+        // Three separately selected factors would need six full-height tables.
+        // Their shared activation reduces this to two within the storage bound.
+        check_bus_over_packed_boolean_tables(
+            &GroupedAffineBusAir(BusDirection::Push),
+            &GroupedAffineBusAir(BusDirection::Pull),
+        );
+    }
+
     #[test]
     fn mixed_height_bus_uses_the_fixed_all_one_vertex_selector() {
         let push = ConditionalBusAir {
