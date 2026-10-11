@@ -22,10 +22,19 @@ use p3_sumcheck::layout::Table;
 use super::error::BusBindingError;
 use crate::selectors::{periodic_num_variables, periodic_table};
 
+/// Source columns used by one declaration, retaining their original AIR indices.
+struct DeclarationSources {
+    main: Vec<usize>,
+    preprocessed: Vec<usize>,
+    periodic: Vec<usize>,
+}
+
 /// Verifier-derived bus declarations and their checked physical layout.
 pub(crate) struct BusContext<F: Field, EF: ExtensionField<F>> {
     /// One symbolic declaration profile per AIR instance.
     profiles: Vec<BusSymbolicBuilder<F, EF>>,
+    /// Exact sources per AIR and declaration, before they are unioned for composition.
+    declaration_sources: Vec<Vec<DeclarationSources>>,
     /// Shared mixed-height layout derived from the profiles.
     plan: BusPlan,
     /// Sorted main columns each AIR's declarations read, in AIR order.
@@ -72,16 +81,33 @@ where
             return Ok(None);
         };
 
-        // Only the columns a declaration reads are lifted into the shared sumcheck and folded.
-        let (main_columns, preprocessed_columns) = profiles
+        // Keep each declaration's sources for leaf construction. Composition still uses
+        // their per-AIR union, so all terms share each interpolated source column.
+        let declaration_sources = profiles
             .iter()
             .map(|profile| {
+                profile
+                    .interactions()
+                    .iter()
+                    .map(|interaction| {
+                        let (main, preprocessed) = interaction.referenced_columns();
+                        DeclarationSources {
+                            main,
+                            preprocessed,
+                            periodic: interaction.referenced_periodic_columns(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let (main_columns, preprocessed_columns) = declaration_sources
+            .iter()
+            .map(|declarations| {
                 let mut main = alloc::collections::BTreeSet::new();
                 let mut preprocessed = alloc::collections::BTreeSet::new();
-                for interaction in profile.interactions() {
-                    let (fields, fixed) = interaction.referenced_columns();
-                    main.extend(fields);
-                    preprocessed.extend(fixed);
+                for sources in declarations {
+                    main.extend(sources.main.iter().copied());
+                    preprocessed.extend(sources.preprocessed.iter().copied());
                 }
                 (
                     main.into_iter().collect::<Vec<_>>(),
@@ -91,13 +117,12 @@ where
             .collect::<(Vec<_>, Vec<_>)>();
 
         // Periodic columns are never opened; the verifier evaluates them at the shared point.
-        let periodic_columns = profiles
+        let periodic_columns = declaration_sources
             .iter()
-            .map(|profile| {
-                profile
-                    .interactions()
+            .map(|declarations| {
+                declarations
                     .iter()
-                    .flat_map(SymbolicBusInteraction::referenced_periodic_columns)
+                    .flat_map(|sources| sources.periodic.iter().copied())
                     .collect::<alloc::collections::BTreeSet<_>>()
                     .into_iter()
                     .collect::<Vec<_>>()
@@ -106,6 +131,7 @@ where
         let periodic_widths = airs.iter().map(|air| air.num_periodic_columns()).collect();
         Ok(Some(Self {
             profiles,
+            declaration_sources,
             plan,
             main_columns,
             preprocessed_columns,
@@ -401,17 +427,18 @@ where
             .expect("a checked bus plan compiles against its own declarations");
         // Representation-independent views read a packed Boolean table without expanding it.
         // Only the columns this declaration names are read, so an unread one is never decoded.
-        let main_indices = self.main_columns(air);
+        let sources = &self.declaration_sources[air][block.owner.declaration];
+        let main_indices = &sources.main;
         let main_columns = main_indices
             .iter()
             .map(|&column| tables[air].column(column))
             .collect::<Vec<_>>();
-        let fixed_indices = self.preprocessed_columns(air);
+        let fixed_indices = &sources.preprocessed;
         let fixed_columns = preprocessed[air]
             .iter()
             .flat_map(|table| fixed_indices.iter().map(|&column| table.column(column)))
             .collect::<Vec<_>>();
-        let periodic_indices = self.periodic_columns(air);
+        let periodic_indices = &sources.periodic;
         let periodic_columns = periodic[air]
             .iter()
             .flat_map(|table| periodic_indices.iter().map(|&column| table.column(column)))
@@ -478,9 +505,12 @@ mod tests {
         BusActivation, BusDirection, BusEvaluationError, BusInteractionBuilder, BusName,
         BusSymbolicBuilder,
     };
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_sumcheck::layout::Table;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::{BusBindingError, BusContext};
 
@@ -601,5 +631,233 @@ mod tests {
                 heights: 0,
             }
         );
+    }
+
+    struct SparseSourcesAir {
+        detailed: bool,
+    }
+
+    impl<F: Field> BaseAir<F> for SparseSourcesAir {
+        fn width(&self) -> usize {
+            if self.detailed { 8 } else { 4 }
+        }
+
+        fn preprocessed_width(&self) -> usize {
+            if self.detailed { 5 } else { 0 }
+        }
+
+        fn num_public_values(&self) -> usize {
+            if self.detailed { 2 } else { 0 }
+        }
+
+        fn num_periodic_columns(&self) -> usize {
+            if self.detailed { 3 } else { 0 }
+        }
+
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            if self.detailed {
+                Cow::Owned(vec![
+                    vec![F::ZERO, F::ONE],
+                    vec![F::ONE, F::ONE, F::ZERO, F::ZERO],
+                    vec![F::ZERO, F::ONE, F::ONE, F::ZERO],
+                ])
+            } else {
+                Cow::Borrowed(&[])
+            }
+        }
+    }
+
+    impl<AB> Air<AB> for SparseSourcesAir
+    where
+        AB: BusInteractionBuilder,
+        AB::F: Field,
+        AB::Expr: From<AB::PeriodicVar>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder
+                .main()
+                .current_slice()
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect::<Vec<AB::Expr>>();
+            if !self.detailed {
+                builder.push_bus_interaction(
+                    BusName::new("plain"),
+                    BusDirection::Pull,
+                    [main[2].clone()],
+                    BusActivation::Always,
+                );
+                return;
+            }
+            let fixed = builder
+                .preprocessed()
+                .current_slice()
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect::<Vec<AB::Expr>>();
+            let periodic = builder
+                .periodic_values()
+                .iter()
+                .copied()
+                .map(AB::Expr::from)
+                .collect::<Vec<_>>();
+            let public = builder
+                .public_values()
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect::<Vec<AB::Expr>>();
+            // Sparse payload indices and columns read only by a nonlinear selector.
+            builder.push_bus_interaction(
+                BusName::new("nonlinear"),
+                BusDirection::Push,
+                [main[1].clone() * main[7].clone()
+                    + fixed[3].clone()
+                    + periodic[2].clone()
+                    + public[1].clone()],
+                BusActivation::Boolean(main[5].clone() * fixed[0].clone()),
+            );
+            // A different declaration needs an activation-only periodic column.
+            builder.push_bus_interaction(
+                BusName::new("periodic"),
+                BusDirection::Pull,
+                [main[4].clone() + fixed[4].clone()],
+                BusActivation::Boolean(periodic[1].clone()),
+            );
+            builder.push_bus_interaction(
+                BusName::new("boundary"),
+                BusDirection::Push,
+                [main[2].clone() + periodic[0].clone()],
+                BusActivation::Boundary(p3_bus::BusBoundary::First),
+            );
+            // This declaration reads no committed or periodic column.
+            builder.push_bus_interaction(
+                BusName::new("public"),
+                BusDirection::Pull,
+                [public[0].clone()],
+                BusActivation::Boundary(p3_bus::BusBoundary::Last),
+            );
+        }
+    }
+
+    fn source_table<F: Field>(
+        width: usize,
+        log_height: usize,
+        packed: bool,
+        rng: &mut SmallRng,
+    ) -> Table<F> {
+        let height = 1usize << log_height;
+        let bits = (0..width * height)
+            .map(|_| rng.random::<bool>())
+            .collect::<Vec<_>>();
+        if packed {
+            let mut words = vec![0; width * height.div_ceil(64)];
+            for column in 0..width {
+                for row in 0..height {
+                    if bits[column * height + row] {
+                        words[(row / 64) * width + column] |= 1u64 << (row % 64);
+                    }
+                }
+            }
+            Table::from_packed_bits(RowMajorMatrix::new(words, width), log_height)
+        } else {
+            Table::new(RowMajorMatrix::new(
+                bits.into_iter().map(F::from_bool).collect(),
+                height,
+            ))
+        }
+    }
+
+    fn check_materialized_sources<F: Field>()
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let airs = [
+            &SparseSourcesAir { detailed: true },
+            &SparseSourcesAir { detailed: false },
+        ];
+        let heights = [4, 2];
+        let context = BusContext::<F, F>::build(&airs, &heights).unwrap().unwrap();
+        let periodic = context.periodic_tables(&airs, &heights);
+        let mut rng = SmallRng::seed_from_u64(0x50_75_ce);
+        let public = [rng.random::<F>(), rng.random::<F>()];
+        let public_values = [public.as_slice(), &[]];
+        let challenges = p3_bus::BusChallenges {
+            fingerprint: (0..p3_util::log2_strict_usize(context.plan().fingerprint_width()))
+                .map(|_| rng.random::<F>())
+                .collect(),
+            offset: rng.random::<F>(),
+        };
+        let weights = challenges.fingerprint_weights();
+        for packed in [false, true] {
+            let tables = [
+                source_table(8, heights[0], packed, &mut rng),
+                source_table(4, heights[1], packed, &mut rng),
+            ];
+            let fixed = source_table(5, heights[0], !packed, &mut rng);
+            let table_refs = [&tables[0], &tables[1]];
+            let fixed_refs = [Some(&fixed), None];
+            assert_eq!(
+                context.check_tables(&table_refs, &fixed_refs, &public_values),
+                Ok(())
+            );
+            let actual = context.materialize(
+                &table_refs,
+                &fixed_refs,
+                &periodic,
+                &public_values,
+                &challenges,
+            );
+            for (direction, actual) in BusDirection::ALL.into_iter().zip(actual) {
+                let mut expected = Vec::new();
+                for block in context.plan().blocks(direction) {
+                    let air = block.owner.air;
+                    let height = 1usize << block.log_height;
+                    for row in 0..height {
+                        // Resolve every original AIR column, independently of dependency lists.
+                        let main = tables[air]
+                            .columns()
+                            .map(|c| c.value(row))
+                            .collect::<Vec<_>>();
+                        let fixed = fixed_refs[air].map_or_else(Vec::new, |table| {
+                            table.columns().map(|c| c.value(row)).collect()
+                        });
+                        let periodic = periodic[air].as_ref().map_or_else(Vec::new, |table| {
+                            table.columns().map(|c| c.value(row)).collect()
+                        });
+                        expected.push(
+                            context
+                                .plan()
+                                .evaluate_factor(
+                                    block.bus,
+                                    context.interaction(block.owner),
+                                    p3_bus::BusEvaluation {
+                                        main: &main,
+                                        preprocessed: &fixed,
+                                        public: public_values[air],
+                                        periodic: &periodic,
+                                        is_first_row: F::from_bool(row == 0),
+                                        is_last_row: F::from_bool(row + 1 == height),
+                                        is_transition: F::from_bool(row + 1 < height),
+                                    },
+                                    &weights,
+                                    challenges.offset,
+                                )
+                                .unwrap(),
+                        );
+                    }
+                }
+                assert_eq!(actual, expected, "packed={packed}, direction={direction:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn materialized_leaves_match_full_rows_for_disjoint_declarations() {
+        check_materialized_sources::<p3_binary_field::BinaryField128>();
+        check_materialized_sources::<p3_binary_field::Ghash128>();
+        check_materialized_sources::<BabyBear>();
     }
 }
