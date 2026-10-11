@@ -202,7 +202,7 @@ impl<EF> ProductGkrProof<EF> {
     {
         let PreparedProductGkr {
             shape,
-            all_layers,
+            mut all_layers,
             roots,
         } = prepared;
         let root_messages = shape
@@ -226,8 +226,8 @@ impl<EF> ProductGkrProof<EF> {
             if arity == 2 {
                 // The root-most binary layer has no parent variables to sum over.
                 let children = all_layers
-                    .iter()
-                    .map(|layers| layers.binary_children(child_depth))
+                    .iter_mut()
+                    .map(|layers| layers.take_binary_children(child_depth))
                     .collect::<Vec<_>>();
                 let branches = transcript.end_binary_layer(&children);
                 values = children
@@ -238,8 +238,11 @@ impl<EF> ProductGkrProof<EF> {
                 layer_proofs.push(ProductGkrLayerProof::Binary { children });
             } else {
                 // Four child tables share one eq-weighted degree-five sumcheck.
-                let mut batch =
-                    RadixFourBatch::new(&all_layers, child_depth, 1usize << round_count);
+                let mut batch = RadixFourBatch::new_consuming(
+                    &mut all_layers,
+                    child_depth,
+                    1usize << round_count,
+                );
                 // The current coordinate factors out of the row sum. Keep only its
                 // normalized suffix table; the root-most layer can have no coordinates.
                 let mut equality = Point::new(point.get(1..).unwrap_or(&[])).equality_weights_lsb();

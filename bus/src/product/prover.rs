@@ -116,7 +116,23 @@ impl<F: Field> ProductLayers<F> {
         [self.layers[depth].get(0), self.layers[depth].get(1)]
     }
 
+    /// Copies the binary child claims and releases their consumed source level.
+    pub(super) fn take_binary_children(&mut self, depth: usize) -> [F; 2] {
+        let children = self.binary_children(depth);
+        self.layers[depth].values = Vec::new();
+        children
+    }
+
+    /// Splits a retained level, releasing its source after the child gathers finish.
+    fn take_radix_four_state(&mut self, depth: usize, logical_len: usize) -> RadixFourState<F> {
+        let source = IdentityPrefix {
+            values: core::mem::take(&mut self.layers[depth].values),
+        };
+        RadixFourState::new(&source, logical_len)
+    }
+
     /// Splits one retained level into four low-bit child prefixes.
+    #[cfg(test)]
     fn radix_four_state(&self, depth: usize, logical_len: usize) -> RadixFourState<F> {
         RadixFourState::new(&self.layers[depth], logical_len)
     }
@@ -185,6 +201,7 @@ pub(super) struct RadixFourBatch<F> {
 
 impl<F: Field> RadixFourBatch<F> {
     /// Creates the batched states from one retained level per tree.
+    #[cfg(test)]
     pub(super) fn new(layers: &[ProductLayers<F>], depth: usize, logical_len: usize) -> Self {
         // A tree reads its retained level once and writes it back as four children.
         let tree_bytes = layers
@@ -197,6 +214,27 @@ impl<F: Field> RadixFourBatch<F> {
             .par_iter()
             .map_collect_min_task_bytes(tree_bytes, |layers| {
                 layers.radix_four_state(depth, logical_len)
+            });
+        Self { states }
+    }
+
+    /// Consumes one retained level per tree after gathering its child prefixes.
+    pub(super) fn new_consuming(
+        layers: &mut [ProductLayers<F>],
+        depth: usize,
+        logical_len: usize,
+    ) -> Self {
+        // A tree reads its retained level once and writes it back as four children.
+        let tree_bytes = layers
+            .iter()
+            .map(|layers| 2 * layers.layers[depth].values.len() * size_of::<F>())
+            .sum::<usize>()
+            .checked_div(layers.len())
+            .unwrap_or(0);
+        let states = layers
+            .par_iter_mut()
+            .map_collect_min_task_bytes(tree_bytes, |layers| {
+                layers.take_radix_four_state(depth, logical_len)
             });
         Self { states }
     }
@@ -556,6 +594,57 @@ mod tests {
         check_lines::<BinaryField128>(&mut rng, [false, false, true, false, true]);
         check_lines::<Ghash128>(&mut rng, [false, false, true, false, true]);
         check_lines::<BabyBearQuartic>(&mut rng, [false, false, true, true, true]);
+    }
+
+    #[test]
+    fn consuming_layers_preserves_children_and_releases_only_the_source() {
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0007);
+        for log_height in [2usize, 3, 6, 7] {
+            let capacity = 1usize << log_height;
+            for len in [0, 1, 3.min(capacity), capacity / 2, capacity] {
+                let mut input = Vec::with_capacity(4 * capacity);
+                input.extend((0..len).map(|index| match index % 5 {
+                    0 => BinaryField128::ONE,
+                    1 => BinaryField128::ZERO,
+                    _ => rng.random::<BinaryField128>(),
+                }));
+                let mut layers = ProductLayers::new_owned(input, log_height);
+                let mut product_depth = log_height;
+                while product_depth > 0 {
+                    let arity: usize = if product_depth % 2 == 1 { 2 } else { 4 };
+                    let depth = product_depth - arity.ilog2() as usize;
+                    let before = layers
+                        .layers
+                        .iter()
+                        .map(|layer| (layer.values.clone(), layer.values.capacity()))
+                        .collect::<Vec<_>>();
+                    if arity == 2 {
+                        let expected = layers.binary_children(depth);
+                        assert_eq!(layers.take_binary_children(depth), expected);
+                    } else {
+                        let logical_len = capacity >> (depth + 2);
+                        let expected = layers.radix_four_state(depth, logical_len);
+                        let actual = layers.take_radix_four_state(depth, logical_len);
+                        for (actual, expected) in actual.children.iter().zip(&expected.children) {
+                            assert_eq!(actual.values, expected.values);
+                            for row in 0..logical_len {
+                                assert_eq!(actual.get(row), expected.get(row));
+                            }
+                        }
+                    }
+                    for (index, (values, reserved)) in before.iter().enumerate() {
+                        if index == depth {
+                            assert!(layers.layers[index].values.is_empty());
+                            assert_eq!(layers.layers[index].values.capacity(), 0);
+                        } else {
+                            assert_eq!(&layers.layers[index].values, values);
+                            assert_eq!(layers.layers[index].values.capacity(), *reserved);
+                        }
+                    }
+                    product_depth = depth;
+                }
+            }
+        }
     }
 
     #[test]
