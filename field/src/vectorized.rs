@@ -85,9 +85,17 @@ impl<F: Field, EF: ExtensionField<F>, const N: usize> VectorizedExt<F, EF, N> {
     /// [`BasedVectorSpace::from_basis_coefficients_fn`]; it takes a slice
     /// rather than a closure so each coefficient is computed once and shared
     /// by all `N` components.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `coefficients.len()` is not equal to `EF::DIMENSION`.
     #[inline]
     pub fn from_vectorized_basis_coefficients(coefficients: &[Vectorized<F, N>]) -> Self {
-        debug_assert_eq!(coefficients.len(), EF::DIMENSION);
+        assert_eq!(
+            coefficients.len(),
+            EF::DIMENSION,
+            "basis coefficient count must match extension dimension"
+        );
         Self(array::from_fn(|i| {
             EF::ExtensionPacking::from_basis_coefficients_fn(|d| coefficients[d].0[i])
         }))
