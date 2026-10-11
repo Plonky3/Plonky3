@@ -197,13 +197,16 @@ impl<F: Field> RadixFourBatch<F> {
         debug_assert_eq!(equality.len(), logical_len);
 
         let nodes = RoundNodes::<F>::new();
-        // Tree `i` is weighted by the `i`-th power of the batching challenge.
-        let powers = batching.powers().collect_n(self.states.len());
+        let Some((first_tree, other_trees)) = self.states.split_first() else {
+            return [F::ZERO; ROUND_POLY_LEN];
+        };
+        // The first tree has coefficient one; only later trees need batching products.
+        let powers = batching
+            .shifted_powers(batching)
+            .collect_n(other_trees.len());
         let accumulate = |evaluations: &mut [F; ROUND_POLY_LEN], row: usize| {
             let eq_values = nodes.line(equality[2 * row], equality[2 * row + 1]);
-            let mut batched = [F::ZERO; ROUND_POLY_LEN];
-
-            for (state, &power) in self.states.iter().zip(&powers) {
+            let tree_product = |state: &RadixFourState<F>| {
                 let [first, rest @ ..] = &state.children;
                 let mut product = nodes.line(first.get(2 * row), first.get(2 * row + 1));
                 for child in rest {
@@ -212,7 +215,11 @@ impl<F: Field> RadixFourBatch<F> {
                         *product *= value;
                     }
                 }
-                for (batched, product) in batched.iter_mut().zip(product) {
+                product
+            };
+            let mut batched = tree_product(first_tree);
+            for (state, &power) in other_trees.iter().zip(&powers) {
+                for (batched, product) in batched.iter_mut().zip(tree_product(state)) {
                     *batched += power * product;
                 }
             }
@@ -394,10 +401,12 @@ mod tests {
 
             // Folding between rounds walks every child prefix down to a single row.
             while logical_len >= 2 {
-                assert_eq!(
-                    batch.round(&equality, logical_len, batching),
-                    per_node_round(&batch, &equality, logical_len, batching),
-                );
+                for batching in [F::ZERO, F::ONE, batching] {
+                    assert_eq!(
+                        batch.round(&equality, logical_len, batching),
+                        per_node_round(&batch, &equality, logical_len, batching),
+                    );
+                }
                 let challenge = rng.random::<F>();
                 batch.fold(challenge, logical_len);
                 fold_dense(&mut equality, challenge);
@@ -452,6 +461,7 @@ mod tests {
         let shapes: [&[usize]; 3] = [&[77], &[128, 0], &[13, 128, 91]];
         for prefix_lens in shapes {
             check_rounds::<BinaryField128>(&mut rng, 7, prefix_lens);
+            check_rounds::<Ghash128>(&mut rng, 7, prefix_lens);
             check_rounds::<BabyBearQuartic>(&mut rng, 7, prefix_lens);
         }
     }
