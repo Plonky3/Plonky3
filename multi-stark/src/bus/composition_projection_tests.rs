@@ -234,8 +234,12 @@ where
     }
 }
 
-fn check<F, EF, R>(to_repr: fn(EF) -> R, from_repr: fn(R) -> EF)
-where
+fn check<F, EF, R>(
+    to_repr: fn(EF) -> R,
+    from_repr: fn(R) -> EF,
+    anchor_kind: usize,
+    fold_kind: usize,
+) where
     F: Field,
     EF: ExtensionField<F>,
     R: Field + Algebra<F>,
@@ -296,7 +300,12 @@ where
             product: ProductGkrOutput {
                 roots: Vec::new(),
                 point: (0..context.plan().security_geometry().log_logical_leaf_count())
-                    .map(|_| rng.random())
+                    .map(|index| match anchor_kind {
+                        0 => rng.random(),
+                        1 => EF::ZERO,
+                        2 => EF::ONE,
+                        _ => EF::from_bool(index % 2 == 0),
+                    })
                     .collect(),
                 values: Vec::new(),
             },
@@ -380,9 +389,32 @@ where
                         generic.round_poly(),
                         "round {round}, packed {packed}"
                     );
-                    let challenge = rng.random();
+                    let challenge = match fold_kind {
+                        0 => rng.random(),
+                        1 => EF::ZERO,
+                        _ => EF::ONE,
+                    };
                     projected.fold(challenge);
                     generic.fold(challenge);
+                    for (actual, reference) in projected.airs.iter().zip(&generic.airs) {
+                        if let Some(projection) = &actual.projected {
+                            let scaled = actual
+                                .equality
+                                .as_slice()
+                                .iter()
+                                .map(|&value| projection.equality_prefix * value)
+                                .collect::<Vec<_>>();
+                            assert_eq!(scaled.as_slice(), reference.equality.as_slice());
+                            // The suffix remains an equality table even after its prefix is zero.
+                            let remaining = actual.equality.num_variables();
+                            let anchor =
+                                &output.product.point[output.product.point.len() - remaining..];
+                            let expected =
+                                Point::new(anchor.iter().copied().map(to_repr).collect::<Vec<_>>())
+                                    .equality_weights_msb();
+                            assert_eq!(actual.equality.as_slice(), expected.as_slice());
+                        }
+                    }
                 }
             }
         }
@@ -391,13 +423,29 @@ where
 
 #[test]
 fn affine_projection_preserves_every_round_and_bounds_its_table_storage() {
-    check::<BinaryField128, BinaryField128, BinaryField128>(
-        core::convert::identity,
-        core::convert::identity,
-    );
-    check::<BinaryField128, BinaryField128, Ghash128>(Ghash128::from, BinaryField128::from);
-    type EF = BinomialExtensionField<BabyBear, 4>;
-    check::<BabyBear, EF, EF>(core::convert::identity, core::convert::identity);
+    for anchor_kind in 0..4 {
+        for fold_kind in 0..3 {
+            check::<BinaryField128, BinaryField128, BinaryField128>(
+                core::convert::identity,
+                core::convert::identity,
+                anchor_kind,
+                fold_kind,
+            );
+            check::<BinaryField128, BinaryField128, Ghash128>(
+                Ghash128::from,
+                BinaryField128::from,
+                anchor_kind,
+                fold_kind,
+            );
+            type EF = BinomialExtensionField<BabyBear, 4>;
+            check::<BabyBear, EF, EF>(
+                core::convert::identity,
+                core::convert::identity,
+                anchor_kind,
+                fold_kind,
+            );
+        }
+    }
 }
 
 fn check_cancellation<F, EF, R>(to_repr: fn(EF) -> R, from_repr: fn(R) -> EF)

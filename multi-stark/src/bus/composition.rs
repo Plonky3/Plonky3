@@ -47,6 +47,8 @@ pub(crate) struct BusCompositionProver<'a, F: Field, EF: ExtensionField<F>, R> {
     fingerprint_weights: Vec<R>,
     /// Random tuple-fingerprint shift.
     offset: R,
+    /// Product-GKR anchor, shared by the suffix equality polynomials of every AIR.
+    equality_point: Vec<R>,
     /// Source columns and selectors grouped once per AIR.
     airs: Vec<AirState<'a, F, R>>,
     /// Maximum round degree, derived once from the public plan.
@@ -80,6 +82,8 @@ struct ProjectedTerm<R> {
 /// Groups belonging to one AIR, with the fixed term coefficients already absorbed.
 struct ProjectedAir<R> {
     groups: Vec<ProjectedTerm<R>>,
+    /// Equality factors for row variables already bound by the shared sumcheck.
+    equality_prefix: R,
     /// Weighted cube sum used while this AIR is dormant.
     row_claim: R,
 }
@@ -306,7 +310,8 @@ struct AirState<'a, F: Field, R> {
     periodic_layout: (Vec<usize>, usize),
     /// Folded boundary-selector values at the bound row variables.
     boundary: BoundaryEvals<R>,
-    /// Equality polynomial anchored at the ProductGKR row point.
+    /// Equality polynomial anchored at the ProductGKR row point. Projected AIRs keep
+    /// its unbound factors normalized; generic AIRs include the bound prefix here.
     equality: Poly<R>,
     /// Bus terms emitted by this AIR.
     terms: Vec<CompositionTerm<R>>,
@@ -402,6 +407,7 @@ where
                 }
             }
             self.projected = Some(ProjectedAir {
+                equality_prefix: R::ONE,
                 groups: vec![ProjectedTerm {
                     difference,
                     activation: factor
@@ -447,6 +453,7 @@ where
         let mut groups = groups.into_iter().collect::<Vec<_>>();
         groups.sort_unstable_by_key(|(_, (index, _))| *index);
         self.projected = Some(ProjectedAir {
+            equality_prefix: R::ONE,
             groups: groups
                 .into_iter()
                 .map(|(activation, (_, difference))| ProjectedTerm {
@@ -762,6 +769,11 @@ where
             context,
             fingerprint_weights: weights,
             offset,
+            equality_point: if airs.iter().flatten().any(|air| air.projected.is_some()) {
+                output.product.point.iter().copied().map(to_repr).collect()
+            } else {
+                Vec::new()
+            },
             airs: airs.into_iter().flatten().collect(),
             degree: context.composition_degree(),
             round: 0,
@@ -773,10 +785,15 @@ where
     fn evaluate_air(&self, air: &AirState<'_, F, R>, node: R) -> R {
         let half = air.equality.as_slice().len() / 2;
         if let Some(projected) = &air.projected {
-            return (0..half)
+            let anchor =
+                self.equality_point[self.equality_point.len() - air.equality.num_variables()];
+            let prefix = projected.equality_prefix * Point::eval_eq(&[anchor], &[node]);
+            let sum: R = (0..half)
                 .into_par_iter()
                 .map(|row| {
-                    let equality = interpolate_poly(&air.equality, row, half, node);
+                    // Summing the leading equality factor over its Boolean endpoints gives one.
+                    let values = air.equality.as_slice();
+                    let equality = values[row] + values[row + half];
                     equality
                         * projected
                             .groups
@@ -785,6 +802,7 @@ where
                             .sum::<R>()
                 })
                 .sum();
+            return prefix * sum;
         }
         // Slot placement is settled once per term, outside the row loop below.
         let factors = air
@@ -876,6 +894,11 @@ where
                 for projection in &mut projected.groups {
                     projection.fold(challenge);
                 }
+                let anchor =
+                    self.equality_point[self.equality_point.len() - air.equality.num_variables()];
+                projected.equality_prefix *= Point::eval_eq(&[anchor], &[challenge]);
+                // Keep the suffix normalized even when the accumulated prefix becomes zero.
+                air.equality.sum_prefix_var_mut();
             } else {
                 for source in air
                     .main
@@ -886,8 +909,8 @@ where
                     source.fold(challenge);
                 }
                 air.boundary.apply(challenge);
+                air.equality.fix_prefix_var_mut(challenge);
             }
-            air.equality.fix_prefix_var_mut(challenge);
         }
         self.round += 1;
     }
