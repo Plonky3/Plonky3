@@ -1924,8 +1924,7 @@ mod tests {
         .unwrap();
     }
 
-    fn check_bus_over_packed_boolean_tables<A: ProverAir<F, EF>>(push: &A, pull: &A) {
-        // Every cell is a bit, so squaring the payload is the identity and both sides match.
+    fn packed_bus_table(width: usize) -> Table<F> {
         let height = packed_floor();
         let log_height = log2_strict_usize(height);
         // Alternating payload bits under a selector that silences every fourth row.
@@ -1934,34 +1933,34 @@ mod tests {
             .flat_map(|block| {
                 let live = (height - block * 64).min(64);
                 let mask = u64::MAX >> (64 - live);
-                [
-                    0xAAAA_AAAA_AAAA_AAAA_u64 & mask,
-                    0x7777_7777_7777_7777_u64 & mask,
-                ]
+                (0..width).map(move |column| {
+                    let pattern = if column + 1 == width {
+                        0x7777_7777_7777_7777_u64
+                    } else {
+                        0xAAAA_AAAA_AAAA_AAAA_u64.rotate_left(column as u32)
+                    };
+                    pattern & mask
+                })
             })
             .collect::<Vec<u64>>();
-        let packed = || Table::from_packed_bits(RowMajorMatrix::new(words.clone(), 2), log_height);
+        Table::from_packed_bits(RowMajorMatrix::new(words, width), log_height)
+    }
+
+    fn check_bus_over_packed_boolean_tables<A: ProverAir<F, EF>>(push: &A, pull: &A) {
+        // Every cell is a bit, so squaring the payload is the identity and both sides match.
+        let height = packed_floor();
+        let log_height = log2_strict_usize(height);
+        let width = push.width();
+        assert!(matches!(width, 2 | 4));
+        assert_eq!(width, pull.width());
+        let packed = || packed_bus_table(width);
 
         // The scheme hands the bus prover its own retained tables, which stay packed here.
-        static PACKED: OnceLock<Table<F>> = OnceLock::new();
-        let retained = PACKED.get_or_init(|| {
-            let height = packed_floor();
-            let log_height = log2_strict_usize(height);
-            let words = (0..height.div_ceil(64))
-                .flat_map(|block| {
-                    let live = (height - block * 64).min(64);
-                    let mask = u64::MAX >> (64 - live);
-                    [
-                        0xAAAA_AAAA_AAAA_AAAA_u64 & mask,
-                        0x7777_7777_7777_7777_u64 & mask,
-                    ]
-                })
-                .collect::<Vec<u64>>();
-            Table::from_packed_bits(RowMajorMatrix::new(words, 2), log_height)
-        });
+        static PACKED: OnceLock<[Table<F>; 2]> = OnceLock::new();
+        let retained = &PACKED.get_or_init(|| [2, 4].map(packed_bus_table))[width / 2 - 1];
         assert!(retained.packed_bits().is_some());
 
-        let mut config = config(log_height + 2, FOLDING);
+        let mut config = config(log_height + log2_strict_usize(2 * width), FOLDING);
         // Public prove uses GenericBackend, exercising the ordinary packed first fold.
         let (pk, vk) = setup(&config, &[push, pull], &mut challenger()).unwrap();
         // The same PCS configuration first exposes its normal dense retained tables.
@@ -2034,6 +2033,37 @@ mod tests {
         check_bus_over_packed_boolean_tables(
             &ConditionalOnlyBusAir(BusDirection::Push),
             &ConditionalOnlyBusAir(BusDirection::Pull),
+        );
+    }
+
+    struct WideAffineBusAir(BusDirection);
+
+    impl BaseAir<F> for WideAffineBusAir {
+        fn width(&self) -> usize {
+            4
+        }
+    }
+
+    impl<AB: BusInteractionBuilder<F = F>> Air<AB> for WideAffineBusAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let row = main.current_slice();
+            builder.push_bus_interaction(
+                BusName::new("projected-affine"),
+                self.0,
+                row[..3].iter().copied().map(Into::into),
+                BusActivation::Boolean(row[3].into()),
+            );
+        }
+    }
+
+    #[test]
+    fn a_projected_affine_bus_has_identical_dense_and_packed_proofs() {
+        // Four source columns fit two full-height projected multilinears within
+        // the four half-height buffers otherwise retained by the first fold.
+        check_bus_over_packed_boolean_tables(
+            &WideAffineBusAir(BusDirection::Push),
+            &WideAffineBusAir(BusDirection::Pull),
         );
     }
 

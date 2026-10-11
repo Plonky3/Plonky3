@@ -31,7 +31,9 @@ pub use debug::{
     BusDebugReport, BusImbalance, BusUnmatched,
 };
 pub use direction::BusDirection;
-pub use evaluation::{BusEvaluation, BusEvaluationError, BusFactorPlan};
+pub use evaluation::{
+    BusAffineExpression, BusAffineFactor, BusEvaluation, BusEvaluationError, BusFactorPlan,
+};
 pub use memory::{
     MemoryFinalCounts, MemoryReadAddresses, MemoryReadCounts, MemoryReadValues, MemoryTableValues,
     ReadOnlyMemoryBus, ReadOnlyMemoryChallenges, ReadOnlyMemoryClaims, ReadOnlyMemoryColumns,

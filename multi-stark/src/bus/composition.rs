@@ -7,21 +7,24 @@
 //! The family runs inside the zerocheck sumcheck, over the same cube and challenges.
 //! Its terminal expression is checked against the same openings the AIR constraints read.
 //!
-//! Every source column is read in place, from its committed table or its period vector.
+//! Wide affine declarations project their columns into separate factor and activation tables.
+//! Projection is used only when those full-height tables fit within the generic path's first
+//! half-height fold. Other declarations read their committed columns or period vectors in place.
 //!
 //! The first challenge that binds one of its table's row variables folds it in half.
 //! A shorter table therefore stays in place while it is dormant.
 //! The fold is a half-height polynomial over the representation field.
 //!
-//! Row selectors are never materialized; their closed form tracks the bound row variables.
+//! The generic path keeps row selectors in closed form; affine projections absorb them.
 //!
 //! Every value is computed in the zerocheck backend's representation field `R`, which is
 //! isomorphic to the challenge field. Challenges cross into `R` once and round polynomials
 //! cross back once, so the composition is the one computed in the challenge field.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_bus::{BusDirection, BusEvaluation, BusReductionOutput};
+use p3_bus::{BusActivation, BusAffineExpression, BusDirection, BusEvaluation, BusReductionOutput};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
@@ -62,6 +65,45 @@ struct CompositionTerm<R> {
     coefficient: R,
     /// Cube sum of the unweighted row composition before this AIR activates.
     row_claim: R,
+}
+
+/// Separate multilinears for the affine factor difference and its activation.
+struct ProjectedTerm<R> {
+    difference: Poly<R>,
+    activation: Option<Poly<R>>,
+}
+
+impl<R: Field> ProjectedTerm<R> {
+    fn at(&self, row: usize) -> R {
+        let difference = self.difference.as_slice()[row];
+        self.activation
+            .as_ref()
+            .map_or(difference, |poly| difference * poly.as_slice()[row])
+    }
+
+    fn interpolate(&self, row: usize, half: usize, node: R) -> R {
+        let difference = interpolate_poly(&self.difference, row, half, node);
+        self.activation.as_ref().map_or(difference, |poly| {
+            difference * interpolate_poly(poly, row, half, node)
+        })
+    }
+
+    fn fold(&mut self, challenge: R) {
+        self.difference.fix_prefix_var_mut(challenge);
+        if let Some(activation) = &mut self.activation {
+            activation.fix_prefix_var_mut(challenge);
+        }
+    }
+}
+
+#[inline]
+fn interpolate_poly<R: Field>(poly: &Poly<R>, row: usize, half: usize, node: R) -> R {
+    let values = poly.as_slice();
+    if node == R::ZERO {
+        values[row]
+    } else {
+        values[row] + (values[row + half] - values[row]) * node
+    }
 }
 
 /// One source multilinear, read in place until one of its row variables is bound, then folded.
@@ -194,6 +236,8 @@ struct AirState<'a, F: Field, R> {
     equality: Poly<R>,
     /// Bus terms emitted by this AIR.
     terms: Vec<CompositionTerm<R>>,
+    /// Optional compact affine representation, in the same order as `terms`.
+    projected: Option<Vec<ProjectedTerm<R>>>,
     /// Number of global prefix variables absent from this AIR table.
     unused_prefix: usize,
     /// Evaluation of the fixed all-one-vertex selector on bound prefix coordinates.
@@ -207,6 +251,120 @@ where
     F: Field,
     R: Field + Algebra<F>,
 {
+    /// Project only when every declaration is affine and the retained tables are no larger
+    /// than the generic path's first fold. Count actual source columns, not declared widths.
+    fn initialize_projection<EF: ExtensionField<F>>(
+        &mut self,
+        context: &BusContext<F, EF>,
+        fingerprint_weights: &[R],
+        offset: R,
+    ) {
+        let sources = self.main.len() + self.preprocessed.len() + self.periodic.len();
+        let projections = self.terms.len()
+            + self
+                .terms
+                .iter()
+                .filter(|term| {
+                    !matches!(
+                        context.interaction(term.owner).activation,
+                        BusActivation::Always
+                    )
+                })
+                .count();
+        // Poly folding retains its allocation, so compare full projected capacity to
+        // half-height source capacity. A one-row table never needs a source fold.
+        if self.equality.as_slice().len() == 1 || projections > sources / 2 {
+            return;
+        }
+        let Some(expressions) = self
+            .terms
+            .iter()
+            .map(|term| {
+                context
+                    .plan()
+                    .compile_factor(
+                        term.bus,
+                        context.interaction(term.owner),
+                        fingerprint_weights,
+                        offset,
+                    )
+                    .expect("a checked bus plan compiles against its own declarations")
+                    .affine(&self.public_values)
+                    .expect("a planned expression resolves its public inputs")
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return;
+        };
+        self.projected = Some(
+            expressions
+                .iter()
+                .map(|factor| ProjectedTerm {
+                    difference: self.materialize_affine(&factor.factor_minus_one),
+                    activation: factor
+                        .activation
+                        .as_ref()
+                        .map(|expression| self.materialize_affine(expression)),
+                })
+                .collect(),
+        );
+        // Borrowed committed views cost no column buffers. Period vectors are owned.
+        self.periodic.clear();
+    }
+
+    /// Evaluate one affine expression on the AIR's own Boolean cube, column by column.
+    fn materialize_affine(&self, expression: &BusAffineExpression<R>) -> Poly<R> {
+        let height = self.equality.as_slice().len();
+        let mut values = vec![expression.constant + expression.transition; height];
+        values[0] += expression.first_row;
+        values[height - 1] += expression.last_row - expression.transition;
+        for (coefficients, sources, indices) in [
+            (&expression.main, &self.main, &self.main_layout.0),
+            (
+                &expression.preprocessed,
+                &self.preprocessed,
+                &self.preprocessed_layout.0,
+            ),
+            (
+                &expression.periodic,
+                &self.periodic,
+                &self.periodic_layout.0,
+            ),
+        ] {
+            for &(index, coefficient) in coefficients {
+                let source = &sources[indices
+                    .binary_search(&index)
+                    .expect("an affine leaf is a planned source")];
+                match source {
+                    Source::Committed(column @ ColumnView::Boolean { .. }) => {
+                        // Packed bits select a coefficient without a representation-field product.
+                        let lookup = [R::ZERO, coefficient];
+                        for (word_index, chunk) in values.chunks_mut(64).enumerate() {
+                            let mut bits = column.boolean_word(word_index).unwrap();
+                            for value in chunk {
+                                *value += lookup[(bits & 1) as usize];
+                                bits >>= 1;
+                            }
+                        }
+                    }
+                    Source::Committed(column) => {
+                        for (row, value) in values.iter_mut().enumerate() {
+                            *value += coefficient * column.value(row);
+                        }
+                    }
+                    Source::Periodic { period, .. } => {
+                        let mask = period.len() - 1;
+                        for (row, value) in values.iter_mut().enumerate() {
+                            *value += coefficient * period[row & mask];
+                        }
+                    }
+                    Source::Folded(_) => unreachable!("projection precedes every fold"),
+                }
+            }
+        }
+        Poly::new(values)
+    }
+
     /// Compute every term's initial cube sum in one pass over the shared AIR columns.
     ///
     /// The result is read only while the global prefix is still ahead of this table.
@@ -217,6 +375,16 @@ where
         offset: R,
     ) {
         let height = self.equality.as_slice().len();
+
+        if let Some(projected) = &self.projected {
+            for (term, projection) in self.terms.iter_mut().zip(projected) {
+                term.row_claim = (0..height)
+                    .into_par_iter()
+                    .map(|row| self.equality.as_slice()[row] * projection.at(row))
+                    .sum();
+            }
+            return;
+        }
 
         // Slot placement is settled once per term, outside the row loop below.
         let factors = self
@@ -404,6 +572,7 @@ where
                                 .equality_weights_msb(),
                         ),
                         terms: Vec::new(),
+                        projected: None,
                         unused_prefix: num_variables - share.row_variables,
                         prefix_evaluation: R::ONE,
                         public_values: public_values[air].to_vec(),
@@ -424,13 +593,14 @@ where
             }
         }
 
-        // A table as tall as the statement never reads its own claim, so it never pays for one.
-        for air in airs
-            .iter_mut()
-            .flatten()
-            .filter(|air| air.unused_prefix > 0)
-        {
-            air.initialize_claims(context, &weights, offset);
+        for air in airs.iter_mut().flatten() {
+            // A dormant wide table benefits before its first active round: its initial
+            // row claim reads the compact projection instead of revisiting every source.
+            air.initialize_projection(context, &weights, offset);
+            // A full-height table never reads its own initial row claim.
+            if air.unused_prefix > 0 {
+                air.initialize_claims(context, &weights, offset);
+            }
         }
 
         Self {
@@ -446,6 +616,22 @@ where
     }
 
     fn evaluate_air(&self, air: &AirState<'_, F, R>, node: R) -> R {
+        let half = air.equality.as_slice().len() / 2;
+        if let Some(projected) = &air.projected {
+            return (0..half)
+                .into_par_iter()
+                .map(|row| {
+                    let equality = interpolate_poly(&air.equality, row, half, node);
+                    air.terms
+                        .iter()
+                        .zip(projected)
+                        .map(|(term, projection)| {
+                            term.coefficient * equality * projection.interpolate(row, half, node)
+                        })
+                        .sum::<R>()
+                })
+                .sum();
+        }
         // Slot placement is settled once per term, outside the row loop below.
         let factors = air
             .terms
@@ -464,7 +650,6 @@ where
             .collect::<Vec<_>>();
 
         // Interpolate shared columns once, then evaluate every declaration owned by this AIR.
-        let half = air.equality.as_slice().len() / 2;
         // The selectors' line at `node` is the selectors with `node` bound as one more variable.
         let mut prefix = air.boundary;
         prefix.apply(node);
@@ -533,15 +718,21 @@ where
                 air.prefix_evaluation *= challenge;
                 continue;
             }
-            for source in air
-                .main
-                .iter_mut()
-                .chain(&mut air.preprocessed)
-                .chain(&mut air.periodic)
-            {
-                source.fold(challenge);
+            if let Some(projected) = &mut air.projected {
+                for projection in projected {
+                    projection.fold(challenge);
+                }
+            } else {
+                for source in air
+                    .main
+                    .iter_mut()
+                    .chain(&mut air.preprocessed)
+                    .chain(&mut air.periodic)
+                {
+                    source.fold(challenge);
+                }
+                air.boundary.apply(challenge);
             }
-            air.boundary.apply(challenge);
             air.equality.fix_prefix_var_mut(challenge);
         }
         self.round += 1;
@@ -576,6 +767,10 @@ where
             .collect()
     }
 }
+
+#[cfg(test)]
+#[path = "composition_projection_tests.rs"]
+mod projection_tests;
 
 #[cfg(test)]
 mod tests {
