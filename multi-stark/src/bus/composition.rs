@@ -159,13 +159,6 @@ impl<R: Field> ProjectedTerm<R> {
             .map_or(difference, |poly| difference * poly.as_slice()[row])
     }
 
-    fn interpolate(&self, row: usize, half: usize, node: R) -> R {
-        let difference = interpolate_poly(&self.difference, row, half, node);
-        self.activation.as_ref().map_or(difference, |poly| {
-            difference * interpolate_poly(poly, row, half, node)
-        })
-    }
-
     fn fold(&mut self, challenge: R) {
         self.difference.fix_prefix_var_mut(challenge);
         if let Some(activation) = &mut self.activation {
@@ -174,13 +167,48 @@ impl<R: Field> ProjectedTerm<R> {
     }
 }
 
-#[inline]
-fn interpolate_poly<R: Field>(poly: &Poly<R>, row: usize, half: usize, node: R) -> R {
-    let values = poly.as_slice();
-    if node == R::ZERO {
-        values[row]
-    } else {
-        values[row] + (values[row + half] - values[row]) * node
+impl<R: Field> ProjectedAir<R> {
+    /// Weighted body coefficients, before applying the current equality factor.
+    fn round_coefficients(&self, equality: &Poly<R>) -> [R; 3] {
+        let values = equality.as_slice();
+        let half = values.len() / 2;
+        let quadratic = self.groups.iter().any(|group| group.activation.is_some());
+        let add = |mut sums: [R; 3], row: [R; 3]| {
+            for (sum, value) in sums.iter_mut().zip(row) {
+                *sum += value;
+            }
+            sums
+        };
+        let sums = (0..half)
+            .into_par_iter()
+            .map(|row| {
+                let mut sums = [R::ZERO; 3];
+                for group in &self.groups {
+                    let difference = group.difference.as_slice();
+                    let (low, high) = (difference[row], difference[row + half]);
+                    if let Some(activation) = &group.activation {
+                        let activation = activation.as_slice();
+                        let (a_low, a_high) = (activation[row], activation[row + half]);
+                        sums[0] += low * a_low;
+                        sums[1] += high * a_high;
+                        sums[2] += (high - low) * (a_high - a_low);
+                    } else {
+                        sums[0] += low;
+                        sums[1] += high;
+                    }
+                }
+                // The leading Boolean equality factor sums to one.
+                let weight = values[row] + values[row + half];
+                sums[0] *= weight;
+                sums[1] *= weight;
+                if quadratic {
+                    sums[2] *= weight;
+                }
+                sums
+            })
+            .par_fold_reduce(|| [R::ZERO; 3], add, add);
+        // The endpoint total at one contains all three monomial coefficients.
+        [sums[0], sums[1] - sums[0] - sums[2], sums[2]]
     }
 }
 
@@ -784,26 +812,6 @@ where
 
     fn evaluate_air(&self, air: &AirState<'_, F, R>, node: R) -> R {
         let half = air.equality.as_slice().len() / 2;
-        if let Some(projected) = &air.projected {
-            let anchor =
-                self.equality_point[self.equality_point.len() - air.equality.num_variables()];
-            let prefix = projected.equality_prefix * Point::eval_eq(&[anchor], &[node]);
-            let sum: R = (0..half)
-                .into_par_iter()
-                .map(|row| {
-                    // Summing the leading equality factor over its Boolean endpoints gives one.
-                    let values = air.equality.as_slice();
-                    let equality = values[row] + values[row + half];
-                    equality
-                        * projected
-                            .groups
-                            .iter()
-                            .map(|group| group.interpolate(row, half, node))
-                            .sum::<R>()
-                })
-                .sum();
-            return prefix * sum;
-        }
         // Slot placement is settled once per term, outside the row loop below.
         let factors = air
             .terms
@@ -916,6 +924,21 @@ where
     }
 
     fn round_poly(&self) -> Vec<EF> {
+        // Every projected body has degree at most two. Read its rows once for all
+        // transmitted nodes, including when another AIR raises the shared degree.
+        let projected = self
+            .airs
+            .iter()
+            .map(|air| {
+                if self.round < air.unused_prefix {
+                    None
+                } else {
+                    air.projected
+                        .as_ref()
+                        .map(|projection| projection.round_coefficients(&air.equality))
+                }
+            })
+            .collect::<Vec<_>>();
         // Generic-degree encoding omits node one, which the verifier derives from the claim.
         (0..self.degree)
             .map(RoundPolyInterpolator::<EF>::transmitted_node)
@@ -924,7 +947,8 @@ where
                 let sum = self
                     .airs
                     .iter()
-                    .map(|air| {
+                    .zip(&projected)
+                    .map(|(air, coefficients)| {
                         let body = if self.round < air.unused_prefix {
                             // χ_k contributes the current node; its remaining cube sum is one.
                             node * air.projected.as_ref().map_or_else(
@@ -936,6 +960,13 @@ where
                                 },
                                 |projected| projected.row_claim,
                             )
+                        } else if let Some([constant, linear, quadratic]) = *coefficients {
+                            let projection = air.projected.as_ref().unwrap();
+                            let anchor = self.equality_point
+                                [self.equality_point.len() - air.equality.num_variables()];
+                            let equality =
+                                projection.equality_prefix * Point::eval_eq(&[anchor], &[node]);
+                            equality * (constant + node * (linear + node * quadratic))
                         } else {
                             // Active terms share one interpolation of their AIR columns.
                             self.evaluate_air(air, node)

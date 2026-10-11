@@ -20,6 +20,7 @@ use super::*;
 enum Kind {
     Conditional,
     Always,
+    Mixed,
     Repeated,
     Nonlinear,
     Selectors,
@@ -98,6 +99,19 @@ where
                 values[..self.width - 1].iter().cloned(),
                 BusActivation::Boolean(values[self.width - 1].clone()),
             ),
+            Kind::Mixed => {
+                for activation in [
+                    BusActivation::Always,
+                    BusActivation::Boolean(values[self.width - 1].clone()),
+                ] {
+                    builder.push_bus_interaction(
+                        name,
+                        BusDirection::Push,
+                        values[..self.width - 1].iter().cloned(),
+                        activation,
+                    );
+                }
+            }
             Kind::Always | Kind::Nonlinear => {
                 builder.push_bus_interaction(
                     name,
@@ -254,6 +268,7 @@ fn check<F, EF, R>(
         (8, "selectors", Kind::Selectors, 2, Some(6)),
         (4, "single-row", Kind::Always, 0, None),
         (4, "always", Kind::Always, 5, Some(1)),
+        (8, "mixed", Kind::Mixed, 4, Some(3)),
         (8, "shared", Kind::Shared, 3, Some(2)),
         (8, "distinct", Kind::Distinct, 4, Some(4)),
         (8, "too-many", Kind::TooMany, 4, None),
@@ -275,6 +290,8 @@ fn check<F, EF, R>(
     let context = BusContext::<F, EF>::build(&air_refs, &heights)
         .unwrap()
         .unwrap();
+    // A generic cubic body raises the shared degree above projected quadratic bodies.
+    assert_eq!(context.composition_degree(), 4);
     let periodic = context.period_vectors(&air_refs, &heights);
     let public = [F::GENERATOR];
     let public_values = vec![public.as_slice(); airs.len()];
