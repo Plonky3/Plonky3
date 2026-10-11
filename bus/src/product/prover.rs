@@ -146,6 +146,16 @@ impl<F: Field> RadixFourState<F> {
         Self { children }
     }
 
+    /// Rows whose endpoint pairs may contain a nonidentity child value.
+    fn active_rows(&self) -> usize {
+        self.children
+            .iter()
+            .map(|child| child.values.len())
+            .max()
+            .unwrap_or(0)
+            .div_ceil(2)
+    }
+
     /// Bytes one fold of every child moves.
     fn fold_bytes(&self) -> usize {
         self.children.iter().map(IdentityPrefix::fold_bytes).sum()
@@ -212,6 +222,51 @@ impl<F: Field> RadixFourBatch<F> {
         let powers = batching
             .shifted_powers(batching)
             .collect_n(other_trees.len());
+        let first_rows = first_tree.active_rows();
+        let same_cutoff = other_trees
+            .iter()
+            .all(|state| state.active_rows() == first_rows);
+        let mut evaluations = if same_cutoff {
+            Self::reduce_trees(&self.states, &powers, &nodes, equality, first_rows)
+        } else {
+            // Each tree can omit its own identity tail before batching the totals.
+            let mut evaluations = Self::reduce_trees(
+                core::slice::from_ref(first_tree),
+                &[],
+                &nodes,
+                equality,
+                first_rows,
+            );
+            for (state, &power) in other_trees.iter().zip(&powers) {
+                let partial = Self::reduce_trees(
+                    core::slice::from_ref(state),
+                    &[],
+                    &nodes,
+                    equality,
+                    state.active_rows(),
+                );
+                for (evaluation, partial) in evaluations.iter_mut().zip(partial) {
+                    *evaluation += power * partial;
+                }
+            }
+            evaluations
+        };
+        for (evaluation, eq_value) in evaluations.iter_mut().zip(eq_values) {
+            *evaluation *= eq_value;
+        }
+        evaluations
+    }
+
+    /// Reduces a nonempty tree group through its last nonidentity endpoint pair.
+    fn reduce_trees(
+        states: &[RadixFourState<F>],
+        powers: &[F],
+        nodes: &RoundNodes<F>,
+        equality: &[F],
+        rows: usize,
+    ) -> [F; ROUND_POLY_LEN] {
+        let (first_tree, other_trees) = states.split_first().expect("nonempty product tree group");
+        debug_assert_eq!(powers.len(), other_trees.len());
         let accumulate = |evaluations: &mut [F; ROUND_POLY_LEN], row: usize| {
             let tree_product = |state: &RadixFourState<F>| {
                 let [first, rest @ ..] = &state.children;
@@ -225,7 +280,7 @@ impl<F: Field> RadixFourBatch<F> {
                 product
             };
             let mut batched = tree_product(first_tree);
-            for (state, &power) in other_trees.iter().zip(&powers) {
+            for (state, &power) in other_trees.iter().zip(powers) {
                 for (batched, product) in batched.iter_mut().zip(tree_product(state)) {
                     *batched += power * product;
                 }
@@ -236,19 +291,9 @@ impl<F: Field> RadixFourBatch<F> {
             }
         };
 
-        // Past every explicit child prefix, all tree products are constant one.
-        // Keep a partial final pair in the active rows.
-        let rows = self
-            .states
-            .iter()
-            .flat_map(|state| &state.children)
-            .map(|child| child.values.len())
-            .max()
-            .unwrap_or(0)
-            .div_ceil(2);
         debug_assert!(rows <= equality.len());
         // An active row reads one equality weight and eight child values per tree.
-        let row_bytes = ROUND_POLY_LEN * (1 + 8 * self.states.len()) * size_of::<F>();
+        let row_bytes = ROUND_POLY_LEN * (1 + 8 * states.len()) * size_of::<F>();
 
         // Each task sums one run of rows, so only its partial message crosses threads.
         let task_rows = min_task_len(rows, row_bytes);
@@ -284,13 +329,14 @@ impl<F: Field> RadixFourBatch<F> {
                     .copied()
                     .sum()
             };
-            let tail = tail_weight * (F::ONE + powers.iter().copied().sum::<F>());
+            let tail = if powers.is_empty() {
+                tail_weight
+            } else {
+                tail_weight * (F::ONE + powers.iter().copied().sum::<F>())
+            };
             for evaluation in &mut evaluations {
                 *evaluation += tail;
             }
-        }
-        for (evaluation, eq_value) in evaluations.iter_mut().zip(eq_values) {
-            *evaluation *= eq_value;
         }
         evaluations
     }
@@ -544,7 +590,17 @@ mod tests {
         // Unequal, empty and non-multiple-of-four prefixes leave children of different lengths.
         // Several trees fix the batching power each tree must receive.
         let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0002);
-        let shapes: [&[usize]; 3] = [&[77], &[128, 0], &[13, 128, 91]];
+        let shapes: [&[usize]; 9] = [
+            &[77],
+            &[128, 0],
+            &[0, 128],
+            &[128, 32],
+            &[32, 128],
+            &[128, 120],
+            &[120, 128],
+            &[13, 128, 91],
+            &[128, 16, 0],
+        ];
         for prefix_lens in shapes {
             check_rounds::<BinaryField128>(&mut rng, 7, prefix_lens);
             check_rounds::<Ghash128>(&mut rng, 7, prefix_lens);
