@@ -636,49 +636,64 @@ where
             return leaves;
         }
 
+        let initialize = || {
+            (
+                F::zero_vec(main_width),
+                F::zero_vec(fixed_width),
+                F::zero_vec(periodic_width),
+                Vec::new(),
+            )
+        };
+        let evaluate = |(main, fixed, periodic, scratch): &mut (Vec<F>, Vec<F>, Vec<F>, Vec<F>),
+                        row| {
+            if selector.is_inactive(row, height) {
+                return EF::ONE;
+            }
+            // Unread columns keep their zero, which no planned expression names.
+            for (&index, column) in main_indices.iter().zip(&main_columns) {
+                main[index] = column.value(row);
+            }
+            for (&index, column) in fixed_indices.iter().zip(&fixed_columns) {
+                fixed[index] = column.value(row);
+            }
+            for (&index, column) in periodic_indices.iter().zip(&periodic_columns) {
+                periodic[index] = column.value(row);
+            }
+            factor
+                .evaluate(
+                    scratch,
+                    BusEvaluation {
+                        main,
+                        preprocessed: fixed,
+                        public,
+                        periodic,
+                        is_first_row: F::from_bool(row == 0),
+                        is_last_row: F::from_bool(row + 1 == height),
+                        is_transition: F::from_bool(row + 1 < height),
+                    },
+                )
+                // Table widths are checked against every AIR before this loop starts.
+                .expect("a checked bus plan resolves against its committed table")
+        };
+
+        // A boundary block has one live leaf. Fill the padding directly and
+        // initialize row scratch only for the row whose payload is evaluated.
+        if height > 1
+            && let RowSelector::Boundary(boundary) = &selector
+        {
+            let row = match boundary {
+                BusBoundary::First => 0,
+                BusBoundary::Last => height - 1,
+            };
+            let mut leaves = alloc::vec![EF::ONE; height];
+            leaves[row] = evaluate(&mut initialize(), row);
+            return leaves;
+        }
+
         // Boolean rows stay in the base field, so every tuple term is a cheap mixed product.
         (0..height)
             .into_par_iter()
-            .map_init(
-                || {
-                    (
-                        F::zero_vec(main_width),
-                        F::zero_vec(fixed_width),
-                        F::zero_vec(periodic_width),
-                        Vec::new(),
-                    )
-                },
-                |(main, fixed, periodic, scratch), row| {
-                    if selector.is_inactive(row, height) {
-                        return EF::ONE;
-                    }
-                    // Unread columns keep their zero, which no planned expression names.
-                    for (&index, column) in main_indices.iter().zip(&main_columns) {
-                        main[index] = column.value(row);
-                    }
-                    for (&index, column) in fixed_indices.iter().zip(&fixed_columns) {
-                        fixed[index] = column.value(row);
-                    }
-                    for (&index, column) in periodic_indices.iter().zip(&periodic_columns) {
-                        periodic[index] = column.value(row);
-                    }
-                    factor
-                        .evaluate(
-                            scratch,
-                            BusEvaluation {
-                                main,
-                                preprocessed: fixed,
-                                public,
-                                periodic,
-                                is_first_row: F::from_bool(row == 0),
-                                is_last_row: F::from_bool(row + 1 == height),
-                                is_transition: F::from_bool(row + 1 < height),
-                            },
-                        )
-                        // Table widths are checked against every AIR before this loop starts.
-                        .expect("a checked bus plan resolves against its committed table")
-                },
-            )
+            .map_init(initialize, evaluate)
             .collect()
     }
 }
