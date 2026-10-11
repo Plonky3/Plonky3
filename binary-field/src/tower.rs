@@ -958,6 +958,8 @@ mod tests {
         check::<2>();
         check::<3>();
         check::<7>();
+        check::<8>();
+        check::<9>();
         check::<16>();
         check::<33>();
         check::<128>();

@@ -480,11 +480,75 @@ pub(crate) fn dot_product_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
 
 #[inline]
 pub(crate) fn dot_product_128(pairs: impl Iterator<Item = (u128, u128)>) -> u128 {
+    // Short dot products do not reliably amortize the composite path's final work.
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes",
+        target_feature = "sha3"
+    ))]
+    if pairs.size_hint().0 >= 8 {
+        return composite_dot_product_128(pairs);
+    }
     let (low, high) = pairs.fold((0, 0), |(low, high), (a, b)| {
         let (lo, hi) = clmul_128x128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
         (low ^ lo, high ^ hi)
     });
     basis::poly_to_tower_128(reduce_128(low, high))
+}
+
+/// Accumulate the composite field's three raw products and reduce the sum once.
+/// The basis maps and reductions are linear over GF(2), so their final work is shared.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+#[inline(always)]
+fn composite_dot_product_128(pairs: impl Iterator<Item = (u128, u128)>) -> u128 {
+    use core::arch::aarch64::*;
+
+    const GAMMA: u64 = basis::tower_image_64(1 << 32) ^ 1;
+    const BETA: u64 = basis::poly_mul(GAMMA as u128, basis::TAIL_64, 64, basis::TAIL_64) as u64;
+
+    // SAFETY: the cfg guarantees AES (PMULL), SHA3 (EOR3), and little-endian
+    // lane ordering. Every transmute preserves the bits of a 128-bit value.
+    unsafe {
+        let (mut z0, mut z1, mut z2) = (vdupq_n_u64(0), vdupq_n_u64(0), vdupq_n_u64(0));
+        for (a, b) in pairs {
+            let a0 = basis::tower_to_poly_64_balanced(a as u64);
+            let a1 = basis::tower_to_poly_64_balanced((a >> 64) as u64);
+            let b0 = basis::tower_to_poly_64_balanced(b as u64);
+            let b1 = basis::tower_to_poly_64_balanced((b >> 64) as u64);
+            z0 = veorq_u64(
+                z0,
+                core::mem::transmute::<u128, uint64x2_t>(vmull_p64(a0, b0)),
+            );
+            z2 = veorq_u64(
+                z2,
+                core::mem::transmute::<u128, uint64x2_t>(vmull_p64(a1, b1)),
+            );
+            z1 = veorq_u64(
+                z1,
+                core::mem::transmute::<u128, uint64x2_t>(vmull_p64(a0 ^ a1, b0 ^ b1)),
+            );
+        }
+        let low = reduce_64_composite(core::mem::transmute::<uint64x2_t, u128>(veorq_u64(z0, z2)));
+        let scaled_low: uint64x2_t =
+            core::mem::transmute(vmull_p64(vgetq_lane_u64::<0>(z2), GAMMA));
+        let scaled_high: uint64x2_t = core::mem::transmute(vmull_high_p64(
+            core::mem::transmute::<uint64x2_t, poly64x2_t>(z2),
+            core::mem::transmute::<uint64x2_t, poly64x2_t>(vdupq_n_u64(BETA)),
+        ));
+        let high = reduce_64_composite(core::mem::transmute::<uint64x2_t, u128>(veor3q_u64(
+            veorq_u64(z1, z0),
+            scaled_low,
+            scaled_high,
+        )));
+        u128::from(basis::poly_to_tower_64_balanced(low))
+            | (u128::from(basis::poly_to_tower_64_balanced(high)) << 64)
+    }
 }
 
 /// Squaring in `GF(2^64)`, taking and returning the tower representation.
@@ -566,6 +630,56 @@ mod tests {
         };
         for _ in 0..10_000 {
             check(next(), next(), true);
+        }
+    }
+
+    #[test]
+    fn tower_128_dot_products_match_reference_across_lengths_and_basis_pairs() {
+        let mut state = 0x8374_85b3_3217_94ad_3495_d918_48fa_910bu128;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut pairs = [(0, 0); 33];
+        for length in [0, 1, 2, 3, 7, 8, 9, 16, 33] {
+            for _ in 0..128 {
+                for pair in &mut pairs[..length] {
+                    *pair = (next(), next());
+                }
+                let terms = &pairs[..length];
+                let expected = terms
+                    .iter()
+                    .map(|&(a, b)| {
+                        BinaryField128::from_repr(a).reference_mul(BinaryField128::from_repr(b))
+                    })
+                    .sum::<BinaryField128>()
+                    .to_repr();
+                assert_eq!(super::dot_product_128(terms.iter().copied()), expected);
+                // Filtering preserves the terms but hides the iterator's lower bound.
+                assert_eq!(
+                    super::dot_product_128(terms.iter().copied().filter(|_| true)),
+                    expected
+                );
+            }
+        }
+        // Isolated terms pin every bilinear coefficient at both ends of a batch.
+        for a in 0..128 {
+            for b in 0..128 {
+                let pair = (1u128 << a, 1u128 << b);
+                let expected = super::basis::poly_to_tower_128(super::composed_poly_mul_128(
+                    super::basis::tower_to_poly_128(pair.0),
+                    super::basis::tower_to_poly_128(pair.1),
+                ));
+                let mut terms = [(0, 0); 8];
+                terms[0] = pair;
+                assert_eq!(super::dot_product_128(terms.into_iter()), expected);
+                terms[7] = pair;
+                assert_eq!(super::dot_product_128(terms.into_iter()), 0);
+                terms[0] = (0, 0);
+                assert_eq!(super::dot_product_128(terms.into_iter()), expected);
+            }
         }
     }
 
