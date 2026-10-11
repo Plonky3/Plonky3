@@ -493,6 +493,20 @@ macro_rules! binary_tower_level {
                 self.0.to_le_bytes()
             }
 
+            #[cfg(target_endian = "little")]
+            #[inline]
+            fn as_serialized_bytes(input: &[Self]) -> Option<&[u8]> {
+                // SAFETY: the transparent integer wrapper has no padding or uninitialized
+                // bytes. On this target its memory order is exactly `to_le_bytes`. The byte
+                // slice borrows the same initialized region and needs no stronger alignment.
+                Some(unsafe {
+                    core::slice::from_raw_parts(
+                        input.as_ptr().cast::<u8>(),
+                        core::mem::size_of_val(input),
+                    )
+                })
+            }
+
             #[inline]
             fn into_parallel_byte_streams<const N: usize>(
                 input: impl IntoIterator<Item = [Self; N]>,

@@ -4,10 +4,9 @@ use p3_field::Field;
 
 use crate::CryptographicHasher;
 
-/// Byte target for the buffer holding the serialized bytes of one group of rows.
+/// Byte target for one group of serialized rows passed to the inner hasher.
 ///
-/// The batched inner hash needs its messages back to back in memory, and field elements reach
-/// byte form only through a serializing iterator, so a group is staged here before it is hashed.
+/// Fields without a borrowed byte encoding stage a group in a scratch buffer before hashing.
 ///
 /// 8 KiB stays inside a typical 32 KiB L1 data cache. It is a target rather than a cap: a group
 /// is always a whole number of lane groups, so one lane group of wider rows overshoots it rather
@@ -75,7 +74,7 @@ where
             return;
         }
 
-        // Serialize as many whole rows at a time as the budget holds.
+        // Hash as many whole rows at a time as the budget holds.
         // The inner hasher then sees a long run of equal-length byte messages:
         //
         //     rows:    [ r_0 | r_1 | ... ]              row_len field elements each
@@ -89,6 +88,26 @@ where
         // still lands on a lane-group boundary.
         let lanes = Inner::LANES.max(1);
         let rows_per_group = (ROW_BYTES_SCRATCH / row_bytes / lanes).max(1) * lanes;
+
+        if let Some(bytes) = F::as_serialized_bytes(input) {
+            let expected_len = input
+                .len()
+                .checked_mul(F::NUM_BYTES)
+                .expect("serialized batch length overflows usize");
+            assert_eq!(
+                bytes.len(),
+                expected_len,
+                "borrowed field serialization must have its declared width"
+            );
+            // Keep the same lane-aligned groups while borrowing the original storage.
+            for (rows, digests) in bytes
+                .chunks(rows_per_group * row_bytes)
+                .zip(out.chunks_mut(rows_per_group))
+            {
+                self.inner.hash_many(rows, digests);
+            }
+            return;
+        }
 
         // One buffer per call, refilled group by group, holding the largest group exactly.
         // Every byte of a group is written before it is read, so none of it is zeroed first.
