@@ -69,18 +69,7 @@ pub(crate) struct PreparedProductGkr<EF> {
 impl<EF: Field> PreparedProductGkr<EF> {
     /// Prepare layers without asserting the shared-root relation or touching a transcript.
     pub(crate) fn new(inputs: &[&[EF]], shape: ProductGkrShape) -> Self {
-        assert_eq!(
-            inputs.len(),
-            shape.num_trees,
-            "product GKR tree count mismatch"
-        );
-        let capacity = 1usize << shape.log_height;
-        for input in inputs {
-            assert!(
-                input.len() <= capacity,
-                "product GKR input exceeds its logical tree"
-            );
-        }
+        Self::validate_lengths(inputs.iter().map(|input| input.len()), shape);
 
         // Keep only explicit prefixes at every product level.
         // A leaf moves two elements to be copied and fewer than two more to be reduced.
@@ -96,6 +85,43 @@ impl<EF: Field> PreparedProductGkr<EF> {
             .map_collect_min_task_bytes(tree_bytes, |input| {
                 ProductLayers::new(input, shape.log_height)
             });
+        Self::from_layers(shape, all_layers)
+    }
+
+    /// Consume the bus's owned leaves without copying their explicit prefixes.
+    pub(crate) fn new_owned(mut inputs: [Vec<EF>; 2], shape: ProductGkrShape) -> Self {
+        Self::validate_lengths(inputs.iter().map(Vec::len), shape);
+        // No leaf copy is needed; only the retained levels move field values.
+        let tree_bytes = inputs
+            .iter()
+            .map(|input| input.len() * 2 * size_of::<EF>())
+            .sum::<usize>()
+            .checked_div(inputs.len())
+            .unwrap_or(0);
+        let all_layers = inputs
+            .par_iter_mut()
+            .map_collect_min_task_bytes(tree_bytes, |input| {
+                ProductLayers::new_owned(core::mem::take(input), shape.log_height)
+            });
+        Self::from_layers(shape, all_layers)
+    }
+
+    fn validate_lengths(lengths: impl ExactSizeIterator<Item = usize>, shape: ProductGkrShape) {
+        assert_eq!(
+            lengths.len(),
+            shape.num_trees,
+            "product GKR tree count mismatch"
+        );
+        let capacity = 1usize << shape.log_height;
+        for length in lengths {
+            assert!(
+                length <= capacity,
+                "product GKR input exceeds its logical tree"
+            );
+        }
+    }
+
+    fn from_layers(shape: ProductGkrShape, all_layers: Vec<ProductLayers<EF>>) -> Self {
         let roots = all_layers
             .iter()
             .map(ProductLayers::root)

@@ -77,11 +77,16 @@ pub(super) struct ProductLayers<F> {
 impl<F: Field> ProductLayers<F> {
     /// Builds every product level needed by the radix-four descent.
     pub(super) fn new(leaves: &[F], log_height: usize) -> Self {
+        Self::new_owned(leaves.to_vec(), log_height)
+    }
+
+    /// Builds the retained levels while taking ownership of the leaf allocation.
+    pub(super) fn new_owned(leaves: Vec<F>, log_height: usize) -> Self {
         // Unvisited depths remain empty constant-one prefixes.
         let mut layers = (0..=log_height)
             .map(|_| IdentityPrefix::new(Vec::new()))
             .collect::<Vec<_>>();
-        layers[0] = IdentityPrefix::new(leaves.to_vec());
+        layers[0] = IdentityPrefix::new(leaves);
 
         // Two multiplication levels are retained per radix-four layer.
         let mut depth = 0;
