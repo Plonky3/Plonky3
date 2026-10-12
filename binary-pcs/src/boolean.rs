@@ -1061,13 +1061,11 @@ mod tests {
         )
     }
 
-    /// The commit phase must bind the root the verifier binds.
-    ///
-    /// `BooleanPcs` is the sibling of the schemes `p3-commit`'s multilinear helper covers: it
-    /// commits bits rather than field elements, so the same obligation is checked through
-    /// `commit_bits`.
     #[test]
     fn commit_bits_binds_what_the_verifier_binds() {
+        // Invariant: the commit phase binds the same root the verifier binds.
+        //
+        // Fixture: 2^13 bits, two witnesses from different seeds.
         const LOG_BITS: usize = 13;
 
         let pcs = boolean_pcs(LOG_BITS);

@@ -93,15 +93,13 @@ fn witness(seed: u64) -> Vec<PackedGf2x64> {
         .collect()
 }
 
-/// The commit phase must bind the root the verifier binds.
-///
-/// The Boolean WHIR prover binds inside `commit_bits` while the verifier reaches the same
-/// binding through `observe_commitment`, and nothing in the type system says the two agree.
 #[test]
 fn commit_bits_binds_what_the_verifier_binds() {
+    // Invariant: the commit phase binds the same root the verifier binds.
     let profile = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING);
     let pcs = whir_pcs(profile);
 
+    // Two witnesses from different seeds, so their commitments differ.
     assert_boolean_multilinear_commit_contract::<_, _, EF, _>(
         &pcs,
         &challenger(),

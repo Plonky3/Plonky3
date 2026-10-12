@@ -16,7 +16,6 @@ mod packing;
 mod params;
 mod pcs;
 mod proof;
-
 mod prover;
 #[cfg(test)]
 mod security_tests;
