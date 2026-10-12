@@ -57,8 +57,7 @@ pub fn par_scale_slice_in_place<F: Field>(slice: &mut [F], s: F) {
 /// For large slices, use [`par_add_scaled_slice_in_place`].
 ///
 /// # Panics
-/// Panics if the two slices do not have the same length. Packing splits each slice by its own
-/// length, so without the check a mismatch would pair unrelated indices instead of truncating.
+/// Panics if the slices have different lengths.
 pub fn add_scaled_slice_in_place<F: Field>(slice: &mut [F], other: &[F], s: F) {
     assert_eq!(slice.len(), other.len(), "slices must have equal length");
     let (slice_packed, slice_sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
@@ -81,7 +80,7 @@ pub fn add_scaled_slice_in_place<F: Field>(slice: &mut [F], other: &[F], s: F) {
 /// Requires the `parallel` feature.
 ///
 /// # Panics
-/// Panics if the two slices do not have the same length. See [`add_scaled_slice_in_place`].
+/// Panics if the slices have different lengths.
 pub fn par_add_scaled_slice_in_place<F: Field>(slice: &mut [F], other: &[F], s: F) {
     assert_eq!(slice.len(), other.len(), "slices must have equal length");
     let (slice_packed, slice_sfx) = F::Packing::pack_slice_with_suffix_mut(slice);

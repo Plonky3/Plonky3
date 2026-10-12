@@ -49,33 +49,38 @@ mod helpers {
         assert_eq!(par_x, original);
     }
 
-    /// A length mismatch must be rejected, not silently mis-paired.
-    ///
-    /// Each slice is packed by its own length, so in a release build the two `zip`s match
-    /// unrelated positions instead of truncating. With `WIDTH = 4`, `slice.len() = 5` and
-    /// `other.len() = 3` would add `other[0] * s` to `slice[4]` and touch nothing else.
     #[test]
     #[should_panic(expected = "slices must have equal length")]
     fn test_add_scaled_slice_in_place_mismatched_lengths() {
+        // Each slice is packed by its own length.
+        // A mismatch would pair unrelated positions instead of truncating.
+        //
+        //     WIDTH = 4, slice: 5 elements, other: 3 elements
+        //     slice: packed = [0..4]  suffix = [4]
+        //     other: packed = []      suffix = [0, 1, 2]
+        //     → only slice[4] += other[0] * s
         let mut x = vec![BabyBear::ONE; 5];
         let y = vec![BabyBear::TWO; 3];
 
+        // The length check must fire before any element is written.
         add_scaled_slice_in_place(&mut x, &y, BabyBear::from_u8(3));
     }
 
     #[test]
     #[should_panic(expected = "slices must have equal length")]
     fn test_par_add_scaled_slice_in_place_mismatched_lengths() {
+        // Same 5 vs 3 mismatch, through the parallel entry point.
         let mut x = vec![BabyBear::ONE; 5];
         let y = vec![BabyBear::TWO; 3];
 
+        // The check runs on the calling thread, before any work is split.
         par_add_scaled_slice_in_place(&mut x, &y, BabyBear::from_u8(3));
     }
 
-    /// Shorter `other` is a mismatch too, and must be rejected before any element is written.
     #[test]
     #[should_panic(expected = "slices must have equal length")]
     fn test_add_scaled_slice_in_place_longer_other() {
+        // Opposite direction: the second slice is the longer one (2 vs 4).
         let mut x = vec![BabyBear::ONE; 2];
         let y = vec![BabyBear::TWO; 4];
 
