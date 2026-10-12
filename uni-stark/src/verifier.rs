@@ -73,10 +73,12 @@ pub fn validate_degree_bits(
 ///
 /// # Errors
 ///
-/// Returns [`InvalidProofShapeError::OpenedValuesDimensionMismatch`] unless there is
-/// exactly one chunk per domain and each chunk holds one extension element's
-/// coefficients. Recursive verifiers call this directly, so the shape is checked here
-/// rather than assumed from [`verify`].
+/// Returns a dimension-mismatch shape error unless:
+///
+/// - there is exactly one chunk per domain,
+/// - each chunk holds the coefficients of one extension element.
+///
+/// Recursive verifiers call this directly, so the shape is checked here.
 pub fn recompose_quotient_from_chunks<SC>(
     quotient_chunks_domains: &[Domain<SC>],
     quotient_chunks: &[Vec<SC::Challenge>],
@@ -148,17 +150,15 @@ where
         "uni-stark does not support boundary-IO public values; bind them with AIR constraints"
     );
 
-    // The constraint folder indexes the rows and values below by column, so each must be
-    // as wide as the AIR says.
+    // The constraint folder indexes these inputs by column.
     //
-    //     trace_local, trace_next -> the AIR's width
-    //     public_values           -> the AIR's public value count
-    //     periodic_values         -> one per periodic column the AIR declares
+    //     current and next rows -> the AIR's width
+    //     public values         -> the AIR's public value count
+    //     periodic values       -> one per periodic column the AIR declares
     //
-    // Why: a short row would panic inside `eval` instead of rejecting the proof.
+    // Why: a short input would panic during evaluation instead of rejecting the proof.
     //
-    // Recursive verifiers reach this public entry point directly, so the shapes are checked
-    // here as well as in `verify`.
+    // Recursive verifiers reach this public entry point directly, so the shapes are checked here.
     let air_width = A::width(air);
     if trace_local.len() != air_width {
         return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch.into());
