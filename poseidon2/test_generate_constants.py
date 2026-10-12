@@ -25,7 +25,12 @@ class EmbeddedTestVectorTests(unittest.TestCase):
     def test_reference_permutation_reproduces_every_embedded_vector(self):
         for field_name, width in sorted(generate_constants.DEFAULT_POSEIDON2_TEST_VECTORS):
             with self.subTest(field=field_name, width=width):
-                self.assertTrue(generate_constants.check_embedded_test_vector(field_name, width))
+                # Compare whole outputs so a mismatch prints the differing lanes.
+                expected = generate_constants.DEFAULT_POSEIDON2_TEST_VECTORS[(field_name, width)]
+                self.assertEqual(
+                    generate_constants.reference_test_vector_output(field_name, width),
+                    expected["expected"],
+                )
 
 
 if __name__ == "__main__":

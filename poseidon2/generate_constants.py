@@ -1145,8 +1145,8 @@ M4 = [
     [3, 1, 1, 2],
 ]
 
-# The 4x4 matrix of the Horizen Labs reference implementation (`HLMDSMat4`). Plonky3
-# uses it only for BN254, which this script does not generate.
+# The 4x4 matrix of the Horizen Labs reference implementation (`HLMDSMat4`).
+# Plonky3 uses it only for BN254, which this script does not generate.
 HL_M4 = [
     [5, 7, 1, 3],
     [4, 6, 1, 1],
@@ -1251,11 +1251,16 @@ def generate_internal_matrix(grain, t, n, p, verbose=False):
 # Default Internal Diagonals
 # =============================================================================
 
-# The default instances do not use a Grain-sampled internal matrix. Each picks the
-# diagonal V of M_I = 1 + Diag(V) from values that multiply cheaply: small integers
-# and signed powers of two. These are the diagonals documented in each field's
-# poseidon2.rs (MATRIX_DIAG_*_GOLDILOCKS for Goldilocks, the shift tables for
-# Mersenne31). Each entry is (numerator, k) for the value numerator / 2^k.
+# The internal matrix of each default instance:
+#
+#     M_I = 1 + Diag(V)
+#
+# The default instances do not sample V with Grain.
+# They pick entries that multiply cheaply: small integers and signed powers of two.
+#
+# The values are transcribed from the diagonals documented in each field's poseidon2.rs.
+#
+# Each entry is (numerator, k), encoding the field element numerator / 2^k.
 DEFAULT_INTERNAL_DIAGONALS = {
     ("babybear", 16): [
         (-2, 0), (1, 0), (2, 0), (1, 1), (3, 0), (4, 0), (-1, 1), (-3, 0),
@@ -1300,7 +1305,8 @@ DEFAULT_INTERNAL_DIAGONALS = {
     ],
 }
 
-# Mersenne31's diagonal is [-2, 2^s for each shift] (POSEIDON2_INTERNAL_MATRIX_DIAG_*_SHIFTS).
+# Mersenne31 diagonals have the shape [-2, 2^s_1, 2^s_2, ...].
+# Each s_i is a shift from the field crate's shift table.
 _MERSENNE31_SHIFTS = {
     16: [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16],
     24: list(range(23)),
@@ -1396,9 +1402,11 @@ def poseidon2_permutation(
 def reference_test_vector_output(field_name, t, security_level=128):
     """Run the reference permutation of the default instance on its embedded test input.
 
-    The round constants come from the Grain LFSR, the external matrix from M4 and the
-    internal diagonal from DEFAULT_INTERNAL_DIAGONALS, so nothing here is copied from
-    the Rust test that produced the expected output.
+    Every input is rebuilt independently of the Rust code:
+
+    - round constants from the Grain LFSR,
+    - external matrix from M4,
+    - internal diagonal from the transcribed default values.
     """
     vector = DEFAULT_POSEIDON2_TEST_VECTORS[(field_name, t)]
     p = FIELDS[field_name]["prime"]
