@@ -88,7 +88,7 @@ impl<F: Field, EF: ExtensionField<F>, const N: usize> VectorizedExt<F, EF, N> {
     ///
     /// # Panics
     ///
-    /// Panics if `coefficients.len()` is not equal to `EF::DIMENSION`.
+    /// Panics if the slice length differs from the extension degree.
     #[inline]
     pub fn from_vectorized_basis_coefficients(coefficients: &[Vectorized<F, N>]) -> Self {
         assert_eq!(
