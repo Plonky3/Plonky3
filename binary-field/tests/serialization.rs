@@ -121,7 +121,7 @@ fn borrowed_wide_rows_preserve_lane_groups_and_remainders() {
 }
 
 #[test]
-fn borrowed_serialization_preserves_empty_batches() {
+fn serialization_preserves_empty_batches() {
     let hasher = SerializingHasher::new(Keccak256Hash);
     hasher.hash_many(&[Poly64::ONE], &mut []);
     let mut actual = [[0; 32]; 5];
@@ -131,7 +131,7 @@ fn borrowed_serialization_preserves_empty_batches() {
 
 #[test]
 #[should_panic(expected = "whole multiple")]
-fn borrowed_serialization_rejects_ragged_batches() {
+fn serialization_rejects_ragged_batches() {
     let hasher = SerializingHasher::new(Keccak256Hash);
     hasher.hash_many(&[Poly64::ONE; 3], &mut [[0; 32]; 2]);
 }
