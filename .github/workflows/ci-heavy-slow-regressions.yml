@@ -4,24 +4,9 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * *"
+  # Every pull request plans its run; a regression runs only when the change reaches its package.
   pull_request:
     branches: [ "*" ]
-    paths:
-      - "whir/src/**"
-      - "circle/src/**"
-      - "fri/src/**"
-      - "batch-stark/**"
-      - "multilinear-util/src/**"
-      - "multi-stark/src/**"
-      - "multi-stark/tests/**"
-      - "bus/src/**"
-      - "uni-stark/src/**"
-      - "uni-stark/tests/**"
-      - "binary-dft/src/**"
-      - "binary-dft/tests/**"
-      - "stir/src/**"
-      - "stir/tests/**"
-      - "examples/src/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -47,12 +32,33 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # The same selection as the main CI: changed packages, their dependents and their direct
+      # dev consumers. Scheduled and manual runs take every package.
+      - name: Select affected packages
+        id: impact
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            python3 scripts/check.py plan --base "$BASE_SHA" --head "$HEAD_SHA" \
+              --github-output "$GITHUB_OUTPUT"
+          else
+            python3 scripts/check.py plan --full --github-output "$GITHUB_OUTPUT"
+          fi
+
       - uses: Swatinem/rust-cache@v2
+        if: ${{ steps.impact.outputs.rust == 'true' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test slow regressions
-        run: python3 scripts/check.py slow-regressions
+        if: ${{ steps.impact.outputs.rust == 'true' }}
+        run: >-
+          python3 scripts/check.py slow-regressions
+          --packages "${{ steps.impact.outputs.packages }}"

@@ -67,7 +67,7 @@ jobs:
                 fi
                 ;;
             esac
-            sleep 30
+            sleep 60
           done
           echo "::error::Timed out (30 min) waiting for CI on $SHA."
           exit 1
@@ -84,7 +84,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Wait before retry (crates.io / GitHub rate limiting)
         if: steps.release-plz-1.outcome == 'failure'
-        run: sleep 120
+        run: sleep 300
       - name: Run release-plz (attempt 2/3)
         id: release-plz-2
         if: steps.release-plz-1.outcome == 'failure'
