@@ -27,7 +27,14 @@ LINT_COMMANDS = {
         "--document-private-items",
     ],
     "fmt": ["cargo", "+nightly", "fmt", "--all", "--", "--check"],
-    "scripts": [sys.executable, "-m", "unittest", "scripts/test_check.py", "-v"],
+    "scripts": [
+        sys.executable,
+        "-m",
+        "unittest",
+        "scripts/test_check.py",
+        "poseidon2/test_generate_constants.py",
+        "-v",
+    ],
 }
 
 DOC_ONLY_NAMES = {"CHANGELOG.md", "LICENSE-APACHE", "LICENSE-MIT"}
@@ -168,7 +175,11 @@ def ci_plan(
     embedded = set(embedded_packages(metadata, set(selected)))
     any_toml = any(Path(path).suffix == ".toml" for path in paths)
     any_manifest = any(Path(path).name == "Cargo.toml" for path in paths)
-    scripts = force_full or any(path.startswith("scripts/") for path in paths)
+    # Python under poseidon2/ is checked by the same unittest run as scripts/.
+    scripts = force_full or any(
+        path.startswith("scripts/") or (path.startswith("poseidon2/") and path.endswith(".py"))
+        for path in paths
+    )
 
     # Scalar outputs are easy to consume from every GitHub Actions shell.
     return {
@@ -517,7 +528,7 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
             ]
         ]
     if command == "slow-regressions":
-        return [
+        regressions = [
             [
                 "cargo",
                 "test",
@@ -529,6 +540,25 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
                 "--",
                 "--ignored",
                 "--exact",
+            ],
+            # Every integer-machine proof except the honest run, which the main suite proves.
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-multi-stark",
+                "--test",
+                "integer_machine",
+                "--",
+                "--ignored",
+                "--exact",
+                "sub_slt_and_beq_prove",
+                "a_stale_register_read_leaves_the_registers_unbalanced",
+                "a_load_returning_31_leaves_the_ram_unbalanced",
+                "a_product_of_seven_breaks_the_multiplier",
+                "a_branch_taken_on_equal_operands_breaks_the_alu",
+                "a_false_output_breaks_the_io_pin",
+                "the_cost_report_matches_the_proof",
             ],
             [
                 "cargo",
@@ -683,6 +713,12 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
                 "--exact",
             ],
         ]
+        # A selection keeps only the regressions of the packages it names.
+        return [
+            regression
+            for regression in regressions
+            if packages is None or regression[regression.index("-p") + 1] in packages
+        ]
     raise AssertionError(f"unhandled command: {command}")
 
 
@@ -786,9 +822,11 @@ def parser() -> argparse.ArgumentParser:
     whir = subparsers.add_parser("whir-exhaustive", help="run the ignored exhaustive WHIR sweep")
     whir.add_argument("--parallel", action="store_true")
     subparsers.add_parser("binary-large", help="run the ignored binary PCS 2^16 round trip")
-    subparsers.add_parser(
+    slow = subparsers.add_parser(
         "slow-regressions", help="run the ignored compute-heavy regression tests"
     )
+    slow.add_argument("--package", action="append", metavar="NAME")
+    slow.add_argument("--packages")
     return result
 
 
