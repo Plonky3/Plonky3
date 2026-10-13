@@ -1369,12 +1369,21 @@ mod kernel {
         }
 
         /// [`Self::finish`], for values added through [`Self::add_bits`].
+        /// Clears the sums for reuse while retaining any allocated coordinate rows.
         pub(crate) fn finish_bits<R: Field>(
             &mut self,
             prepared: &PreparedPowers<R>,
             lanes: &BitLaneSums<R>,
         ) -> R {
-            self.finish_with::<R, 1>(prepared, |plane| lanes.sum(plane))
+            let value = self.finish_with::<R, 1>(prepared, |plane| lanes.sum(plane));
+            if self.carried {
+                self.sums.fill([0; REGISTER_WORDS]);
+                if let Some(extra) = &mut self.extra {
+                    extra.0.fill([0; REGISTER_WORDS]);
+                }
+                self.carried = false;
+            }
+            value
         }
 
         /// Finish the byte-sliced sums, contracting every coordinate plane through `plane_sum`.

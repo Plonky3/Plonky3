@@ -318,8 +318,11 @@ mod kernel_tests {
         let folder =
             || SlicedQuadraticFolder::new(&local, &local, boundary, &[], &powers, &lanes, whole);
         let air = Columns(width);
+        let mut sums = core::array::from_fn(|_| PreparedSums::new());
         (
-            folder().with_prepared_powers(&prepared).eval_air(&air),
+            folder()
+                .with_prepared_powers(&prepared, &mut sums)
+                .eval_air(&air),
             folder().eval_air(&air),
         )
     }
@@ -374,7 +377,8 @@ mod kernel_tests {
             &lanes,
             [false; SLICED_CELLS],
         );
-        let _ = folder.with_prepared_powers(&prepared);
+        let mut sums = core::array::from_fn(|_| PreparedSums::new());
+        let _ = folder.with_prepared_powers(&prepared, &mut sums);
     }
 
     #[test]
@@ -580,6 +584,27 @@ mod kernel_tests {
         }
         check::<Ghash128>();
         check::<Poly192>();
+    }
+
+    #[test]
+    fn cubic_bit_sums_can_be_reused_after_active_and_zero_evaluations() {
+        let power = Poly192::from_basis_coefficients_fn(|coefficient| {
+            Poly64::new([0x1234, 0x5678, 0x9abc][coefficient])
+        });
+        let prepared = prepared(&[power; 17], Poly192::ZERO);
+        let weights = core::array::from_fn::<_, SLICED_LANES, _>(|lane| {
+            Poly192::from(Poly64::new(lane as u64 + 1))
+        });
+        let lanes = BitLaneSums::new(&weights);
+        let mut sums = PreparedSums::new();
+        for bits in [u64::MAX, 0, 1 << 63, 0, 0b101] {
+            for index in 0..17 {
+                sums.add_bits(&prepared, index, bits);
+            }
+            // Seventeen identical constraints add to one in characteristic two.
+            assert_eq!(sums.finish_bits(&prepared, &lanes), power * lanes.sum(bits));
+            assert!(sums.has_extra_sums(), "the first allocation is retained");
+        }
     }
 
     #[test]
