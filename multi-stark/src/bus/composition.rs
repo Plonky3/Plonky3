@@ -95,6 +95,11 @@ impl<F: Field, EF: Field + Algebra<F>> Source<'_, F, EF> {
     /// The line through rows `row` and `row + half` of the current hypercube, at `node`.
     #[inline]
     fn interpolate(&self, row: usize, half: usize, node: EF) -> EF {
+        // Every round transmits node zero. Read its endpoint without loading the
+        // other row or multiplying the column difference by zero.
+        if node == EF::ZERO {
+            return self.at(row);
+        }
         match self {
             Self::Committed(column) => {
                 let low = column.value(row);
@@ -671,15 +676,16 @@ mod tests {
 
         for round in 0..log2_strict_usize(height) {
             let half = height >> (round + 1);
-            let node: EF = rng.random();
-            let mut at_node = prefix;
-            at_node.apply(node);
-            for row in 0..half {
-                assert_eq!(source.interpolate(row, half, node), line(&dense, row, node));
-                assert_eq!(
-                    selectors(BoundaryEvals::from_row_with_prefix(row, half, at_node)),
-                    indicators.each_ref().map(|poly| line(poly, row, node))
-                );
+            for node in [EF::ZERO, EF::ONE, EF::interpolation_node(2), rng.random()] {
+                let mut at_node = prefix;
+                at_node.apply(node);
+                for row in 0..half {
+                    assert_eq!(source.interpolate(row, half, node), line(&dense, row, node));
+                    assert_eq!(
+                        selectors(BoundaryEvals::from_row_with_prefix(row, half, at_node)),
+                        indicators.each_ref().map(|poly| line(poly, row, node))
+                    );
+                }
             }
 
             let challenge: EF = rng.random();
