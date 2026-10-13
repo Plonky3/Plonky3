@@ -91,10 +91,8 @@ impl<'a, F: Field, EF: ExtensionField<F>> AffineRow<'a, F, EF> {
         for &(column, coefficient) in &self.columns {
             value += match column {
                 ColumnView::Dense(values) => coefficient * values[row],
-                ColumnView::Boolean { words, column, len } => {
-                    assert!(row < len, "column row out of bounds");
-                    let bit = (words.values[(row / 64) * words.width + column] >> (row % 64)) & 1;
-                    [EF::ZERO, coefficient][bit as usize]
+                ColumnView::Boolean { .. } => {
+                    [EF::ZERO, coefficient][usize::from(column.boolean_bit(row).unwrap())]
                 }
             };
         }

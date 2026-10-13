@@ -1968,19 +1968,11 @@ where
                 if let Some(values) = column.as_dense() {
                     PolyView::new(values).fix_prefix_var_to_packed(r)
                 } else {
-                    let ColumnView::Boolean {
-                        words,
-                        column: index,
-                        len,
-                    } = column
-                    else {
+                    let ColumnView::Boolean { len, .. } = column else {
                         unreachable!()
                     };
                     let half = len / 2;
-                    let bit = |row: usize| {
-                        ((words.values[(row / 64) * words.width + index] >> (row % 64)) & 1)
-                            as usize
-                    };
+                    let bit = |row| usize::from(column.boolean_bit(row).unwrap());
                     // Invariant: the low half holds at least one full lane group.
                     // Halves are powers of two, so one group then divides the half exactly.
                     debug_assert!(
@@ -2004,19 +1996,11 @@ where
                 if let Some(values) = column.as_dense() {
                     PolyView::new(values).fix_prefix_var(r)
                 } else {
-                    let ColumnView::Boolean {
-                        words,
-                        column: index,
-                        len,
-                    } = column
-                    else {
+                    let ColumnView::Boolean { len, .. } = column else {
                         unreachable!()
                     };
                     let half = len / 2;
-                    let bit = |row: usize| {
-                        ((words.values[(row / 64) * words.width + index] >> (row % 64)) & 1)
-                            as usize
-                    };
+                    let bit = |row| usize::from(column.boolean_bit(row).unwrap());
                     Poly::new(
                         (0..half)
                             .map(|row| lookup[2 * bit(row) + bit(row + half)])

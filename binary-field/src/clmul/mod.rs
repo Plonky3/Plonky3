@@ -424,6 +424,24 @@ fn reduce_64_composite(product: u128) -> u64 {
     }
 }
 
+/// The polynomial-basis image of `alpha + 1` shared by the composite kernels.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+const GAMMA: u64 = basis::tower_image_64(1 << 32) ^ 1;
+
+/// Multiplication by `alpha + 1` after folding a high polynomial word.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+const BETA: u64 = basis::poly_mul(GAMMA as u128, basis::TAIL_64, 64, basis::TAIL_64) as u64;
+
 /// Write a tower value as `a0 + a1 Y`, where `Y² + alpha Y + 1 = 0`.
 /// For raw polynomial products `z0=a0*b0`, `z2=a1*b1`, and
 /// `z1=(a0+a1)*(b0+b1)`, the low coefficient is `R(z0+z2)` and the high
@@ -437,9 +455,6 @@ fn reduce_64_composite(product: u128) -> u64 {
 ))]
 #[inline(always)]
 fn composite_mul_128(a: u128, b: u128) -> u128 {
-    const GAMMA: u64 = basis::tower_image_64(1 << 32) ^ 1;
-    const BETA: u64 = basis::poly_mul(GAMMA as u128, basis::TAIL_64, 64, basis::TAIL_64) as u64;
-
     let a0 = basis::tower_to_poly_64_balanced(a as u64);
     let a1 = basis::tower_to_poly_64_balanced((a >> 64) as u64);
     let b0 = basis::tower_to_poly_64_balanced(b as u64);
@@ -512,9 +527,6 @@ pub(crate) fn dot_product_128(pairs: impl Iterator<Item = (u128, u128)>) -> u128
 #[inline(always)]
 fn composite_dot_product_128(pairs: impl Iterator<Item = (u128, u128)>) -> u128 {
     use core::arch::aarch64::*;
-
-    const GAMMA: u64 = basis::tower_image_64(1 << 32) ^ 1;
-    const BETA: u64 = basis::poly_mul(GAMMA as u128, basis::TAIL_64, 64, basis::TAIL_64) as u64;
 
     // SAFETY: the cfg guarantees AES (PMULL), SHA3 (EOR3), and little-endian
     // lane ordering. Every transmute preserves the bits of a 128-bit value.

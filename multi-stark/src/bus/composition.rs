@@ -250,11 +250,11 @@ impl<F: Field, EF: Field + Algebra<F>> Source<'_, F, EF> {
         }
         match self {
             Self::Committed(column @ ColumnView::Boolean { .. }) => {
-                let low = (column.boolean_word(row / 64).unwrap() >> (row % 64)) & 1;
+                let low = usize::from(column.boolean_bit(row).unwrap());
                 let upper = row + half;
-                let high = (column.boolean_word(upper / 64).unwrap() >> (upper % 64)) & 1;
+                let high = usize::from(column.boolean_bit(upper).unwrap());
                 // The line through two bits has only these four possible values.
-                [EF::ZERO, node, EF::ONE - node, EF::ONE][(2 * low + high) as usize]
+                [EF::ZERO, node, EF::ONE - node, EF::ONE][2 * low + high]
             }
             Self::Committed(column) => {
                 let low = column.value(row);
@@ -282,10 +282,10 @@ impl<F: Field, EF: Field + Algebra<F>> Source<'_, F, EF> {
                 Poly::new((0..half).into_par_iter().map_collect_min_task_bytes(
                     2 * size_of::<F>() + size_of::<EF>(),
                     |row| {
-                        let low = (column.boolean_word(row / 64).unwrap() >> (row % 64)) & 1;
+                        let low = usize::from(column.boolean_bit(row).unwrap());
                         let upper = row + half;
-                        let high = (column.boolean_word(upper / 64).unwrap() >> (upper % 64)) & 1;
-                        lookup[(2 * low + high) as usize]
+                        let high = usize::from(column.boolean_bit(upper).unwrap());
+                        lookup[2 * low + high]
                     },
                 ))
             }
@@ -811,6 +811,7 @@ where
     }
 
     fn evaluate_air(&self, air: &AirState<'_, F, R>, node: R) -> R {
+        debug_assert!(air.projected.is_none());
         let half = air.equality.as_slice().len() / 2;
         // Slot placement is settled once per term, outside the row loop below.
         let factors = air
