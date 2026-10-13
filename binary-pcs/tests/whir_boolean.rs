@@ -10,6 +10,7 @@
 //! ```
 
 use p3_binary_field::{BinaryChallenger, BinaryField128, Gf2, Ghash128, PackedGf2x64};
+use p3_binary_pcs::testing::assert_boolean_multilinear_commit_contract;
 use p3_binary_pcs::whir::{
     BinaryWhirBudget, BinaryWhirProfile, BooleanWhirDomain, BooleanWhirError, BooleanWhirPcs,
     BooleanWhirProof, BooleanWhirProver, BooleanWhirTracePcs, BudgetError, recommended_cap_height,
@@ -90,6 +91,21 @@ fn witness(seed: u64) -> Vec<PackedGf2x64> {
     (0..1 << (LOG_BITS - 6))
         .map(|_| PackedGf2x64::new(rng.random::<u64>()))
         .collect()
+}
+
+#[test]
+fn commit_bits_binds_what_the_verifier_binds() {
+    // Invariant: the commit phase binds the same root the verifier binds.
+    let profile = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING);
+    let pcs = whir_pcs(profile);
+
+    // Two witnesses from different seeds, so their commitments differ.
+    assert_boolean_multilinear_commit_contract::<_, _, EF, _>(
+        &pcs,
+        &challenger(),
+        &witness(0x5C01),
+        &witness(0x5C02),
+    );
 }
 
 /// A bit witness written into the words a commitment lends.
