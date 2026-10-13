@@ -188,10 +188,9 @@ fn pack_block(
 
     // Padding rows and bits beyond the trace height were left zero in the output buffer.
     // Each lane occupies exactly 64 columns, so the transpose needs no extra allocation.
-    for rows in block[KECCAK_BINARY_ROWS_PER_PERM..]
-        .as_chunks_mut::<BITS_PER_WORD>()
-        .0
-    {
+    let (lanes, rest) = block[KECCAK_BINARY_ROWS_PER_PERM..].as_chunks_mut::<BITS_PER_WORD>();
+    debug_assert!(rest.is_empty());
+    for rows in lanes {
         transpose_bits(rows);
     }
 }
