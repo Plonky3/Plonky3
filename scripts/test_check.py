@@ -109,6 +109,18 @@ class CheckCliTests(unittest.TestCase):
             ],
         )
 
+    def test_slow_regressions_run_only_for_selected_packages(self):
+        every = self.dry_run_lines("slow-regressions")
+        whir = [line for line in every if " -p p3-whir " in line]
+        self.assertTrue(whir)
+        self.assertLess(len(whir), len(every))
+        self.assertEqual(self.dry_run_lines("slow-regressions", "--packages", "p3-whir"), whir)
+        self.assertEqual(
+            self.dry_run_lines("slow-regressions", "--package", "p3-whir", "--package", "p3-util"),
+            whir,
+        )
+        self.assertEqual(self.dry_run_lines("slow-regressions", "--packages", "p3-util"), [])
+
     def test_lint_can_run_each_existing_ci_check_independently(self):
         expected = {
             "sort": "+ cargo +stable sort --workspace --grouped --check",
@@ -118,7 +130,16 @@ class CheckCliTests(unittest.TestCase):
             "docs": "+ cargo +stable doc --no-deps --workspace --document-private-items",
             "fmt": "+ cargo +nightly fmt --all -- --check",
             "scripts": "+ "
-            + shlex.join([sys.executable, "-m", "unittest", "scripts/test_check.py", "-v"]),
+            + shlex.join(
+                [
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    "scripts/test_check.py",
+                    "poseidon2/test_generate_constants.py",
+                    "-v",
+                ]
+            ),
         }
         for check, command in expected.items():
             with self.subTest(check=check):
