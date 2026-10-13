@@ -48,7 +48,9 @@ use super::{
 };
 use crate::rounds::{AirSlot, rows_per_task};
 use crate::selectors::BoundaryEvals;
-use crate::sliced::{BitLaneSums, PreparedPowers, SLICED_CELLS, SlicedBit, SlicedQuadraticFolder};
+use crate::sliced::{
+    BitLaneSums, PreparedPowers, PreparedSums, SLICED_CELLS, SlicedBit, SlicedQuadraticFolder,
+};
 
 /// Variables the tensor spans: three prefix variables, then the active variable `t`.
 const DEPTH: usize = 4;
@@ -89,6 +91,8 @@ struct InfinityScratch<F, R> {
     inputs: Vec<SlicedBit<F>>,
     /// The next-row inputs, which no AIR on the tensor declares.
     zeros: Vec<SlicedBit<F>>,
+    /// Reused kernel accumulators, retaining any allocated 192-bit coordinate rows.
+    kernel_sums: [PreparedSums; SLICED_CELLS],
     /// Whether any evaluation was poisoned.
     poisoned: bool,
 }
@@ -99,6 +103,7 @@ impl<F, R: Field> InfinityScratch<F, R> {
             sums: vec![R::zero_vec(PREFIXES * NODES); airs],
             inputs: vec![SlicedBit::default(); width],
             zeros: vec![SlicedBit::default(); width],
+            kernel_sums: core::array::from_fn(|_| PreparedSums::new()),
             poisoned: false,
         }
     }
@@ -200,7 +205,7 @@ where
                 whole,
             );
             if let Some(prepared) = &self.prepared_powers[slot.stage_index] {
-                folder = folder.with_prepared_powers(prepared);
+                folder = folder.with_prepared_powers(prepared, &mut scratch.kernel_sums);
             }
             let evaluation = folder
                 .with_preprocessed(

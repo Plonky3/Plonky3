@@ -48,6 +48,7 @@ fn current_profile() -> String {
 /// Beside the executable, Cargo writes a dep-info rule naming every local source it was compiled
 /// from. A build that selects only this test does not rebuild the example, so the executable is
 /// used only while none of those sources is newer than it.
+/// When only this test is selected, the executable may have been built with a different feature set.
 fn prebuilt_example() -> Option<PathBuf> {
     let exe = env::current_exe().ok()?;
     let examples = exe.parent()?.parent()?.join("examples");

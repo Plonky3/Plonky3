@@ -1,9 +1,9 @@
 use alloc::vec::Vec;
 use core::iter;
 use core::marker::PhantomData;
-use core::ops::Deref;
+use core::ops::{Deref, Range};
 
-use p3_field::{ExtensionField, Field, PackedValue};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, PackedValue};
 
 use crate::Matrix;
 use crate::bitrev::BitReversibleMatrix;
@@ -15,6 +15,24 @@ use crate::bitrev::BitReversibleMatrix;
 /// effectively increasing the number of columns (width) while keeping the number of rows unchanged.
 #[derive(Debug)]
 pub struct FlatMatrixView<F, EF, Inner>(Inner, PhantomData<(F, EF)>);
+
+/// Retain the inner row handle, which may own inline storage that moves with the handle.
+struct FlatRows<F, EF, Rows>(Rows, PhantomData<(F, EF)>);
+
+impl<F, EF, Rows> Deref for FlatRows<F, EF, Rows>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Rows: Deref<Target = [EF]>,
+{
+    type Target = [F];
+
+    fn deref(&self) -> &Self::Target {
+        // The vector-space contract makes support stable after the owned handle moves.
+        <EF as BasedVectorSpace<F>>::flatten_slice_to_base(&self.0)
+            .expect("the row handle supports contiguous coefficients")
+    }
+}
 
 impl<F, EF, Inner> FlatMatrixView<F, EF, Inner> {
     pub const fn new(inner: Inner) -> Self {
@@ -42,6 +60,12 @@ where
 
     fn height(&self) -> usize {
         self.0.height()
+    }
+
+    fn contiguous_rows(&self, rows: Range<usize>) -> Option<impl Deref<Target = [F]>> {
+        let rows = self.0.contiguous_rows(rows)?;
+        <EF as BasedVectorSpace<F>>::flatten_slice_to_base(&rows)?;
+        Some(FlatRows::<F, EF, _>(rows, PhantomData))
     }
 
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> F {
@@ -175,6 +199,143 @@ mod tests {
     use crate::dense::RowMajorMatrix;
     type F = Mersenne31;
     type EF = Complex<Mersenne31>;
+
+    #[test]
+    fn identity_contiguous_rows_borrow_the_original_elements() {
+        use p3_binary_field::{BinaryField128, TowerLevel};
+
+        let values: Vec<_> = (0..12).map(BinaryField128::from_repr).collect();
+        let inner = RowMajorMatrix::new(values, 3);
+        let flat = FlatMatrixView::<BinaryField128, BinaryField128, _>::new(inner.as_view());
+        for start in 0..=4 {
+            for end in start..=4 {
+                let rows = flat.contiguous_rows(start..end).unwrap();
+                assert_eq!(&*rows, &inner.values[start * 3..end * 3]);
+                assert_eq!(rows.as_ptr(), inner.values.as_ptr().wrapping_add(start * 3));
+            }
+        }
+        assert!(flat.contiguous_rows(Range { start: 3, end: 2 }).is_none());
+        assert!(flat.contiguous_rows(0..5).is_none());
+        assert!(flat.contiguous_rows(5..5).is_none());
+        let empty = FlatMatrixView::<BinaryField128, BinaryField128, _>::new(RowMajorMatrix::new(
+            vec![],
+            3,
+        ));
+        assert!(empty.contiguous_rows(0..0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn flattened_contiguous_rows_borrow_ordered_cubic_coefficients() {
+        use p3_binary_field::{Poly64, Poly192};
+        let values: Vec<_> = (0..12)
+            .map(|i| {
+                Poly192::new(core::array::from_fn(|j| {
+                    Poly64::new((3 * i + j + 1) as u64)
+                }))
+            })
+            .collect();
+        let inner = RowMajorMatrix::new(values.clone(), 3);
+        let flat = FlatMatrixView::<Poly64, Poly192, _>::new(inner.as_view());
+        for start in 0..=4 {
+            for end in start..=4 {
+                let rows = flat
+                    .contiguous_rows(start..end)
+                    .expect("cubic coefficients are contiguous");
+                let expected: Vec<_> = values[start * 3..end * 3]
+                    .iter()
+                    .flat_map(|value| value.as_basis_coefficients_slice().iter().copied())
+                    .collect();
+                assert_eq!(&*rows, expected);
+                assert_eq!(
+                    rows.as_ptr(),
+                    inner
+                        .values
+                        .as_ptr()
+                        .wrapping_add(start * 3)
+                        .cast::<Poly64>()
+                );
+            }
+        }
+        assert!(flat.contiguous_rows(Range { start: 3, end: 2 }).is_none());
+        assert!(flat.contiguous_rows(0..5).is_none());
+        assert!(flat.contiguous_rows(5..5).is_none());
+        let empty = FlatMatrixView::<Poly64, Poly192, _>::new(RowMajorMatrix::new(vec![], 3));
+        assert!(empty.contiguous_rows(0..0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn flattened_contiguous_rows_retain_an_owned_inline_handle() {
+        use p3_binary_field::{Poly64, Poly192};
+        struct InlineRows {
+            values: [Poly192; 6],
+            len: usize,
+        }
+        impl Deref for InlineRows {
+            type Target = [Poly192];
+            fn deref(&self) -> &Self::Target {
+                &self.values[..self.len]
+            }
+        }
+        struct OwnedRows(RowMajorMatrix<Poly192>);
+        impl Matrix<Poly192> for OwnedRows {
+            fn width(&self) -> usize {
+                self.0.width()
+            }
+            fn height(&self) -> usize {
+                self.0.height()
+            }
+            unsafe fn row_unchecked(
+                &self,
+                r: usize,
+            ) -> impl IntoIterator<Item = Poly192, IntoIter = impl Iterator<Item = Poly192> + Send + Sync>
+            {
+                // SAFETY: the caller supplies a valid row, and dimensions are unchanged.
+                unsafe { self.0.row_unchecked(r) }
+            }
+            fn contiguous_rows(
+                &self,
+                rows: core::ops::Range<usize>,
+            ) -> Option<impl Deref<Target = [Poly192]>> {
+                let source = self.0.contiguous_rows(rows)?;
+                let mut owned = InlineRows {
+                    values: [Poly192::ZERO; 6],
+                    len: source.len(),
+                };
+                owned.values[..source.len()].copy_from_slice(&source);
+                Some(owned)
+            }
+        }
+        let values: Vec<_> = (0..6)
+            .map(|i| {
+                Poly192::new(core::array::from_fn(|j| {
+                    Poly64::new((i * 3 + j + 1) as u64)
+                }))
+            })
+            .collect();
+        let expected: Vec<_> = values
+            .iter()
+            .flat_map(|value| value.as_basis_coefficients_slice().iter().copied())
+            .collect();
+        let flat =
+            FlatMatrixView::<Poly64, Poly192, _>::new(OwnedRows(RowMajorMatrix::new(values, 3)));
+        let rows = flat
+            .contiguous_rows(0..2)
+            .expect("owned row handles can be projected");
+        // Move the inline elements to a new allocation before asking for their coefficients.
+        let moved = alloc::boxed::Box::new(rows);
+        assert_eq!(&**moved, expected);
+    }
+
+    #[test]
+    fn flattened_contiguous_rows_keep_unsupported_layouts_on_the_iterator_path() {
+        use p3_binary_field::{Poly64, Poly192};
+        let unsupported = FlatMatrixView::<F, EF, _>::new(extension_matrix::<F, EF>(4, 3));
+        assert!(unsupported.contiguous_rows(0..4).is_none());
+        let reversed = FlatMatrixView::<Poly64, Poly192, _>::new(
+            extension_matrix::<Poly64, Poly192>(4, 3).bit_reverse_rows(),
+        );
+        assert!(reversed.contiguous_rows(0..4).is_none());
+    }
 
     fn assert_vertical_packing<F, EF, Inner, P>(flat: &FlatMatrixView<F, EF, Inner>)
     where

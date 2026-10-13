@@ -36,6 +36,24 @@ use crate::selectors::BoundaryEvals;
 /// Entries of a subfield fold table, one per value of a byte.
 const TABLE_ENTRIES: usize = 1 << u8::BITS;
 
+/// Fold a scalar column in place, using the representation field's packed arithmetic.
+fn fold_repr_column<R: Field>(column: &mut Poly<R>, r: R::Packing) {
+    let half = column.num_evals() / 2;
+    if R::Packing::WIDTH == 1 || !half.is_multiple_of(R::Packing::WIDTH) {
+        column.fix_prefix_var_mut(r.as_slice()[0]);
+        return;
+    }
+
+    let (low, high) = column.as_mut_slice().split_at_mut(half);
+    R::Packing::pack_slice_mut(low)
+        .par_iter_mut()
+        .zip(R::Packing::pack_slice(high).par_iter())
+        .for_each_min_task_bytes(3 * size_of::<R::Packing>(), |(low, &high)| {
+            *low += (high - *low) * r;
+        });
+    column.truncate_to_half();
+}
+
 /// One lane group of the representation field, holding the value each lane reads.
 #[inline]
 pub(super) fn lane_group<F, R: Field>(value: impl FnMut(usize) -> R) -> PackedRepr<F, R> {
@@ -636,10 +654,11 @@ where
         self.fold_claims_and_tails(r);
 
         let r = R::from(r);
+        let packed_r = R::Packing::from(r);
         match &mut self.columns {
             ExtColumns::Scalar(cols) => cols
                 .par_iter_mut()
-                .for_each(|col| col.fix_prefix_var_mut(r)),
+                .for_each(|col| fold_repr_column(col, packed_r)),
             ExtColumns::Packed(_) | ExtColumns::Sliced(_) => {
                 unreachable!("a stage folded into R keeps scalar columns")
             }

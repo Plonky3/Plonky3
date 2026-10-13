@@ -72,7 +72,7 @@ struct KernelSums<'a, R> {
     /// The alpha powers laid out for the kernel.
     prepared: &'a PreparedPowers<R>,
     /// Per-cell sums of the constraints asserted so far.
-    sums: [PreparedSums; SLICED_CELLS],
+    sums: &'a mut [PreparedSums; SLICED_CELLS],
 }
 
 /// AIR folder over [`SLICED_CELLS`] evaluations of sixty-four rows, each constraint reduced to one
@@ -162,22 +162,24 @@ impl<'a, F: Field, R: Field> SlicedQuadraticFolder<'a, F, R> {
     }
 
     /// Sum the constraints with the kernel, from `prepared`, the layout of the alpha powers.
+    /// Borrows the worker's cleared sums, which are cleared again after the evaluation.
     ///
     /// # Panics
     ///
     /// Panics if `prepared` does not hold one power per alpha power.
     #[inline]
     #[must_use]
-    pub(crate) fn with_prepared_powers(mut self, prepared: &'a PreparedPowers<R>) -> Self {
+    pub(crate) fn with_prepared_powers(
+        mut self,
+        prepared: &'a PreparedPowers<R>,
+        sums: &'a mut [PreparedSums; SLICED_CELLS],
+    ) -> Self {
         assert_eq!(
             prepared.0.len(),
             self.alpha_powers.len(),
             "the prepared powers must be the attached alpha powers"
         );
-        self.kernel = Some(KernelSums {
-            prepared,
-            sums: core::array::from_fn(|_| PreparedSums::new()),
-        });
+        self.kernel = Some(KernelSums { prepared, sums });
         self
     }
 
@@ -223,7 +225,7 @@ impl<'a, F: Field, R: Field> SlicedQuadraticFolder<'a, F, R> {
         let value = match &mut self.kernel {
             Some(kernel) => {
                 let mut value = [R::ZERO; SLICED_CELLS];
-                for (value, sums) in value.iter_mut().zip(&mut kernel.sums) {
+                for (value, sums) in value.iter_mut().zip(kernel.sums.iter_mut()) {
                     *value = sums.finish_bits(kernel.prepared, self.lanes);
                 }
                 debug_assert_eq!(
@@ -254,7 +256,7 @@ impl<'a, F: Field, R: Field> SlicedQuadraticFolder<'a, F, R> {
         }
         if let Some(kernel) = &mut self.kernel {
             for (sums, bits) in kernel.sums.iter_mut().zip(bits) {
-                sums.add(kernel.prepared, self.constraint_index, bits, 0);
+                sums.add_bits(kernel.prepared, self.constraint_index, bits);
             }
         }
     }

@@ -1,6 +1,6 @@
 //! Binary-field evaluation domains for the WHIR commitment scheme.
 
-use p3_binary_dft::{AdditiveRsEncoder, LchNtt, PolyBasisNtt, domain_point, subspace_polynomial};
+use p3_binary_dft::{AdditiveRsEncoder, LchNtt, PolyBasisNtt, domain_point};
 use p3_binary_field::{BinaryField32, BinaryField128, Poly64, TowerLevel};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::Encoder;
@@ -149,12 +149,17 @@ fn query_point<F: TowerLevel>(
         "domain index is out of range"
     );
     let point = domain_point(index);
-    WhirQueryPoint::Multilinear(Point::new(
-        (0..num_variables)
-            .rev()
-            .map(|j| subspace_polynomial(j, point))
-            .collect(),
-    ))
+    let mut coordinates = F::zero_vec(num_variables);
+    if let Some((last, prefix)) = coordinates.split_last_mut() {
+        *last = point;
+        // Coordinates run from W_(n-1) back to W_0; share the recurrence between them.
+        let mut value = point;
+        for coordinate in prefix.iter_mut().rev() {
+            value = value.square() + value;
+            *coordinate = value;
+        }
+    }
+    WhirQueryPoint::Multilinear(Point::new(coordinates))
 }
 
 /// Whether a regime's distance assumption holds for a characteristic-two subspace domain.
@@ -427,6 +432,31 @@ mod tests {
         let reference = BinaryWhirDomain::<Poly64, _>::new(NaiveAdditiveNtt::<Poly64>::default())
             .encode_batch(message, 2);
         assert_eq!(fast, reference);
+    }
+
+    #[test]
+    fn query_coordinates_match_each_subspace_polynomial_in_reverse_order() {
+        fn check<F: p3_binary_field::TowerLevel>() {
+            for num_variables in [0usize, 1, 3, 8, 16, 17] {
+                let log_domain_size = (num_variables + 1).max(3);
+                let last = (1usize << log_domain_size) - 1;
+                for index in [0, 1, 2, 1 << (log_domain_size - 1), 0xA529 & last, last] {
+                    let WhirQueryPoint::Multilinear(point) =
+                        super::query_point::<F>(log_domain_size, num_variables, index)
+                    else {
+                        panic!("binary domains expose multilinear selector coordinates");
+                    };
+                    assert_eq!(point.num_variables(), num_variables);
+                    let x = p3_binary_dft::domain_point::<F>(index);
+                    for (j, &coordinate) in point.as_slice().iter().rev().enumerate() {
+                        assert_eq!(coordinate, p3_binary_dft::subspace_polynomial(j, x));
+                    }
+                }
+            }
+        }
+        check::<Poly64>();
+        check::<BinaryField32>();
+        check::<BinaryField128>();
     }
 
     #[test]

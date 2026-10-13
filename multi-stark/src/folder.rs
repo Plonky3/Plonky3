@@ -619,6 +619,52 @@ where
     }
 
     #[inline]
+    fn assert_zeros_with_filter<const N: usize, I: Into<Self::Expr>, J: Into<Self::Expr>>(
+        &mut self,
+        filter: J,
+        array: [I; N],
+    ) {
+        let filter = filter.into();
+        let can_batch = self.alpha_powers.is_some_and(|powers| {
+            self.constraint_index
+                .checked_add(N)
+                .is_some_and(|end| end <= powers.len())
+        });
+        if !can_batch {
+            for value in array {
+                self.assert_zero(filter * value.into());
+            }
+            return;
+        }
+
+        let mut values = array.into_iter();
+        // Finish the live partial batch before skipping any pending-array slots.
+        let leading = (ALPHA_BATCH - self.constraint_index % ALPHA_BATCH) % ALPHA_BATCH;
+        for value in values.by_ref().take(leading) {
+            self.assert_zero(filter * value.into());
+        }
+        if values.len() >= ALPHA_BATCH {
+            let powers = self
+                .alpha_powers
+                .expect("batching requires attached powers");
+            let mut ungated = Acc::ZERO;
+            while values.len() >= ALPHA_BATCH {
+                let batch = core::array::from_fn(|_| values.next().unwrap().into());
+                let window = powers[self.constraint_index..]
+                    .first_chunk::<ALPHA_BATCH>()
+                    .expect("the attached powers cover the full array");
+                ungated += <Acc as Algebra<Var>>::mixed_dot_product::<ALPHA_BATCH>(window, &batch);
+                self.constraint_index += ALPHA_BATCH;
+            }
+            // All complete batches share this filter, so pay for its multiplication once.
+            self.accumulator += ungated * filter;
+        }
+        for value in values {
+            self.assert_zero(filter * value.into());
+        }
+    }
+
+    #[inline]
     fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values
     }
@@ -771,6 +817,17 @@ where
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         if self.constraints_enabled {
             self.inner.assert_zero(x);
+        }
+    }
+
+    #[inline]
+    fn assert_zeros_with_filter<const N: usize, I: Into<Self::Expr>, J: Into<Self::Expr>>(
+        &mut self,
+        filter: J,
+        array: [I; N],
+    ) {
+        if self.constraints_enabled {
+            self.inner.assert_zeros_with_filter(filter, array);
         }
     }
 
@@ -1615,5 +1672,203 @@ mod tests {
         let value = TestFolder::new(&local, &next, boundary, &[] as &[F], EF::from_u64(11))
             .eval_air(&LinkedAir);
         assert_eq!(value, EF::ZERO);
+    }
+    fn check_filtered_arrays<BF, Var, Acc, const N: usize>(
+        values: [Var; N],
+        filter: Var,
+        alpha: Acc,
+        assert_equal: impl Fn(Acc, Acc),
+    ) where
+        BF: Field,
+        Var: Algebra<BF> + Copy + Send + Sync,
+        Acc: Algebra<Var> + Copy,
+    {
+        let boundary = BoundaryEvals {
+            first: Var::ZERO,
+            last: Var::ZERO,
+            transition: Var::ONE,
+        };
+        for offset in 0..ALPHA_BATCH {
+            let second_filter = filter + Var::ONE;
+            let mut constraints = vec![filter; offset];
+            constraints.extend(values.map(|value| filter * value));
+            constraints.push(Var::ONE);
+            constraints.extend(values.map(|value| second_filter * value));
+            constraints.extend([filter; ALPHA_BATCH + 1]);
+            let expected = constraints
+                .iter()
+                .fold(Acc::ZERO, |sum, &value| sum * alpha + value);
+            let powers: Vec<_> = (0..constraints.len())
+                .map(|i| alpha.exp_u64((constraints.len() - 1 - i) as u64))
+                .collect();
+            for attached in [false, true] {
+                let mut folder =
+                    MultilinearFolder::<BF, Var, Acc>::new(&[], &[], boundary, &[], alpha);
+                if attached {
+                    folder = folder.with_alpha_powers(&powers);
+                }
+                for _ in 0..offset {
+                    folder.assert_zero(filter);
+                }
+                folder.assert_zeros_with_filter(filter, values);
+                folder.assert_zero(Var::ONE);
+                folder.assert_zeros_with_filter(second_filter, values);
+                for _ in 0..ALPHA_BATCH + 1 {
+                    folder.assert_zero(filter);
+                }
+                assert_equal(folder.into_accumulator(), expected);
+            }
+            let link = AirLinkInstance {
+                num_local_lookups: 0,
+                lookups: Vec::new(),
+            };
+            let inner = MultilinearFolder::<BF, Var, Acc>::new(&[], &[], boundary, &[], alpha)
+                .with_alpha_powers(&powers);
+            let mut folder = InteractionMultilinearFolder::new(inner, &link, &[], true);
+            for _ in 0..offset {
+                folder.assert_zero(filter);
+            }
+            folder.assert_zeros_with_filter(filter, values);
+            folder.assert_zero(Var::ONE);
+            folder.assert_zeros_with_filter(second_filter, values);
+            for _ in 0..ALPHA_BATCH + 1 {
+                folder.assert_zero(filter);
+            }
+            assert_equal(folder.inner.into_accumulator(), expected);
+
+            let inner = MultilinearFolder::<BF, Var, Acc>::new(&[], &[], boundary, &[], alpha)
+                .with_alpha_powers(&[]);
+            let mut disabled = InteractionMultilinearFolder::new(inner, &link, &[], false);
+            disabled.assert_zeros_with_filter(filter, values);
+            assert_equal(disabled.inner.into_accumulator(), Acc::ZERO);
+        }
+    }
+
+    fn filtered_cases<const N: usize>() {
+        use p3_binary_field::{Poly64, Poly192};
+        use p3_field::{BasedVectorSpace, PackedValue};
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+        let mut rng = SmallRng::seed_from_u64(0x9876abc + N as u64);
+        let values: [EF; N] = core::array::from_fn(|_| rng.random());
+        for filter in [EF::ZERO, EF::ONE, rng.random()] {
+            check_filtered_arrays::<F, _, _, N>(values, filter, rng.random::<EF>(), |a, b| {
+                assert_eq!(a, b);
+            });
+        }
+        let values: [Poly64; N] = core::array::from_fn(|_| rng.random());
+        for filter in [Poly64::ZERO, Poly64::ONE, rng.random()] {
+            check_filtered_arrays::<Poly64, _, _, N>(
+                values,
+                filter,
+                rng.random::<Poly192>(),
+                |a, b| assert_eq!(a, b),
+            );
+        }
+        type Packed = <Poly192 as ExtensionField<Poly64>>::ExtensionPacking;
+        type Var = PackedExt<Poly64, Packed>;
+        let packed = |seed: u64| {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            Var::new(Packed::from_basis_coefficients_fn(|_| {
+                <Poly64 as Field>::Packing::from_fn(|_| rng.random())
+            }))
+        };
+        let values: [Var; N] = core::array::from_fn(|i| packed(i as u64 + 10));
+        for filter in [Var::ZERO, Var::ONE, packed(19)] {
+            check_filtered_arrays::<Poly64, _, _, N>(values, filter, packed(20), |a, b| {
+                assert_eq!(a.0, b.0);
+            });
+        }
+    }
+
+    #[test]
+    fn shared_filter_batches_match_horner_for_all_alignments_and_mixed_fields() {
+        filtered_cases::<0>();
+        filtered_cases::<1>();
+        filtered_cases::<7>();
+        filtered_cases::<8>();
+        filtered_cases::<9>();
+        filtered_cases::<23>();
+        filtered_cases::<64>();
+    }
+
+    #[test]
+    #[should_panic = "attached alpha powers must match the number of asserted constraints"]
+    fn shared_filter_batch_rejects_too_few_powers() {
+        let boundary = BoundaryEvals {
+            first: EF::ZERO,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+        let powers = [EF::ONE; 15];
+        let mut folder =
+            TestFolder::new(&[], &[], boundary, &[], EF::ONE).with_alpha_powers(&powers);
+        folder.assert_zero(EF::ONE);
+        folder.assert_zeros_with_filter(EF::from_u64(3), [EF::ONE; 16]);
+        let _ = folder.into_accumulator();
+    }
+
+    #[test]
+    #[should_panic = "attached alpha powers must match the number of asserted constraints"]
+    fn shared_filter_batch_rejects_too_many_powers() {
+        let boundary = BoundaryEvals {
+            first: EF::ZERO,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+        let powers = [EF::ONE; 18];
+        let mut folder =
+            TestFolder::new(&[], &[], boundary, &[], EF::ONE).with_alpha_powers(&powers);
+        folder.assert_zero(EF::ONE);
+        folder.assert_zeros_with_filter(EF::from_u64(3), [EF::ONE; 16]);
+        let _ = folder.into_accumulator();
+    }
+    fn check_keccak_filtered<BF, R>(local: &[R], next: &[R], alpha: R)
+    where
+        BF: Field,
+        R: Field + Algebra<BF>,
+    {
+        use p3_keccak_air::KeccakBinaryAir;
+        let boundary = BoundaryEvals {
+            first: local[0],
+            last: local[1],
+            transition: local[2],
+        };
+        for air in [
+            KeccakBinaryAir::default(),
+            KeccakBinaryAir::assuming_boolean_trace(),
+        ] {
+            let count = <KeccakBinaryAir as BaseAir<BF>>::num_constraints(&air).unwrap();
+            let powers = (0..count)
+                .map(|i| alpha.exp_u64((count - i - 1) as u64))
+                .collect::<Vec<_>>();
+            let reference = MultilinearFolder::<BF, R, R>::new(local, next, boundary, &[], alpha)
+                .eval_air(&air);
+            let actual = MultilinearFolder::<BF, R, R>::new(local, next, boundary, &[], alpha)
+                .with_alpha_powers(&powers)
+                .eval_air(&air);
+            assert_eq!(actual, reference);
+        }
+    }
+
+    #[test]
+    fn shared_filter_keccak_matches_horner_on_nonboolean_rows() {
+        use p3_binary_field::{Poly64, Poly192};
+        use p3_keccak_air::KeccakBinaryAir;
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+        let width =
+            <KeccakBinaryAir as BaseAir<BinaryField128>>::width(&KeccakBinaryAir::default());
+        let mut rng = SmallRng::seed_from_u64(0xbadcafe);
+        let local: Vec<Ghash128> = (0..width).map(|_| rng.random()).collect();
+        let next: Vec<Ghash128> = (0..width).map(|_| rng.random()).collect();
+        for alpha in [Ghash128::ZERO, Ghash128::ONE, rng.random()] {
+            check_keccak_filtered::<BinaryField128, Ghash128>(&local, &next, alpha);
+        }
+        let local: Vec<Poly192> = (0..width).map(|_| rng.random()).collect();
+        let next: Vec<Poly192> = (0..width).map(|_| rng.random()).collect();
+        for alpha in [Poly192::ZERO, Poly192::ONE, rng.random()] {
+            check_keccak_filtered::<Poly64, Poly192>(&local, &next, alpha);
+        }
     }
 }

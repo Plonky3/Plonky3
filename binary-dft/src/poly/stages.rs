@@ -225,6 +225,36 @@ fn local_stage(
     }
 }
 
+/// Run two consecutive forward stages while their four streams fit in one cache-sized chunk.
+fn stage_pair(values: &mut [u128], width: usize, j: usize, twiddles: &Twiddles) {
+    debug_assert!(j > 0);
+    let quarter = width << (j - 1);
+    const STREAM_GRAIN: usize = BUTTERFLY_GRAIN / 4;
+
+    for (block_index, block) in values.chunks_exact_mut(quarter << 2).enumerate() {
+        let (lo, hi) = block.split_at_mut(quarter << 1);
+        let (a, b) = lo.split_at_mut(quarter);
+        let (c, d) = hi.split_at_mut(quarter);
+        let top = twiddles.at(j, block_index);
+        let left = twiddles.at(j - 1, block_index << 1);
+        let right = twiddles.at(j - 1, (block_index << 1) + 1);
+
+        // Different offsets never meet in either stage, so both stages can finish
+        // on one chunk before the next chunk is read.
+        for (((a, b), c), d) in a
+            .chunks_mut(STREAM_GRAIN)
+            .zip(b.chunks_mut(STREAM_GRAIN))
+            .zip(c.chunks_mut(STREAM_GRAIN))
+            .zip(d.chunks_mut(STREAM_GRAIN))
+        {
+            poly_basis::butterfly_forward(a, c, top);
+            poly_basis::butterfly_forward(b, d, top);
+            poly_basis::butterfly_forward(a, b, left);
+            poly_basis::butterfly_forward(c, d, right);
+        }
+    }
+}
+
 /// Run the `depth` stages a tile of `2^depth` rows of `row` elements is closed under.
 ///
 /// - Sub-layer `s` pairs rows `2^(depth-1-s)` apart, in `2^s` blocks of one twiddle each.
@@ -482,6 +512,12 @@ pub(super) fn forward_below(
         convert(values, INTO_POLY);
         entry = false;
     }
+    if !use_parallel(values.len()) {
+        while top - local >= 2 {
+            stage_pair(values, width, top - 1, twiddles);
+            top -= 2;
+        }
+    }
     for j in (local..top).rev() {
         stage(values, (1 << j) * width, j, twiddles, false);
     }
@@ -551,5 +587,35 @@ pub(super) fn inverse(values: &mut [u128], plan: Plan, shift: BinaryField128, fo
     // No group ran, so the exit conversion takes a pass of its own.
     if exit {
         convert(values, INTO_TOWER);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::*;
+
+    #[test]
+    fn paired_stages_match_two_complete_passes() {
+        const STRIDE: u128 = 0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835;
+        for width in [1, 2, 3, 16] {
+            for j in [1, 2, 7, 8, 9, 10] {
+                for extra in [0, 2] {
+                    let log_n = j + 1 + extra;
+                    for shift in [BinaryField128::ZERO, BinaryField128::from_repr(STRIDE)] {
+                        let twiddles = Twiddles::new(log_n, shift);
+                        let mut expected: Vec<_> = (0..width << log_n)
+                            .map(|i| STRIDE.wrapping_mul(i as u128 + 1))
+                            .collect();
+                        let mut actual = expected.clone();
+                        stage(&mut expected, width << j, j, &twiddles, false);
+                        stage(&mut expected, width << (j - 1), j - 1, &twiddles, false);
+                        stage_pair(&mut actual, width, j, &twiddles);
+                        assert_eq!(actual, expected, "width={width} j={j} extra={extra}");
+                    }
+                }
+            }
+        }
     }
 }

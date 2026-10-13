@@ -3457,52 +3457,66 @@ fn folded_columns_match_the_plane_fold_across_block_boundaries() {
     }
 }
 
-/// The accelerated unslice accepts exactly a 64-corner low-plane fold. A paired layout remains
+/// The accelerated unslice accepts 16- and 64-corner low-plane folds. A paired layout remains
 /// on the existing path even when every high word happens to be zero.
 #[test]
-fn bit_plane_expansion_selects_only_64_corner_low_planes() {
+fn bit_plane_expansion_selects_only_supported_low_planes() {
     let (pairs, _) = plane_fold_trace_fixture(12, 1, true);
     let low = low_plane_twin(&pairs);
 
-    for prefix_len in [4, 5, 6] {
+    for prefix_len in [3, 4, 5, 6] {
         let challenges = (0..prefix_len)
             .map(|index| Tower::from_repr(0xb1 + index as u128))
             .collect::<Vec<_>>();
         let low_fold =
             PlaneFold::<Ghash128, MAX_PLANE_FOLD_CORNERS>::new::<Gf4, Tower>(&low, &challenges);
-        let weights = low_fold.bit_plane_expansion_weights();
-        assert_eq!(weights.is_some(), prefix_len == 6, "prefix {prefix_len}");
-        if let Some(weights) = weights {
-            for (corner, &weight) in weights.iter().enumerate() {
-                assert_eq!(
-                    weight,
-                    low_fold.low_sums[corner / GROUP_CORNERS][1 << (corner % GROUP_CORNERS)],
-                    "corner {corner}"
-                );
+        let short_weights = low_fold.bit_plane_expansion_weights::<16>();
+        let weights = low_fold.bit_plane_expansion_weights::<64>();
+        for (weights, expected) in [
+            (
+                short_weights.as_ref().map(|weights| weights.as_slice()),
+                prefix_len == 4,
+            ),
+            (
+                weights.as_ref().map(|weights| weights.as_slice()),
+                prefix_len == 6,
+            ),
+        ] {
+            assert_eq!(weights.is_some(), expected, "prefix {prefix_len}");
+            if let Some(weights) = weights {
+                for (corner, &weight) in weights.iter().enumerate() {
+                    assert_eq!(
+                        weight,
+                        low_fold.low_sums[corner / GROUP_CORNERS][1 << (corner % GROUP_CORNERS)],
+                        "corner {corner}"
+                    );
+                }
             }
         }
 
         let pairs_fold =
             PlaneFold::<Ghash128, MAX_PLANE_FOLD_CORNERS>::new::<Gf4, Tower>(&pairs, &challenges);
         assert!(
-            pairs_fold.bit_plane_expansion_weights().is_none(),
+            pairs_fold.bit_plane_expansion_weights::<64>().is_none()
+                && pairs_fold.bit_plane_expansion_weights::<16>().is_none(),
             "paired prefix {prefix_len}"
         );
     }
 
     let weights = [Tower::ZERO; 64];
     assert!(Tower::prepare_bit_plane_expansion(&weights).is_none());
+    assert!(Tower::prepare_bit_plane_expansion_16(&[Tower::ZERO; 16]).is_none());
 }
 
 /// The accelerated low-plane path and the unchanged paired-plane path produce the same columns,
 /// including the final partial block of columns and multiple residual words.
 #[test]
-fn low_plane_64_corner_unslice_matches_the_paired_fallback() {
+fn low_plane_unslice_matches_the_paired_fallback() {
     let width = STAGED_COLUMNS + 7;
-    let challenges = (0..MAX_PLANE_FOLD_ROUNDS)
-        .map(|index| Tower::from_repr(0xd1 + index as u128))
-        .collect::<Vec<_>>();
-    for (num_vars, residual_words) in [(12, 1), (13, 2)] {
+    for (prefix_len, num_vars, residual_words) in [(4, 10, 1), (4, 11, 2), (6, 12, 1), (6, 13, 2)] {
+        let challenges = (0..prefix_len)
+            .map(|index| Tower::from_repr(0xd1 + index as u128))
+            .collect::<Vec<_>>();
         let (pairs, _) = plane_fold_trace_fixture(num_vars, width, true);
         let low = low_plane_twin(&pairs);
         let pairs_fold =

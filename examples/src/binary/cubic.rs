@@ -8,8 +8,8 @@
 //! Every challenge-field term then sits near 190 bits.
 //! The proximity schedule and the 32-byte hash are what bound the proof.
 //!
-//! The zerocheck runs through the generic backend.
-//! The sliced `GF(4)` kernels are wired for `GF(2^128)` alone.
+//! Eligible quadratic Boolean stages use a four-round tensor, followed by the generic SIMD
+//! kernels. Other stages use the generic backend throughout.
 
 use std::time::Instant;
 
@@ -56,9 +56,11 @@ use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
     )
 )))]
 use p3_multi_stark::packed_ext::PackedExt;
+use p3_multi_stark::sliced::SlicedQuadraticFolder;
 use p3_multi_stark::{
-    MultiStarkProof, ProverInstance, ProverInstances, ProvingError, VerificationError,
-    VerifierInstance, VerifierInstances, prove, security_report, setup, verify,
+    BooleanTensorBackend, MultiStarkProof, ProverInstance, ProverInstances, ProvingError,
+    VerificationError, VerifierInstance, VerifierInstances, prove_with_backend, security_report,
+    setup, verify,
 };
 use p3_sumcheck::TableShape;
 use p3_sumcheck::layout::{Table, plan_stacked_layout};
@@ -165,6 +167,7 @@ pub trait CubicAir:
     BaseAir<Val>
     + Air<InteractionSymbolicBuilder<Val, Challenge>>
     + Air<BusSymbolicBuilder<Val, Challenge>>
+    + for<'a> Air<SlicedQuadraticFolder<'a, Val, Challenge>>
     + ProverAir<Val, Challenge>
     + for<'a> Air<MultilinearFolder<'a, Val, Challenge, Challenge>>
     + for<'a> Air<InteractionMultilinearFolder<'a, Val, Challenge, Challenge>>
@@ -187,6 +190,7 @@ impl<A> CubicAir for A where
     A: BaseAir<Val>
         + Air<InteractionSymbolicBuilder<Val, Challenge>>
         + Air<BusSymbolicBuilder<Val, Challenge>>
+        + for<'a> Air<SlicedQuadraticFolder<'a, Val, Challenge>>
         + ProverAir<Val, Challenge>
         + for<'a> Air<MultilinearFolder<'a, Val, Challenge, Challenge>>
         + for<'a> Air<InteractionMultilinearFolder<'a, Val, Challenge, Challenge>>
@@ -216,6 +220,7 @@ pub trait CubicAir:
     BaseAir<Val>
     + Air<InteractionSymbolicBuilder<Val, Challenge>>
     + Air<BusSymbolicBuilder<Val, Challenge>>
+    + for<'a> Air<SlicedQuadraticFolder<'a, Val, Challenge>>
     + for<'a> Air<MultilinearFolder<'a, Val, Challenge, Challenge>>
     + for<'a> Air<InteractionMultilinearFolder<'a, Val, Challenge, Challenge>>
     + for<'a> Air<MultilinearFolder<'a, Val, Val, Challenge>>
@@ -243,6 +248,7 @@ impl<A> CubicAir for A where
     A: BaseAir<Val>
         + Air<InteractionSymbolicBuilder<Val, Challenge>>
         + Air<BusSymbolicBuilder<Val, Challenge>>
+        + for<'a> Air<SlicedQuadraticFolder<'a, Val, Challenge>>
         + for<'a> Air<MultilinearFolder<'a, Val, Challenge, Challenge>>
         + for<'a> Air<InteractionMultilinearFolder<'a, Val, Challenge, Challenge>>
         + for<'a> Air<MultilinearFolder<'a, Val, Val, Challenge>>
@@ -488,7 +494,7 @@ where
     let setup_seconds = setup_start.elapsed().as_secs_f64();
 
     let prove_start = Instant::now();
-    let proof = prove(
+    let proof = prove_with_backend::<_, _, BooleanTensorBackend>(
         &config,
         ProverInstances::new(vec![ProverInstance::new(air, trace, &pk, &[])]),
         options.sumcheck_pow_bits,
