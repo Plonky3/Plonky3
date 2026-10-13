@@ -96,7 +96,40 @@ macro_rules! unary_map {
 
 unary_map!(square_16, 2, u16, false);
 unary_map!(square_64, 8, u64, false);
+#[cfg(not(target_arch = "aarch64"))]
 unary_map!(square_128, 16, u128, false);
+#[cfg(target_arch = "aarch64")]
+pub(crate) use composite_square_128 as square_128;
+
+/// Square in the quadratic extension using two 64-bit linear maps.
+#[cfg(any(target_arch = "aarch64", test))]
+#[inline]
+pub(crate) fn composite_square_128(value: u128) -> u128 {
+    // Precompose multiplication by alpha with squaring for the high component.
+    static HIGH: [[u64; 256]; 8] = {
+        let squares = unary_table::<8>(false);
+        let mut table = [[0; 256]; 8];
+        let mut i = 0;
+        while i < 8 {
+            let mut j = 0;
+            while j < 256 {
+                table[i][j] = mul_alpha(squares[i][j], 64) as u64;
+                j += 1;
+            }
+            i += 1;
+        }
+        table
+    };
+    let high = (value >> 64) as u64;
+    // Squaring is GF(2)-linear: low^2 + high^2 = (low + high)^2.
+    let low_squared = square_64(value as u64 ^ high);
+    let mut high_squared = 0;
+    for (i, row) in HIGH.iter().enumerate() {
+        high_squared ^= row[((high >> (8 * i)) & 255) as usize];
+    }
+    u128::from(low_squared) | (u128::from(high_squared) << 64)
+}
+
 unary_map!(sqrt_16, 2, u16, true);
 unary_map!(sqrt_32, 4, u32, true);
 unary_map!(sqrt_64, 8, u64, true);
@@ -209,6 +242,19 @@ mod tests {
         check!(BinaryField128, u128, 128);
     }
 
+    #[test]
+    fn composite_square_128_basis_matches_reference() {
+        // Squaring is linear over GF(2), so the basis fixes all map coefficients.
+        for bit in 0..128 {
+            let value = 1u128 << bit;
+            let x = BinaryField128::from_repr(value);
+            assert_eq!(
+                super::composite_square_128(value),
+                x.reference_mul(x).to_repr()
+            );
+        }
+    }
+
     proptest! {
         #[test]
         fn square_maps_match_reference(a: u128) {
@@ -221,6 +267,7 @@ mod tests {
             check!(BinaryField16, u16, square_16);
             check!(BinaryField64, u64, square_64);
             check!(BinaryField128, u128, square_128);
+            check!(BinaryField128, u128, composite_square_128);
         }
     }
 }

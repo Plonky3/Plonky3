@@ -141,9 +141,9 @@ where
                 let (&n1_lo, &n1_hi) = n1;
                 let (&d0_lo, &d0_hi) = d0;
                 let (&d1_lo, &d1_hi) = d1;
-                // Every operand is in the extension here, so the whole gate is one dot product.
+                // Combine the terms sharing d1 before their common reduction.
                 let evaluate = |n0: A, n1: A, d0: A, d1: A| {
-                    A::dot_product::<3>(&[d1, d0, lambda * d0], &[n0, n1, d1])
+                    A::dot_product::<2>(&[d1, d0], &[n0 + lambda * d0, n1])
                 };
 
                 acc[0] += eq_suffix
@@ -1026,4 +1026,154 @@ where
             denominator,
         },
     )
+}
+
+#[cfg(test)]
+mod scaled_round_tests {
+    //! Independent references for the scaled-node fractional-GKR round kernel.
+    use alloc::vec::Vec;
+
+    use p3_binary_field::{BinaryField32, BinaryField128, Ghash128, Poly64, Poly192, TowerLevel};
+    use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
+    use rand::SeedableRng;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::rngs::SmallRng;
+
+    use super::mixed_round_polys;
+
+    fn values<T>(rng: &mut SmallRng, len: usize) -> Vec<T>
+    where
+        StandardUniform: Distribution<T>,
+    {
+        (0..len).map(|_| StandardUniform.sample(rng)).collect()
+    }
+
+    fn check_scaled_round<N, A>(node: A)
+    where
+        N: PrimeCharacteristicRing + Copy + Send + Sync,
+        A: Algebra<N> + Copy + PartialEq + Send + Sync,
+        StandardUniform: Distribution<N> + Distribution<A>,
+    {
+        // Each field case starts from its own fixed state; running a test alone does not
+        // change its inputs. Packed distributions fill the lanes independently.
+        let mut rng = SmallRng::seed_from_u64(0xFACC_2D07);
+        for len in [0, 1, 2, 3, 17, 65] {
+            let eq: Vec<A> = values(&mut rng, len);
+            let n0_lo: Vec<N> = values(&mut rng, len);
+            let n0_hi: Vec<N> = values(&mut rng, len);
+            let n1_lo: Vec<N> = values(&mut rng, len);
+            let n1_hi: Vec<N> = values(&mut rng, len);
+            let d0_lo: Vec<A> = values(&mut rng, len);
+            let d0_hi: Vec<A> = values(&mut rng, len);
+            let d1_lo: Vec<A> = values(&mut rng, len);
+            let d1_hi: Vec<A> = values(&mut rng, len);
+            let random_lambda: A = StandardUniform.sample(&mut rng);
+            for lambda in [A::ZERO, A::ONE, random_lambda] {
+                let mut expected = [A::ZERO; 2];
+                for i in 0..len {
+                    // Keep the low value mixed, as production does.
+                    expected[0] += eq[i]
+                        * (d1_lo[i] * n0_lo[i]
+                            + d0_lo[i] * n1_lo[i]
+                            + lambda * d0_lo[i] * d1_lo[i]);
+                    let n0: A = node * (n0_hi[i] - n0_lo[i]) + n0_lo[i];
+                    let n1: A = node * (n1_hi[i] - n1_lo[i]) + n1_lo[i];
+                    let d0 = node * (d0_hi[i] - d0_lo[i]) + d0_lo[i];
+                    let d1 = node * (d1_hi[i] - d1_lo[i]) + d1_lo[i];
+                    expected[1] += eq[i] * (d1 * n0 + d0 * n1 + lambda * d0 * d1);
+                }
+                assert_eq!(
+                    mixed_round_polys(
+                        &eq,
+                        &n0_lo,
+                        &n0_hi,
+                        &n1_lo,
+                        &n1_hi,
+                        &d0_lo,
+                        &d0_hi,
+                        &d1_lo,
+                        &d1_hi,
+                        lambda,
+                        Some(node),
+                    ),
+                    expected,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scaled_tower_round_matches_expanded_gate_with_same_and_narrow_numerators() {
+        let node = BinaryField128::interpolation_node(2);
+        check_scaled_round::<BinaryField128, BinaryField128>(node);
+        check_scaled_round::<BinaryField32, BinaryField128>(node);
+    }
+
+    #[test]
+    fn scaled_polynomial_round_matches_expanded_gate_in_scalar_and_packed_forms() {
+        type PackedGhash = <Ghash128 as Field>::Packing;
+        type PackedBase = <Poly64 as Field>::Packing;
+        type PackedExtension = <Poly192 as ExtensionField<Poly64>>::ExtensionPacking;
+
+        check_scaled_round::<Ghash128, Ghash128>(Ghash128::interpolation_node(2));
+        check_scaled_round::<PackedGhash, PackedGhash>(PackedGhash::from(
+            Ghash128::interpolation_node(2),
+        ));
+        check_scaled_round::<Poly64, Poly192>(Poly192::interpolation_node(2));
+        check_scaled_round::<Poly192, Poly192>(Poly192::interpolation_node(2));
+        check_scaled_round::<PackedBase, PackedExtension>(PackedExtension::from(
+            Poly192::interpolation_node(2),
+        ));
+        check_scaled_round::<PackedExtension, PackedExtension>(PackedExtension::from(
+            Poly192::interpolation_node(2),
+        ));
+    }
+
+    #[test]
+    fn scaled_tower_gate_preserves_basis_inputs_and_cancellation() {
+        type F = BinaryField128;
+        let node = F::interpolation_node(2);
+        let seed = [
+            F::from_repr(0x0123456789abcdef_fedcba9876543210),
+            F::from_repr(0xdeadbeefabcd1234_12345678deadbeef),
+            F::from_repr(0x1000000000000000_0000000000000087),
+            F::from_repr(u128::MAX),
+            F::from_repr(0x0123456789abcdef_0123456789abcdef),
+        ];
+        let check = |[n0, n1, d0, d1, lambda]: [F; 5]| {
+            // Constant interpolation lines isolate the gate at the selected node while
+            // still entering the real Some(node) arm. Equality weight is one.
+            let actual = mixed_round_polys(
+                &[F::ONE],
+                &[n0],
+                &[n0],
+                &[n1],
+                &[n1],
+                &[d0],
+                &[d0],
+                &[d1],
+                &[d1],
+                lambda,
+                Some(node),
+            );
+            let expected = d1 * n0 + d0 * n1 + lambda * d0 * d1;
+            assert_eq!(actual, [expected; 2]);
+        };
+        for slot in 0..seed.len() {
+            for bit in 0..128 {
+                let mut row = seed;
+                row[slot] = F::from_repr(1u128 << bit);
+                check(row);
+            }
+            for value in [F::ZERO, F::ONE, F::from_repr(u128::MAX)] {
+                let mut row = seed;
+                row[slot] = value;
+                check(row);
+            }
+        }
+        // n0 + lambda*d0 cancels exactly; the other term must remain intact.
+        let [_, n1, d0, d1, lambda] = seed;
+        check([lambda * d0, n1, d0, d1, lambda]);
+        check([F::ZERO; 5]);
+    }
 }

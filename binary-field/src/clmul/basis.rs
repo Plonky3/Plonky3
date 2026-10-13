@@ -834,6 +834,79 @@ pub(crate) fn poly_to_tower_64(v: u64) -> u64 {
     apply_64(&POLY_TO_TOWER_64, v)
 }
 
+/// Balance the eight byte-table loads with three-way XORs for the composite
+/// Tower128 kernel. Other 64-bit consumers retain their existing map.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+#[inline]
+fn apply_64_balanced(tables: &[[u64; 256]; 8], value: u64) -> u64 {
+    use core::arch::aarch64::*;
+
+    // SAFETY: SHA3 enables EOR3. Each byte index is below 256, and each load
+    // reads exactly one initialized u64 within its table. The cfg fixes lane order.
+    unsafe {
+        let t0 = vcombine_u64(vld1_u64(&tables[0][value as u8 as usize]), vdup_n_u64(0));
+        let t1 = vcombine_u64(
+            vld1_u64(&tables[1][(value >> 8) as u8 as usize]),
+            vdup_n_u64(0),
+        );
+        let t2 = vcombine_u64(
+            vld1_u64(&tables[2][(value >> 16) as u8 as usize]),
+            vdup_n_u64(0),
+        );
+        let t3 = vcombine_u64(
+            vld1_u64(&tables[3][(value >> 24) as u8 as usize]),
+            vdup_n_u64(0),
+        );
+        let t4 = vcombine_u64(
+            vld1_u64(&tables[4][(value >> 32) as u8 as usize]),
+            vdup_n_u64(0),
+        );
+        let t5 = vcombine_u64(
+            vld1_u64(&tables[5][(value >> 40) as u8 as usize]),
+            vdup_n_u64(0),
+        );
+        let t6 = vcombine_u64(
+            vld1_u64(&tables[6][(value >> 48) as u8 as usize]),
+            vdup_n_u64(0),
+        );
+        let t7 = vcombine_u64(
+            vld1_u64(&tables[7][(value >> 56) as u8 as usize]),
+            vdup_n_u64(0),
+        );
+        let g0 = veor3q_u64(t0, t1, t2);
+        let g1 = veor3q_u64(t3, t4, t5);
+        let g2 = veorq_u64(t6, t7);
+        vgetq_lane_u64::<0>(veor3q_u64(g0, g1, g2))
+    }
+}
+
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+#[inline]
+pub(super) fn tower_to_poly_64_balanced(value: u64) -> u64 {
+    apply_64_balanced(&TOWER_TO_POLY_64, value)
+}
+
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+#[inline]
+pub(super) fn poly_to_tower_64_balanced(value: u64) -> u64 {
+    apply_64_balanced(&POLY_TO_TOWER_64, value)
+}
+
 /// Squaring in `GF(2^64)`, taking and returning the tower representation.
 #[inline]
 pub(super) fn tower_square_64(v: u64) -> u64 {
@@ -903,6 +976,37 @@ pub(crate) fn poly_to_tower_128_slice(values: &mut [u128]) -> usize {
 #[cfg(test)]
 mod tests {
     extern crate std;
+
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes",
+        target_feature = "sha3"
+    ))]
+    #[test]
+    fn balanced_64_bit_maps_match_existing_maps() {
+        let mut state = 0x9182_3746_a5b6_c7d8u64;
+        let random = (0..1024).map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        });
+        for value in [0, u64::MAX]
+            .into_iter()
+            .chain((0..64).map(|i| 1 << i))
+            .chain(random)
+        {
+            assert_eq!(
+                super::tower_to_poly_64_balanced(value),
+                super::tower_to_poly_64(value)
+            );
+            assert_eq!(
+                super::poly_to_tower_64_balanced(value),
+                super::poly_to_tower_64(value)
+            );
+        }
+    }
 
     use alloc::vec::Vec;
     #[cfg(all(

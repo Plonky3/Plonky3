@@ -286,6 +286,15 @@ pub(crate) fn mul_pair_64(a: u64, b: u64, scalar: u64) -> (u64, u64) {
 /// Multiplication in `GF(2^128)`, taking and returning the polynomial representation.
 ///
 /// Assembled and folded in general-purpose registers, so the dependency chain stays short.
+#[cfg(any(
+    test,
+    not(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes",
+        target_feature = "sha3"
+    ))
+))]
 #[inline]
 fn composed_poly_mul_128(a: u128, b: u128) -> u128 {
     let (low, high) = clmul_128x128(a, b);
@@ -358,12 +367,107 @@ impl BatchMultiplier {
 
 /// Multiplication in `GF(2^128)`, taking and returning the tower representation.
 ///
-/// The three changes of basis are sixteen dependent lookups each.
-/// Behind a chain of loads that long there is no throughput for a vector kernel to win.
+/// On little-endian ARM64 with PMULL and EOR3, treat the top tower level as a
+/// quadratic over the 64-bit polynomial field. Its six 64-bit basis maps use
+/// 32 KiB of tables, versus 128 KiB for three full-width maps. Other targets
+/// retain the full polynomial-basis kernel.
 #[inline]
 pub(crate) fn mul_128(a: u128, b: u128) -> u128 {
-    let product = composed_poly_mul_128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
-    basis::poly_to_tower_128(product)
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes",
+        target_feature = "sha3"
+    ))]
+    {
+        composite_mul_128(a, b)
+    }
+    #[cfg(not(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes",
+        target_feature = "sha3"
+    )))]
+    {
+        let product =
+            composed_poly_mul_128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
+        basis::poly_to_tower_128(product)
+    }
+}
+
+/// Reduce a 128-bit polynomial modulo `X^64 + X^4 + X^3 + X + 1`.
+/// Folding the high limb by the tail twice leaves only the low limb.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+#[inline]
+fn reduce_64_composite(product: u128) -> u64 {
+    use core::arch::aarch64::*;
+
+    // SAFETY: the cfg guarantees AES (PMULL), SHA3 (EOR3), and little-endian
+    // lane ordering. Every transmute preserves the bits of a 128-bit value.
+    unsafe {
+        let product: poly64x2_t = core::mem::transmute(product);
+        let tail: poly64x2_t = core::mem::transmute(vdupq_n_u64(basis::TAIL_64 as u64));
+        let first = vmull_high_p64(product, tail);
+        let second = vmull_high_p64(core::mem::transmute::<u128, poly64x2_t>(first), tail);
+        let product: uint64x2_t = core::mem::transmute(product);
+        let reduced = veor3q_u64(
+            product,
+            core::mem::transmute::<u128, uint64x2_t>(first),
+            core::mem::transmute::<u128, uint64x2_t>(second),
+        );
+        vgetq_lane_u64::<0>(reduced)
+    }
+}
+
+/// The polynomial-basis image of `alpha + 1` shared by the composite kernels.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+const GAMMA: u64 = basis::tower_image_64(1 << 32) ^ 1;
+
+/// Multiplication by `alpha + 1` after folding a high polynomial word.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+const BETA: u64 = basis::poly_mul(GAMMA as u128, basis::TAIL_64, 64, basis::TAIL_64) as u64;
+
+/// Write a tower value as `a0 + a1 Y`, where `Y² + alpha Y + 1 = 0`.
+/// For raw polynomial products `z0=a0*b0`, `z2=a1*b1`, and
+/// `z1=(a0+a1)*(b0+b1)`, the low coefficient is `R(z0+z2)` and the high
+/// coefficient is `R(z1+z0+(alpha+1)*z2)`. Fold multiplication by `alpha+1`
+/// into that final reduction instead of reducing `z2` separately.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+#[inline(always)]
+fn composite_mul_128(a: u128, b: u128) -> u128 {
+    let a0 = basis::tower_to_poly_64_balanced(a as u64);
+    let a1 = basis::tower_to_poly_64_balanced((a >> 64) as u64);
+    let b0 = basis::tower_to_poly_64_balanced(b as u64);
+    let b1 = basis::tower_to_poly_64_balanced((b >> 64) as u64);
+    let z0 = clmul_64x64(a0, b0);
+    let z2 = clmul_64x64(a1, b1);
+    let z1 = clmul_64x64(a0 ^ a1, b0 ^ b1);
+    let low = reduce_64_composite(z0 ^ z2);
+    let high = reduce_64_composite(
+        z1 ^ z0 ^ clmul_64x64(z2 as u64, GAMMA) ^ clmul_64x64((z2 >> 64) as u64, BETA),
+    );
+    u128::from(basis::poly_to_tower_64_balanced(low))
+        | (u128::from(basis::poly_to_tower_64_balanced(high)) << 64)
 }
 
 /// A narrow hardware consumer: independent dot-product terms amortize the basis changes.
@@ -391,11 +495,76 @@ pub(crate) fn dot_product_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
 
 #[inline]
 pub(crate) fn dot_product_128(pairs: impl Iterator<Item = (u128, u128)>) -> u128 {
+    // An exact two-term hint or a lower bound of eight selects the composite path.
+    // An inexact two-term hint can still contain a slower three-to-seven-term batch.
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes",
+        target_feature = "sha3"
+    ))]
+    {
+        let (lower, upper) = pairs.size_hint();
+        if lower >= 8 || (lower == 2 && upper == Some(2)) {
+            return composite_dot_product_128(pairs);
+        }
+    }
     let (low, high) = pairs.fold((0, 0), |(low, high), (a, b)| {
         let (lo, hi) = clmul_128x128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
         (low ^ lo, high ^ hi)
     });
     basis::poly_to_tower_128(reduce_128(low, high))
+}
+
+/// Accumulate the composite field's three raw products and reduce the sum once.
+/// The basis maps and reductions are linear over GF(2), so their final work is shared.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes",
+    target_feature = "sha3"
+))]
+#[inline(always)]
+fn composite_dot_product_128(pairs: impl Iterator<Item = (u128, u128)>) -> u128 {
+    use core::arch::aarch64::*;
+
+    // SAFETY: the cfg guarantees AES (PMULL), SHA3 (EOR3), and little-endian
+    // lane ordering. Every transmute preserves the bits of a 128-bit value.
+    unsafe {
+        let (mut z0, mut z1, mut z2) = (vdupq_n_u64(0), vdupq_n_u64(0), vdupq_n_u64(0));
+        for (a, b) in pairs {
+            let a0 = basis::tower_to_poly_64_balanced(a as u64);
+            let a1 = basis::tower_to_poly_64_balanced((a >> 64) as u64);
+            let b0 = basis::tower_to_poly_64_balanced(b as u64);
+            let b1 = basis::tower_to_poly_64_balanced((b >> 64) as u64);
+            z0 = veorq_u64(
+                z0,
+                core::mem::transmute::<u128, uint64x2_t>(vmull_p64(a0, b0)),
+            );
+            z2 = veorq_u64(
+                z2,
+                core::mem::transmute::<u128, uint64x2_t>(vmull_p64(a1, b1)),
+            );
+            z1 = veorq_u64(
+                z1,
+                core::mem::transmute::<u128, uint64x2_t>(vmull_p64(a0 ^ a1, b0 ^ b1)),
+            );
+        }
+        let low = reduce_64_composite(core::mem::transmute::<uint64x2_t, u128>(veorq_u64(z0, z2)));
+        let scaled_low: uint64x2_t =
+            core::mem::transmute(vmull_p64(vgetq_lane_u64::<0>(z2), GAMMA));
+        let scaled_high: uint64x2_t = core::mem::transmute(vmull_high_p64(
+            core::mem::transmute::<uint64x2_t, poly64x2_t>(z2),
+            core::mem::transmute::<uint64x2_t, poly64x2_t>(vdupq_n_u64(BETA)),
+        ));
+        let high = reduce_64_composite(core::mem::transmute::<uint64x2_t, u128>(veor3q_u64(
+            veorq_u64(z1, z0),
+            scaled_low,
+            scaled_high,
+        )));
+        u128::from(basis::poly_to_tower_64_balanced(low))
+            | (u128::from(basis::poly_to_tower_64_balanced(high)) << 64)
+    }
 }
 
 /// Squaring in `GF(2^64)`, taking and returning the tower representation.
@@ -430,6 +599,113 @@ mod tests {
     use super::basis::{TAIL_64, TAIL_128, poly_mul};
     use crate::tower::TowerLevel;
     use crate::{BinaryField32, BinaryField64, BinaryField128};
+
+    #[test]
+    fn tower_128_products_match_both_reference_representations() {
+        fn check(a: u128, b: u128, recursive: bool) {
+            let actual = super::mul_128(a, b);
+            let polynomial = super::basis::poly_to_tower_128(super::composed_poly_mul_128(
+                super::basis::tower_to_poly_128(a),
+                super::basis::tower_to_poly_128(b),
+            ));
+            assert_eq!(actual, polynomial, "polynomial reference: {a:x}, {b:x}");
+            if recursive {
+                let expected = BinaryField128::from_repr(a)
+                    .reference_mul(BinaryField128::from_repr(b))
+                    .to_repr();
+                assert_eq!(actual, expected, "recursive reference: {a:x}, {b:x}");
+            }
+        }
+        let edges = [
+            0,
+            1,
+            2,
+            3,
+            u128::from(u64::MAX),
+            1 << 64,
+            u128::MAX,
+            0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa,
+        ];
+        for a in edges {
+            for b in edges {
+                check(a, b, true);
+            }
+        }
+        // Multiplication is bilinear over GF(2), so basis pairs pin every coefficient.
+        for a in 0..128 {
+            for b in 0..128 {
+                check(1 << a, 1 << b, false);
+            }
+        }
+        let mut state = 0x2342_35f7_3174_8541_7124_9384_ab71_8234u128;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..10_000 {
+            check(next(), next(), true);
+        }
+    }
+
+    #[test]
+    fn tower_128_dot_products_match_reference_across_lengths_and_basis_pairs() {
+        let mut state = 0x8374_85b3_3217_94ad_3495_d918_48fa_910bu128;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut pairs = [(0, 0); 33];
+        for length in [0, 1, 2, 3, 7, 8, 9, 16, 33] {
+            for _ in 0..128 {
+                for pair in &mut pairs[..length] {
+                    *pair = (next(), next());
+                }
+                let terms = &pairs[..length];
+                let expected = terms
+                    .iter()
+                    .map(|&(a, b)| {
+                        BinaryField128::from_repr(a).reference_mul(BinaryField128::from_repr(b))
+                    })
+                    .sum::<BinaryField128>()
+                    .to_repr();
+                assert_eq!(super::dot_product_128(terms.iter().copied()), expected);
+                // Filtering preserves the terms but hides the iterator's lower bound.
+                assert_eq!(
+                    super::dot_product_128(terms.iter().copied().filter(|_| true)),
+                    expected
+                );
+            }
+        }
+        // Isolated terms pin every bilinear coefficient at both ends of a batch.
+        for a in 0..128 {
+            for b in 0..128 {
+                let pair = (1u128 << a, 1u128 << b);
+                let expected = super::basis::poly_to_tower_128(super::composed_poly_mul_128(
+                    super::basis::tower_to_poly_128(pair.0),
+                    super::basis::tower_to_poly_128(pair.1),
+                ));
+                for length in [2, 8] {
+                    let mut terms = [(0, 0); 8];
+                    terms[0] = pair;
+                    assert_eq!(
+                        super::dot_product_128(terms[..length].iter().copied()),
+                        expected
+                    );
+                    terms[length - 1] = pair;
+                    assert_eq!(super::dot_product_128(terms[..length].iter().copied()), 0);
+                    terms[0] = (0, 0);
+                    assert_eq!(
+                        super::dot_product_128(terms[..length].iter().copied()),
+                        expected
+                    );
+                }
+            }
+        }
+    }
 
     /// Squaring in `GF(2^64)`, through the polynomial basis.
     ///

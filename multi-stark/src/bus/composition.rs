@@ -7,21 +7,28 @@
 //! The family runs inside the zerocheck sumcheck, over the same cube and challenges.
 //! Its terminal expression is checked against the same openings the AIR constraints read.
 //!
-//! Every source column is read in place, from its committed table or its period vector.
+//! Wide affine declarations sharing an activation combine their weighted factors before
+//! projecting into separate factor and activation tables.
+//! Projection is used only when those full-height tables fit within the generic path's first
+//! half-height fold. Other declarations read their committed columns or period vectors in place.
 //!
 //! The first challenge that binds one of its table's row variables folds it in half.
 //! A shorter table therefore stays in place while it is dormant.
 //! The fold is a half-height polynomial over the representation field.
 //!
-//! Row selectors are never materialized; their closed form tracks the bound row variables.
+//! The generic path keeps row selectors in closed form; affine projections absorb them.
 //!
 //! Every value is computed in the zerocheck backend's representation field `R`, which is
 //! isomorphic to the challenge field. Challenges cross into `R` once and round polynomials
 //! cross back once, so the composition is the one computed in the challenge field.
 
+use alloc::collections::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_bus::{BusDirection, BusEvaluation, BusReductionOutput};
+use hashbrown::HashMap;
+use hashbrown::hash_map::Entry;
+use p3_bus::{BusActivation, BusAffineExpression, BusDirection, BusEvaluation, BusReductionOutput};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
@@ -40,6 +47,8 @@ pub(crate) struct BusCompositionProver<'a, F: Field, EF: ExtensionField<F>, R> {
     fingerprint_weights: Vec<R>,
     /// Random tuple-fingerprint shift.
     offset: R,
+    /// Product-GKR anchor, shared by the suffix equality polynomials of every AIR.
+    equality_point: Vec<R>,
     /// Source columns and selectors grouped once per AIR.
     airs: Vec<AirState<'a, F, R>>,
     /// Maximum round degree, derived once from the public plan.
@@ -62,6 +71,145 @@ struct CompositionTerm<R> {
     coefficient: R,
     /// Cube sum of the unweighted row composition before this AIR activates.
     row_claim: R,
+}
+
+/// Separate multilinears for a weighted affine factor difference and its activation.
+struct ProjectedTerm<R> {
+    difference: Poly<R>,
+    activation: Option<Poly<R>>,
+}
+
+/// Groups belonging to one AIR, with the fixed term coefficients already absorbed.
+struct ProjectedAir<R> {
+    groups: Vec<ProjectedTerm<R>>,
+    /// Equality factors for row variables already bound by the shared sumcheck.
+    equality_prefix: R,
+    /// Weighted cube sum used while this AIR is dormant.
+    row_claim: R,
+}
+
+/// Sparse weighted sum without repeatedly copying a growing coefficient vector.
+struct AffineSum<R> {
+    expression: BusAffineExpression<R>,
+    columns: [BTreeMap<usize, R>; 3],
+}
+
+impl<R: Field> AffineSum<R> {
+    fn new(mut expression: BusAffineExpression<R>, weight: R) -> Self {
+        let columns = [
+            core::mem::take(&mut expression.main),
+            core::mem::take(&mut expression.preprocessed),
+            core::mem::take(&mut expression.periodic),
+        ]
+        .map(|entries| {
+            entries
+                .into_iter()
+                .map(|(column, coefficient)| (column, weight * coefficient))
+                .collect()
+        });
+        expression.constant *= weight;
+        expression.first_row *= weight;
+        expression.last_row *= weight;
+        expression.transition *= weight;
+        Self {
+            expression,
+            columns,
+        }
+    }
+
+    fn add(&mut self, expression: BusAffineExpression<R>, weight: R) {
+        self.expression.constant += weight * expression.constant;
+        self.expression.first_row += weight * expression.first_row;
+        self.expression.last_row += weight * expression.last_row;
+        self.expression.transition += weight * expression.transition;
+        for (sum, entries) in self.columns.iter_mut().zip([
+            expression.main,
+            expression.preprocessed,
+            expression.periodic,
+        ]) {
+            for (column, coefficient) in entries {
+                *sum.entry(column).or_insert(R::ZERO) += weight * coefficient;
+            }
+        }
+    }
+
+    fn finish(mut self) -> BusAffineExpression<R> {
+        for (entries, sum) in [
+            &mut self.expression.main,
+            &mut self.expression.preprocessed,
+            &mut self.expression.periodic,
+        ]
+        .into_iter()
+        .zip(self.columns)
+        {
+            *entries = sum
+                .into_iter()
+                .filter(|&(_, coefficient)| coefficient != R::ZERO)
+                .collect();
+        }
+        self.expression
+    }
+}
+
+impl<R: Field> ProjectedTerm<R> {
+    fn at(&self, row: usize) -> R {
+        let difference = self.difference.as_slice()[row];
+        self.activation
+            .as_ref()
+            .map_or(difference, |poly| difference * poly.as_slice()[row])
+    }
+
+    fn fold(&mut self, challenge: R) {
+        self.difference.fix_prefix_var_mut(challenge);
+        if let Some(activation) = &mut self.activation {
+            activation.fix_prefix_var_mut(challenge);
+        }
+    }
+}
+
+impl<R: Field> ProjectedAir<R> {
+    /// Weighted body coefficients, before applying the current equality factor.
+    fn round_coefficients(&self, equality: &Poly<R>) -> [R; 3] {
+        let values = equality.as_slice();
+        let half = values.len() / 2;
+        let quadratic = self.groups.iter().any(|group| group.activation.is_some());
+        let add = |mut sums: [R; 3], row: [R; 3]| {
+            for (sum, value) in sums.iter_mut().zip(row) {
+                *sum += value;
+            }
+            sums
+        };
+        let sums = (0..half)
+            .into_par_iter()
+            .map(|row| {
+                let mut sums = [R::ZERO; 3];
+                for group in &self.groups {
+                    let difference = group.difference.as_slice();
+                    let (low, high) = (difference[row], difference[row + half]);
+                    if let Some(activation) = &group.activation {
+                        let activation = activation.as_slice();
+                        let (a_low, a_high) = (activation[row], activation[row + half]);
+                        sums[0] += low * a_low;
+                        sums[1] += high * a_high;
+                        sums[2] += (high - low) * (a_high - a_low);
+                    } else {
+                        sums[0] += low;
+                        sums[1] += high;
+                    }
+                }
+                // The leading Boolean equality factor sums to one.
+                let weight = values[row] + values[row + half];
+                sums[0] *= weight;
+                sums[1] *= weight;
+                if quadratic {
+                    sums[2] *= weight;
+                }
+                sums
+            })
+            .par_fold_reduce(|| [R::ZERO; 3], add, add);
+        // The endpoint total at one contains all three monomial coefficients.
+        [sums[0], sums[1] - sums[0] - sums[2], sums[2]]
+    }
 }
 
 /// One source multilinear, read in place until one of its row variables is bound, then folded.
@@ -101,6 +249,13 @@ impl<F: Field, EF: Field + Algebra<F>> Source<'_, F, EF> {
             return self.at(row);
         }
         match self {
+            Self::Committed(column @ ColumnView::Boolean { .. }) => {
+                let low = usize::from(column.boolean_bit(row).unwrap());
+                let upper = row + half;
+                let high = usize::from(column.boolean_bit(upper).unwrap());
+                // The line through two bits has only these four possible values.
+                [EF::ZERO, node, EF::ONE - node, EF::ONE][2 * low + high]
+            }
             Self::Committed(column) => {
                 let low = column.value(row);
                 node * (column.value(row + half) - low) + low
@@ -120,6 +275,20 @@ impl<F: Field, EF: Field + Algebra<F>> Source<'_, F, EF> {
     /// Binds the leading row variable, moving a column read in place into `EF`.
     fn fold(&mut self, challenge: EF) {
         let folded = match self {
+            Self::Committed(column @ ColumnView::Boolean { .. }) => {
+                let column = *column;
+                let half = column.len() / 2;
+                let lookup = [EF::ZERO, challenge, EF::ONE - challenge, EF::ONE];
+                Poly::new((0..half).into_par_iter().map_collect_min_task_bytes(
+                    2 * size_of::<F>() + size_of::<EF>(),
+                    |row| {
+                        let low = usize::from(column.boolean_bit(row).unwrap());
+                        let upper = row + half;
+                        let high = usize::from(column.boolean_bit(upper).unwrap());
+                        lookup[2 * low + high]
+                    },
+                ))
+            }
             Self::Committed(column) => {
                 let column = *column;
                 fold_in_half(column.len() / 2, challenge, |row| column.value(row))
@@ -169,10 +338,13 @@ struct AirState<'a, F: Field, R> {
     periodic_layout: (Vec<usize>, usize),
     /// Folded boundary-selector values at the bound row variables.
     boundary: BoundaryEvals<R>,
-    /// Equality polynomial anchored at the ProductGKR row point.
+    /// Equality polynomial anchored at the ProductGKR row point. Projected AIRs keep
+    /// its unbound factors normalized; generic AIRs include the bound prefix here.
     equality: Poly<R>,
     /// Bus terms emitted by this AIR.
     terms: Vec<CompositionTerm<R>>,
+    /// Optional compact affine representation, grouped by exact activation expression.
+    projected: Option<ProjectedAir<R>>,
     /// Number of global prefix variables absent from this AIR table.
     unused_prefix: usize,
     /// Evaluation of the fixed all-one-vertex selector on bound prefix coordinates.
@@ -186,7 +358,199 @@ where
     F: Field,
     R: Field + Algebra<F>,
 {
-    /// Compute every term's initial cube sum in one pass over the shared AIR columns.
+    /// Project only when every declaration is affine and the retained tables are no larger
+    /// than the generic path's first fold. Count actual source columns, not declared widths.
+    fn initialize_projection<EF: ExtensionField<F>>(
+        &mut self,
+        context: &BusContext<F, EF>,
+        fingerprint_weights: &[R],
+        offset: R,
+    ) {
+        let sources = self.main.len() + self.preprocessed.len() + self.periodic.len();
+        let mut always = false;
+        let mut conditional = false;
+        for term in &self.terms {
+            if matches!(
+                context.interaction(term.owner).activation,
+                BusActivation::Always
+            ) {
+                always = true;
+            } else {
+                conditional = true;
+            }
+        }
+        let minimum_projections = usize::from(always) + 2 * usize::from(conditional);
+        // Poly folding retains its allocation, so compare full projected capacity to
+        // half-height source capacity. A one-row table never needs a source fold.
+        if self.equality.as_slice().len() == 1 || minimum_projections > sources / 2 {
+            return;
+        }
+        let affine = |term: &CompositionTerm<R>| {
+            context
+                .plan()
+                .compile_factor(
+                    term.bus,
+                    context.interaction(term.owner),
+                    fingerprint_weights,
+                    offset,
+                )
+                .expect("a checked bus plan compiles against its own declarations")
+                .affine(&self.public_values)
+                .expect("a planned expression resolves its public inputs")
+        };
+        if let [term] = self.terms.as_slice() {
+            let Some(mut factor) = affine(term) else {
+                return;
+            };
+            // With no terms to combine, skip sparse aggregation and weight
+            // whichever is shorter: the affine coefficients or the row table.
+            let expression = &mut factor.factor_minus_one;
+            let scale_rows = self.equality.as_slice().len()
+                < expression.main.len()
+                    + expression.preprocessed.len()
+                    + expression.periodic.len()
+                    + 4;
+            if !scale_rows && term.coefficient != R::ONE {
+                for coefficient in [
+                    &mut expression.constant,
+                    &mut expression.first_row,
+                    &mut expression.last_row,
+                    &mut expression.transition,
+                ] {
+                    *coefficient *= term.coefficient;
+                }
+                for (_, coefficient) in expression
+                    .main
+                    .iter_mut()
+                    .chain(&mut expression.preprocessed)
+                    .chain(&mut expression.periodic)
+                {
+                    *coefficient *= term.coefficient;
+                }
+            }
+            let mut difference = self.materialize_affine(&factor.factor_minus_one);
+            if scale_rows && term.coefficient != R::ONE {
+                for value in difference.as_mut_slice() {
+                    *value *= term.coefficient;
+                }
+            }
+            self.projected = Some(ProjectedAir {
+                equality_prefix: R::ONE,
+                groups: vec![ProjectedTerm {
+                    difference,
+                    activation: factor
+                        .activation
+                        .as_ref()
+                        .map(|expression| self.materialize_affine(expression)),
+                }],
+                row_claim: R::ZERO,
+            });
+            self.periodic.clear();
+            return;
+        }
+        // All terms share this AIR's row point. For each identical activation S,
+        // sum_i c_i * eq * D_i * S = eq * (sum_i c_i * D_i) * S.
+        // Keep None distinct from Some(1), and retain even zero aggregate groups:
+        // the table count can only increase, so exceeding the bound can abort early.
+        let mut groups = HashMap::new();
+        let mut projections = 0;
+        for term in &self.terms {
+            let Some(factor) = affine(term) else {
+                return;
+            };
+            let index = groups.len();
+            match groups.entry(factor.activation) {
+                Entry::Occupied(mut entry) => {
+                    let (_, difference): &mut (usize, AffineSum<R>) = entry.get_mut();
+                    difference.add(factor.factor_minus_one, term.coefficient);
+                }
+                Entry::Vacant(entry) => {
+                    projections += 1 + usize::from(entry.key().is_some());
+                    if projections > sources / 2 {
+                        return;
+                    }
+                    entry.insert((
+                        index,
+                        AffineSum::new(factor.factor_minus_one, term.coefficient),
+                    ));
+                }
+            }
+        }
+        // Never let hash iteration order determine evaluation order. No source is
+        // changed until every declaration passes extraction and the storage bound.
+        let mut groups = groups.into_iter().collect::<Vec<_>>();
+        groups.sort_unstable_by_key(|(_, (index, _))| *index);
+        self.projected = Some(ProjectedAir {
+            equality_prefix: R::ONE,
+            groups: groups
+                .into_iter()
+                .map(|(activation, (_, difference))| ProjectedTerm {
+                    difference: self.materialize_affine(&difference.finish()),
+                    activation: activation
+                        .as_ref()
+                        .map(|expression| self.materialize_affine(expression)),
+                })
+                .collect(),
+            row_claim: R::ZERO,
+        });
+        // Borrowed committed views cost no column buffers. Period vectors are owned.
+        self.periodic.clear();
+    }
+
+    /// Evaluate one affine expression on the AIR's own Boolean cube, column by column.
+    fn materialize_affine(&self, expression: &BusAffineExpression<R>) -> Poly<R> {
+        let height = self.equality.as_slice().len();
+        let mut values = vec![expression.constant + expression.transition; height];
+        values[0] += expression.first_row;
+        values[height - 1] += expression.last_row - expression.transition;
+        for (coefficients, sources, indices) in [
+            (&expression.main, &self.main, &self.main_layout.0),
+            (
+                &expression.preprocessed,
+                &self.preprocessed,
+                &self.preprocessed_layout.0,
+            ),
+            (
+                &expression.periodic,
+                &self.periodic,
+                &self.periodic_layout.0,
+            ),
+        ] {
+            for &(index, coefficient) in coefficients {
+                let source = &sources[indices
+                    .binary_search(&index)
+                    .expect("an affine leaf is a planned source")];
+                match source {
+                    Source::Committed(column @ ColumnView::Boolean { .. }) => {
+                        // Packed bits select a coefficient without a representation-field product.
+                        let lookup = [R::ZERO, coefficient];
+                        for (word_index, chunk) in values.chunks_mut(64).enumerate() {
+                            let mut bits = column.boolean_word(word_index).unwrap();
+                            for value in chunk {
+                                *value += lookup[(bits & 1) as usize];
+                                bits >>= 1;
+                            }
+                        }
+                    }
+                    Source::Committed(column) => {
+                        for (row, value) in values.iter_mut().enumerate() {
+                            *value += coefficient * column.value(row);
+                        }
+                    }
+                    Source::Periodic { period, .. } => {
+                        let mask = period.len() - 1;
+                        for (row, value) in values.iter_mut().enumerate() {
+                            *value += coefficient * period[row & mask];
+                        }
+                    }
+                    Source::Folded(_) => unreachable!("projection precedes every fold"),
+                }
+            }
+        }
+        Poly::new(values)
+    }
+
+    /// Compute initial cube sums in one pass over this AIR's active representation.
     ///
     /// The result is read only while the global prefix is still ahead of this table.
     fn initialize_claims<EF: ExtensionField<F>>(
@@ -196,6 +560,21 @@ where
         offset: R,
     ) {
         let height = self.equality.as_slice().len();
+
+        if let Some(projected) = &mut self.projected {
+            projected.row_claim = (0..height)
+                .into_par_iter()
+                .map(|row| {
+                    self.equality.as_slice()[row]
+                        * projected
+                            .groups
+                            .iter()
+                            .map(|group| group.at(row))
+                            .sum::<R>()
+                })
+                .sum();
+            return;
+        }
 
         // Slot placement is settled once per term, outside the row loop below.
         let factors = self
@@ -383,6 +762,7 @@ where
                                 .equality_weights_msb(),
                         ),
                         terms: Vec::new(),
+                        projected: None,
                         unused_prefix: num_variables - share.row_variables,
                         prefix_evaluation: R::ONE,
                         public_values: public_values[air].to_vec(),
@@ -403,19 +783,25 @@ where
             }
         }
 
-        // A table as tall as the statement never reads its own claim, so it never pays for one.
-        for air in airs
-            .iter_mut()
-            .flatten()
-            .filter(|air| air.unused_prefix > 0)
-        {
-            air.initialize_claims(context, &weights, offset);
+        for air in airs.iter_mut().flatten() {
+            // A dormant wide table benefits before its first active round: its initial
+            // row claim reads the compact projection instead of revisiting every source.
+            air.initialize_projection(context, &weights, offset);
+            // A full-height table never reads its own initial row claim.
+            if air.unused_prefix > 0 {
+                air.initialize_claims(context, &weights, offset);
+            }
         }
 
         Self {
             context,
             fingerprint_weights: weights,
             offset,
+            equality_point: if airs.iter().flatten().any(|air| air.projected.is_some()) {
+                output.product.point.iter().copied().map(to_repr).collect()
+            } else {
+                Vec::new()
+            },
             airs: airs.into_iter().flatten().collect(),
             degree: context.composition_degree(),
             round: 0,
@@ -425,6 +811,8 @@ where
     }
 
     fn evaluate_air(&self, air: &AirState<'_, F, R>, node: R) -> R {
+        debug_assert!(air.projected.is_none());
+        let half = air.equality.as_slice().len() / 2;
         // Slot placement is settled once per term, outside the row loop below.
         let factors = air
             .terms
@@ -443,7 +831,6 @@ where
             .collect::<Vec<_>>();
 
         // Interpolate shared columns once, then evaluate every declaration owned by this AIR.
-        let half = air.equality.as_slice().len() / 2;
         // The selectors' line at `node` is the selectors with `node` bound as one more variable.
         let mut prefix = air.boundary;
         prefix.apply(node);
@@ -512,21 +899,47 @@ where
                 air.prefix_evaluation *= challenge;
                 continue;
             }
-            for source in air
-                .main
-                .iter_mut()
-                .chain(&mut air.preprocessed)
-                .chain(&mut air.periodic)
-            {
-                source.fold(challenge);
+            if let Some(projected) = &mut air.projected {
+                for projection in &mut projected.groups {
+                    projection.fold(challenge);
+                }
+                let anchor =
+                    self.equality_point[self.equality_point.len() - air.equality.num_variables()];
+                projected.equality_prefix *= Point::eval_eq(&[anchor], &[challenge]);
+                // Keep the suffix normalized even when the accumulated prefix becomes zero.
+                air.equality.sum_prefix_var_mut();
+            } else {
+                for source in air
+                    .main
+                    .iter_mut()
+                    .chain(&mut air.preprocessed)
+                    .chain(&mut air.periodic)
+                {
+                    source.fold(challenge);
+                }
+                air.boundary.apply(challenge);
+                air.equality.fix_prefix_var_mut(challenge);
             }
-            air.boundary.apply(challenge);
-            air.equality.fix_prefix_var_mut(challenge);
         }
         self.round += 1;
     }
 
     fn round_poly(&self) -> Vec<EF> {
+        // Every projected body has degree at most two. Read its rows once for all
+        // transmitted nodes, including when another AIR raises the shared degree.
+        let projected = self
+            .airs
+            .iter()
+            .map(|air| {
+                if self.round < air.unused_prefix {
+                    None
+                } else {
+                    air.projected
+                        .as_ref()
+                        .map(|projection| projection.round_coefficients(&air.equality))
+                }
+            })
+            .collect::<Vec<_>>();
         // Generic-degree encoding omits node one, which the verifier derives from the claim.
         (0..self.degree)
             .map(RoundPolyInterpolator::<EF>::transmitted_node)
@@ -535,14 +948,26 @@ where
                 let sum = self
                     .airs
                     .iter()
-                    .map(|air| {
+                    .zip(&projected)
+                    .map(|(air, coefficients)| {
                         let body = if self.round < air.unused_prefix {
                             // χ_k contributes the current node; its remaining cube sum is one.
-                            node * air
-                                .terms
-                                .iter()
-                                .map(|term| term.coefficient * term.row_claim)
-                                .sum::<R>()
+                            node * air.projected.as_ref().map_or_else(
+                                || {
+                                    air.terms
+                                        .iter()
+                                        .map(|term| term.coefficient * term.row_claim)
+                                        .sum::<R>()
+                                },
+                                |projected| projected.row_claim,
+                            )
+                        } else if let Some([constant, linear, quadratic]) = *coefficients {
+                            let projection = air.projected.as_ref().unwrap();
+                            let anchor = self.equality_point
+                                [self.equality_point.len() - air.equality.num_variables()];
+                            let equality =
+                                projection.equality_prefix * Point::eval_eq(&[anchor], &[node]);
+                            equality * (constant + node * (linear + node * quadratic))
                         } else {
                             // Active terms share one interpolation of their AIR columns.
                             self.evaluate_air(air, node)
@@ -555,6 +980,10 @@ where
             .collect()
     }
 }
+
+#[cfg(test)]
+#[path = "composition_projection_tests.rs"]
+mod projection_tests;
 
 #[cfg(test)]
 mod tests {

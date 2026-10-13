@@ -19,7 +19,7 @@ mod shape;
 mod transcript;
 
 pub use error::{ProductGkrError, ProductGkrShapeError};
-pub(crate) use proof::ROUND_POLY_LEN;
+pub(crate) use proof::{PreparedProductGkr, ROUND_POLY_LEN};
 pub use proof::{ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof};
 pub use shape::{ProductGkrRootShape, ProductGkrShape};
 
