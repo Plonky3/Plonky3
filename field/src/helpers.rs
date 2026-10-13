@@ -55,8 +55,11 @@ pub fn par_scale_slice_in_place<F: Field>(slice: &mut [F], s: F) {
 ///
 /// # Performance
 /// For large slices, use [`par_add_scaled_slice_in_place`].
+///
+/// # Panics
+/// Panics if the slices have different lengths.
 pub fn add_scaled_slice_in_place<F: Field>(slice: &mut [F], other: &[F], s: F) {
-    debug_assert_eq!(slice.len(), other.len(), "slices must have equal length");
+    assert_eq!(slice.len(), other.len(), "slices must have equal length");
     let (slice_packed, slice_sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
     let (other_packed, other_sfx) = F::Packing::pack_slice_with_suffix(other);
     let packed_s: F::Packing = s.into();
@@ -75,8 +78,11 @@ pub fn add_scaled_slice_in_place<F: Field>(slice: &mut [F], other: &[F], s: F) {
 /// # Performance
 /// For small slices, use [`add_scaled_slice_in_place`].
 /// Requires the `parallel` feature.
+///
+/// # Panics
+/// Panics if the slices have different lengths.
 pub fn par_add_scaled_slice_in_place<F: Field>(slice: &mut [F], other: &[F], s: F) {
-    debug_assert_eq!(slice.len(), other.len(), "slices must have equal length");
+    assert_eq!(slice.len(), other.len(), "slices must have equal length");
     let (slice_packed, slice_sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
     let (other_packed, other_sfx) = F::Packing::pack_slice_with_suffix(other);
     let packed_s: F::Packing = s.into();

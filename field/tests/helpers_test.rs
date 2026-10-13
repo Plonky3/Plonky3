@@ -50,6 +50,44 @@ mod helpers {
     }
 
     #[test]
+    #[should_panic(expected = "slices must have equal length")]
+    fn test_add_scaled_slice_in_place_mismatched_lengths() {
+        // Each slice is packed by its own length.
+        // A mismatch would pair unrelated positions instead of truncating.
+        //
+        //     WIDTH = 4, slice: 5 elements, other: 3 elements
+        //     slice: packed = [0..4]  suffix = [4]
+        //     other: packed = []      suffix = [0, 1, 2]
+        //     → only slice[4] += other[0] * s
+        let mut x = vec![BabyBear::ONE; 5];
+        let y = vec![BabyBear::TWO; 3];
+
+        // The length check must fire before any element is written.
+        add_scaled_slice_in_place(&mut x, &y, BabyBear::from_u8(3));
+    }
+
+    #[test]
+    #[should_panic(expected = "slices must have equal length")]
+    fn test_par_add_scaled_slice_in_place_mismatched_lengths() {
+        // Same 5 vs 3 mismatch, through the parallel entry point.
+        let mut x = vec![BabyBear::ONE; 5];
+        let y = vec![BabyBear::TWO; 3];
+
+        // The check runs on the calling thread, before any work is split.
+        par_add_scaled_slice_in_place(&mut x, &y, BabyBear::from_u8(3));
+    }
+
+    #[test]
+    #[should_panic(expected = "slices must have equal length")]
+    fn test_add_scaled_slice_in_place_longer_other() {
+        // Opposite direction: the second slice is the longer one (2 vs 4).
+        let mut x = vec![BabyBear::ONE; 2];
+        let y = vec![BabyBear::TWO; 4];
+
+        add_scaled_slice_in_place(&mut x, &y, BabyBear::ONE);
+    }
+
+    #[test]
     fn test_field_to_array() {
         // Convert value 9 to array of size 4
         let x = BabyBear::from_u8(9);
