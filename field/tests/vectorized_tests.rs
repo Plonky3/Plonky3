@@ -32,6 +32,24 @@ mod vectorized {
         EF::from_basis_coefficients_fn(|dcoef| F::from_u64(offset + (i * d + dcoef) as u64))
     }
 
+    #[test]
+    #[should_panic(expected = "basis coefficient count must match extension dimension")]
+    fn vectorized_ext_rejects_too_few_basis_coefficients() {
+        // One coefficient short of the extension degree.
+        let dimension = <EF as BasedVectorSpace<F>>::DIMENSION;
+        let coefficients = vec![Vectorized::<F, 2>::ZERO; dimension - 1];
+        let _ = VectorizedExt::<F, EF, 2>::from_vectorized_basis_coefficients(&coefficients);
+    }
+
+    #[test]
+    #[should_panic(expected = "basis coefficient count must match extension dimension")]
+    fn vectorized_ext_rejects_too_many_basis_coefficients() {
+        // One coefficient past the extension degree.
+        let dimension = <EF as BasedVectorSpace<F>>::DIMENSION;
+        let coefficients = vec![Vectorized::<F, 2>::ZERO; dimension + 1];
+        let _ = VectorizedExt::<F, EF, 2>::from_vectorized_basis_coefficients(&coefficients);
+    }
+
     fn round_trip<const N: usize>() {
         let width = Vectorized::<F, N>::WIDTH;
         let vals = base_vals(width, 1);
