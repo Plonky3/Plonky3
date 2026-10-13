@@ -384,3 +384,81 @@ fn identity_suffix_evaluation_matches_materialization() {
         );
     }
 }
+
+/// Ownership of spare capacity and implicit identities cannot change a proof.
+fn check_owned_prefixes<F, EF, C>(make_challenger: impl Fn() -> C)
+where
+    F: p3_challenger::fs::TranscriptField,
+    EF: p3_field::ExtensionField<F>,
+    C: p3_challenger::FieldChallenger<F>,
+{
+    for log_height in 0..=6 {
+        let capacity = 1usize << log_height;
+        for case in 0..5 {
+            let mut inputs = match case {
+                0 | 1 => {
+                    let length = capacity - usize::from(case == 1);
+                    let left = (0..length)
+                        .map(|index| EF::interpolation_node(2 + index % 2))
+                        .collect::<Vec<_>>();
+                    let mut right = left.iter().copied().rev().collect::<Vec<_>>();
+                    right.resize(capacity, EF::ONE);
+                    [left, right]
+                }
+                2 => [vec![EF::ONE; capacity], vec![EF::ONE; capacity]],
+                3 => [Vec::new(), vec![EF::ONE; capacity]],
+                _ => {
+                    let mut right = vec![EF::ONE; capacity];
+                    right[capacity - 1] = EF::ZERO;
+                    [vec![EF::ZERO], right]
+                }
+            };
+            for input in &mut inputs {
+                input.reserve_exact(capacity * 3 + 7);
+            }
+            let shape =
+                ProductGkrShape::new(log_height, 2, ProductGkrRootShape::FirstTwoShared).unwrap();
+            let mut borrowed_challenger = make_challenger();
+            let (expected_proof, expected_output) = ProductGkrProof::prove::<F, _>(
+                &[inputs[0].as_slice(), inputs[1].as_slice()],
+                shape,
+                &mut borrowed_challenger,
+            );
+            check_output(
+                &inputs,
+                log_height,
+                &expected_output.roots,
+                &expected_output.point,
+                &expected_output.values,
+            );
+            let mut owned_challenger = make_challenger();
+            let (proof, output) = super::PreparedProductGkr::new_owned(inputs, shape)
+                .prove::<F, _>(&mut owned_challenger);
+            assert_eq!(proof, expected_proof);
+            assert_eq!(output, expected_output);
+            assert_eq!(
+                proof.verify::<F, _>(shape, &mut make_challenger()).unwrap(),
+                output
+            );
+            for _ in 0..16 {
+                assert_eq!(
+                    borrowed_challenger.sample_algebra_element::<EF>(),
+                    owned_challenger.sample_algebra_element::<EF>(),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn owned_leaves_preserve_proofs_with_spare_capacity_and_identity_padding() {
+    check_owned_prefixes::<Binary, Binary, _>(binary_challenger);
+    check_owned_prefixes::<PrimeBase, PrimeChallenge, _>(prime_challenger);
+}
+
+#[test]
+#[should_panic(expected = "product GKR input exceeds its logical tree")]
+fn owned_leaves_validate_lengths_before_trimming_identities() {
+    let shape = ProductGkrShape::new(0, 2, ProductGkrRootShape::FirstTwoShared).unwrap();
+    super::PreparedProductGkr::new_owned([vec![Binary::ONE; 2], vec![Binary::ONE]], shape);
+}

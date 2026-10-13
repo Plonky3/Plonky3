@@ -180,9 +180,7 @@ impl<'a, F: Field> ColumnView<'a, F> {
         assert!(row < self.len(), "column row out of bounds");
         match self {
             Self::Dense(values) => values[row],
-            Self::Boolean { words, column, .. } => F::from_bool(
-                ((words.values[(row / 64) * words.width + column] >> (row % 64)) & 1) != 0,
-            ),
+            Self::Boolean { .. } => F::from_bool(self.boolean_bit(row).unwrap()),
         }
     }
 
@@ -208,6 +206,22 @@ impl<'a, F: Field> ColumnView<'a, F> {
     #[inline]
     pub fn packed_at(self, row: usize) -> F::Packing {
         F::Packing::from_fn(|lane| self.value(row + lane))
+    }
+
+    /// Returns one logical bit for a Boolean column, or `None` for a dense column.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` is outside the column's logical rows, including word padding.
+    #[inline]
+    pub fn boolean_bit(self, row: usize) -> Option<bool> {
+        assert!(row < self.len(), "column row out of bounds");
+        match self {
+            Self::Boolean { words, column, .. } => {
+                Some(((words.values[(row / 64) * words.width + column] >> (row % 64)) & 1) != 0)
+            }
+            Self::Dense(_) => None,
+        }
     }
 
     /// Returns the packed source word for a Boolean column.
@@ -1636,6 +1650,10 @@ mod tests {
                         F::ZERO
                     };
                     assert_eq!(packed.column(column).value(row), expected);
+                    assert_eq!(
+                        packed.column(column).boolean_bit(row),
+                        Some(expected == F::ONE)
+                    );
                 }
             }
             let dense = packed.clone().into_dense();
@@ -1645,6 +1663,13 @@ mod tests {
             assert_eq!(direct.poly().as_slice(), legacy.stacked_poly().as_slice());
             assert_eq!(direct.table_shapes(), legacy.table_shapes());
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "column row out of bounds")]
+    fn boolean_bit_rejects_rows_in_word_padding() {
+        let table = Table::<F>::from_packed_bits(RowMajorMatrix::new(vec![0b0101u64], 1), 2);
+        let _ = table.column(0).boolean_bit(4);
     }
 
     #[test]

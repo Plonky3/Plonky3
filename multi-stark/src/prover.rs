@@ -1924,79 +1924,180 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn a_bus_over_packed_boolean_tables_proves_and_verifies() {
-        // Every cell is a bit, so squaring the payload is the identity and both sides match.
+    fn packed_bus_table(width: usize) -> Table<F> {
         let height = packed_floor();
         let log_height = log2_strict_usize(height);
-        let push = ConditionalBusAir {
-            direction: BusDirection::Push,
-            conditional: true,
-        };
-        let pull = ConditionalBusAir {
-            direction: BusDirection::Pull,
-            conditional: true,
-        };
-
         // Alternating payload bits under a selector that silences every fourth row.
         // Rows past the table height are absent from the word, which the layout requires.
         let words = (0..height.div_ceil(64))
             .flat_map(|block| {
                 let live = (height - block * 64).min(64);
                 let mask = u64::MAX >> (64 - live);
-                [
-                    0xAAAA_AAAA_AAAA_AAAA_u64 & mask,
-                    0x7777_7777_7777_7777_u64 & mask,
-                ]
+                (0..width).map(move |column| {
+                    let pattern = if column + 1 == width {
+                        0x7777_7777_7777_7777_u64
+                    } else {
+                        0xAAAA_AAAA_AAAA_AAAA_u64.rotate_left(column as u32)
+                    };
+                    pattern & mask
+                })
             })
             .collect::<Vec<u64>>();
-        let packed = || Table::from_packed_bits(RowMajorMatrix::new(words.clone(), 2), log_height);
+        Table::from_packed_bits(RowMajorMatrix::new(words, width), log_height)
+    }
+
+    fn check_bus_over_packed_boolean_tables<A: ProverAir<F, EF>>(push: &A, pull: &A) {
+        // Every cell is a bit, so squaring the payload is the identity and both sides match.
+        let height = packed_floor();
+        let log_height = log2_strict_usize(height);
+        let width = push.width();
+        assert!(matches!(width, 2 | 4));
+        assert_eq!(width, pull.width());
+        let packed = || packed_bus_table(width);
 
         // The scheme hands the bus prover its own retained tables, which stay packed here.
-        static PACKED: OnceLock<Table<F>> = OnceLock::new();
-        let retained = PACKED.get_or_init(|| {
-            let height = packed_floor();
-            let log_height = log2_strict_usize(height);
-            let words = (0..height.div_ceil(64))
-                .flat_map(|block| {
-                    let live = (height - block * 64).min(64);
-                    let mask = u64::MAX >> (64 - live);
-                    [
-                        0xAAAA_AAAA_AAAA_AAAA_u64 & mask,
-                        0x7777_7777_7777_7777_u64 & mask,
-                    ]
-                })
-                .collect::<Vec<u64>>();
-            Table::from_packed_bits(RowMajorMatrix::new(words, 2), log_height)
-        });
+        static PACKED: OnceLock<[Table<F>; 2]> = OnceLock::new();
+        let retained = &PACKED.get_or_init(|| [2, 4].map(packed_bus_table))[width / 2 - 1];
         assert!(retained.packed_bits().is_some());
 
-        let mut config = config(log_height + 2, FOLDING);
-        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let mut config = config(log_height + log2_strict_usize(2 * width), FOLDING);
+        // Public prove uses GenericBackend, exercising the ordinary packed first fold.
+        let (pk, vk) = setup(&config, &[push, pull], &mut challenger()).unwrap();
+        // The same PCS configuration first exposes its normal dense retained tables.
+        let dense = || {
+            Table::new(RowMajorMatrix::new(
+                packed()
+                    .columns()
+                    .flat_map(|column| column.values())
+                    .collect(),
+                height,
+            ))
+        };
+        let reference = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(push, dense(), &pk, &[]),
+                ProverInstance::new(pull, dense(), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
         config.committed_table_override = Some(retained);
 
         let proof = prove(
             &config,
             ProverInstances::new(vec![
-                ProverInstance::new(&push, packed(), &pk, &[]),
-                ProverInstance::new(&pull, packed(), &pk, &[]),
+                ProverInstance::new(push, packed(), &pk, &[]),
+                ProverInstance::new(pull, packed(), &pk, &[]),
             ]),
             0,
             &mut challenger(),
         )
         .unwrap();
 
+        assert_eq!(
+            postcard::to_allocvec(&proof).unwrap(),
+            postcard::to_allocvec(&reference).unwrap()
+        );
+
         verify(
             &config,
             VerifierInstances::new(vec![
-                VerifierInstance::new(&push, &vk, log_height, &[]),
-                VerifierInstance::new(&pull, &vk, log_height, &[]),
+                VerifierInstance::new(push, &vk, log_height, &[]),
+                VerifierInstance::new(pull, &vk, log_height, &[]),
             ]),
             &proof,
             0,
             &mut challenger(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_bus_over_packed_boolean_tables_proves_and_verifies() {
+        check_bus_over_packed_boolean_tables(
+            &ConditionalBusAir {
+                direction: BusDirection::Push,
+                conditional: true,
+            },
+            &ConditionalBusAir {
+                direction: BusDirection::Pull,
+                conditional: true,
+            },
+        );
+    }
+
+    #[test]
+    fn an_affine_bus_has_identical_dense_and_packed_proofs() {
+        check_bus_over_packed_boolean_tables(
+            &ConditionalOnlyBusAir(BusDirection::Push),
+            &ConditionalOnlyBusAir(BusDirection::Pull),
+        );
+    }
+
+    struct WideAffineBusAir(BusDirection);
+
+    impl BaseAir<F> for WideAffineBusAir {
+        fn width(&self) -> usize {
+            4
+        }
+    }
+
+    impl<AB: BusInteractionBuilder<F = F>> Air<AB> for WideAffineBusAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let row = main.current_slice();
+            builder.push_bus_interaction(
+                BusName::new("projected-affine"),
+                self.0,
+                row[..3].iter().copied().map(Into::into),
+                BusActivation::Boolean(row[3].into()),
+            );
+        }
+    }
+
+    #[test]
+    fn a_projected_affine_bus_has_identical_dense_and_packed_proofs() {
+        // Four source columns fit two full-height projected multilinears within
+        // the four half-height buffers otherwise retained by the first fold.
+        check_bus_over_packed_boolean_tables(
+            &WideAffineBusAir(BusDirection::Push),
+            &WideAffineBusAir(BusDirection::Pull),
+        );
+    }
+
+    struct GroupedAffineBusAir(BusDirection);
+
+    impl BaseAir<F> for GroupedAffineBusAir {
+        fn width(&self) -> usize {
+            4
+        }
+    }
+
+    impl<AB: BusInteractionBuilder<F = F>> Air<AB> for GroupedAffineBusAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let row = main.current_slice();
+            for &value in &row[..3] {
+                builder.push_bus_interaction(
+                    BusName::new("grouped-affine"),
+                    self.0,
+                    [value.into()],
+                    BusActivation::Boolean(row[3].into()),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn grouped_affine_buses_have_identical_dense_and_packed_proofs() {
+        // Three separately selected factors would need six full-height tables.
+        // Their shared activation reduces this to two within the storage bound.
+        check_bus_over_packed_boolean_tables(
+            &GroupedAffineBusAir(BusDirection::Push),
+            &GroupedAffineBusAir(BusDirection::Pull),
+        );
     }
 
     #[test]

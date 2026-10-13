@@ -7,8 +7,10 @@ use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 
+mod affine;
 mod error;
 
+pub use affine::{BusAffineExpression, BusAffineFactor};
 pub use error::BusEvaluationError;
 
 use crate::{
@@ -510,6 +512,13 @@ mod tests {
 
         // Doubling that many times multiplies the leaf by that power of two.
         assert_eq!(value, -(leaf * F::TWO.exp_u64(u64::from(DEPTH))));
+        let affine = factor.affine(&[]).unwrap().unwrap();
+        assert!(affine.activation.is_none());
+        assert_eq!(affine.factor_minus_one.constant, -F::ONE);
+        assert_eq!(
+            affine.factor_minus_one.main,
+            vec![(0, -F::TWO.exp_u64(u64::from(DEPTH)))]
+        );
     }
 
     #[test]

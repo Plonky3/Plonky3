@@ -260,6 +260,17 @@ impl RawDataSerializable for Poly64 {
     fn into_bytes(self) -> impl IntoIterator<Item = u8> {
         self.0.to_le_bytes()
     }
+
+    #[cfg(target_endian = "little")]
+    #[inline]
+    fn as_serialized_bytes(input: &[Self]) -> Option<&[u8]> {
+        // SAFETY: `Self` is transparent over `u64`, with no padding or uninitialized bytes.
+        // Little-endian memory matches `to_le_bytes`. The byte view retains the same region
+        // and lifetime while requiring only byte alignment.
+        Some(unsafe {
+            core::slice::from_raw_parts(input.as_ptr().cast::<u8>(), core::mem::size_of_val(input))
+        })
+    }
 }
 
 impl crate::tower::private::Sealed for Poly64 {}

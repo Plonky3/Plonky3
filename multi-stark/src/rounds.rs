@@ -44,15 +44,15 @@ fn boolean_fold_values<F: Field, EF: Field>(
     view: ColumnView<'_, F>,
     sums: [EF; 4],
 ) -> impl Fn(usize) -> EF {
-    let ColumnView::Boolean { words, column, len } = view else {
+    let ColumnView::Boolean { len, .. } = view else {
         unreachable!("Boolean folding requires a packed column");
     };
     let half = len / 2;
     move |row| {
-        let low = (words.values[(row / 64) * words.width + column] >> (row % 64)) & 1;
+        let low = usize::from(view.boolean_bit(row).unwrap());
         let high_row = row + half;
-        let high = (words.values[(high_row / 64) * words.width + column] >> (high_row % 64)) & 1;
-        sums[(low | (high << 1)) as usize]
+        let high = usize::from(view.boolean_bit(high_row).unwrap());
+        sums[low | (high << 1)]
     }
 }
 
@@ -3480,3 +3480,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "rounds/boolean_fold_tests.rs"]
+mod boolean_fold_tests;

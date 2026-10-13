@@ -992,6 +992,18 @@ pub trait RawDataSerializable: Sized {
     #[must_use]
     fn into_bytes(self) -> impl IntoIterator<Item = u8>;
 
+    /// Borrow the serialized bytes of a slice when its memory layout matches the encoding.
+    ///
+    /// If provided, the bytes must match `into_byte_stream` in both order and contents,
+    /// with exactly `input.len() * Self::NUM_BYTES` bytes. Matching the element size alone
+    /// is insufficient: padding, byte order, and the stored representation must also match.
+    /// The default retains the iterator-based serialization path.
+    #[must_use]
+    #[inline]
+    fn as_serialized_bytes(_input: &[Self]) -> Option<&[u8]> {
+        None
+    }
+
     /// Convert an iterator of field elements into an iterator of bytes.
     #[must_use]
     fn into_byte_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u8> {
