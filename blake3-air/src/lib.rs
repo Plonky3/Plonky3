@@ -1,7 +1,8 @@
 //! AIRs for the Blake-3 permutation.
 //!
 //! [`Blake3Air`] assumes the field size is between 2^20 and 2^32.
-//! [`Blake3BinaryAir`] works over fields of characteristic 2.
+//! [`Blake3BinaryAir`] works over fields of characteristic 2, with one compression per row.
+//! [`Blake3BinaryCompactAir`] offers a narrower round-per-row layout for recursive verifiers.
 
 #![no_std]
 

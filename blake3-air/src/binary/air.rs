@@ -23,7 +23,7 @@ use crate::constants::permute;
 pub(super) const NUM_INPUT_BITS: usize = NUM_INPUT_WORDS * 32;
 
 /// Constraints per G step: two 3-operand and two 2-operand additions.
-const CONSTRAINTS_PER_G: usize = 2 * (31 + 32) + 2 * 32;
+pub(super) const CONSTRAINTS_PER_G: usize = 2 * (31 + 32) + 2 * 32;
 
 /// Number of constraints excluding input booleanity: every G step.
 const NUM_G_CONSTRAINTS: usize = NUM_ROUNDS * G_PER_ROUND * CONSTRAINTS_PER_G;
@@ -145,11 +145,11 @@ impl<F> BaseAir<F> for Blake3BinaryAir {
 ///
 /// The `b` and `d` words are always trace columns. The `a` and `c` words are either
 /// initial values or the XOR of two trace columns.
-struct State<AB: AirBuilder> {
-    a: [[AB::Expr; 32]; 4],
-    b: [[AB::Var; 32]; 4],
-    c: [[AB::Expr; 32]; 4],
-    d: [[AB::Var; 32]; 4],
+pub(super) struct State<AB: AirBuilder> {
+    pub(super) a: [[AB::Expr; 32]; 4],
+    pub(super) b: [[AB::Var; 32]; 4],
+    pub(super) c: [[AB::Expr; 32]; 4],
+    pub(super) d: [[AB::Var; 32]; 4],
 }
 
 impl<AB: AirBuilder> Air<AB> for Blake3BinaryAir {
@@ -201,7 +201,7 @@ impl<AB: AirBuilder> Air<AB> for Blake3BinaryAir {
 /// Constrain one G step and advance `state` to its output.
 ///
 /// `slots` holds the indices of the `a`, `b`, `c`, `d` words within their state rows.
-fn eval_g<AB: AirBuilder>(
+pub(super) fn eval_g<AB: AirBuilder>(
     builder: &mut AB,
     state: &mut State<AB>,
     [ia, ib, ic, id]: [usize; 4],

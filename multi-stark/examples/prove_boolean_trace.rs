@@ -490,6 +490,144 @@ mod tests {
 
     use super::*;
 
+    /// Compact round rows and their periodic transitions use the existing bit PCS.
+    #[test]
+    fn compact_blake3_dense_and_packed_traces_prove_and_verify() {
+        use p3_blake3_air::{Blake3BinaryCompactAir, NUM_BLAKE3_BINARY_COMPACT_COLS};
+
+        let air = Blake3BinaryCompactAir::assuming_boolean_trace();
+        for (compressions, log_height) in [(1, 3), (2, 4)] {
+            let shapes = [TableShape::new(log_height, NUM_BLAKE3_BINARY_COMPACT_COLS)];
+            let config = PackedConfig::new(&shapes);
+            let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+            let dense = Table::new(
+                air.generate_random_trace_rows::<F>(compressions, 0)
+                    .transpose(),
+            );
+            let packed = Table::from_packed_bits(
+                air.generate_random_trace_packed::<F>(compressions),
+                log_height,
+            );
+            let mut proofs = Vec::new();
+            for table in [dense, packed] {
+                let proof = prove_with_security(
+                    &config,
+                    ProverInstances::new(vec![ProverInstance::new(&air, table, &pk, &[])]),
+                    0,
+                    SECURITY_BITS,
+                    &mut challenger(),
+                )
+                .unwrap();
+                verify_with_security(
+                    &config,
+                    VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+                    &proof,
+                    0,
+                    SECURITY_BITS,
+                    &mut challenger(),
+                )
+                .unwrap();
+                proofs.push(postcard::to_allocvec(&proof).unwrap());
+            }
+            assert_eq!(proofs[0], proofs[1]);
+        }
+    }
+
+    /// A wrong bit committed by the prover fails the AIR's closing check.
+    #[test]
+    fn compact_blake3_rejects_an_invalid_committed_round() {
+        use p3_blake3_air::{Blake3BinaryCompactAir, NUM_BLAKE3_BINARY_COMPACT_COLS};
+
+        let air = Blake3BinaryCompactAir::assuming_boolean_trace();
+        let log_height = 3;
+        let config =
+            PackedConfig::new(&[TableShape::new(log_height, NUM_BLAKE3_BINARY_COMPACT_COLS)]);
+        let mut trace = air.generate_random_trace_rows::<F>(1, 0);
+        // Change a real round's input while leaving its witness and neighbors intact.
+        trace.values[3 * trace.width] += F::ONE;
+        let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+        let proof = prove_with_security(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &air,
+                Table::new(trace.transpose()),
+                &pk,
+                &[],
+            )]),
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        )
+        .unwrap();
+        let result = verify_with_security(
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+            &proof,
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        );
+        assert!(
+            matches!(
+                result,
+                Err(VerificationError::Zerocheck(
+                    ZerocheckError::FinalSumMismatch
+                ))
+            ),
+            "{result:?}"
+        );
+    }
+
+    /// Periodic compact rounds and successors agree across native binary backends.
+    #[test]
+    fn compact_blake3_backends_prove_identically() {
+        use p3_binary_field::{BinaryField2, Ghash128};
+        use p3_blake3_air::{Blake3BinaryCompactAir, NUM_BLAKE3_BINARY_COMPACT_COLS};
+        use p3_multi_stark::{GenericBackend, ReprBackend, SubfieldBackend, prove_with_backend};
+
+        let air = Blake3BinaryCompactAir::assuming_boolean_trace();
+        let log_height = 3;
+        let config =
+            PackedConfig::new(&[TableShape::new(log_height, NUM_BLAKE3_BINARY_COMPACT_COLS)]);
+        let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+        let table = Table::new(air.generate_random_trace_rows::<F>(1, 0).transpose());
+        let instances =
+            || ProverInstances::new(vec![ProverInstance::new(&air, table.clone(), &pk, &[])]);
+        let proofs = [
+            prove_with_backend::<_, _, GenericBackend>(&config, instances(), 0, &mut challenger())
+                .unwrap(),
+            prove_with_backend::<_, _, SubfieldBackend<BinaryField2>>(
+                &config,
+                instances(),
+                0,
+                &mut challenger(),
+            )
+            .unwrap(),
+            prove_with_backend::<_, _, ReprBackend<BinaryField2, Ghash128>>(
+                &config,
+                instances(),
+                0,
+                &mut challenger(),
+            )
+            .unwrap(),
+        ];
+        for proof in &proofs {
+            verify_with_security(
+                &config,
+                VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+                proof,
+                0,
+                SECURITY_BITS,
+                &mut challenger(),
+            )
+            .unwrap();
+            assert_eq!(
+                postcard::to_allocvec(proof).unwrap(),
+                postcard::to_allocvec(&proofs[0]).unwrap()
+            );
+        }
+    }
+
     /// Both arms accept an honest proof, at every height the fixture admits.
     #[test]
     fn a_boolean_gate_table_round_trips_on_both_arms() {

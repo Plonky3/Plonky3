@@ -6,12 +6,14 @@
 
 mod air;
 mod columns;
+mod compact;
 mod generation;
 #[cfg(test)]
 mod tests;
 
 pub use air::*;
 pub use columns::*;
+pub use compact::*;
 pub use generation::*;
 
 use crate::constants::IV;

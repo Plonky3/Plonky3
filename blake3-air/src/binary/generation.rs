@@ -300,28 +300,36 @@ impl<F: Field> Blake3BinaryCols<F> {
     ///
     /// Panics if a cell read is not a bit.
     pub fn compression_output(&self) -> [u32; 16] {
-        let mut v = [0u32; 16];
-        for (cols, [ia, ib, ic, id]) in self.rounds[NUM_ROUNDS - 1].iter().zip(G_SCHEDULE) {
-            let (d1, b1, d2, b2) = (
-                read_word(&cols.d1),
-                read_word(&cols.b1),
-                read_word(&cols.d2),
-                read_word(&cols.b2),
-            );
-            v[ia] = d1 ^ d2.rotate_left(8);
-            v[4 + ib] = b2;
-            v[8 + ic] = b1 ^ b2.rotate_left(7);
-            v[12 + id] = d2;
-        }
-        let cv = self.chaining_value.map(|word| read_word(&word));
-        array::from_fn(|i| {
-            if i < 8 {
-                v[i] ^ v[i + 8]
-            } else {
-                v[i] ^ cv[i - 8]
-            }
-        })
+        round_compression_output(&self.rounds[NUM_ROUNDS - 1], &self.chaining_value)
     }
+}
+
+/// Recover output feed-forward from one round and the original chaining value.
+pub(super) fn round_compression_output<F: Field>(
+    round: &[Blake3BinaryGCols<F>; super::G_PER_ROUND],
+    chaining_value: &[[F; 32]; 8],
+) -> [u32; 16] {
+    let mut v = [0u32; 16];
+    for (cols, [ia, ib, ic, id]) in round.iter().zip(G_SCHEDULE) {
+        let (d1, b1, d2, b2) = (
+            read_word(&cols.d1),
+            read_word(&cols.b1),
+            read_word(&cols.d2),
+            read_word(&cols.b2),
+        );
+        v[ia] = d1 ^ d2.rotate_left(8);
+        v[4 + ib] = b2;
+        v[8 + ic] = b1 ^ b2.rotate_left(7);
+        v[12 + id] = d2;
+    }
+    let cv = chaining_value.map(|word| read_word(&word));
+    array::from_fn(|i| {
+        if i < 8 {
+            v[i] ^ v[i + 8]
+        } else {
+            v[i] ^ cv[i - 8]
+        }
+    })
 }
 
 /// Read a word stored as 32 boolean cells, least significant bit first.
@@ -339,19 +347,19 @@ fn read_word<F: Field>(bits: &[F; 32]) -> u32 {
 /// The witness words one G step contributes, in column order.
 ///
 /// Each is a word whose low bits are the cells of one column group, lowest bit first.
-struct GWords {
+pub(super) struct GWords {
     /// Carries into bits `1..32` of `a + b`, shifted down to start at bit zero.
-    add1_carries: u32,
+    pub(super) add1_carries: u32,
     /// The word `d1`.
-    d1: u32,
+    pub(super) d1: u32,
     /// The word `b1`.
-    b1: u32,
+    pub(super) b1: u32,
     /// Carries into bits `1..32` of `a1 + b1`, shifted down to start at bit zero.
-    add2_carries: u32,
+    pub(super) add2_carries: u32,
     /// The output word `d2`.
-    d2: u32,
+    pub(super) d2: u32,
     /// The output word `b2`.
-    b2: u32,
+    pub(super) b2: u32,
 }
 
 /// Apply one G step to `state` and return the witness words it contributes.
@@ -359,7 +367,7 @@ struct GWords {
 /// `slots` holds the indices of the `a`, `b`, `c`, `d` words within their state rows.
 ///
 /// This is the whole arithmetic of a G step, and the field rows are written from what it returns.
-const fn g_words(
+pub(super) const fn g_words(
     state: &mut [[u32; 4]; 4],
     [ia, ib, ic, id]: [usize; 4],
     mx: u32,
@@ -397,7 +405,7 @@ const fn g_words(
 /// Apply one G step to `state`, writing its witness to `cols`.
 ///
 /// `slots` holds the indices of the `a`, `b`, `c`, `d` words within their state rows.
-fn generate_g<F: Field>(
+pub(super) fn generate_g<F: Field>(
     cols: &mut Blake3BinaryGCols<F>,
     state: &mut [[u32; 4]; 4],
     slots: [usize; 4],
