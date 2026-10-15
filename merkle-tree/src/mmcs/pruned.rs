@@ -77,6 +77,248 @@ mod tests {
     }
 
     #[test]
+    fn pruned_verifier_packed_hashes_match_scalar_paths() {
+        use alloc::sync::Arc;
+        use core::sync::atomic::{AtomicUsize, Ordering};
+        use p3_field::PackedValue;
+        use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
+
+        #[derive(Clone)]
+        struct Tracked<T>(T, Arc<AtomicUsize>);
+        impl<I: Clone, O, H: CryptographicHasher<I, O>> CryptographicHasher<I, O> for Tracked<H> {
+            fn hash_iter<T: IntoIterator<Item = I>>(&self, input: T) -> O {
+                if size_of::<I>() > size_of::<F>() {
+                    self.1.fetch_add(1, Ordering::Relaxed);
+                }
+                self.0.hash_iter(input)
+            }
+        }
+        impl<W: Copy, C: PseudoCompressionFunction<[W; 8], 4>> PseudoCompressionFunction<[W; 8], 4>
+            for Tracked<C>
+        {
+            fn compress(&self, input: [[W; 8]; 4]) -> [W; 8] {
+                if size_of::<W>() > size_of::<F>() {
+                    self.1.fetch_add(1, Ordering::Relaxed);
+                }
+                self.0.compress(input)
+            }
+        }
+        let mut rng = SmallRng::seed_from_u64(981);
+        let perm16 = Perm::new_from_rng_128(&mut rng);
+        let perm32 = PermWide::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm16);
+        let compress = MyCompress4::new(perm32);
+        let hash_calls = Arc::new(AtomicUsize::new(0));
+        let compress_calls = Arc::new(AtomicUsize::new(0));
+        let packed =
+            MerkleTreeMmcs::<<F as Field>::Packing, <F as Field>::Packing, _, _, 4, 8>::new(
+                Tracked(hash.clone(), hash_calls.clone()),
+                Tracked(compress.clone(), compress_calls.clone()),
+                0,
+            );
+        let scalar = MerkleTreeMmcs::<F, F, _, _, 4, 8>::new(hash, compress, 0);
+        let mats: Vec<_> = [(128, 3), (128, 5), (64, 2), (16, 4)]
+            .into_iter()
+            .map(|(height, width)| RowMajorMatrix::<F>::rand(&mut rng, height, width))
+            .collect();
+        let dims: Vec<_> = mats.iter().map(Matrix::dimensions).collect();
+        let (commit, data) = scalar.commit(mats);
+        let indices: Vec<_> = (0..35).map(|i| (i * 3) % 128).collect();
+        let opening = scalar.open_batch_pruned(&indices, &data);
+        packed
+            .verify_batch_pruned(
+                &commit,
+                &dims,
+                &indices,
+                &opening.opened_values,
+                &opening.pruned_proof,
+            )
+            .unwrap();
+        let restored = packed
+            .restore_and_recompute_paths(
+                &dims,
+                &indices,
+                &opening.opened_values,
+                &opening.pruned_proof,
+            )
+            .unwrap();
+        for (index, path) in indices.iter().zip(restored) {
+            assert_eq!(
+                path.siblings,
+                scalar.open_batch(*index, &data).opening_proof
+            );
+        }
+        if <<F as Field>::Packing as PackedValue>::WIDTH > 1 {
+            assert!(
+                hash_calls.load(Ordering::Relaxed) > 0,
+                "must hash packed leaf/injection groups"
+            );
+            assert!(
+                compress_calls.load(Ordering::Relaxed) > 0,
+                "must compress packed parent/injection groups"
+            );
+        }
+    }
+
+    #[test]
+    fn pruned_verifier_batches_fragmented_byte_rows_and_rejects_before_hashing() {
+        use alloc::sync::Arc;
+        use core::sync::atomic::{AtomicUsize, Ordering};
+        use p3_keccak::Keccak256Hash;
+        use p3_symmetric::{CompressionFunctionFromHasher, CryptographicHasher};
+
+        #[derive(Clone, Default)]
+        struct BatchedHash(Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>);
+        impl CryptographicHasher<u8, [u8; 32]> for BatchedHash {
+            const LANES: usize = 4;
+            fn hash_iter<I: IntoIterator<Item = u8>>(&self, input: I) -> [u8; 32] {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                Keccak256Hash.hash_iter(input)
+            }
+            fn hash_many(&self, input: &[u8], out: &mut [[u8; 32]]) {
+                self.0.fetch_add(out.len(), Ordering::Relaxed);
+                self.2.fetch_max(input.len(), Ordering::Relaxed);
+                Keccak256Hash.hash_many(input, out);
+            }
+        }
+        let hash = BatchedHash::default();
+        let mmcs = MerkleTreeMmcs::<u8, u8, _, _, 4, 32>::new(
+            hash.clone(),
+            CompressionFunctionFromHasher::new(hash.clone()),
+            0,
+        );
+        let mut rng = SmallRng::seed_from_u64(811);
+        for width in [1, 3, 17000] {
+            let mats: Vec<_> = [(53, width), (53, 5), (27, 2), (7, 4)]
+                .into_iter()
+                .map(|(height, width)| RowMajorMatrix::<u8>::rand(&mut rng, height, width))
+                .collect();
+            let dims: Vec<_> = mats.iter().map(Matrix::dimensions).collect();
+            let (commit, data) = mmcs.commit(mats);
+            // More than one lane group, an incomplete group, arbitrary ordering and duplicates.
+            let indices = vec![52, 0, 8, 2, 8, 26, 27, 51, 35, 43];
+            let opening = mmcs.open_batch_pruned(&indices, &data);
+            for &index in &indices {
+                let single = mmcs.open_batch(index, &data);
+                mmcs.verify_batch(&commit, &dims, index, (&single).into())
+                    .unwrap();
+            }
+            hash.0.store(0, Ordering::Relaxed);
+            hash.2.store(0, Ordering::Relaxed);
+            mmcs.verify_batch_pruned(
+                &commit,
+                &dims,
+                &indices,
+                &opening.opened_values,
+                &opening.pruned_proof,
+            )
+            .unwrap();
+            assert!(
+                hash.0.load(Ordering::Relaxed) > 0,
+                "verifier must use hash_many/compress_many"
+            );
+            assert!(
+                hash.2.load(Ordering::Relaxed)
+                    <= crate::builder::ROW_SCRATCH_BYTES.max(4 * (width + 5))
+            );
+            let mut malformed = opening.pruned_proof.clone();
+            malformed.sibling_hashes.push([0; 32]);
+            hash.0.store(0, Ordering::Relaxed);
+            hash.1.store(0, Ordering::Relaxed);
+            assert!(matches!(
+                mmcs.verify_batch_pruned(
+                    &commit,
+                    &dims,
+                    &indices,
+                    &opening.opened_values,
+                    &malformed
+                ),
+                Err(MerkleTreeError::MalformedPrunedProof(
+                    PrunedProofError::SiblingCountMismatch { .. }
+                ))
+            ));
+            assert_eq!(hash.0.load(Ordering::Relaxed), 0);
+            assert_eq!(hash.1.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn pruned_frontier_streams_without_restored_paths() {
+        use crate::pruning::{MerkleAuthPath, prune_paths};
+
+        let mut rng = SmallRng::seed_from_u64(197);
+        for cap_height in 0..=3 {
+            let perm16 = Perm::new_from_rng_128(&mut rng);
+            let perm32 = PermWide::new_from_rng_128(&mut rng);
+            let mmcs = MyMmcs4::new(MyHash::new(perm16), MyCompress4::new(perm32), cap_height);
+            // Non-power-of-two padding, a binary bridge before injection, and multiple
+            // matrices at a height all preserve the original full-path wire order.
+            let height: usize = if cap_height == 0 { 53 } else { 64 };
+            let mats: Vec<_> = [
+                (height, 3),
+                (height, 5),
+                (height.div_ceil(2), 2),
+                (height.div_ceil(8), 4),
+            ]
+            .into_iter()
+            .map(|(height, width)| RowMajorMatrix::<F>::rand(&mut rng, height, width))
+            .collect();
+            let dims: Vec<_> = mats.iter().map(Matrix::dimensions).collect();
+            let (commit, data) = mmcs.commit(mats);
+            for indices in [
+                vec![],
+                vec![52],
+                vec![52, 0, 8, 2, 8, 26, 27, 51],
+                (0..height).collect(),
+            ] {
+                let individual: Vec<_> =
+                    indices.iter().map(|&i| mmcs.open_batch(i, &data)).collect();
+                let paths: Vec<_> = individual
+                    .iter()
+                    .zip(&indices)
+                    .map(|(opening, &leaf_index)| MerkleAuthPath {
+                        leaf_index,
+                        siblings: opening.opening_proof.clone(),
+                    })
+                    .collect();
+                let schedule = mmcs.proof_arity_schedule(&dims).unwrap();
+                let expected = prune_paths(&schedule, &paths);
+                let pruned = mmcs.open_batch_pruned(&indices, &data);
+                assert_eq!(pruned.pruned_proof.sibling_hashes, expected.sibling_hashes);
+                for (opening, values) in individual.iter().zip(&pruned.opened_values) {
+                    assert_eq!(&opening.opened_values, values);
+                }
+                mmcs.verify_batch_pruned(
+                    &commit,
+                    &dims,
+                    &indices,
+                    &pruned.opened_values,
+                    &expected,
+                )
+                .unwrap();
+                let frontier = mmcs
+                    .walk_pruned_frontier::<_, false>(
+                        &dims,
+                        &indices,
+                        &pruned.opened_values,
+                        &expected,
+                    )
+                    .unwrap();
+                assert!(
+                    frontier.restored.is_empty(),
+                    "verification must not allocate full paths"
+                );
+                let restored = mmcs
+                    .restore_and_recompute_paths(&dims, &indices, &pruned.opened_values, &expected)
+                    .unwrap();
+                for (path, index) in restored.iter().zip(indices) {
+                    assert_eq!(path.siblings, mmcs.open_batch(index, &data).opening_proof);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn pruned_opening_matches_individual_binary() {
         let seed = 42u64;
         let mmcs = make_binary_mmcs(seed);
