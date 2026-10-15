@@ -80,6 +80,7 @@ mod tests {
     fn pruned_verifier_packed_hashes_match_scalar_paths() {
         use alloc::sync::Arc;
         use core::sync::atomic::{AtomicUsize, Ordering};
+
         use p3_field::PackedValue;
         use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 
@@ -164,6 +165,7 @@ mod tests {
     fn pruned_verifier_batches_fragmented_byte_rows_and_rejects_before_hashing() {
         use alloc::sync::Arc;
         use core::sync::atomic::{AtomicUsize, Ordering};
+
         use p3_keccak::Keccak256Hash;
         use p3_symmetric::{CompressionFunctionFromHasher, CryptographicHasher};
 
