@@ -410,6 +410,16 @@ impl RawDataSerializable for Ghash128 {
     fn into_bytes(self) -> impl IntoIterator<Item = u8> {
         self.0.to_le_bytes()
     }
+
+    #[cfg(target_endian = "little")]
+    #[inline]
+    fn as_serialized_bytes(input: &[Self]) -> Option<&[u8]> {
+        // SAFETY: `Self` is transparent over `u128` with no padding. Little-endian
+        // storage matches `into_bytes`; the borrowed view keeps its region and lifetime.
+        Some(unsafe {
+            core::slice::from_raw_parts(input.as_ptr().cast::<u8>(), core::mem::size_of_val(input))
+        })
+    }
 }
 
 impl crate::tower::private::Sealed for Ghash128 {}
@@ -625,6 +635,24 @@ mod tests {
     use super::{CANTOR_BASIS, Ghash128};
     use crate::tower::TowerLevel;
     use crate::{BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Gf2};
+
+    #[cfg(target_endian = "little")]
+    #[test]
+    fn borrowed_serialization_matches_wire_bytes_without_copying() {
+        let values = [
+            Ghash128(0),
+            Ghash128(u128::MAX),
+            Ghash128(0x0123456789abcdef),
+        ];
+        let bytes = Ghash128::as_serialized_bytes(&values).expect("a little-endian byte view");
+        let expected = values
+            .into_iter()
+            .flat_map(Ghash128::into_bytes)
+            .collect::<alloc::vec::Vec<_>>();
+        assert_eq!(bytes, expected);
+        assert_eq!(bytes.as_ptr(), values.as_ptr().cast::<u8>());
+        assert_eq!(Ghash128::as_serialized_bytes(&[]).unwrap().len(), 0);
+    }
 
     #[cfg(not(all(
         target_arch = "x86_64",
