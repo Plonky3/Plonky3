@@ -73,3 +73,7 @@ required-features = []
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "encoding"
+harness = false
