@@ -465,23 +465,28 @@ where
         // Fingerprint weights are shared by every row and every declaration.
         let weights = challenges.fingerprint_weights();
         BusDirection::ALL.map(|direction| {
-            // Blocks are independent, and concatenating them restores the planned leaf order.
-            self.plan
-                .blocks(direction)
+            let blocks = self.plan.blocks(direction);
+            let length = blocks
                 .iter()
-                .map(|block| {
-                    self.materialize_block(
-                        block,
-                        tables,
-                        preprocessed,
-                        periodic,
-                        public_values,
-                        &weights,
-                        challenges.offset,
-                    )
+                .try_fold(0usize, |length, block| {
+                    length.checked_add(1usize << block.log_height)
                 })
-                .collect::<Vec<_>>()
-                .concat()
+                .expect("a checked bus plan's leaves fit in memory");
+            let mut leaves = Vec::with_capacity(length);
+            // Release each temporary block before materializing the next one.
+            // Appending restores the planned leaf order without retaining all blocks.
+            for block in blocks {
+                leaves.extend(self.materialize_block(
+                    block,
+                    tables,
+                    preprocessed,
+                    periodic,
+                    public_values,
+                    &weights,
+                    challenges.offset,
+                ));
+            }
+            leaves
         })
     }
 
