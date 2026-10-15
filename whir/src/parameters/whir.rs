@@ -14,6 +14,9 @@ use crate::domain::WhirDomain;
 /// Reasons a set of user-facing parameters cannot form a valid WHIR configuration.
 #[derive(Debug, Error)]
 pub enum WhirConfigError {
+    /// Supplied opening values do not match the prescribed opening schedule.
+    #[error("invalid known opening evaluations: {0}")]
+    InvalidKnownEvaluations(&'static str),
     /// The number of claims cannot be represented by the budget counter.
     #[error("initial claim count overflow")]
     InitialClaimCountOverflow,

@@ -591,6 +591,26 @@ fn check_a_retained_clone_opens_like_the_original<L: Layout<F, EF> + Clone>() {
         .cloned()
         .map(Some)
         .collect::<Vec<_>>();
+    for supplied in [
+        known[..known.len() - 1].to_vec(),
+        vec![Some(OpeningBatch::new(vec![EF::ZERO], Vec::new())); known.len()],
+    ] {
+        let mut rejected = challenger.clone();
+        let mut untouched = rejected.clone();
+        assert!(
+            pcs.open_at_known(
+                prover_data.clone(),
+                &protocol,
+                &points,
+                &supplied,
+                &mut rejected,
+            )
+            .is_err()
+        );
+        let after: F = rejected.sample();
+        let before: F = untouched.sample();
+        assert_eq!(after, before);
+    }
     let mut known_challenger = challenger.clone();
     let from_known = pcs
         .open_at_known(

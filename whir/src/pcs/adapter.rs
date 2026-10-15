@@ -285,18 +285,24 @@ where
         )?;
         // One prescribed point per opening batch.
         assert_eq!(protocol.num_openings(), points.len());
-        assert_eq!(known.len(), points.len());
-        assert!(
-            protocol
-                .iter_openings()
-                .zip(known)
-                .all(|((_, batch), value)| {
-                    value
-                        .as_ref()
-                        .is_none_or(|value| batch.has_same_shape(value))
-                }),
-            "known evaluations must match each opening batch"
-        );
+        if known.len() != points.len() {
+            return Err(WhirConfigError::InvalidKnownEvaluations(
+                "wrong batch count",
+            ));
+        }
+        if protocol
+            .iter_openings()
+            .zip(known)
+            .any(|((_, batch), value)| {
+                value
+                    .as_ref()
+                    .is_some_and(|value| !batch.has_same_shape(value))
+            })
+        {
+            return Err(WhirConfigError::InvalidKnownEvaluations(
+                "wrong batch shape",
+            ));
+        }
 
         let mut prover_data = prover_data;
         let initial_ood_answers = (0..self.commitment_ood_samples)
