@@ -173,14 +173,75 @@ where
     }
 }
 
-impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> {
-    pub const fn new(
+impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R>
+where
+    Val: Send + Sync + Clone,
+    InputMmcs: HidingMmcs<Val>,
+{
+    /// Both MMCSs must be hiding, so a plain Merkle tree is rejected here, at construction,
+    /// rather than at the first use as a [`Pcs`].
+    ///
+    /// `new` takes `Challenge` as its own type parameter, inferred from the FRI MMCS, since
+    /// `HidingFriPcs` does not name it.
+    ///
+    /// ```
+    /// use p3_baby_bear::BabyBear;
+    /// use p3_commit::HidingMmcs;
+    /// use p3_fri::{FriParameters, HidingFriPcs};
+    ///
+    /// fn build<Dft, M: HidingMmcs<BabyBear>, C: Send + Sync + Clone, F: HidingMmcs<C>, R>(
+    ///     dft: Dft,
+    ///     mmcs: M,
+    ///     params: FriParameters<F>,
+    ///     rng: R,
+    /// ) -> HidingFriPcs<BabyBear, Dft, M, F, R> {
+    ///     HidingFriPcs::new(dft, mmcs, params, 4, rng)
+    /// }
+    /// ```
+    ///
+    /// The same function over a plain FRI MMCS does not compile:
+    ///
+    /// ```compile_fail
+    /// use p3_baby_bear::BabyBear;
+    /// use p3_commit::{HidingMmcs, Mmcs};
+    /// use p3_fri::{FriParameters, HidingFriPcs};
+    ///
+    /// fn build<Dft, M: HidingMmcs<BabyBear>, C: Send + Sync + Clone, F: Mmcs<C>, R>(
+    ///     dft: Dft,
+    ///     mmcs: M,
+    ///     params: FriParameters<F>,
+    ///     rng: R,
+    /// ) -> HidingFriPcs<BabyBear, Dft, M, F, R> {
+    ///     HidingFriPcs::new(dft, mmcs, params, 4, rng)
+    /// }
+    /// ```
+    ///
+    /// Nor over a plain input MMCS:
+    ///
+    /// ```compile_fail
+    /// use p3_baby_bear::BabyBear;
+    /// use p3_commit::{HidingMmcs, Mmcs};
+    /// use p3_fri::{FriParameters, HidingFriPcs};
+    ///
+    /// fn build<Dft, M: Mmcs<BabyBear>, C: Send + Sync + Clone, F: HidingMmcs<C>, R>(
+    ///     dft: Dft,
+    ///     mmcs: M,
+    ///     params: FriParameters<F>,
+    ///     rng: R,
+    /// ) -> HidingFriPcs<BabyBear, Dft, M, F, R> {
+    ///     HidingFriPcs::new(dft, mmcs, params, 4, rng)
+    /// }
+    /// ```
+    pub const fn new<Challenge: Send + Sync + Clone>(
         dft: Dft,
         mmcs: InputMmcs,
         params: FriParameters<FriMmcs>,
         num_random_codewords: usize,
         rng: R,
-    ) -> Self {
+    ) -> Self
+    where
+        FriMmcs: HidingMmcs<Challenge>,
+    {
         let inner = TwoAdicFriPcs::new(dft, mmcs, params);
         Self {
             inner,

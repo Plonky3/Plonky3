@@ -146,6 +146,8 @@ where
 }
 
 // Every leaf carries `SALT_ELEMS > 0` fresh salt elements (checked in `new`), so the commitment hides the unopened rows.
+// The fields are private and the type derives no `Default` or `Deserialize`, so outside this crate every value comes
+// from `new` or a clone of one; code inside it must not build a fresh one with a struct literal, which would skip the check.
 impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
     HidingMmcs<P::Value> for MerkleTreeHidingMmcs<P, PW, H, C, R, N, DIGEST_ELEMS, SALT_ELEMS>
 where
