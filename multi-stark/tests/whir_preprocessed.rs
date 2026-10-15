@@ -362,6 +362,86 @@ fn verify_rejects_a_wrong_public_value_alongside_a_preprocessed_trace() {
 }
 
 #[test]
+fn supplied_preprocessing_is_reused_and_shape_checked_before_commitment() {
+    use p3_multi_stark::setup_with_preprocessed_tables;
+    struct Counted<'a> {
+        air: &'a PreprocessedAir,
+        calls: &'a AtomicUsize,
+    }
+    impl BaseAir<F> for Counted<'_> {
+        fn width(&self) -> usize {
+            self.air.width()
+        }
+        fn preprocessed_width(&self) -> usize {
+            self.air.preprocessed_width()
+        }
+        fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.air.preprocessed_trace()
+        }
+    }
+    impl<AB: AirBuilder<F = F>> Air<AB> for Counted<'_> {
+        fn eval(&self, builder: &mut AB) {
+            self.air.eval(builder);
+        }
+    }
+    let air = PreprocessedAir {
+        height: 16,
+        cells: &[],
+    };
+    let calls = AtomicUsize::new(0);
+    let counted = Counted {
+        air: &air,
+        calls: &calls,
+    };
+    let config = config_for(4);
+    let (_, reference_vk) = setup(&config, &[&counted], &mut challenger()).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    let (pk, vk) = setup_with_preprocessed_tables(
+        &config,
+        &[&counted],
+        vec![Table::new(air.preprocessed_trace().unwrap().transpose())],
+        &mut challenger(),
+    )
+    .unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &counted,
+            Table::new(main_trace(&fixed_column(16)).transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    for key in [&vk, &reference_vk] {
+        verify(
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(&counted, key, 4, &[])]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+    }
+    assert!(
+        setup_with_preprocessed_tables(&config, &[&counted], vec![], &mut challenger()).is_err()
+    );
+    assert!(
+        setup_with_preprocessed_tables(
+            &config,
+            &[&counted],
+            vec![Table::new(RowMajorMatrix::new(vec![F::ZERO; 32], 16))],
+            &mut challenger()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn prove_verify_preprocessed_roundtrips() {
     // A satisfying trace with a preprocessed column must prove and verify end to end.
     let n = 256;

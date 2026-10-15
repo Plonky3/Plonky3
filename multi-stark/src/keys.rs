@@ -15,9 +15,7 @@ use p3_bus::BusSymbolicBuilder;
 use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
 use p3_lookup::InteractionSymbolicBuilder;
-use p3_matrix::Matrix;
 use p3_sumcheck::layout::Table;
-use p3_util::log2_strict_usize;
 
 use crate::ProvingError;
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
@@ -171,6 +169,52 @@ where
         + Air<BusSymbolicBuilder<C::Val, C::Challenge>>,
     Commitment<C>: Clone,
 {
+    let tables = airs
+        .iter()
+        .filter(|air| air.preprocessed_width() != 0)
+        .map(|air| {
+            let trace = air
+                .preprocessed_trace()
+                .expect("AIR with preprocessed columns must return a preprocessed trace");
+            Table::new(trace.transpose())
+        })
+        .collect();
+    setup_with_preprocessed_tables(config, airs, tables, challenger)
+}
+
+/// Sets up matched keys from trusted preprocessing tables in nonempty AIR order.
+///
+/// The caller supplies the fixed tables that its AIRs use. Their count and widths
+/// are checked before commitment; values are bound by the returned keys. This
+/// avoids regenerating tables a caller has already materialized and validated.
+#[allow(clippy::type_complexity)]
+pub fn setup_with_preprocessed_tables<C, A>(
+    config: &C,
+    airs: &[&A],
+    tables: Vec<Table<C::Val>>,
+    challenger: &mut C::Challenger,
+) -> Result<(ProvingKey<C>, VerifyingKey<C>), ProvingError<PcsProverError<C>>>
+where
+    C: MultiStarkConfig,
+    A: BaseAir<C::Val>
+        + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>
+        + Air<BusSymbolicBuilder<C::Val, C::Challenge>>,
+    Commitment<C>: Clone,
+{
+    let declared = airs
+        .iter()
+        .filter(|air| air.preprocessed_width() != 0)
+        .collect::<Vec<_>>();
+    if tables.len() != declared.len()
+        || tables
+            .iter()
+            .zip(declared)
+            .any(|(table, air)| table.num_polys() != air.preprocessed_width())
+    {
+        return Err(ProvingError::PreprocessedShape(
+            "tables do not match the declared preprocessing",
+        ));
+    }
     let air_profiles = airs
         .iter()
         .map(|&air| get_air_profile::<C::Val, C::Challenge, A>(air))
@@ -180,17 +224,7 @@ where
         .iter()
         .map(|&air| AirShape::of::<C::Val, A>(air))
         .collect::<Vec<_>>();
-    let mut tables = Vec::new();
-    let mut preprocessed_log_heights = Vec::new();
-
-    for air in airs.iter().filter(|air| air.preprocessed_width() != 0) {
-        let trace = air
-            .preprocessed_trace()
-            .expect("AIR with preprocessed columns must return a preprocessed trace");
-
-        preprocessed_log_heights.push(log2_strict_usize(trace.height()));
-        tables.push(Table::new(trace.transpose()));
-    }
+    let preprocessed_log_heights = tables.iter().map(Table::num_variables).collect();
 
     if tables.is_empty() {
         return Ok((

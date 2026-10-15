@@ -51,6 +51,9 @@ pub(crate) struct Forgery {
 /// A proving-time PCS budget failure or a failed statement security assessment.
 #[derive(Debug, thiserror::Error)]
 pub enum ProvingError<E> {
+    /// Supplied fixed tables do not match the AIR preprocessing declarations.
+    #[error("invalid preprocessing shape: {0}")]
+    PreprocessedShape(&'static str),
     /// The PCS rejected a commitment or an opening budget.
     #[error("PCS {phase} failed: {source:?}")]
     Pcs { phase: &'static str, source: E },

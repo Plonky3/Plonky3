@@ -46,7 +46,7 @@ pub use backend::{
 pub use bus::BusBindingError;
 pub use contract::{MachineDeclaration, SealedProof, TableDeclaration};
 pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};
-pub use keys::{ProvingKey, VerifyingKey, setup};
+pub use keys::{ProvingKey, VerifyingKey, setup, setup_with_preprocessed_tables};
 pub use p3_air::BoundaryIoError;
 pub use proof::MultiStarkProof;
 pub use prover::{
