@@ -49,6 +49,8 @@ pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierIn
 pub use keys::{ProvingKey, VerifyingKey, setup};
 pub use p3_air::BoundaryIoError;
 pub use proof::MultiStarkProof;
-pub use prover::{ProvingError, prove, prove_with_backend, prove_with_security};
+pub use prover::{
+    ProvingError, prove, prove_with_backend, prove_with_security, prove_with_security_and_backend,
+};
 pub use security::{MultiStarkSecurityReport, SecurityError, security_report};
 pub use verifier::{VerificationError, verify, verify_with_security};

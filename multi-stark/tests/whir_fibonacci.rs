@@ -374,7 +374,8 @@ fn security_rejects_verifier_height_overflow_without_panicking() {
 fn security_checked_whir_roundtrip_and_target_rejection() {
     use p3_challenger::CanSample;
     use p3_multi_stark::{
-        SecurityError, prove_with_security, security_report, verify_with_security,
+        GenericBackend, SecurityError, prove_with_security, prove_with_security_and_backend,
+        security_report, verify_with_security,
     };
 
     let mut config = config_for(4, NUM_COLS);
@@ -424,7 +425,13 @@ fn security_checked_whir_roundtrip_and_target_rejection() {
 
     let mut rejected = challenger();
     assert!(matches!(
-        prove_with_security(&config, prover_instances(), 0, 100, &mut rejected),
+        prove_with_security_and_backend::<_, _, GenericBackend>(
+            &config,
+            prover_instances(),
+            0,
+            100,
+            &mut rejected
+        ),
         Err(p3_multi_stark::ProvingError::Security(
             SecurityError::InsufficientSecurity { .. }
         ))
@@ -434,6 +441,18 @@ fn security_checked_whir_roundtrip_and_target_rejection() {
     assert_eq!(after_rejection, untouched);
 
     let proof = prove_with_security(&config, prover_instances(), 0, 20, &mut challenger()).unwrap();
+    let selected = prove_with_security_and_backend::<_, _, GenericBackend>(
+        &config,
+        prover_instances(),
+        0,
+        20,
+        &mut challenger(),
+    )
+    .unwrap();
+    assert_eq!(
+        postcard::to_allocvec(&proof).unwrap(),
+        postcard::to_allocvec(&selected).unwrap()
+    );
     verify_with_security(
         &config,
         verifier_instances(),

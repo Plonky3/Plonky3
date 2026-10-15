@@ -92,8 +92,43 @@ where
     <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking:
         From<C::Challenge> + From<<C::Val as Field>::Packing>,
 {
+    prove_with_security_and_backend::<C, A, GenericBackend>(
+        config,
+        instances,
+        pow_bits,
+        target_bits,
+        challenger,
+    )
+}
+
+/// Prove with backend `B` only after the complete statement meets `target_bits`.
+///
+/// Assessment precedes commitment, grinding, and transcript mutation, as in
+/// [`prove_with_security`]. The chosen backend preserves the proof and transcript.
+pub fn prove_with_security_and_backend<'a, C, A, B>(
+    config: &C,
+    instances: ProverInstances<'a, C, A>,
+    pow_bits: usize,
+    target_bits: usize,
+    challenger: &mut C::Challenger,
+) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
+where
+    C: MultiStarkConfig,
+    C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
+    C::Challenger: Clone
+        + FieldChallenger<C::Val>
+        + GrindingChallenger<Witness = C::Val>
+        + CanSampleUniformBits<C::Val>
+        + CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    ProverData<C>: Clone,
+    A: ProverAir<C::Val, C::Challenge>,
+    B: ZerocheckBackend<C::Val, C::Challenge, A>,
+    <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking:
+        From<C::Challenge> + From<<C::Val as Field>::Packing>,
+{
     assess_statement(config, &instances.statement())?.require_security(target_bits)?;
-    prove(config, instances, pow_bits, challenger)
+    prove_with_backend::<C, A, B>(config, instances, pow_bits, challenger)
 }
 
 /// Prove that a batch of AIR instances is satisfied by committed execution traces.
