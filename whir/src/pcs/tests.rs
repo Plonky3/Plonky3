@@ -1,5 +1,6 @@
 //! End-to-end tests exercising the WHIR PCS through the multilinear trait.
 
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -328,13 +329,16 @@ enum Tamper {
     ///
     /// The commitment fixes the true value, so the WHIR proof must reject.
     ProofEval,
+    /// Supply a wrong known evaluation to the prover.
+    KnownEval,
+    KnownHonest,
 }
 
 /// Drive the prescribed-point opening path: open and verify at caller-chosen points.
 ///
 /// Returns the verifier result so a test can assert acceptance.
 /// Optionally applies one mutation to check that the broken binding is rejected.
-fn run_whir_pcs_at_prescribed_points<L: Layout<F, EF>>(
+fn run_whir_pcs_at_prescribed_points<L: Layout<F, EF> + Clone>(
     specs: &[TableSpec],
     folding_factor: FoldingFactor,
     soundness_type: SecurityAssumption,
@@ -389,9 +393,36 @@ fn run_whir_pcs_at_prescribed_points<L: Layout<F, EF>>(
                 &mut challenger,
             )
             .unwrap();
-        let proof = pcs
-            .open_at(prover_data, &protocol, &points, &mut challenger)
-            .unwrap();
+        let proof = if matches!(tamper, Tamper::KnownEval | Tamper::KnownHonest) {
+            let reference = pcs
+                .open_at(
+                    prover_data.clone(),
+                    &protocol,
+                    &points,
+                    &mut challenger.clone(),
+                )
+                .unwrap();
+            let mut known = vec![None; protocol.num_openings()];
+            let eval = &reference.evals[0];
+            let mut current = eval.current().to_vec();
+            if matches!(tamper, Tamper::KnownEval) {
+                current[0] += EF::ONE;
+            }
+            known[0] = Some(OpeningBatch::new(current, eval.next().to_vec()));
+            let supplied = pcs
+                .open_at_known(prover_data, &protocol, &points, &known, &mut challenger)
+                .unwrap();
+            if matches!(tamper, Tamper::KnownHonest) {
+                assert_eq!(
+                    postcard::to_allocvec(&supplied).unwrap(),
+                    postcard::to_allocvec(&reference).unwrap()
+                );
+            }
+            supplied
+        } else {
+            pcs.open_at(prover_data, &protocol, &points, &mut challenger)
+                .unwrap()
+        };
         (commitment, proof)
     };
 
@@ -428,6 +459,49 @@ fn run_whir_pcs_at_prescribed_points<L: Layout<F, EF>>(
         &mut challenger,
     )
     .map(|_evals| ())
+}
+
+#[test]
+fn supplied_evaluations_preserve_the_proof_and_reject_wrong_claims() {
+    fn check<L: Layout<F, EF> + Clone>() {
+        let specs = [TableSpec::new(
+            TableShape::new(5, 2),
+            vec![
+                OpeningBatch::new(vec![1, 0], vec![0]),
+                OpeningBatch::new(vec![0], vec![]),
+            ],
+        )];
+        run_whir_pcs_at_prescribed_points::<L>(
+            &specs,
+            FoldingFactor::Constant(2),
+            SecurityAssumption::CapacityBound,
+            0,
+            Tamper::KnownHonest,
+        )
+        .unwrap();
+        let rejection = std::panic::catch_unwind(|| {
+            run_whir_pcs_at_prescribed_points::<L>(
+                &specs,
+                FoldingFactor::Constant(2),
+                SecurityAssumption::CapacityBound,
+                0,
+                Tamper::KnownEval,
+            )
+        });
+        match rejection {
+            Ok(result) => assert!(result.is_err()),
+            Err(error) => {
+                let message = error
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| error.downcast_ref::<&str>().copied())
+                    .unwrap_or("");
+                assert!(cfg!(debug_assertions) && message.contains("known_evals_agree"));
+            }
+        }
+    }
+    check::<PrefixProver<F, EF>>();
+    check::<SuffixProver<F, EF>>();
 }
 
 /// A proving key keeps its commitment's prover data and opens a clone of it on every proof.
@@ -508,6 +582,27 @@ fn check_a_retained_clone_opens_like_the_original<L: Layout<F, EF> + Clone>() {
         .unwrap();
     assert_eq!(
         postcard::to_allocvec(&from_clone).unwrap(),
+        postcard::to_allocvec(&from_original).unwrap()
+    );
+
+    let known = from_original
+        .evals
+        .iter()
+        .cloned()
+        .map(Some)
+        .collect::<Vec<_>>();
+    let mut known_challenger = challenger.clone();
+    let from_known = pcs
+        .open_at_known(
+            prover_data.clone(),
+            &protocol,
+            &points,
+            &known,
+            &mut known_challenger,
+        )
+        .unwrap();
+    assert_eq!(
+        postcard::to_allocvec(&from_known).unwrap(),
         postcard::to_allocvec(&from_original).unwrap()
     );
 

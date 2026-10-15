@@ -158,6 +158,15 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// - evaluated at `z_svo` to obtain the opening value
     /// - partially compressed after each SVO round to feed the accumulator path
     pub fn eval(&self, poly: PolyView<'_, F>) -> (EF, EqSvoPartials<EF>) {
+        self.eval_internal(poly, None)
+    }
+
+    /// Computes SVO residuals while reusing an already known opening value.
+    pub fn eval_with_known(&self, poly: PolyView<'_, F>, known: EF) -> EqSvoPartials<EF> {
+        self.eval_internal(poly, Some(known)).1
+    }
+
+    fn eval_internal(&self, poly: PolyView<'_, F>, known: Option<EF>) -> (EF, EqSvoPartials<EF>) {
         assert_eq!(self.num_variables(), poly.num_variables());
         // Each per-round compression is wrapped as an equality payload as it is produced.
         let (compressed, partial_evals) = match self.var_order {
@@ -184,7 +193,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
             }
         };
         // Evaluate the fully compressed SVO-only polynomial to get the scalar opening value.
-        let eval = compressed.eval_base(&self.z_svo);
+        let eval = known.unwrap_or_else(|| compressed.eval_base(&self.z_svo));
         (eval, EqSvoPartials::new(partial_evals))
     }
 
@@ -474,6 +483,25 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         poly: PolyView<'_, F>,
         d_eq: Option<&Poly<EF>>,
     ) -> (EF, NextSvoPartials<EF>) {
+        self.eval_next_suffix_internal(poly, d_eq, None)
+    }
+
+    /// Computes successor residuals while reusing a known suffix opening value.
+    pub fn eval_next_suffix_with_known(
+        &self,
+        poly: PolyView<'_, F>,
+        d_eq: Option<&Poly<EF>>,
+        known: EF,
+    ) -> NextSvoPartials<EF> {
+        self.eval_next_suffix_internal(poly, d_eq, Some(known)).1
+    }
+
+    fn eval_next_suffix_internal(
+        &self,
+        poly: PolyView<'_, F>,
+        d_eq: Option<&Poly<EF>>,
+        known: Option<EF>,
+    ) -> (EF, NextSvoPartials<EF>) {
         // The polynomial must cover both the split and SVO variables.
         assert_eq!(self.num_variables(), poly.num_variables());
         // This routine derives its compressions only for suffix layout.
@@ -517,6 +545,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
 
         // Weight the three state tables against the payloads and cache one table per round.
         self.eval_next_with(
+            known,
             [
                 states.done().as_slice(),
                 states.carry().as_slice(),
@@ -549,6 +578,23 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// - If the polynomial does not span all point variables.
     /// - If the point is not in prefix layout.
     pub fn eval_next_prefix(&self, poly: PolyView<'_, F>) -> (EF, NextSvoPartials<EF>) {
+        self.eval_next_prefix_internal(poly, None)
+    }
+
+    /// Computes successor residuals while reusing a known prefix opening value.
+    pub fn eval_next_prefix_with_known(
+        &self,
+        poly: PolyView<'_, F>,
+        known: EF,
+    ) -> NextSvoPartials<EF> {
+        self.eval_next_prefix_internal(poly, Some(known)).1
+    }
+
+    fn eval_next_prefix_internal(
+        &self,
+        poly: PolyView<'_, F>,
+        known: Option<EF>,
+    ) -> (EF, NextSvoPartials<EF>) {
         // The polynomial must cover both the split and SVO variables.
         assert_eq!(self.num_variables(), poly.num_variables());
         // This routine derives its compressions only for prefix layout.
@@ -592,6 +638,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
 
         // Weight the three tables against the payloads and cache one table per round.
         self.eval_next_with(
+            known,
             [
                 eq.as_slice(),
                 states.done().as_slice(),
@@ -622,6 +669,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// - One cached successor table per SVO sumcheck round.
     fn eval_next_with(
         &self,
+        known: Option<EF>,
         weights: [&[EF]; 3],
         payloads: [&Poly<EF>; 3],
         mut round_tail: impl FnMut(usize) -> NextPartials<EF>,
@@ -632,13 +680,15 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         let svo_rows = 1 << self.num_variables_svo();
 
         // Opening value: sum each weight table against its payload over every SVO row.
-        let eval = (0..svo_rows)
-            .map(|svo_idx| {
-                w0[svo_idx] * p0.as_slice()[svo_idx]
-                    + w1[svo_idx] * p1.as_slice()[svo_idx]
-                    + w2[svo_idx] * p2.as_slice()[svo_idx]
-            })
-            .sum();
+        let eval = known.unwrap_or_else(|| {
+            (0..svo_rows)
+                .map(|svo_idx| {
+                    w0[svo_idx] * p0.as_slice()[svo_idx]
+                        + w1[svo_idx] * p1.as_slice()[svo_idx]
+                        + w2[svo_idx] * p2.as_slice()[svo_idx]
+                })
+                .sum()
+        });
 
         // Cache one compressed successor table per SVO sumcheck round.
         let rounds = (1..=self.num_variables_svo())

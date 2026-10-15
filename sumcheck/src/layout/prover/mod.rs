@@ -418,8 +418,8 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     ///
     /// # Panics
     ///
-    /// When the layout runs preprocessing rounds: those rounds read per-round residuals
-    /// of the column, which an evaluation alone does not carry.
+    /// When the supplied evaluations do not match the request. Layouts still read
+    /// any column residuals needed by their preprocessing rounds.
     fn record_opening_known(
         &mut self,
         table_idx: usize,

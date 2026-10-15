@@ -263,6 +263,20 @@ where
         points: &[Point<EF>],
         challenger: &mut Challenger,
     ) -> Result<Self::Proof, Self::ProverError> {
+        let known = alloc::vec![None; protocol.num_openings()];
+        self.open_at_known(prover_data, protocol, points, &known, challenger)
+    }
+
+    /// Bind supplied evaluations through the same reduction as computed evaluations.
+    /// Preprocessing residuals are still computed; supplied scalar values are reused.
+    fn open_at_known(
+        &self,
+        prover_data: Self::ProverData,
+        protocol: &OpeningProtocol,
+        points: &[Point<EF>],
+        known: &[Option<OpeningEvals<EF>>],
+        challenger: &mut Challenger,
+    ) -> Result<Self::Proof, Self::ProverError> {
         self.config.validate_initial_claims(
             protocol
                 .checked_num_claims()
@@ -271,6 +285,18 @@ where
         )?;
         // One prescribed point per opening batch.
         assert_eq!(protocol.num_openings(), points.len());
+        assert_eq!(known.len(), points.len());
+        assert!(
+            protocol
+                .iter_openings()
+                .zip(known)
+                .all(|((_, batch), value)| {
+                    value
+                        .as_ref()
+                        .is_none_or(|value| batch.has_same_shape(value))
+                }),
+            "known evaluations must match each opening batch"
+        );
 
         let mut prover_data = prover_data;
         let initial_ood_answers = (0..self.commitment_ood_samples)
@@ -281,10 +307,18 @@ where
         let evals = protocol
             .iter_openings()
             .zip(points)
-            .map(|((table_idx, batch), point)| {
-                prover_data
-                    .layout
-                    .eval_at(table_idx, batch, point, challenger)
+            .zip(known)
+            .map(|(((table_idx, batch), point), known)| {
+                if let Some(evals) = known.as_ref() {
+                    prover_data
+                        .layout
+                        .eval_at_known(table_idx, batch, point, evals, challenger);
+                    evals.clone()
+                } else {
+                    prover_data
+                        .layout
+                        .eval_at(table_idx, batch, point, challenger)
+                }
             })
             .collect::<Vec<_>>();
 

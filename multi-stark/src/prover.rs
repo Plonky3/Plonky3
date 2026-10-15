@@ -686,10 +686,26 @@ where
         let schedule = instances.preprocessed_schedule(indexed_plan.as_ref(), |role, rows| {
             trace_suffix(points.at(role), rows)
         });
-        config.preprocessed_pcs().open_at(
+        let mut known = alloc::vec![None; schedule.protocol().num_openings()];
+        let evaluations = zerocheck_proof
+            .preprocessed_local
+            .into_iter()
+            .zip(zerocheck_proof.preprocessed_next)
+            .zip(instances.iter())
+            .filter(|(_, instance)| instance.air.preprocessed_width() != 0)
+            .map(|((local, next), _)| OpeningEvals::new(local, next));
+        for (batch, evaluations) in schedule
+            .first_batch_per_table()
+            .into_iter()
+            .zip(evaluations)
+        {
+            known[batch] = Some(evaluations);
+        }
+        config.preprocessed_pcs().open_at_known(
             preprocessed.prover_data.clone(),
             schedule.protocol(),
             &schedule.against(),
+            &known,
             challenger,
         )
     });

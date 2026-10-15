@@ -156,9 +156,36 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
         );
         debug_assert!(self.known_evals_agree(table_idx, batch, point, evals));
 
-        // The point is factorised as the evaluating route factorises it; only the pass is skipped.
         let point = SvoPoint::new_packed(self.claims.folding, point);
-        self.claims.record_known(table_idx, batch, point, evals);
+        if self.claims.folding == 0 {
+            self.claims.record_known(table_idx, batch, point, evals);
+            return;
+        }
+        let table = &self.claims.tables[table_idx];
+        let current = batch
+            .current()
+            .par_iter()
+            .copied()
+            .zip(evals.current().par_iter().copied())
+            .map(|(poly_idx, eval)| {
+                Opening::new_with_data(
+                    poly_idx,
+                    eval,
+                    point.eval_with_known(table.poly(poly_idx), eval),
+                )
+            })
+            .collect::<Vec<_>>();
+        let next = batch
+            .next()
+            .par_iter()
+            .copied()
+            .zip(evals.next().par_iter().copied())
+            .map(|(poly_idx, eval)| {
+                let residuals = point.eval_next_prefix_with_known(table.poly(poly_idx), eval);
+                Opening::new_with_data(poly_idx, eval, residuals)
+            })
+            .collect::<Vec<_>>();
+        self.claims.claim_map[table_idx].push(ProverMultiClaim::new(point, current, next));
     }
 
     /// Evaluates the full stacked polynomial at a point and records the claim.
