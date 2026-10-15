@@ -663,6 +663,12 @@ where
         {
             known[batch] = Some(OpeningEvals::new(local, next));
         }
+        // Open the committed table so the forged bus claim reaches the closing check,
+        // while reusing the correct known evaluations for every other table.
+        #[cfg(test)]
+        if let Some((air, _)) = forgery.and_then(|forgery| forgery.bus_table.as_ref()) {
+            known[schedule.first_batch_per_table()[*air]] = None;
+        }
         config.pcs().open_at_known(
             prover_data,
             schedule.protocol(),
