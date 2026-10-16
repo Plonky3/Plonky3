@@ -47,7 +47,7 @@ pub trait AirBuilder: Sized {
 
     /// Variable type for periodic column values at the current row.
     ///
-    /// - Periodic columns are commitment-free witness data.
+    /// - Periodic columns are public parameters, computed by both prover and verifier.
     /// - Their values repeat with a fixed period.
     /// - Builders without periodic data still pick a concrete type, so
     ///   the trait can be implemented uniformly.

@@ -10,7 +10,9 @@ use crate::{
 
 /// Compute the multiplicative inverse of every element in a slice via Montgomery's trick.
 ///
-/// Replaces `n` field inversions with one inversion plus `~3n` multiplications:
+/// Each chunk of at most 1024 elements uses one field inversion for its nonempty
+/// 4-lane packed prefix, plus one more if it has a scalar tail. Each part uses
+/// Montgomery's trick:
 /// - forward pass: build prefix products of the inputs,
 /// - one inversion of the full product,
 /// - reverse pass: derive each individual inverse from the prefix products.
@@ -80,7 +82,7 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
 
             // Phase 2 — packed pass: 4 independent Montgomery chains, one per lane.
             //
-            // Final inversion lands on a 4-lane array → one scalar inversion per chunk.
+            // Final inversion lands on a 4-lane array → one scalar inversion for the packed prefix.
             batch_multiplicative_inverse_general(x_packed, result_packed, |y| y.inverse());
 
             // Phase 3 — tail pass: 0..=3 leftover scalars.
