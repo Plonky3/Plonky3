@@ -91,8 +91,13 @@ impl<T: Copy> KeccakCols<T> {
     }
 }
 
+/// Returns the column index of the `i`th limb in the input rate.
+///
+/// # Panics
+///
+/// Panics if `i >= RATE_LIMBS` (68 limbs).
 pub fn input_limb(i: usize) -> usize {
-    debug_assert!(i < RATE_LIMBS);
+    assert!(i < RATE_LIMBS, "rate limb index out of bounds");
 
     let i_u64 = i / U64_LIMBS;
     let limb_index = i % U64_LIMBS;
@@ -104,8 +109,13 @@ pub fn input_limb(i: usize) -> usize {
     KECCAK_COL_MAP.preimage[y][x][limb_index]
 }
 
+/// Returns the column index of the `i`th limb in the output rate.
+///
+/// # Panics
+///
+/// Panics if `i >= RATE_LIMBS` (68 limbs).
 pub fn output_limb(i: usize) -> usize {
-    debug_assert!(i < RATE_LIMBS);
+    assert!(i < RATE_LIMBS, "rate limb index out of bounds");
 
     let i_u64 = i / U64_LIMBS;
     let limb_index = i % U64_LIMBS;
@@ -143,5 +153,36 @@ impl<T> BorrowMut<KeccakCols<T>> for [T] {
         debug_assert!(suffix.is_empty(), "Alignment should match");
         debug_assert_eq!(shorts.len(), 1);
         &mut shorts[0]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limb_indices_match_column_layout() {
+        for i in 0..RATE_LIMBS {
+            assert_eq!(input_limb(i), KECCAK_COL_MAP.preimage[0][0][0] + i);
+
+            let expected_output = if i < U64_LIMBS {
+                KECCAK_COL_MAP.a_prime_prime_prime_0_0_limbs[i]
+            } else {
+                KECCAK_COL_MAP.a_prime_prime[0][0][0] + i
+            };
+            assert_eq!(output_limb(i), expected_output);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "rate limb index out of bounds")]
+    fn input_limb_rejects_capacity_index() {
+        input_limb(RATE_LIMBS);
+    }
+
+    #[test]
+    #[should_panic(expected = "rate limb index out of bounds")]
+    fn output_limb_rejects_capacity_index() {
+        output_limb(RATE_LIMBS);
     }
 }
