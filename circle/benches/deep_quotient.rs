@@ -10,8 +10,8 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_mersenne_31::{Mersenne31, QM31};
-use rand::{RngExt, SeedableRng};
 use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 type F = Mersenne31;
 type EF = QM31;
