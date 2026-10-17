@@ -1010,6 +1010,14 @@ where
                             }
                         }
                     }
+                    // Finish this query's first-layer shape checks before looking for
+                    // collisions in later queries, matching the original rejection order.
+                    let num_heights = query_points.len();
+                    if first_layer_siblings[query].len() != num_heights
+                        || proof.lambdas.len() != num_heights
+                    {
+                        return Err(InputError::InputShapeError);
+                    }
                     // Every geometry came from a matrix/point visited above.
                     vanishing_parts.extend(query_parts.into_iter().map(Option::unwrap));
                 }
@@ -1267,7 +1275,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_challenger::{HashChallenger, SerializingChallenger32};
+    use p3_challenger::{CanSample, CanSampleBits, HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
@@ -1473,6 +1481,114 @@ mod tests {
         // Smoke test: an honestly generated proof must verify successfully.
         let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof(0);
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).expect("verify err");
+    }
+
+    /// Preserve authenticated query locations while changing the claimed opening point.
+    /// All grinding difficulties are zero in this fixture, so bit samples are only queries.
+    struct QueryReplayChallenger {
+        inner: Challenger,
+        indices: Vec<usize>,
+        replay: bool,
+        next: usize,
+    }
+
+    impl<T: Clone> CanObserve<T> for QueryReplayChallenger
+    where
+        Challenger: CanObserve<T>,
+    {
+        fn observe(&mut self, value: T) {
+            self.inner.observe(value);
+        }
+
+        fn observe_slice(&mut self, values: &[T]) {
+            self.inner.observe_slice(values);
+        }
+    }
+
+    impl CanSample<Val> for QueryReplayChallenger {
+        fn sample(&mut self) -> Val {
+            self.inner.sample()
+        }
+    }
+
+    impl CanSampleBits<usize> for QueryReplayChallenger {
+        fn sample_bits(&mut self, bits: usize) -> usize {
+            let sampled = self.inner.sample_bits(bits);
+            if self.replay {
+                let index = self.indices[self.next];
+                self.next += 1;
+                index
+            } else {
+                self.indices.push(sampled);
+                sampled
+            }
+        }
+    }
+
+    impl FieldChallenger<Val> for QueryReplayChallenger {}
+
+    impl GrindingChallenger for QueryReplayChallenger {
+        type Witness = Val;
+
+        fn grind(&mut self, bits: usize) -> Val {
+            self.inner.grind(bits)
+        }
+    }
+
+    #[test]
+    fn query_shape_errors_precede_later_collisions() {
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof_at(0, 0, 0);
+        let mut rounds: Vec<CommitmentWithClaims<Val, Challenge, _>> =
+            vec![(comm, vec![(d, vec![(zeta, values[0][0][0].clone())])]).into()];
+        let mut challenger = QueryReplayChallenger {
+            inner: Challenger::from_hasher(vec![], byte_hash),
+            indices: Vec::new(),
+            replay: false,
+            next: 0,
+        };
+        pcs.verify(rounds.clone(), &proof, &mut challenger).unwrap();
+        let indices = challenger.indices;
+        assert_ne!(indices[0], indices[1], "fixture needs distinct queries");
+        let log_height = d.log_n + pcs.fri_params.log_blowup;
+        let collision = CircleDomain::<Val>::standard(log_height)
+            .nth_point(cfft_permute_index(indices[1], log_height))
+            .to_projective_line()
+            .unwrap();
+        rounds[0].matrices[0].points[0].point = collision.into();
+
+        // The collision is reached through CirclePcs::verify and real input MMCS checks.
+        // With either earlier query-0 shape fault, that shape error must win instead.
+        for shape_fault in 0..3 {
+            let mut proof = proof.clone();
+            match shape_fault {
+                1 => proof.fri_proof.input_openings.first_layer_siblings[0].clear(),
+                2 => proof.lambdas.clear(),
+                _ => {}
+            }
+            let err = pcs
+                .verify(
+                    rounds.clone(),
+                    &proof,
+                    &mut QueryReplayChallenger {
+                        inner: Challenger::from_hasher(vec![], byte_hash),
+                        indices: indices.clone(),
+                        replay: true,
+                        next: 0,
+                    },
+                )
+                .unwrap_err();
+            if shape_fault == 0 {
+                assert!(matches!(
+                    err,
+                    FriError::InputError(InputError::OpeningPointMatchesQueryPoint)
+                ));
+            } else {
+                assert!(
+                    matches!(err, FriError::InputError(InputError::InputShapeError)),
+                    "{err:?}"
+                );
+            }
+        }
     }
 
     #[test]
