@@ -50,8 +50,8 @@ pub enum HidingBoundClassification {
     Conditional,
     /// The term is a numerical approximation, not a conservative theorem bound.
     ///
-    /// Retained for API compatibility and downstream constructions of
-    /// approximate bounds. This crate's reports do not currently produce it.
+    /// Used for intermediate-source query estimates evaluated with undirected
+    /// floating-point arithmetic, including any grinding credit added to them.
     Approximation,
     /// No accepted numerical bound is encoded for this geometry.
     Unavailable,
@@ -323,9 +323,9 @@ pub struct HidingBaseCaseSecurityReport {
 
 /// Diagnostic query coordinates for one intermediate randomized source.
 ///
-/// These are local far-word sampling bounds, not security bounds for a
-/// code-switching round or the compiled hiding PCS. In particular, selecting
-/// a radius does not establish the preceding reduction's close-word branch.
+/// These are numerical far-word sampling estimates, not conservative security
+/// bounds for a code-switching round or the compiled hiding PCS. In particular,
+/// selecting a radius does not establish the reduction's close-word branch.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct HidingIntermediateSourceSecurityReport {
@@ -341,28 +341,37 @@ pub struct HidingIntermediateSourceSecurityReport {
     pub randomized_dimension: usize,
     /// Number of source rows, `H`.
     pub domain_size: usize,
-    /// Exact randomized-code rate, `(M + t) / H`.
+    /// Floating-point estimate of the randomized-code rate, `(M + t) / H`.
+    ///
+    /// Integer conversion can lose precision above `2^53`; the integer geometry
+    /// fields retain the exact dimensions even when this estimate rounds.
     pub randomized_rate: f64,
     /// Dimension used to select the diagnostic radius.
     ///
     /// Unique decoding uses `M + t` directly. The other regimes retain the
     /// conservative next-power-of-two envelope used by the base-case report.
     pub analysis_dimension: usize,
-    /// Selected far-word radius, or `None` if no positive radius is encoded.
+    /// Numerical estimate of the selected far-word radius.
+    ///
+    /// `None` when the analysis dimension fills the domain. Floating-point
+    /// rounding can produce zero even when the mathematical radius is positive.
     pub analysis_radius: Option<f64>,
     /// Number of queries inherited from the plain schedule.
     pub requested_queries: usize,
     /// Number of distinct source rows opened, capped at `H`.
     pub effective_queries: usize,
-    /// Query-miss bound when the source is at least `analysis_radius` from
-    /// its randomized code. This does not certify the close-word branch.
+    /// Query-miss estimate for the far-word branch at the selected radius.
+    ///
+    /// Undirected integer conversions, logarithms and arithmetic make every
+    /// available value an `Approximation`, never a conservative theorem bound.
     pub query_before_pow: HidingErrorBound,
     /// Inherited grind guarding this round's source queries.
     pub query_pow_bits: usize,
     /// Query estimate with the inherited grind credited once.
     ///
-    /// Positive grinding credit is compiler-conditional. An unavailable
-    /// pre-grind bound remains unavailable regardless of grinding difficulty.
+    /// Grinding credit also assumes the compiler's grinding model. Adding it
+    /// does not promote an `Approximation` to `Conditional` or `Proven`. An
+    /// unavailable pre-grind coordinate remains unavailable.
     pub query_with_pow: HidingErrorBound,
     /// Full intermediate hiding-reduction coordinate.
     ///
@@ -379,6 +388,12 @@ pub struct HidingIntermediateSourceSecurityReport {
 /// the existing dyadic-envelope radius is retained; if that envelope fills
 /// the domain, no query coordinate is assessed. No earlier hiding reduction
 /// is certified by these far-word sampling coordinates.
+///
+/// The displayed rates, radii and query coordinates use undirected `f64`
+/// arithmetic, not conservative rounding. Integer conversion can additionally
+/// lose precision above `2^53`, while the integer geometry remains exact.
+/// Every available query coordinate therefore stays `Approximation`, with or
+/// without grinding credit, and cannot be retrieved through `proven_bits()`.
 #[must_use]
 pub fn hiding_intermediate_source_security_report(
     round: usize,
@@ -401,16 +416,12 @@ pub fn hiding_intermediate_source_security_report(
     let effective_queries = source.requested_queries.min(source.domain_size);
     let query_bits = log_one_minus_delta.map(|log_value| -(effective_queries as f64) * log_value);
     let query_before_pow = query_bits.map_or_else(HidingErrorBound::unavailable, |bits| {
-        HidingErrorBound::available(bits, HidingBoundClassification::Proven)
+        HidingErrorBound::available(bits, HidingBoundClassification::Approximation)
     });
     let query_with_pow = query_bits.map_or_else(HidingErrorBound::unavailable, |bits| {
         HidingErrorBound::available(
             bits + query_pow_bits as f64,
-            if query_pow_bits == 0 {
-                HidingBoundClassification::Proven
-            } else {
-                HidingBoundClassification::Conditional
-            },
+            HidingBoundClassification::Approximation,
         )
     });
 
@@ -854,16 +865,14 @@ mod tests {
                 assert!((report.query_with_pow.bits.unwrap() - bits - pow as f64).abs() < 1e-12);
                 assert_eq!(
                     report.query_before_pow.classification,
-                    HidingBoundClassification::Proven
+                    HidingBoundClassification::Approximation
                 );
                 assert_eq!(
                     report.query_with_pow.classification,
-                    if pow == 0 {
-                        HidingBoundClassification::Proven
-                    } else {
-                        HidingBoundClassification::Conditional
-                    }
+                    HidingBoundClassification::Approximation
                 );
+                assert_eq!(report.query_before_pow.proven_bits(), None);
+                assert_eq!(report.query_with_pow.proven_bits(), None);
                 assert_eq!(report.hiding_reduction.proven_bits(), None);
                 assert_eq!(
                     report.hiding_reduction.classification,
@@ -871,6 +880,79 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn intermediate_lossy_integer_conversions_remain_approximations() {
+        let message_len = 1usize << 53;
+        let domain_size = 1usize << 55;
+        let queries = message_len + 1;
+        let geometry = HidingCodeGeometry::new(
+            HidingCodeRole::Source,
+            message_len,
+            1,
+            domain_size,
+            1,
+            queries,
+        );
+        for assumption in [
+            SecurityAssumption::UniqueDecoding,
+            SecurityAssumption::JohnsonBound,
+            SecurityAssumption::CapacityBound,
+        ] {
+            for pow in [0, 5] {
+                let report =
+                    hiding_intermediate_source_security_report(0, assumption, geometry, pow);
+                assert_eq!(report.randomized_dimension, 9_007_199_254_740_993);
+                assert_eq!(report.effective_queries, 9_007_199_254_740_993);
+                // The integer geometry retains the extra coefficient, but
+                // its f64 rate estimate rounds to the dimension-2^53 rate.
+                assert_eq!(report.randomized_rate, 0.25);
+                for bound in [report.query_before_pow, report.query_with_pow] {
+                    assert!(bound.bits.is_some());
+                    assert_eq!(
+                        bound.classification,
+                        HidingBoundClassification::Approximation
+                    );
+                    assert_eq!(bound.proven_bits(), None);
+                }
+                assert_eq!(
+                    report.hiding_reduction.classification,
+                    HidingBoundClassification::Unavailable
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn intermediate_rounded_rate_one_does_not_certify_a_grinding_coordinate() {
+        let domain_size = 1usize << 55;
+        let geometry = HidingCodeGeometry::new(
+            HidingCodeRole::Source,
+            domain_size - 1,
+            0,
+            domain_size,
+            1,
+            1,
+        );
+        let report = hiding_intermediate_source_security_report(
+            0,
+            SecurityAssumption::UniqueDecoding,
+            geometry,
+            5,
+        );
+        assert_eq!(report.randomized_dimension, 36_028_797_018_963_967);
+        assert_eq!(report.randomized_rate, 1.);
+        assert_eq!(report.analysis_radius, Some(0.));
+        assert!(report.query_before_pow.vacuous);
+        assert_eq!(report.query_with_pow.bits, Some(5.));
+        assert_eq!(
+            report.query_with_pow.classification,
+            HidingBoundClassification::Approximation
+        );
+        assert_eq!(report.query_with_pow.proven_bits(), None);
     }
 
     #[test]

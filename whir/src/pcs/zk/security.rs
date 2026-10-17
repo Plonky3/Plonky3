@@ -26,8 +26,9 @@ where
     /// Reports every intermediate source's randomized geometry and inherited
     /// query/PoW budget, in code-switching order.
     ///
-    /// This is diagnostic only: query coordinates apply to their documented
-    /// far-word branch. The full hiding reduction remains unavailable, and
+    /// This is diagnostic only: available query coordinates are undirected
+    /// floating-point approximations for the far-word branch, including after
+    /// grinding credit. The full hiding reduction remains unavailable, and
     /// this method neither changes the schedule nor certifies the compiled
     /// PCS. The terminal source is reported separately by
     /// [`Self::hiding_base_case_security_report`].
@@ -158,15 +159,20 @@ mod tests {
         assert_eq!(report.query_pow_bits, 30);
         assert_eq!(report.analysis_dimension, 749);
         assert_eq!(report.analysis_radius, Some(275. / 2048.));
-        assert!((report.query_with_pow.bits.unwrap() - 79.301_493_447_010_8).abs() < 1e-10);
+        // The exact post-PoW coordinate is 79.301493447010794763... bits.
+        // An undirected estimate may round to either side of that value;
+        // numerical proximity does not establish conservatism.
+        assert!((report.query_before_pow.bits.unwrap() - 49.301_493_447_010_8).abs() < 1e-12);
+        assert!((report.query_with_pow.bits.unwrap() - 79.301_493_447_010_8).abs() < 1e-12);
         assert_eq!(
             report.query_before_pow.classification,
-            HidingBoundClassification::Proven
+            HidingBoundClassification::Approximation
         );
         assert_eq!(
             report.query_with_pow.classification,
-            HidingBoundClassification::Conditional
+            HidingBoundClassification::Approximation
         );
+        assert_eq!(report.query_before_pow.proven_bits(), None);
         assert_eq!(report.query_with_pow.proven_bits(), None);
         assert_eq!(report.hiding_reduction.bits, None);
         assert_eq!(
@@ -221,11 +227,11 @@ mod tests {
                 assert_eq!(report.query_pow_bits, 0);
                 assert_eq!(
                     report.query_before_pow.classification,
-                    HidingBoundClassification::Proven
+                    HidingBoundClassification::Approximation
                 );
                 assert_eq!(
                     report.query_with_pow.classification,
-                    HidingBoundClassification::Proven
+                    HidingBoundClassification::Approximation
                 );
                 assert_eq!(
                     report.hiding_reduction.classification,
