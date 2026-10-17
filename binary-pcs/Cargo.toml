@@ -62,5 +62,9 @@ harness = false
 name = "whir"
 harness = false
 
+[[bench]]
+name = "trace"
+harness = false
+
 [lints]
 workspace = true

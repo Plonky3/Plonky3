@@ -51,7 +51,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use p3_binary_field::{BinaryField8, BitCoordinates, TowerLevel};
+use p3_binary_field::{BinaryField8, BitCoordinates, PackedGf2x64, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
@@ -305,21 +305,12 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
                 for column in bits..width {
                     let view = table.column(column);
                     let out = &mut row[committed_columns::<EF>(bits, column)];
-                    for (lane, r) in rows.clone().enumerate() {
-                        let value = view.value(r);
-                        for (byte_index, &byte) in coordinate_bytes(core::slice::from_ref(&value))
-                            .iter()
-                            .enumerate()
-                        {
-                            // Only the set coordinates are visited.
-                            let mut rest = byte;
-                            while rest != 0 {
-                                let bit = rest.trailing_zeros() as usize;
-                                out[byte_index * 8 + bit] |= 1 << lane;
-                                rest &= rest - 1;
-                            }
-                        }
+                    let mut cells = [EF::ZERO; WORD_BITS];
+                    let count = rows.len();
+                    for (cell, r) in cells.iter_mut().zip(rows.clone()) {
+                        *cell = view.value(r);
                     }
+                    expand_coordinate_block(&cells[..count], out);
                 }
                 None
             })
@@ -334,6 +325,48 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
             RowMajorMatrix::new(words, committed),
             num_variables,
         ))
+    }
+}
+
+/// Expand at most 64 source rows, one coordinate word per output column.
+///
+/// Dense 64-by-64 tiles use the field's bit transpose. Sparse tiles retain set-bit
+/// iteration, avoiding fixed transpose work for zeros and small integer values.
+fn expand_coordinate_block<A: Coordinates>(values: &[A], out: &mut [u64]) {
+    debug_assert!(values.len() <= WORD_BITS);
+    debug_assert_eq!(out.len(), A::COORDINATES);
+    let bytes = coordinate_bytes(values);
+    let stride = A::COORDINATES / 8;
+    for (tile, output) in out.chunks_mut(WORD_BITS).enumerate() {
+        let byte_start = tile * 8;
+        let byte_count = output.len() / 8;
+        let mut rows = [PackedGf2x64::new(0); WORD_BITS];
+        let mut set_bits = 0;
+        for (lane, row) in rows.iter_mut().take(values.len()).enumerate() {
+            let mut word = [0; 8];
+            word[..byte_count].copy_from_slice(
+                &bytes[lane * stride + byte_start..lane * stride + byte_start + byte_count],
+            );
+            let word = u64::from_le_bytes(word);
+            set_bits += word.count_ones();
+            *row = PackedGf2x64::new(word);
+        }
+        // A transpose performs six fixed word passes. Below four set coordinates
+        // per source word, enumerating the set bits avoids that fixed work.
+        if values.len() == WORD_BITS && output.len() == WORD_BITS && set_bits > 256 {
+            PackedGf2x64::transpose(&mut rows);
+            for (output, row) in output.iter_mut().zip(rows) {
+                *output = row.to_bits();
+            }
+        } else {
+            for (lane, row) in rows.iter().take(values.len()).enumerate() {
+                let mut word = row.to_bits();
+                while word != 0 {
+                    output[word.trailing_zeros() as usize] |= 1 << lane;
+                    word &= word - 1;
+                }
+            }
+        }
     }
 }
 
