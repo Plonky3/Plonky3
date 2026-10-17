@@ -27,6 +27,9 @@
 //!     v(r)  =  sum_k c_k(r) * e_k
 //! ```
 //!
+//! Dense cells and basis elements lie in the source field `F`; row points and coordinate
+//! evaluations lie in its extension `EF`. Recombination embeds each basis element into `EF`.
+//!
 //! A claim on a dense column is answered by the claims on its coordinate columns.
 //!
 //! The verifier recombines them itself, so the recombination draws nothing.
@@ -55,7 +58,7 @@ use p3_binary_field::{BinaryField8, BitCoordinates, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
-use p3_field::Field;
+use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
@@ -65,7 +68,7 @@ use p3_sumcheck::{
     TableShape, TableSpec,
 };
 
-use crate::boolean::{BooleanMultilinearPcs, BooleanPcs};
+use crate::boolean::{BooleanBackend, BooleanMultilinearPcs, BooleanPcs};
 use crate::boolean_trace::{
     BooleanTraceCommitment, BooleanTraceCommitmentData, BooleanTraceCommitmentError,
     BooleanTraceCommitmentProof,
@@ -134,24 +137,31 @@ const fn committed_columns<EF: Coordinates>(bits: usize, column: usize) -> Range
 ///
 /// Table `t` holds bits in its first `boolean_columns[t]` columns, field elements after.
 ///
+/// Source cells and packed elements use `F`; opening points and evaluations use its extension `EF`.
+/// Dense columns split into the coordinates of `F`, and recombine by its embedding into `EF`.
+/// The default `F = EF` preserves the square case.
+///
 /// The split is part of the statement, so prover and verifier build it from the same tables.
-pub struct MixedTraceCommitment<EF, B> {
+pub struct MixedTraceCommitment<EF, B, F = EF> {
     /// The Boolean trace commitment every claim is discharged against.
     inner: BooleanTraceCommitment<EF, B>,
     /// Width of each table's bit region, in table order.
     boolean_columns: Vec<usize>,
     /// The coordinate basis dense claims are recombined over.
-    basis: Vec<EF>,
+    basis: Vec<F>,
 }
 
 /// The mixed trace commitment discharged through the folding-only bit commitment.
 pub type MixedTracePcs<EF, MT, MX> = MixedTraceCommitment<EF, BooleanPcs<EF, MT, MX>>;
 
-impl<EF: Coordinates, B> MixedTraceCommitment<EF, B> {
+impl<EF, B, F: Coordinates> MixedTraceCommitment<EF, B, F> {
     /// Split each table at its bit region, and commit through `inner`.
     ///
     /// `inner` must hold the arity [`committed_shapes`] stacks to.
-    pub fn new(inner: BooleanTraceCommitment<EF, B>, boolean_columns: Vec<usize>) -> Self {
+    pub fn new(inner: BooleanTraceCommitment<EF, B>, boolean_columns: Vec<usize>) -> Self
+    where
+        B: BooleanBackend<EF, Val = F>,
+    {
         Self {
             inner,
             boolean_columns,
@@ -172,7 +182,7 @@ impl<EF: Coordinates, B> MixedTraceCommitment<EF, B> {
     }
 }
 
-impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
+impl<EF: ExtensionField<F>, B, F: Field + Coordinates> MixedTraceCommitment<EF, B, F> {
     /// Refuse a protocol whose table count or widths disagree with the bit regions.
     fn check_regions<E>(
         &self,
@@ -205,7 +215,7 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
     /// The extra readings are opened and verified like the others, and dropped on the way back.
     fn expand_protocol(&self, protocol: &OpeningProtocol) -> OpeningProtocol {
         let shapes = protocol.table_shapes();
-        let committed = committed_shapes::<EF>(&shapes, &self.boolean_columns);
+        let committed = committed_shapes::<F>(&shapes, &self.boolean_columns);
         let mut successor = vec![false; shapes.len()];
         for (table, batch) in protocol.iter_openings() {
             successor[table] |= !batch.next().is_empty();
@@ -246,12 +256,15 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
                     columns
                         .iter()
                         .map(|&column| {
-                            let range = committed_columns::<EF>(bits, column);
+                            let range = committed_columns::<F>(bits, column);
                             if column < bits {
                                 values[range.start]
                             } else {
-                                // v(r) = sum_k c_k(r) * e_k
-                                EF::batched_linear_combination(&values[range], &self.basis)
+                                // v(r) = sum_k c_k(r) * embed(e_k)
+                                <EF as Algebra<F>>::batched_linear_combination(
+                                    &values[range],
+                                    &self.basis,
+                                )
                             }
                         })
                         .collect()
@@ -268,13 +281,13 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
     fn expand_table<E>(
         &self,
         index: usize,
-        table: &Table<EF>,
-    ) -> Result<Table<EF>, BooleanTraceCommitmentError<E>> {
+        table: &Table<F>,
+    ) -> Result<Table<F>, BooleanTraceCommitmentError<E>> {
         let num_variables = table.num_variables();
         let height = 1usize << num_variables;
         let width = table.num_polys();
         let bits = self.boolean_columns[index];
-        let committed = bits + (width - bits) * EF::COORDINATES;
+        let committed = bits + (width - bits) * F::COORDINATES;
         let blocks = height.div_ceil(WORD_BITS);
         let mut words = vec![0u64; blocks * committed];
 
@@ -292,9 +305,9 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
                             let mut word = 0;
                             for (lane, r) in rows.clone().enumerate() {
                                 let value = view.value(r);
-                                if value == EF::ONE {
+                                if value == F::ONE {
                                     word |= 1 << lane;
-                                } else if value != EF::ZERO {
+                                } else if value != F::ZERO {
                                     return Some(column);
                                 }
                             }
@@ -304,7 +317,7 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
                 }
                 for column in bits..width {
                     let view = table.column(column);
-                    let out = &mut row[committed_columns::<EF>(bits, column)];
+                    let out = &mut row[committed_columns::<F>(bits, column)];
                     for (lane, r) in rows.clone().enumerate() {
                         let value = view.value(r);
                         for (byte_index, &byte) in coordinate_bytes(core::slice::from_ref(&value))
@@ -366,22 +379,23 @@ impl<EF: Field, D> MixedTraceData<EF, D> {
     }
 }
 
-impl<EF, B, Challenger> MultilinearPcs<EF, Challenger> for MixedTraceCommitment<EF, B>
+impl<EF, B, F, Challenger> MultilinearPcs<EF, Challenger> for MixedTraceCommitment<EF, B, F>
 where
-    EF: BitCoordinates + TranscriptField + TowerLevel + Coordinates,
-    B: BooleanMultilinearPcs<EF, Challenger, Val = EF>,
-    Challenger: FieldChallenger<EF>
-        + GrindingChallenger<Witness = EF>
-        + CanSampleUniformBits<EF>
+    F: TranscriptField + TowerLevel + Coordinates,
+    EF: BitCoordinates + ExtensionField<F>,
+    B: BooleanMultilinearPcs<EF, Challenger, Val = F>,
+    Challenger: FieldChallenger<F>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>
         + CanObserve<B::Commitment>,
 {
-    type Val = EF;
+    type Val = F;
     type Commitment = B::Commitment;
-    type ProverData = MixedTraceData<EF, B::ProverData>;
+    type ProverData = MixedTraceData<F, B::ProverData>;
     type Proof = BooleanTraceCommitmentProof<EF, B::Proof>;
     type Error = BooleanTraceCommitmentError<B::Error>;
     type ProverError = BooleanTraceCommitmentError<B::Error>;
-    type Witness = Vec<Table<EF>>;
+    type Witness = Vec<Table<F>>;
     type OpeningProtocol = OpeningProtocol;
 
     fn num_vars(&self) -> usize {
@@ -443,13 +457,14 @@ where
 
 /// Supplied values are not forwarded: `open_at_known` keeps its default and evaluates every
 /// batch, since the values would first need mapping through `expand_protocol`.
-impl<EF, B, Challenger> PrescribedPointPcs<EF, Challenger> for MixedTraceCommitment<EF, B>
+impl<EF, B, F, Challenger> PrescribedPointPcs<EF, Challenger> for MixedTraceCommitment<EF, B, F>
 where
-    EF: BitCoordinates + TranscriptField + TowerLevel + Coordinates,
-    B: BooleanMultilinearPcs<EF, Challenger, Val = EF>,
-    Challenger: FieldChallenger<EF>
-        + GrindingChallenger<Witness = EF>
-        + CanSampleUniformBits<EF>
+    F: TranscriptField + TowerLevel + Coordinates,
+    EF: BitCoordinates + ExtensionField<F>,
+    B: BooleanMultilinearPcs<EF, Challenger, Val = F>,
+    Challenger: FieldChallenger<F>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>
         + CanObserve<B::Commitment>,
 {
     fn bit_region(&self, table: usize, _width: usize) -> usize {
