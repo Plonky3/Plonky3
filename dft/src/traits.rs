@@ -61,6 +61,25 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// evaluations of those polynomials on the subgroup `H`.
     fn dft_batch(&self, mat: RowMajorMatrix<F>) -> Self::Evaluations;
 
+    /// Compute each column's DFT when its high coefficient rows are zero.
+    ///
+    /// `mat` already has the final transform height. Only its first
+    /// `mat.height() >> log_inv_rate` rows may be nonzero; the caller must set
+    /// the remaining rows to zero. This is a coefficient transform, not a
+    /// low-degree extension of evaluations.
+    ///
+    /// The result uses the same roots and ordering as [`Self::dft_batch`].
+    /// The default performs that full transform, so backends may opt into
+    /// skipping work on the known zero tail.
+    ///
+    /// # Panics
+    /// Panics if the height is not a power of two or the padding exceeds its height.
+    fn dft_batch_padded(&self, mat: RowMajorMatrix<F>, log_inv_rate: usize) -> Self::Evaluations {
+        let log_height = p3_util::log2_strict_usize(mat.height());
+        assert!(log_inv_rate <= log_height, "padding exceeds matrix height");
+        self.dft_batch(mat)
+    }
+
     /// Compute the "coset DFT" of `vec`.
     ///
     /// #### Mathematical Description

@@ -129,7 +129,16 @@ impl<F: TwoAdicField, D: TwoAdicSubgroupDft<F>> Encoder<F> for D {
             values[..len].copy_from_slice(&message.values);
             message.values = values;
         }
-        self.dft_batch(message).to_row_major_matrix()
+        self.encode_batch_padded(message, log_inv_rate)
+    }
+
+    fn encode_batch_padded(
+        &self,
+        message: RowMajorMatrix<F>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<F> {
+        self.dft_batch_padded(message, log_inv_rate)
+            .to_row_major_matrix()
     }
 }
 
