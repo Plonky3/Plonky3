@@ -36,12 +36,8 @@ use core::slice;
 /// ```
 ///
 /// The rows need not be adjacent in memory, so a caller can gather them from anywhere.
-///
-/// On AVX2 and NEON targets, a 4-byte, 4-byte-aligned element is copied as a `u32` vector lane.
-///
-/// Such an element must have no padding and no uninitialized bytes, which every field element and integer satisfies.
-///
-/// A type like `#[repr(C, align(4))] struct P(u8)`, or `MaybeUninit<u32>`, is undefined behavior on those targets.
+/// Typed copies support arbitrary `Copy` representations; audited integer
+/// representations can use [`transpose_rows_words`] for register kernels.
 ///
 /// # Arguments
 ///
@@ -52,6 +48,7 @@ use core::slice;
 ///
 /// # Panics
 ///
+/// - Panics if `rows * cols` overflows `usize`.
 /// - Panics if the output does not hold exactly `rows * cols` elements.
 /// - Panics if a row is shorter than the column count.
 ///
@@ -72,11 +69,10 @@ where
     R: Fn(usize) -> &'a [T],
 {
     // The output shape is fixed by the input shape.
-    assert_eq!(
-        dst.len(),
-        rows * cols,
-        "transpose output has the wrong length"
-    );
+    let len = rows
+        .checked_mul(cols)
+        .expect("transpose dimensions overflow");
+    assert_eq!(dst.len(), len, "transpose output has the wrong length");
     transpose_rows_strided(rows, cols, row, dst, rows);
 }
 
@@ -91,6 +87,7 @@ where
 /// # Panics
 ///
 /// - Panics if the stride is below the row count.
+/// - Panics if the strided output extent overflows `usize`.
 /// - Panics if the output ends before the last written slot.
 /// - Panics if a row is shorter than the column count.
 #[inline]
@@ -109,8 +106,65 @@ pub(crate) fn transpose_rows_strided<'a, T, R>(
     if rows == 0 || cols == 0 {
         return;
     }
+    let extent = (cols - 1)
+        .checked_mul(stride)
+        .and_then(|last_run| last_run.checked_add(rows))
+        .expect("transpose strided extent overflow");
     assert!(
-        dst.len() >= (cols - 1) * stride + rows,
+        dst.len() >= extent,
+        "transpose output is too short for its stride"
+    );
+
+    transpose_rows_scalar(rows, cols, row, dst, stride);
+}
+
+/// Transpose rows using integer-word register kernels where available.
+///
+/// # Safety
+///
+/// The input rows and destination elements must satisfy the representation
+/// contract of [`super::transpose_words`]. This applies to every slice returned
+/// by the callback, including when the callback changes its result.
+#[inline]
+pub unsafe fn transpose_rows_words<'a, T, R>(rows: usize, cols: usize, row: R, dst: &mut [T])
+where
+    T: Copy + 'a,
+    R: Fn(usize) -> &'a [T],
+{
+    let len = rows
+        .checked_mul(cols)
+        .expect("transpose dimensions overflow");
+    assert_eq!(dst.len(), len, "transpose output has the wrong length");
+    // SAFETY: the caller supplies the representation guarantee.
+    unsafe { transpose_rows_strided_words(rows, cols, row, dst, rows) };
+}
+
+/// Integer-word version of the strided transpose.
+///
+/// # Safety
+///
+/// All elements must satisfy [`super::transpose_words`]'s representation contract.
+#[inline]
+pub(crate) unsafe fn transpose_rows_strided_words<'a, T, R>(
+    rows: usize,
+    cols: usize,
+    row: R,
+    dst: &mut [T],
+    stride: usize,
+) where
+    T: Copy + 'a,
+    R: Fn(usize) -> &'a [T],
+{
+    assert!(stride >= rows, "transpose stride is below the row count");
+    if rows == 0 || cols == 0 {
+        return;
+    }
+    let extent = (cols - 1)
+        .checked_mul(stride)
+        .and_then(|last_run| last_run.checked_add(rows))
+        .expect("transpose strided extent overflow");
+    assert!(
+        dst.len() >= extent,
         "transpose output is too short for its stride"
     );
 
@@ -126,7 +180,7 @@ pub(crate) fn transpose_rows_strided<'a, T, R>(
         //
         // So every row and the output reinterpret as 32-bit words over the same memory.
         //
-        // The documented contract rules out padding and uninitialized bytes in `T`.
+        // The caller guarantees initialized, padding-free, pointer-free elements.
         //
         // So every word the kernel loads is an initialized integer.
         //
@@ -220,18 +274,11 @@ mod simd {
         dst: &mut [u32],
         stride: usize,
     ) {
-        // Check every row once, so the tile loads can skip per-tile bounds checks.
-        for r in 0..rows {
-            assert!(
-                row(r).len() >= cols,
-                "transpose row is shorter than the column count"
-            );
-        }
-
         for_each_tile::<L>(rows, cols, |r0, c0, h, w| {
             // A short tile needs fewer stages: eight rows take three, sixteen take four.
             //
-            // SAFETY: every row holds `cols` words and the output holds every strided run, as checked.
+            // SAFETY: each load checks its actual callback result below, and
+            // the strided entry point checked the output extent.
             unsafe {
                 if h <= L / 2 {
                     tile::<{ L / 2 }>(stride, &row, dst, r0, c0, h, w);
@@ -256,7 +303,7 @@ mod simd {
     ///
     /// # Safety
     ///
-    /// - Rows `r0 .. r0 + h` hold at least `c0 + w` words.
+    /// - `R` is 8 or 16, `h <= R`, and `w <= L`.
     /// - The output holds every slot `(c0 + j) * stride + r0 + i` for `j < w` and `i < h`.
     #[inline(always)]
     unsafe fn tile<'a, const R: usize>(
@@ -275,11 +322,18 @@ mod simd {
 
         // Phase 1: one register per input row.
         //
-        // A row past the tile height loads nothing, through an all-off mask.
+        // Rows past the tile height become zero registers without calling `row`.
         let load_mask = lane_mask(w);
         let mut t: [__m512i; R] = array::from_fn(|i| {
-            let (r, mask) = if i < h { (r0 + i, load_mask) } else { (r0, 0) };
-            let src = row(r).as_ptr().wrapping_add(c0);
+            if i >= h {
+                // No source row exists for this masked-off register.
+                // SAFETY: this module is compiled only with AVX-512F enabled.
+                return unsafe { _mm512_setzero_si512() };
+            }
+            // A callback can change its result on every call. Validate the
+            // exact slice used by this load, rather than an earlier result.
+            let src = &row(r0 + i)[c0..c0 + w];
+            let src = src.as_ptr();
 
             // SAFETY: a full tile reads 16 words from column c0, inside the row.
             //
@@ -288,7 +342,7 @@ mod simd {
                 if full {
                     _mm512_loadu_si512(src.cast())
                 } else {
-                    _mm512_maskz_loadu_epi32(mask, src.cast())
+                    _mm512_maskz_loadu_epi32(load_mask, src.cast())
                 }
             }
         });
@@ -341,6 +395,53 @@ mod simd {
                 }
             }
         }
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn full_tile_uses_each_callback_result_once() {
+        use core::cell::Cell;
+
+        let src = [7u32; L];
+        let calls = Cell::new(0);
+        let mut dst = [0u32; L * L];
+        transpose_u32(
+            L,
+            L,
+            |_| {
+                let count = calls.get();
+                // Fail before any unsafe load if a preflight check re-reads rows.
+                assert!(count < L, "callback was called again after preflight");
+                calls.set(count + 1);
+                &src
+            },
+            &mut dst,
+            L,
+        );
+        assert_eq!(dst, [7; L * L]);
+        assert_eq!(calls.get(), L);
+    }
+
+    #[cfg(test)]
+    #[test]
+    #[should_panic]
+    fn checks_the_actual_stateful_callback_result() {
+        use core::cell::Cell;
+
+        let src = [7u32; L * 2];
+        let calls = Cell::new(0);
+        let mut dst = [0u32; L * L * 2];
+        transpose_u32(
+            L,
+            L * 2,
+            |_| {
+                let count = calls.get();
+                calls.set(count + 1);
+                if count < L { &src } else { &src[..0] }
+            },
+            &mut dst,
+            L,
+        );
     }
 
     /// Mask with the low `n` of the 16 lanes set.
@@ -585,14 +686,93 @@ mod simd {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{Packable, PrimeCharacteristicRing};
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "transpose dimensions overflow")]
+    fn rejects_overflowing_word_dimensions_before_access() {
+        // SAFETY: u32 has an initialized, padding-free, pointer-free representation.
+        unsafe {
+            transpose_rows_words::<u32, _>(
+                usize::MAX,
+                2,
+                |_| panic!("must not read a row"),
+                &mut [],
+            );
+        };
+    }
+
+    #[test]
+    #[should_panic(expected = "transpose dimensions overflow")]
+    fn rejects_overflowing_dimensions_before_access() {
+        transpose_rows::<u32, _>(usize::MAX, 2, |_| panic!("must not read a row"), &mut []);
+    }
+
+    #[test]
+    fn rejects_overflowing_stride_before_reading_a_row() {
+        use core::cell::Cell;
+
+        // Addition overflow and multiplication overflow must both be rejected.
+        for (cols, stride) in [(2, usize::MAX), (3, usize::MAX / 2 + 1)] {
+            for words in [false, true] {
+                let calls = Cell::new(0);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let row = |_| -> &[u32] {
+                        calls.set(calls.get() + 1);
+                        // Stop the old code before any load or store.
+                        panic!("must not read a row");
+                    };
+                    if words {
+                        // SAFETY: u32 supports integer-word copying.
+                        unsafe { transpose_rows_strided_words(1, cols, row, &mut [0], stride) };
+                    } else {
+                        transpose_rows_strided(1, cols, row, &mut [0], stride);
+                    }
+                }));
+                assert!(result.is_err());
+                assert_eq!(
+                    calls.get(),
+                    0,
+                    "overflow must be rejected before reading rows"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn padding_and_uninitialized_bytes_are_copied_as_typed_values() {
+        use core::mem::MaybeUninit;
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(C, align(4))]
+        struct Padded(u8);
+        let src: Vec<Vec<_>> = (0..16)
+            .map(|r| (0..17).map(|c| Padded((r * 17 + c) as u8)).collect())
+            .collect();
+        let mut dst = vec![Padded(0); 16 * 17];
+        transpose_rows(16, 17, |r| &src[r], &mut dst);
+        for r in 0..16 {
+            for c in 0..17 {
+                assert_eq!(dst[c * 16 + r], src[r][c]);
+            }
+        }
+
+        let mut src = [[MaybeUninit::<u32>::uninit(); 17]; 16];
+        src[1][2].write(73);
+        let mut dst = [MaybeUninit::uninit(); 16 * 17];
+        transpose_rows(16, 17, |r| &src[r], &mut dst);
+        // SAFETY: this slot comes from the initialized src[1][2].
+        assert_eq!(unsafe { dst[2 * 16 + 1].assume_init() }, 73);
+    }
 
     /// A distinct word per position, so any misplaced element shows up.
     fn grid(rows: usize, row_len: usize) -> Vec<Vec<u32>> {
@@ -618,7 +798,7 @@ mod tests {
         let src = grid(16, 20);
         let mut fast = vec![0u32; 16 * 17];
         let mut reference = vec![0u32; 16 * 17];
-        transpose_rows(16, 17, |r| &src[r], &mut fast);
+        u32::transpose_rows(16, 17, |r| &src[r], &mut fast);
         transpose_rows_scalar(16, 17, |r| &src[r], &mut reference, 16);
         assert_eq!(fast, reference);
     }
@@ -643,7 +823,7 @@ mod tests {
             .map(|r| (0..9).map(|c| BabyBear::from_usize(r * 9 + c)).collect())
             .collect();
         let mut dst = vec![BabyBear::ZERO; 16 * 9];
-        transpose_rows(16, 9, |r| &src[r], &mut dst);
+        BabyBear::transpose_rows(16, 9, |r| &src[r], &mut dst);
         for (r, row) in src.iter().enumerate() {
             for (c, &x) in row.iter().enumerate() {
                 assert_eq!(dst[c * 16 + r], x);
@@ -709,7 +889,8 @@ mod tests {
 
             let mut fast = vec![u32::MAX; stride * cols];
             let mut reference = vec![u32::MAX; stride * cols];
-            transpose_rows_strided(rows, cols, |r| &src[r], &mut fast, stride);
+            // SAFETY: u32 has an initialized, padding-free, pointer-free representation.
+            unsafe { transpose_rows_strided_words(rows, cols, |r| &src[r], &mut fast, stride) };
             transpose_rows_scalar(rows, cols, |r| &src[r], &mut reference, stride);
             prop_assert_eq!(fast, reference);
         }

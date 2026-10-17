@@ -6,7 +6,8 @@ use core::marker::PhantomData;
 use core::ops::{Deref, Range};
 
 use p3_field::{
-    ExtensionField, Field, PackedValue, par_scale_slice_in_place, scale_slice_in_place_single_core,
+    ExtensionField, Field, Packable, PackedValue, par_scale_slice_in_place,
+    scale_slice_in_place_single_core,
 };
 use p3_maybe_rayon::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
@@ -972,6 +973,35 @@ impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
     }
 }
 
+impl<T: Packable, V: DenseStorage<T>> DenseMatrix<T, V> {
+    /// Transpose using the element type's `Packable` implementation.
+    pub fn transpose_packable(&self) -> RowMajorMatrix<T> {
+        let mut values = vec![T::default(); self.values.borrow().len()];
+        T::transpose(
+            self.values.borrow(),
+            &mut values,
+            self.width(),
+            self.height(),
+        );
+        RowMajorMatrix::new(values, self.height())
+    }
+
+    /// Transpose into `other` using the element type's `Packable` implementation.
+    pub fn transpose_packable_into<W: DenseStorage<T> + BorrowMut<[T]>>(
+        &self,
+        other: &mut DenseMatrix<T, W>,
+    ) {
+        assert_eq!(self.height(), other.width());
+        assert_eq!(other.height(), self.width());
+        T::transpose(
+            self.values.borrow(),
+            other.values.borrow_mut(),
+            self.width(),
+            self.height(),
+        );
+    }
+}
+
 impl<'a, T: Clone + Default + Send + Sync> RowMajorMatrixView<'a, T> {
     pub fn as_cow(self) -> RowMajorMatrixCow<'a, T> {
         RowMajorMatrixCow::new(Cow::Borrowed(self.values), self.width)
@@ -986,6 +1016,16 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
+
+    #[test]
+    fn packing_aware_transpose_matches_generic_transpose() {
+        let input = RowMajorMatrix::new((0..16 * 17).map(|i| i as u32).collect(), 17);
+        let expected = input.transpose();
+        assert_eq!(input.transpose_packable(), expected);
+        let mut output = RowMajorMatrix::new(vec![u32::MAX; 16 * 17], 16);
+        input.transpose_packable_into(&mut output);
+        assert_eq!(output, expected);
+    }
 
     #[test]
     fn contiguous_rows_reads_the_backing_storage() {
