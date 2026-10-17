@@ -371,7 +371,7 @@ mod tests {
         })
         .unwrap();
 
-        if N % 2 == 0 {
+        if N.is_multiple_of(2) {
             // Cancellation must happen within one deferred dot product.
             let paired_values = core::array::from_fn(|i| values[i / 2]);
             let paired_weights = core::array::from_fn(|i| weights[i / 2]);
