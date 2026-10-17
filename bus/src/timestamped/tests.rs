@@ -616,6 +616,73 @@ fn gap_factors_cover_exactly_one_to_two_to_the_thirty_two() {
 }
 
 #[test]
+fn checked_gap_digits_keep_both_range_indices() {
+    for (gap, low, high) in [
+        (1, 0, 0),
+        (65_536, 65_535, 0),
+        (65_537, 0, 1),
+        (4_294_967_296, 65_535, 65_535),
+    ] {
+        let digits = ClockGapDigits::new(gap).unwrap();
+        assert_eq!((digits.low(), digits.high()), (low, high));
+        let (lo, hi) = digits.factors::<C, F>();
+        assert_eq!(time(7) * lo, time(7 + gap) * hi);
+        assert_eq!(Some((lo, hi)), Memory::gap_factors(gap));
+    }
+    for gap in [0, 4_294_967_297, u64::MAX] {
+        assert_eq!(ClockGapDigits::new(gap), None);
+    }
+}
+
+#[test]
+fn range_witness_counts_shared_slots_and_padding() {
+    let mut witness = ClockRangeWitness::<C, F>::new();
+    let generator = F::GENERATOR;
+    // Two slots per row, then two padding slots using the smallest factors.
+    let gaps = [[1, 65_536], [65_537, 4_294_967_296], [1, 1]];
+    let expected_counts = [
+        [(F::ONE, F::ONE), (F::ONE, generator)],
+        [(generator, F::ONE), (generator, F::ONE)],
+        [
+            (generator.square(), generator.square()),
+            (generator.exp_u64(3), generator.exp_u64(3)),
+        ],
+    ];
+    for (row, expected) in gaps.into_iter().zip(expected_counts) {
+        for (gap, (low_count, high_count)) in row.into_iter().zip(expected) {
+            let read = witness.read(ClockGapDigits::new(gap).unwrap());
+            let factors = match gap {
+                1 => (time(1), F::ONE),
+                65_536 => (time(65_536), F::ONE),
+                65_537 => (time(1), time(65_536).inverse()),
+                4_294_967_296 => (time(65_536), time(4_294_901_760).inverse()),
+                _ => unreachable!(),
+            };
+            assert_eq!((read.low.value, read.high.value), factors);
+            for (read, expected) in [(read.low, low_count), (read.high, high_count)] {
+                assert_eq!(read.count, expected);
+                assert_eq!(read.count * read.count_inverse, F::ONE);
+            }
+        }
+    }
+    let [low, low_final, high, high_final] = witness.into_columns();
+    assert_eq!(
+        [low.len(), low_final.len(), high.len(), high_final.len()],
+        [65_536; 4]
+    );
+    for row in [0, 1, 7, 65_535] {
+        assert_eq!(low[row], time(row as u64 + 1));
+        assert_eq!(high[row], time(65_536).inverse().exp_u64(row as u64));
+    }
+    assert_eq!(low_final[0], generator.exp_u64(4));
+    assert_eq!(low_final[65_535], generator.square());
+    assert_eq!(high_final[0], generator.exp_u64(4));
+    assert_eq!(high_final[1], generator);
+    assert_eq!(high_final[65_535], generator);
+    assert_eq!((low_final[7], high_final[7]), (F::ONE, F::ONE));
+}
+
+#[test]
 fn the_handle_refuses_what_it_cannot_prove() {
     // One channel in two roles would let their tuples cancel.
     assert_eq!(
