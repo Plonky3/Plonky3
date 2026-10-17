@@ -15,13 +15,14 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{Air, AirLayout, BaseEntry, BaseLeaf, SymbolicExpression, SymbolicVariable};
+use p3_binary_dft::subspace_polynomial;
 use p3_challenger::CanObserve;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::{CryptoRng, RngExt};
 use serde::{Deserialize, Serialize};
 
-use super::polynomial::{add, evaluate, exact_divide, interpolate, multiply, scale, vanishing};
+use super::polynomial::{add, exact_divide, interpolate, multiply, scale, vanishing};
 use super::{
     Challenger, CurrentRowAirBuilder, ReferenceZkPcs, Val, ZkCommitment, ZkError, ZkOpeningProof,
     challenger, observe_bytes, observe_usize,
@@ -317,7 +318,7 @@ impl ReferenceZkAir {
         self.pcs
             .observe_commitment(&proof.commitment, &mut transcript);
         let z = self.sample_point(&mut transcript)?;
-        let wz = evaluate(&self.vanishing, z);
+        let wz = subspace_polynomial(self.config.log_trace_height, z);
         let claims = &proof.opening.claimed_values;
         for (index, constraint) in self.constraints.iter().enumerate() {
             if scalar_expression(constraint, &claims[..self.width], public_values)
@@ -360,7 +361,7 @@ impl ReferenceZkAir {
     fn sample_point(&self, transcript: &mut Challenger) -> Result<Val, ZkError> {
         // One public round: a fixed batch of 16 independent field candidates.
         transcript.sample_accepted(b"air-point", "air-point", |point| {
-            evaluate(&self.vanishing, point) != Val::ZERO
+            subspace_polynomial(self.config.log_trace_height, point) != Val::ZERO
         })
     }
 }

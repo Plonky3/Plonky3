@@ -46,6 +46,96 @@ fn proof() -> &'static ZkAirProof {
 }
 
 #[test]
+fn seeded_geometry_proofs_preserve_wire_bytes_and_private_rng_consumption() {
+    use p3_field::Field;
+    use p3_keccak::Keccak256Hash;
+    use p3_symmetric::CryptographicHasher;
+
+    struct Products(usize);
+    impl BaseAir<Val> for Products {
+        fn width(&self) -> usize {
+            2 * self.0
+        }
+        fn num_public_values(&self) -> usize {
+            self.0
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            vec![]
+        }
+    }
+    impl<AB: AirBuilder<F = Val>> Air<AB> for Products {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            for pair in 0..self.0 {
+                let public: AB::Expr = builder.public_values()[pair].into();
+                builder.assert_zero(
+                    main.current_slice()[2 * pair] * main.current_slice()[2 * pair + 1] - public,
+                );
+            }
+        }
+    }
+    // Captured with the original Horner encoder before the basis conversion.
+    let fixtures = [
+        (
+            1,
+            1,
+            29184,
+            [
+                97, 139, 114, 36, 199, 139, 232, 91, 18, 123, 209, 179, 129, 139, 13, 64, 117, 157,
+                136, 127, 105, 220, 45, 35, 46, 112, 45, 36, 180, 133, 228, 194,
+            ],
+            5320056603071529090,
+        ),
+        (
+            8,
+            1,
+            49056,
+            [
+                80, 49, 241, 27, 114, 156, 108, 43, 151, 165, 243, 47, 181, 53, 135, 229, 196, 255,
+                202, 165, 167, 149, 131, 95, 221, 96, 186, 248, 23, 101, 161, 122,
+            ],
+            3808814452620606110,
+        ),
+        (
+            6,
+            4,
+            61792,
+            [
+                244, 241, 223, 92, 240, 182, 40, 211, 77, 119, 76, 81, 36, 169, 87, 62, 166, 206,
+                206, 74, 6, 187, 212, 171, 97, 147, 119, 221, 167, 39, 101, 200,
+            ],
+            2614293073977236531,
+        ),
+    ];
+    for (log_height, pairs, length, digest, next_random) in fixtures {
+        let air = ReferenceZkAir::compile(
+            &Products(pairs),
+            ZkAirConfig::interactive(log_height, 8).unwrap(),
+        )
+        .unwrap();
+        let public: Vec<_> = (0..pairs)
+            .map(|pair| Val::from_repr(7 + pair as u128))
+            .collect();
+        let mut values = vec![];
+        for row in 0..1 << log_height {
+            for (pair, &product) in public.iter().enumerate() {
+                let factor = Val::from_repr((row * pairs + pair + 1) as u128);
+                values.extend([factor, product * factor.inverse()]);
+            }
+        }
+        let mut rng = StdRng::seed_from_u64(0x6261_7365);
+        let proof = air
+            .prove(RowMajorMatrix::new(values, 2 * pairs), &public, &mut rng)
+            .unwrap();
+        let wire = air.encode_proof(&proof).unwrap();
+        assert_eq!(wire.len(), length);
+        assert_eq!(Keccak256Hash.hash_slice(&wire), digest);
+        assert_eq!(rand::Rng::next_u64(&mut rng), next_random);
+        air.verify(&proof, &public).unwrap();
+    }
+}
+
+#[test]
 fn wire_roundtrip_preserves_every_field_and_verifies_statement() {
     let air = air();
     let encoded = air.encode_proof(proof()).unwrap();

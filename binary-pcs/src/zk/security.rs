@@ -347,9 +347,11 @@
 //! Review should cross-check assumptions here, exact grammar above and the
 //! raw-draw/AST/full-proof/wire conformance tests together. Changes to roles,
 //! roots, geometry, sampler lengths, batching or randomness lifecycle require
-//! revisiting the proofs and call counts. The polynomial-size full g and
-//! O(n*L*B) Horner encoder are reference costs; a hiding BaseFold replacement
-//! would be a different protocol needing its own reduction.
+//! revisiting the proofs and call counts. Encoding changes a scratch copy to
+//! the Cantor novel basis and evaluates the same shifted codeword by additive
+//! NTT; monomial proof coefficients, conservative resource caps and hash calls
+//! are unchanged. The polynomial-size full g remains a reference cost; a hiding
+//! BaseFold replacement would be a different protocol needing its own reduction.
 //!
 //! Primary context: [Ben-Sasson, Chiesa, Spooner, Interactive Oracle Proofs
 //! (2016)](https://eprint.iacr.org/2016/116), Remark 2.1, Section 3.2 and Lemmas

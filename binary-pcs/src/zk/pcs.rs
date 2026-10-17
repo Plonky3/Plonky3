@@ -3,10 +3,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_binary_dft::{AdditiveNtt, LchNtt};
 use p3_binary_field::TowerLevel;
 use p3_challenger::CanObserve;
 use p3_commit::{BatchOpeningRef, Mmcs};
-use p3_field::Field;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Dimensions;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeHidingMmcs;
@@ -15,10 +16,11 @@ use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 
+use super::polynomial::monomial_to_novel;
 use super::transcript::{LeafHash, NodeHash};
 use super::{Challenger, Val, ZkError, observe_bytes, observe_usize};
 
-// Bound allocations and the deliberately quadratic Horner encoder's work.
+// Preserve the reference allocation and conservative monomial-work limits.
 const MAX_CODEWORD_LEN: usize = 1 << 16;
 const MAX_QUERIES: usize = 4096;
 const MAX_CELLS: usize = 1 << 20;
@@ -345,12 +347,21 @@ impl ReferenceZkPcs {
             width: commitment.num_polynomials,
             height: self.config.codeword_len,
         }];
+        // Only public geometry chooses the evaluation method. Retain Horner for
+        // small query counts; a complete codeword is cheaper for larger batches.
+        let codeword = (self.config.num_queries * self.config.coefficient_len
+            > self.config.codeword_len * self.config.codeword_len.ilog2() as usize)
+            .then(|| self.encode(&proof.blended_coefficients));
         for (&index, query) in indices.iter().zip(&proof.queries) {
             verify_row(&salted, &commitment.root, &dimensions, index, &query.h)?;
             verify_row(&salted, &proof.mask_root, &dimensions, index, &query.u)?;
             let x = self.domain_point(index);
             for (column, g) in proof.blended_coefficients.iter().enumerate() {
-                if evaluate(g, x) != gamma * query.h.values[column] + query.u.values[column] {
+                let value = codeword.as_ref().map_or_else(
+                    || evaluate(g, x),
+                    |matrix| matrix.values[index * commitment.num_polynomials + column],
+                );
+                if value != gamma * query.h.values[column] + query.u.values[column] {
                     return Err(ZkError::InvalidOpening("queried blend identity"));
                 }
             }
@@ -460,12 +471,19 @@ impl ReferenceZkPcs {
     }
 
     fn encode(&self, coefficients: &[Vec<Val>]) -> RowMajorMatrix<Val> {
-        let mut values = Vec::with_capacity(self.config.codeword_len * coefficients.len());
-        for index in 0..self.config.codeword_len {
-            let x = self.domain_point(index);
-            values.extend(coefficients.iter().map(|h| evaluate(h, x)));
+        let width = coefficients.len();
+        let mut values = Val::zero_vec(self.config.codeword_len * width);
+        for (column, polynomial) in coefficients.iter().enumerate() {
+            for (row, &coefficient) in polynomial.iter().enumerate() {
+                values[row * width + column] = coefficient;
+            }
         }
-        RowMajorMatrix::new(values, coefficients.len())
+        let padded_len = self.config.coefficient_len.next_power_of_two();
+        monomial_to_novel(&mut values[..padded_len * width], width);
+        LchNtt::default().shifted_ntt_batch(
+            RowMajorMatrix::new(values, width),
+            Val::cantor_basis(self.config.codeword_len.ilog2() as usize),
+        )
     }
 }
 

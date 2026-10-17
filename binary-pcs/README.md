@@ -137,7 +137,8 @@ opening.
 
 For PCS message length `M` and `q` queries, put `kappa=q+1`, `L=M+kappa`, and
 `n=next_power_of_two(4L)`. Each message `f` gets an independent uniform
-`kappa`-coefficient tail `R`: `h=f+X^M*R`. Encode by Horner evaluation on the
+`kappa`-coefficient tail `R`: `h=f+X^M*R`. Change a scratch copy from monomial
+to Cantor novel-basis coefficients, then use the additive NTT to evaluate on the
 shifted Cantor domain `S_log2(n) + s_log2(n)`, which excludes zero. Here `S_k`
 is the span of the first `k` Cantor basis vectors and `s_k` is the next basis
 vector. Commit the rows with Keccak256 `MerkleTreeHidingMmcs`, using two
@@ -253,8 +254,13 @@ AST, full-proof and canonical-wire tests together when changing the protocol.
 
 This implementation sends one full `L`-coefficient blend per committed
 polynomial, plus sampled authenticated rows: proof size is polynomial, not
-succinct. Horner encoding costs `O(n*L)` field operations per polynomial, and
-the interpolation/quotient arithmetic is also a reference implementation.
+succinct. Encoding uses sparse monic basis conversion and an `O(n*log(n))`
+additive NTT per polynomial. Verification evaluates the public blend with the
+same encoder when `q*L > n*log2(n)` and otherwise uses Horner at queried points.
+The transform path allocates an additional `n*batch_width` field elements
+(at most 16 MiB under the unchanged resource caps). The original conservative
+`n*L*batch_width` work cap remains in force. Interpolation and quotient arithmetic
+remain reference implementations.
 An optimized hiding BaseFold replacement remains future work; this protocol
 does not reuse the existing clear BaseFold reductions as a privacy argument.
 

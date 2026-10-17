@@ -21,12 +21,14 @@
 //!
 //! The native `zk_air` example uses an OS-seeded private CSPRNG and verifies
 //! a serialized proof round-trip. This reference sends full coefficient blends
-//! and uses O(n*L) Horner encoding per polynomial; optimized hiding BaseFold is
-//! future work. The existing clear BaseFold reductions are not used here.
+//! and uses sparse basis conversion plus additive NTT encoding; optimized
+//! hiding BaseFold is future work. The existing clear BaseFold reductions are
+//! not used here.
 //!
 //! For message length M and q queries, append kappa=q+1 independent uniform
-//! monomial coefficients. Thus h=f+X^M R has L=M+kappa coefficients. Horner
-//! evaluation encodes h on a shifted Cantor domain of n=next_power_of_two(4L)
+//! monomial coefficients. Thus h=f+X^M R has L=M+kappa coefficients. A scratch
+//! copy is converted to the Cantor novel basis and evaluated by additive NTT
+//! on a shifted Cantor domain of n=next_power_of_two(4L)
 //! nonzero points. Keccak256 salted Merkle commitments use two independent
 //! full-field salts per leaf. This is not the novel-basis additive RS encoder.
 //!

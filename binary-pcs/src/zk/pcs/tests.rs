@@ -11,6 +11,151 @@ use super::*;
 use crate::zk::challenger;
 
 #[test]
+fn encoded_monomials_match_horner_across_padding_and_batch_boundaries() {
+    use rand::RngExt;
+
+    let mut rng = StdRng::seed_from_u64(0x454e_434f_4445);
+    for length in [
+        3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129,
+    ] {
+        for width in [1, 2, 3, 4, 7, 8, 16, 48] {
+            let pcs = ReferenceZkPcs::new(ReferencePcsConfig::new(length - 2, 1).unwrap());
+            if pcs.config.check_width(width).is_err() {
+                continue;
+            }
+            let coefficients: Vec<Vec<Val>> = (0..width)
+                .map(|_| (0..length).map(|_| rng.random()).collect())
+                .collect();
+            let encoded = pcs.encode(&coefficients);
+            for (index, row) in encoded.values.chunks_exact(width).enumerate() {
+                for (column, &value) in row.iter().enumerate() {
+                    assert_eq!(
+                        value,
+                        evaluate(&coefficients[column], pcs.domain_point(index)),
+                        "L={length} width={width} row={index} column={column}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn encoder_preserves_every_supported_domain_dimension_and_work_boundary() {
+    use rand::RngExt;
+
+    let mut rng = StdRng::seed_from_u64(0x424f_554e_4453);
+    for log_n in 4..=14 {
+        let length = 1 << (log_n - 2);
+        let pcs = ReferenceZkPcs::new(ReferencePcsConfig::new(length - 2, 1).unwrap());
+        assert_eq!(pcs.config.codeword_len, 1 << log_n);
+        let coefficients: Vec<_> = (0..length).map(|_| rng.random::<Val>()).collect();
+        let encoded = pcs.encode(core::slice::from_ref(&coefficients));
+        let n = pcs.config.codeword_len;
+        for index in [0, 1, n / 4 - 1, n / 4, n / 2 - 1, n / 2, n - 2, n - 1] {
+            assert_eq!(
+                encoded.values[index],
+                evaluate(&coefficients, pcs.domain_point(index)),
+                "log_n={log_n} index={index}"
+            );
+        }
+        let mut sparse = vec![Val::ZERO; length];
+        sparse[0] = Val::from_repr(0x1234_5678_9abc_def0_4321_8765_cba9_0fed);
+        sparse[length - 1] = Val::ONE;
+        let encoded = pcs.encode(core::slice::from_ref(&sparse));
+        for (index, &value) in encoded.values.iter().enumerate() {
+            assert_eq!(
+                value,
+                sparse[0] + pcs.domain_point(index).exp_u64((length - 1) as u64)
+            );
+        }
+        if log_n == 13 {
+            // 8192 * 2048 * 2 is exactly the conservative work cap.
+            pcs.config.check_width(2).unwrap();
+            let batched = pcs.encode(&[coefficients.clone(), coefficients.clone()]);
+            for index in [0, n / 4, n / 2, n - 1] {
+                let expected = evaluate(&coefficients, pcs.domain_point(index));
+                assert_eq!(&batched.values[2 * index..2 * index + 2], &[expected; 2]);
+            }
+        }
+    }
+}
+
+#[test]
+fn verifier_preserves_transcripts_at_both_sides_of_the_evaluation_threshold() {
+    for (message_len, q) in [(32, 31), (31, 32), (30, 33), (1000, 1), (2, 100)] {
+        let pcs = ReferenceZkPcs::new(ReferencePcsConfig::new(message_len, q).unwrap());
+        let mut rng = StdRng::seed_from_u64(0x5448_5245_5348);
+        let (commitment, data) = pcs
+            .commit(
+                RowMajorMatrix::new_col(vec![Val::from_repr(7); message_len]),
+                &mut rng,
+            )
+            .unwrap();
+        let (mut prover, mut verifier) = (challenger(), challenger());
+        let proof = pcs
+            .open(data, Val::from_repr(5), &mut prover, &mut rng)
+            .unwrap();
+        assert_eq!(
+            pcs.verify(&commitment, Val::from_repr(5), &proof, &mut verifier)
+                .unwrap(),
+            proof.claimed_values
+        );
+        assert_eq!(
+            CanSample::<Val>::sample(&mut prover),
+            CanSample::<Val>::sample(&mut verifier)
+        );
+        for edit in 0..12 {
+            let mut bad = proof.clone();
+            let mut root = commitment.clone();
+            match edit {
+                0 => bad.blended_coefficients[0][0] += Val::ONE,
+                1 => bad.blended_coefficients[0][pcs.config.coefficient_len - 1] += Val::ONE,
+                2 => bad.queries[0].h.values[0] += Val::ONE,
+                3 => bad.queries[0].u.values[0] += Val::ONE,
+                4 => bad.queries[0].h.salts[0] += Val::ONE,
+                5 => bad.queries[0].u.salts[1] += Val::ONE,
+                6 => bad.queries[0].h.authentication_path[0][0] ^= 1,
+                7 => bad.queries[0].u.authentication_path[0][0] ^= 1,
+                8 => bad.claimed_values[0] += Val::ONE,
+                9 => bad.sigma[0] += Val::ONE,
+                10 => root.root = MerkleCap::new(vec![[0; 32]]),
+                11 => bad.mask_root = MerkleCap::new(vec![[0; 32]]),
+                _ => unreachable!(),
+            }
+            assert!(
+                pcs.verify(&root, Val::from_repr(5), &bad, &mut challenger())
+                    .is_err(),
+                "M={message_len} q={q} edit={edit}"
+            );
+        }
+        if q == 100 {
+            let mut replay = challenger();
+            pcs.bind_opening(
+                &commitment,
+                Val::from_repr(5),
+                &proof.claimed_values,
+                &proof.mask_root,
+                &proof.sigma,
+                &mut replay,
+            );
+            let _ = replay.sample_nonzero().unwrap();
+            observe_blend(&proof.blended_coefficients, &mut replay);
+            let indices = pcs.sample_indices(&mut replay);
+            let later_duplicate = (0..q)
+                .find(|&i| indices[..i].contains(&indices[i]))
+                .expect("fixture has a repeated position");
+            let mut bad = proof.clone();
+            bad.queries[later_duplicate].h.salts[1] += Val::ONE;
+            assert!(
+                pcs.verify(&commitment, Val::from_repr(5), &bad, &mut challenger())
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
 fn opens_monomial_columns_and_replays_transcript() {
     let pcs = ReferenceZkPcs::new(ReferencePcsConfig::new(3, 8).unwrap());
     // f0=1+3X+5X²; f1=2+4X+6X², evaluated at zero.

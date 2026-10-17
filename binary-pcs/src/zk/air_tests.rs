@@ -8,6 +8,7 @@ use p3_symmetric::CryptographicHasher;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
+use super::super::polynomial::evaluate;
 use super::*;
 
 struct Product;
