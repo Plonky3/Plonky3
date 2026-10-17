@@ -79,7 +79,8 @@ pub struct ReferenceZkAir {
     constraints: Vec<Expr>,
     statement: Vec<u8>,
     vanishing: Vec<Val>,
-    pcs: ReferenceZkPcs,
+    pub(super) pcs: ReferenceZkPcs,
+    pub(super) wire: super::wire::WireGeometry,
 }
 
 impl ReferenceZkAir {
@@ -204,7 +205,11 @@ impl ReferenceZkAir {
             ));
         }
         let pcs_config = ReferencePcsConfig::new(message_len, 4 * (config.security_bits + 2))?;
-        pcs_config.check_width(width + constraints.len())?;
+        let batch_width = width
+            .checked_add(constraints.len())
+            .ok_or(ZkError::InvalidConfig("AIR batch width overflow"))?;
+        pcs_config.check_width(batch_width)?;
+        let wire = super::wire::WireGeometry::new(batch_width, &pcs_config)?;
         // Normalization removes cached degrees and pointer-sharing differences;
         // postcard's existing symbolic expression encoding fixes the AST bytes.
         let statement = postcard::to_allocvec(&constraints).map_err(|_| ZkError::Serialization)?;
@@ -216,6 +221,7 @@ impl ReferenceZkAir {
             constraints,
             statement,
             pcs: ReferenceZkPcs::new(pcs_config),
+            wire,
         })
     }
 

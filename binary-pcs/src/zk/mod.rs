@@ -67,6 +67,7 @@ pub use pcs::*;
 mod air;
 mod builder;
 mod polynomial;
+mod wire;
 pub use air::*;
 pub use builder::CurrentRowAirBuilder;
 

@@ -7,7 +7,7 @@
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_binary_field::TowerLevel;
-use p3_binary_pcs::zk::{ReferenceZkAir, Val, ZkAirConfig, ZkAirProof};
+use p3_binary_pcs::zk::{ReferenceZkAir, Val, ZkAirConfig};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::{StdRng, SysRng};
@@ -65,9 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ZkAirConfig::new(LOG_TRACE_HEIGHT, INTERACTIVE_TARGET_BITS)?,
     )?;
     let proof = air.prove(trace, &[public_product], &mut rng)?;
-    let bytes = postcard::to_allocvec(&proof)?;
-    let decoded: ZkAirProof = postcard::from_bytes(&bytes)?;
-    air.verify(&decoded, &[public_product])?;
+    let bytes = air.encode_proof(&proof)?;
+    air.verify_bytes(&bytes, &[public_product])?;
 
     // Report only public dimensions and serialized size, never private inputs,
     // seeds, trace values, or unblinded polynomial coefficients.
