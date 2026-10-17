@@ -17,7 +17,6 @@
 //! - `m_i, m'_j` are multiplicities (how many times each element appears)
 //! - The transformation eliminates expensive exponentiation operations
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -157,33 +156,55 @@ impl LogUpGadget {
 
     /// Computes the combined elements for each tuple using the challenge `beta`:
     /// `combined_elements[i] = ∑_j elements[i][j] * β^(k-1-j), for a tuple of width k`
-    fn combine_elements<AB, E>(
-        &self,
-        elements: &[Vec<E>],
-        alpha: &AB::ExprEF,
-        beta: &AB::ExprEF,
-    ) -> Vec<AB::ExprEF>
+    fn combine_elements<T, I, J>(&self, elements: I, alpha: T, beta: T) -> impl Iterator<Item = T>
     where
-        AB: PermutationAirBuilder,
-        E: Into<AB::ExprEF> + Clone,
+        T: PrimeCharacteristicRing,
+        I: IntoIterator<Item = J>,
+        J: IntoIterator<Item = T>,
     {
-        elements
-            .iter()
-            .map(|elts| {
-                // Combine the elements in the tuple using beta.
-                let combined_elt = elts.iter().fold(AB::ExprEF::ZERO, |acc, elt| {
-                    elt.clone().into() + acc * beta.clone()
-                });
+        elements.into_iter().map(move |elts| {
+            let mut elts = elts.into_iter();
+            let head = elts.next().unwrap_or(T::ZERO);
+            let combined_elt = elts.fold(head, |acc, elt| elt + acc * beta.clone());
+            alpha.clone() - combined_elt
+        })
+    }
 
-                // Compute (α - combined_elt)
-                alpha.clone() - combined_elt
-            })
-            .collect()
+    fn fold_rational_terms<T: PrimeCharacteristicRing>(
+        terms: impl IntoIterator<Item = (T, T)>,
+    ) -> (T, T) {
+        let mut terms = terms.into_iter();
+        let Some((mut common_denominator, mut numerator)) = terms.next() else {
+            return (T::ZERO, T::ONE);
+        };
+
+        // This identity also holds when one or more denominator factors are zero.
+        for (term, mult) in terms {
+            numerator = numerator * term.clone() + mult * common_denominator.clone();
+            common_denominator *= term;
+        }
+        (numerator, common_denominator)
+    }
+
+    fn fold_exclusive_terms<T: PrimeCharacteristicRing>(
+        terms: impl IntoIterator<Item = (T, T, T)>,
+    ) -> (T, T) {
+        let mut numerator = T::ZERO;
+        let mut denominator = T::ZERO;
+        let mut flag_sum = T::ZERO;
+        for (flag, term, mult) in terms {
+            denominator += flag.clone() * term;
+            numerator += flag.clone() * mult;
+            flag_sum += flag;
+        }
+        denominator += T::ONE - flag_sum;
+        (numerator, denominator)
     }
 
     /// Computes the numerator and denominator of the fraction:
     /// `∑(m_i / (α - combined_elements[i]))`, where
     /// `combined_elements[i] = ∑_j elements[i][j] * β^(k-1-j), for a tuple of width k`
+    #[cfg(test)]
     pub(crate) fn compute_combined_sum_terms<AB, E, M>(
         &self,
         elements: &[Vec<E>],
@@ -196,39 +217,18 @@ impl LogUpGadget {
         E: Into<AB::ExprEF> + Clone,
         M: Into<AB::ExprEF> + Clone,
     {
-        if elements.is_empty() {
-            return (AB::ExprEF::ZERO, AB::ExprEF::ONE);
-        }
-
-        let n = elements.len();
-
-        // Precompute all (α - ∑e_{i, j} β^j) terms
-        let terms = self.combine_elements::<AB, E>(elements, alpha, beta);
-
-        // Build prefix products: pref[i] = ∏_{j=0}^{i-1}(α - e_j)
-        let mut pref = Vec::with_capacity(n + 1);
-        pref.push(AB::ExprEF::ONE);
-        for t in &terms {
-            pref.push(pref.last().unwrap().clone() * t.clone());
-        }
-
-        // Build suffix products: suff[i] = ∏_{j=i}^{n-1}(α - e_j)
-        let mut suff = vec![AB::ExprEF::ONE; n + 1];
-        for i in (0..n).rev() {
-            suff[i] = suff[i + 1].clone() * terms[i].clone();
-        }
-
-        // Common denominator is the product of all terms
-        let common_denominator = pref[n].clone();
-
-        // Compute numerator: ∑(m_i * ∏_{j≠i}(α - e_j))
-        //
-        // The product without i is: pref[i] * suff[i+1]
-        let numerator = (0..n).fold(AB::ExprEF::ZERO, |acc, i| {
-            acc + multiplicities[i].clone().into() * pref[i].clone() * suff[i + 1].clone()
-        });
-
-        (numerator, common_denominator)
+        let terms = self.combine_elements(
+            elements
+                .iter()
+                .map(|elts| elts.iter().cloned().map(Into::into)),
+            alpha.clone(),
+            beta.clone(),
+        );
+        Self::fold_rational_terms(
+            terms
+                .enumerate()
+                .map(|(i, term)| (term, multiplicities[i].clone().into())),
+        )
     }
 
     /// Numerator and denominator of a mutually-exclusive column's single fraction.
@@ -254,6 +254,7 @@ impl LogUpGadget {
     /// - Correct only when the flags sum to at most one per row.
     /// - The AIR must enforce that.
     /// - The gadget assumes it.
+    #[cfg(test)]
     pub(crate) fn compute_exclusive_terms<AB>(
         &self,
         flags: &[AB::ExprEF],
@@ -265,27 +266,19 @@ impl LogUpGadget {
     where
         AB: PermutationAirBuilder,
     {
-        // Per-branch denominator term (alpha - combine(payload_k)).
-        let terms = self.combine_elements::<AB, AB::ExprEF>(elements, alpha, beta);
-
-        // Multiplex by the flags, accumulating the selected numerator and denominator.
-        //
-        // One flag per branch is the structural contract of an exclusive column.
-        // `zip_eq` panics on any length drift, so a malformed column never folds silently.
-        let mut numerator = AB::ExprEF::ZERO;
-        let mut denominator = AB::ExprEF::ZERO;
-        let mut flag_sum = AB::ExprEF::ZERO;
-        for ((flag, term), mult) in flags.iter().zip_eq(&terms).zip_eq(multiplicities) {
-            denominator += flag.clone() * term.clone();
-            numerator += flag.clone() * mult.clone();
-            flag_sum += flag.clone();
-        }
-
-        // Fallback term: an all-inactive row gets denominator 1.
-        // Its fraction is then 0.
-        denominator += AB::ExprEF::ONE - flag_sum;
-
-        (numerator, denominator)
+        let terms = self.combine_elements(
+            elements.iter().map(|elts| elts.iter().cloned()),
+            alpha.clone(),
+            beta.clone(),
+        );
+        Self::fold_exclusive_terms(
+            flags
+                .iter()
+                .cloned()
+                .zip_eq(terms)
+                .zip_eq(multiplicities.iter().cloned())
+                .map(|((flag, term), mult)| (flag, term, mult)),
+        )
     }
 }
 
@@ -332,22 +325,6 @@ impl LookupProtocol for LogUpGadget {
 
         let column = *column;
 
-        // First, turn the symbolic expressions into builder expressions, for elements and multiplicities.
-        let elements = elements
-            .iter()
-            .map(|exprs| {
-                exprs
-                    .iter()
-                    .map(|expr| expr.resolve(builder).into())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        let multiplicities = multiplicities
-            .iter()
-            .map(|expr| expr.resolve(builder).into())
-            .collect::<Vec<_>>();
-
         // Access the permutation (aux) table and the per-lookup challenges.
         let permutation = builder.permutation();
         let permutation_challenges = builder.permutation_randomness();
@@ -368,35 +345,32 @@ impl LookupProtocol for LogUpGadget {
         // So lookup slot `column` lives at permutation-trace column `column + 1`.
         let frac_local: AB::ExprEF = permutation.current(column + 1).unwrap().into();
 
-        // Resolve the exclusive selector flags into builder expressions.
-        //
-        // - An additive column has no flags, so this stays empty.
-        // - An exclusive column yields one resolved flag per branch.
-        let flags = flags
-            .iter()
-            .flatten()
-            .map(|expr| expr.resolve(builder).into())
-            .collect::<Vec<AB::ExprEF>>();
-
-        // Build the fraction `numerator / denominator`.
-        //
-        // - No flags: sum one term per tuple, so the denominator is their product.
-        // - With flags: select one branch's single fraction, so the degree is the per-branch max.
-        let (numerator, common_denominator) = if flags.is_empty() {
-            self.compute_combined_sum_terms::<AB, AB::ExprEF, AB::ExprEF>(
-                &elements,
-                &multiplicities,
-                &alpha.into(),
-                &beta.into(),
-            )
-        } else {
-            self.compute_exclusive_terms::<AB>(
-                &flags,
-                &elements,
-                &multiplicities,
-                &alpha.into(),
-                &beta.into(),
-            )
+        // Resolve directly into the rational fold, avoiding per-row tuple buffers.
+        let (numerator, common_denominator) = {
+            let row_builder = &*builder;
+            let tuples = elements.iter().map(move |exprs| {
+                exprs
+                    .iter()
+                    .map(move |expr| AB::ExprEF::from(expr.resolve(row_builder)))
+            });
+            let terms = self.combine_elements(tuples, alpha.into(), beta.into());
+            let multiplicities = multiplicities
+                .iter()
+                .map(|expr| AB::ExprEF::from(expr.resolve(row_builder)));
+            let terms = terms.zip_eq(multiplicities);
+            let flags = flags.as_deref().unwrap_or_default();
+            if flags.is_empty() {
+                Self::fold_rational_terms(terms)
+            } else {
+                let flags = flags
+                    .iter()
+                    .map(|expr| AB::ExprEF::from(expr.resolve(row_builder)));
+                Self::fold_exclusive_terms(
+                    flags
+                        .zip_eq(terms)
+                        .map(|(flag, (term, mult))| (flag, term, mult)),
+                )
+            }
         };
 
         // Pin the fraction column to V / U on every row.
