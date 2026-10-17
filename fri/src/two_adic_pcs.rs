@@ -607,6 +607,7 @@ where
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(z - X) for the largest subgroup (in bitrev order).
         let inv_denoms = compute_inverse_denominators(&mats_and_points, &coset);
+        drop(coset);
 
         // Precompute adjusted barycentric weights once per opening point.
         // adjusted[i] = 1/(z - x_i) - 1/z, reused across all matrices opened at z.
@@ -668,6 +669,8 @@ where
                     .collect_vec()
             })
             .collect_vec();
+
+        drop(adjusted_weights);
 
         // Describe the transcript before running it.
         //
@@ -811,6 +814,8 @@ where
                 }
             }
         }
+
+        drop(inv_denoms);
 
         // It remains to prove that all evaluation vectors in reduced_openings correspond to
         // low degree functions.
