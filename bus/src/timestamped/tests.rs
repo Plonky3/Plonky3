@@ -616,6 +616,73 @@ fn gap_factors_cover_exactly_one_to_two_to_the_thirty_two() {
 }
 
 #[test]
+fn checked_gap_digits_keep_both_range_indices() {
+    for (gap, low, high) in [
+        (1, 0, 0),
+        (65_536, 65_535, 0),
+        (65_537, 0, 1),
+        (4_294_967_296, 65_535, 65_535),
+    ] {
+        let digits = ClockGapDigits::new(gap).unwrap();
+        assert_eq!((digits.low(), digits.high()), (low, high));
+        let (lo, hi) = digits.factors::<C, F>();
+        assert_eq!(time(7) * lo, time(7 + gap) * hi);
+        assert_eq!(Some((lo, hi)), Memory::gap_factors(gap));
+    }
+    for gap in [0, 4_294_967_297, u64::MAX] {
+        assert_eq!(ClockGapDigits::new(gap), None);
+    }
+}
+
+#[test]
+fn range_witness_counts_shared_slots_and_padding() {
+    let mut witness = ClockRangeWitness::<C, F>::new();
+    let generator = F::GENERATOR;
+    // Two slots per row, then two padding slots using the smallest factors.
+    let gaps = [[1, 65_536], [65_537, 4_294_967_296], [1, 1]];
+    let expected_counts = [
+        [(F::ONE, F::ONE), (F::ONE, generator)],
+        [(generator, F::ONE), (generator, F::ONE)],
+        [
+            (generator.square(), generator.square()),
+            (generator.exp_u64(3), generator.exp_u64(3)),
+        ],
+    ];
+    for (row, expected) in gaps.into_iter().zip(expected_counts) {
+        for (gap, (low_count, high_count)) in row.into_iter().zip(expected) {
+            let read = witness.read(ClockGapDigits::new(gap).unwrap());
+            let factors = match gap {
+                1 => (time(1), F::ONE),
+                65_536 => (time(65_536), F::ONE),
+                65_537 => (time(1), time(65_536).inverse()),
+                4_294_967_296 => (time(65_536), time(4_294_901_760).inverse()),
+                _ => unreachable!(),
+            };
+            assert_eq!((read.low.value, read.high.value), factors);
+            for (read, expected) in [(read.low, low_count), (read.high, high_count)] {
+                assert_eq!(read.count, expected);
+                assert_eq!(read.count * read.count_inverse, F::ONE);
+            }
+        }
+    }
+    let [low, low_final, high, high_final] = witness.into_columns();
+    assert_eq!(
+        [low.len(), low_final.len(), high.len(), high_final.len()],
+        [65_536; 4]
+    );
+    for row in [0, 1, 7, 65_535] {
+        assert_eq!(low[row], time(row as u64 + 1));
+        assert_eq!(high[row], time(65_536).inverse().exp_u64(row as u64));
+    }
+    assert_eq!(low_final[0], generator.exp_u64(4));
+    assert_eq!(low_final[65_535], generator.square());
+    assert_eq!(high_final[0], generator.exp_u64(4));
+    assert_eq!(high_final[1], generator);
+    assert_eq!(high_final[65_535], generator);
+    assert_eq!((low_final[7], high_final[7]), (F::ONE, F::ONE));
+}
+
+#[test]
 fn the_handle_refuses_what_it_cannot_prove() {
     // One channel in two roles would let their tuples cancel.
     assert_eq!(
@@ -696,6 +763,109 @@ fn image() -> PublicImage<F> {
         vec![(2, vec![value(11)]), (5, vec![value(7), value(9)])],
     )
     .expect("the fixture runs fit")
+}
+
+#[test]
+fn public_image_periodic_rows_read_runs_and_gaps_without_materializing_columns() {
+    let wide_memory = Memory::new(MEMORY, LOW, HIGH, 2).unwrap();
+    let image = PublicImage::new(
+        &wide_memory,
+        3,
+        vec![
+            (1, vec![value(11), value(12), value(21), value(22)]),
+            (5, vec![value(51), value(52)]),
+            (7, vec![value(71), value(72)]),
+        ],
+    )
+    .unwrap();
+    let boundary =
+        TimestampedBoundaryAir::new(wide_memory, TimestampedSeed::Public(image)).unwrap();
+    let expected = [
+        [0, 0],
+        [11, 12],
+        [21, 22],
+        [0, 0],
+        [0, 0],
+        [51, 52],
+        [0, 0],
+        [71, 72],
+    ];
+
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| count.set(0));
+    for row in 0..16 {
+        assert_eq!(boundary.periodic_values(row), expected[row % 8].map(value));
+    }
+    for runs in [vec![], vec![(0, vec![value(4)])]] {
+        let expected = if runs.is_empty() { F::ZERO } else { value(4) };
+        let image = PublicImage::new(&memory(), 0, runs).unwrap();
+        let boundary =
+            TimestampedBoundaryAir::new(memory(), TimestampedSeed::Public(image)).unwrap();
+        assert_eq!(boundary.periodic_values(usize::MAX), [expected]);
+    }
+    for seed in [
+        TimestampedSeed::Zero,
+        TimestampedSeed::Private(PrivateRegion::new(0, 3).unwrap()),
+    ] {
+        let boundary = TimestampedBoundaryAir::new(memory(), seed).unwrap();
+        assert!(boundary.periodic_values(0).is_empty());
+    }
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
+}
+
+#[test]
+fn public_image_diagnostics_materialize_only_for_shape_validation() {
+    use p3_air::check_all_constraints;
+
+    let boundary = TimestampedBoundaryAir::new(memory(), TimestampedSeed::Public(image())).unwrap();
+    let trace = RowMajorMatrix::new(
+        (0..CELLS)
+            .flat_map(|row| [cell(row), time(0), F::ZERO])
+            .collect(),
+        3,
+    );
+
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| count.set(0));
+    check_constraints(&boundary, &trace, &[]);
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 1));
+
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| count.set(0));
+    assert!(check_all_constraints(&boundary, &trace, &[], None).is_ok());
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 1));
+
+    let mut forged = trace.clone();
+    forged.values[3 * 3] += F::ONE;
+    let report = check_all_constraints(&boundary, &forged, &[], None);
+    assert_eq!(
+        report
+            .failures
+            .iter()
+            .map(|failure| (failure.row, failure.constraint))
+            .collect::<Vec<_>>(),
+        [(2, 1), (3, 1)]
+    );
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        check_constraints(&boundary, &forged, &[]);
+    }))
+    .unwrap_err();
+    let message = panic.downcast_ref::<String>().unwrap();
+    assert!(message.contains("row 2"), "{message}");
+
+    // Sparse row lookup must not bypass the full column-period validation.
+    let short = RowMajorMatrix::new(trace.values[..4 * 3].to_vec(), 3);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| check_constraints(
+            &boundary,
+            &short,
+            &[]
+        )))
+        .is_err()
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            check_all_constraints(&boundary, &short, &[], None)
+        }))
+        .is_err()
+    );
 }
 
 /// A program reading the three image words, then overwriting one.
