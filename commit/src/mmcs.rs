@@ -227,6 +227,10 @@ impl<T: Send + Sync + Clone, M: Mmcs<T>> Mmcs<T> for &M {
     type MultiProof = M::MultiProof;
     type Error = M::Error;
 
+    fn proof_geometry(&self, log_height: usize) -> Option<MmcsProofGeometry> {
+        (**self).proof_geometry(log_height)
+    }
+
     fn commit<Mat: Matrix<T>>(
         &self,
         inputs: Vec<Mat>,

@@ -78,6 +78,17 @@ fn maximal_caps_are_included_in_the_proof_budget() {
     for cap_height in [0, recommended_cap_height(&config), usize::MAX] {
         let backend = mmcs(cap_height);
         let shape = ProofShape::of(&config, &backend, 1).unwrap();
+        let referenced = &backend;
+        let referenced_shape = ProofShape::of(&config, &referenced, 1).unwrap();
+        assert_eq!(referenced_shape, shape);
+        assert_eq!(
+            referenced_shape.max_bytes(10, 30, 32),
+            shape.max_bytes(10, 30, 32)
+        );
+        assert_eq!(
+            BinaryWhirBudget::PRODUCTION.check_shape(&referenced_shape, 10, 30, 32),
+            BinaryWhirBudget::PRODUCTION.check_shape(&shape, 10, 30, 32)
+        );
         let pcs = SuffixPcs::new(config.clone(), Domain::default(), backend);
         let mut rng = SmallRng::seed_from_u64(0xCA95);
         let witness = SuffixProver::<Poly64, Poly192>::new_witness(
