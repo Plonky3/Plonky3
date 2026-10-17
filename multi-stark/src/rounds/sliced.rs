@@ -158,8 +158,8 @@ pub(super) struct SlicedTrace<'data> {
     /// The successor planes, laid out like `cells`.
     ///
     /// Row `s` holds the cell at row `min(s + 1, height - 1)`, the repeat-last successor.
-    /// Zero for every column no AIR reads on the next row. A Boolean tensor with no declared
-    /// successor reads may omit this buffer entirely.
+    /// Zero for every column no AIR reads on the next row. A stage with no declared successor
+    /// reads omits this buffer entirely.
     successors: Planes<'data>,
     /// The first-row, last-row, and transition selectors of each word, one bit per row.
     boundary: Vec<[u64; 3]>,
@@ -1167,11 +1167,11 @@ where
         let low = borrowed.or_else(|| direct_packed_cells(&tables, words).map(Cow::Owned));
         let (cells, successors) = if let Some(low) = low {
             let successors = if next_columns.is_empty() {
-                vec![0; words * width]
+                Cow::Borrowed(&[][..])
             } else {
-                low_successors(&low, &is_successor, width)
+                Cow::Owned(low_successors(&low, &is_successor, width))
             };
-            (Planes::Low(low), Planes::Low(Cow::Owned(successors)))
+            (Planes::Low(low), Planes::Low(successors))
         } else {
             let (cells, successors) =
                 pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?;
@@ -1576,6 +1576,17 @@ where
 
     // Lay the words out word by word, every column of a word side by side.
     let mut cells = vec![[0; 2]; words * width];
+    if !is_successor.iter().any(|&next| next) {
+        cells
+            .par_chunks_mut(width)
+            .enumerate()
+            .for_each(|(word, word_cells)| {
+                for (cell, (column_planes, _)) in word_cells.iter_mut().zip(&packed) {
+                    *cell = column_planes[word];
+                }
+            });
+        return Some((cells, Vec::new()));
+    }
     let mut successors = vec![[0; 2]; words * width];
     cells
         .par_chunks_mut(width)
