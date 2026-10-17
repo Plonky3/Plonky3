@@ -4,6 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::repeat_n;
 
+use itertools::Either;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
@@ -314,16 +315,32 @@ where
             )?;
             // Evaluation domain of the mask code over the extension field.
             let mask_gen = EF::two_adic_generator(log2_strict_usize(group.shape.domain_size));
+            // Extract the actual extension-domain generator once. Even when it
+            // lies in F, it need not equal F's chosen canonical generator.
+            let mask_gen: Either<F, EF> = match mask_gen.as_base() {
+                Some(generator) => Either::Left(generator),
+                None => Either::Right(mask_gen),
+            };
             let blinded = &proof.blinded_masks[mask_offset..mask_offset + group.width];
             for ((&position, carried_row), fresh_row) in
                 positions.iter().zip(carried_rows).zip(fresh_rows)
             {
                 // The field point behind position y.
-                let point = mask_gen.exp_u64(position as u64);
+                let point = match mask_gen {
+                    Either::Left(generator) => Either::Left(generator.exp_u64(position as u64)),
+                    Either::Right(generator) => Either::Right(generator.exp_u64(position as u64)),
+                };
                 for ((blinded, &carried), &fresh) in blinded.iter().zip(carried_row).zip(fresh_row)
                 {
                     // Enc(xi*_i, r*_i)(y): re-encode member i's reveal.
-                    let blinded_value = padded_ood_t1(point, &blinded.message, &blinded.randomness);
+                    let blinded_value = match point {
+                        Either::Left(point) => {
+                            padded_ood_t1(point, &blinded.message, &blinded.randomness)
+                        }
+                        Either::Right(point) => {
+                            padded_ood_t1(point, &blinded.message, &blinded.randomness)
+                        }
+                    };
                     if blinded_value != fresh + gamma * carried {
                         return Err(BaseCaseZkError::MaskSpotCheckFailed {
                             group: group_index,
