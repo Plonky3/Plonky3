@@ -121,6 +121,26 @@ class CheckCliTests(unittest.TestCase):
         )
         self.assertEqual(self.dry_run_lines("slow-regressions", "--packages", "p3-util"), [])
 
+    def test_exhaustive_word_shifts_are_selected_as_a_slow_regression(self):
+        expected = [
+            "+ cargo test -p p3-word-backend"
+            " shift::wiring::tests::factorized_transpose_matches_every_shift_pair"
+            " -- --ignored --exact"
+        ]
+        self.assertEqual(
+            self.dry_run_lines("slow-regressions", "--package", "p3-word-backend"),
+            expected,
+        )
+        self.assertIn(expected[0], self.dry_run_lines("slow-regressions"))
+
+    def test_prove_hash_binary_participates_in_default_test_discovery(self):
+        import check  # noqa: PLC0415
+
+        metadata = check.cargo_metadata(REPO)
+        examples = next(p for p in metadata["packages"] if p["name"] == "p3-examples")
+        target = next(t for t in examples["targets"] if t["name"] == "prove_hash_binary")
+        self.assertTrue(target["test"])
+
     def test_lint_can_run_each_existing_ci_check_independently(self):
         expected = {
             "sort": "+ cargo +stable sort --workspace --grouped --check",
@@ -481,6 +501,50 @@ class CiPlanTests(unittest.TestCase):
             plan = check.ci_plan(self.metadata(temp), ["alpha/src/lib.rs"])
         self.assertEqual(plan["packages"], ["p3-alpha", "p3-beta", "p3-runner"])
         self.assertFalse(plan["full"])
+
+    def test_heavy_suites_follow_upstream_dependencies(self):
+        import check  # noqa: PLC0415
+
+        # Field -> sumcheck -> WHIR -> binary PCS; the transcript is shared by both.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            dependencies = {
+                "field": [],
+                "challenger": ["field"],
+                "sumcheck": ["field", "challenger"],
+                "whir": ["sumcheck", "challenger"],
+                "binary-pcs": ["whir", "sumcheck", "challenger"],
+                "isolated": [],
+            }
+            metadata = {
+                "workspace_root": temp,
+                "workspace_members": [f"p3-{name}" for name in dependencies],
+                "packages": [
+                    {
+                        "id": f"p3-{name}",
+                        "name": f"p3-{name}",
+                        "manifest_path": str(root / name / "Cargo.toml"),
+                        "dependencies": [
+                            {"path": str(root / dependency), "kind": None}
+                            for dependency in upstream
+                        ],
+                        "targets": [{"kind": ["lib"]}],
+                    }
+                    for name, upstream in dependencies.items()
+                ],
+            }
+            for path in ["field/src/lib.rs", "sumcheck/src/lib.rs", "challenger/src/lib.rs"]:
+                with self.subTest(path=path):
+                    plan = check.ci_plan(metadata, [path])
+                    self.assertTrue(plan["whir"])
+                    self.assertTrue(plan["binary_pcs"])
+            for path in ["README.md", "isolated/src/lib.rs"]:
+                with self.subTest(path=path):
+                    plan = check.ci_plan(metadata, [path])
+                    self.assertFalse(plan["whir"])
+                    self.assertFalse(plan["binary_pcs"])
+            self.assertTrue(check.ci_plan(metadata, [], force_full=True)["whir"])
+            self.assertTrue(check.ci_plan(metadata, ["Cargo.lock"])["binary_pcs"])
 
     def test_sumcheck_change_selects_gfni_jobs(self):
         import check  # noqa: PLC0415
