@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_dft::TwoAdicSubgroupDft;
-use p3_field::TwoAdicField;
+use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
@@ -10,6 +10,53 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{CryptoRng, Rng, RngExt};
 
 use crate::{LinearZkEncoding, ZkEncoding, ZkEncodingWithRandomness};
+
+/// An extension-field DFT that reuses a base-field DFT when its domain agrees.
+///
+/// Cloning the supplied DFT preserves its usual cache-sharing behavior. Domains
+/// above the base field's two-adicity, or with a different canonical generator,
+/// retain the extension-field radix-2 transform and its evaluation order.
+#[derive(Clone, Debug, Default)]
+pub struct BaseFieldDft<F, EF, Dft> {
+    dft: Dft,
+    _phantom: PhantomData<(F, EF)>,
+}
+
+impl<F, EF, Dft> BaseFieldDft<F, EF, Dft> {
+    /// Wrap an existing base-field DFT, including any shared twiddle cache.
+    pub const fn new(dft: Dft) -> Self {
+        Self {
+            dft,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+fn base_domain_matches<F, EF>(log_n: usize, extension_generator: EF) -> bool
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+{
+    log_n <= F::TWO_ADICITY && extension_generator == EF::from(F::two_adic_generator(log_n))
+}
+
+impl<F, EF, Dft> TwoAdicSubgroupDft<EF> for BaseFieldDft<F, EF, Dft>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F>,
+{
+    type Evaluations = RowMajorMatrix<EF>;
+
+    fn dft_batch(&self, mat: RowMajorMatrix<EF>) -> Self::Evaluations {
+        let log_n = log2_strict_usize(mat.height());
+        if base_domain_matches::<F, EF>(log_n, EF::two_adic_generator(log_n)) {
+            self.dft.dft_algebra_batch(mat)
+        } else {
+            Radix2Dit::<EF>::default().dft_batch(mat)
+        }
+    }
+}
 
 /// A Reed-Solomon zero-knowledge encoding.
 ///
@@ -331,6 +378,55 @@ mod tests {
             self.calls.set(self.calls.get() + 1);
             self.inner.dft_batch(mat)
         }
+    }
+
+    #[test]
+    fn base_field_dft_matches_extension_encoding() {
+        use p3_field::extension::BinomialExtensionField;
+        type EF = BinomialExtensionField<KoalaBear, 8>;
+        let dft = CountingDft::<Radix2DFTSmallBatch<KoalaBear>>::default();
+        let fast = BaseFieldDft::<KoalaBear, EF, _>::new(dft.clone());
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(0xfeed);
+        for (msg_len, t, m) in [(0, 0, 1), (3, 92, 1024), (8, 0, 16)] {
+            let reference = ReedSolomonZkEncoding::new(t, msg_len, m, Radix2Dit::<EF>::default());
+            let candidate = ReedSolomonZkEncoding::new(t, msg_len, m, fast.clone());
+            for width in [1, 6, 8] {
+                let messages: Vec<Vec<EF>> = (0..width)
+                    .map(|_| (0..msg_len).map(|_| rng.random()).collect())
+                    .collect();
+                let randomness: Vec<Vec<EF>> = (0..width)
+                    .map(|_| (0..t).map(|_| rng.random()).collect())
+                    .collect();
+                assert_eq!(
+                    candidate.encode_batch_with_randomness(&messages, &randomness),
+                    reference.encode_batch_with_randomness(&messages, &randomness)
+                );
+                for (msg, randomness) in messages.iter().zip(&randomness) {
+                    assert_eq!(
+                        candidate.encode_with_randomness(msg, randomness),
+                        reference.encode_with_randomness(msg, randomness)
+                    );
+                }
+            }
+        }
+        assert!(dft.calls() > 0, "the shared base-field DFT must be used");
+    }
+
+    #[test]
+    fn base_field_dft_requires_identical_domain_generators() {
+        use p3_field::extension::BinomialExtensionField;
+        type EF = BinomialExtensionField<KoalaBear, 8>;
+        let root = KoalaBear::two_adic_generator(10);
+        assert!(base_domain_matches::<KoalaBear, EF>(10, root.into()));
+        // Another primitive root belongs to F but orders the codeword differently.
+        assert!(!base_domain_matches::<KoalaBear, EF>(
+            10,
+            root.inverse().into()
+        ));
+        let log_n = KoalaBear::TWO_ADICITY + 1;
+        let extension_root = EF::two_adic_generator(log_n);
+        assert!(<EF as ExtensionField<KoalaBear>>::as_base(&extension_root).is_none());
+        assert!(!base_domain_matches::<KoalaBear, EF>(log_n, extension_root));
     }
 
     #[test]

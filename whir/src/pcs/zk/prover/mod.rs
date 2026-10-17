@@ -156,7 +156,9 @@ where
         // A rejection therefore leaves the sponge and the masking RNG where it found them.
         config.validate_initial_claims(claims.len())?;
         let num_variables = config.num_variables;
-        let sumcheck_mask_encoding = config.sumcheck_mask.encoding::<EF>();
+        let sumcheck_mask_encoding = config
+            .sumcheck_mask
+            .encoding_with_base_dft::<F, EF, _>(self.dft);
 
         // One driver spans the whole run.
         //
@@ -278,7 +280,7 @@ where
 
             // Commit the code-switch mask (folded randomness || pad).
             let mask_shape = &config.switch_masks[round];
-            let mask_encoding = mask_shape.encoding::<EF>();
+            let mask_encoding = mask_shape.encoding_with_base_dft::<F, EF, _>(self.dft);
             let pad: Vec<EF> = (0..round_params.ood_samples)
                 .map(|_| rng.random())
                 .collect();

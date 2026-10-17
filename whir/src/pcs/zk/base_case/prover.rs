@@ -134,7 +134,7 @@ where
         let mut fresh_groups = Vec::with_capacity(masks.len());
         for (group, witness) in self.config.mask_groups.iter().zip(masks) {
             // Every member of a group shares the group's code.
-            let encoding = group.shape.encoding::<EF>();
+            let encoding = group.shape.encoding_with_base_dft::<F, EF, _>(dft);
             let mut blind_messages = Vec::with_capacity(group.width);
             let mut blind_randomness = Vec::with_capacity(group.width);
             for _ in 0..group.width {

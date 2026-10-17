@@ -1,12 +1,14 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
-use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+use p3_dft::{Radix2DFTSmallBatch, Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{PrimeCharacteristicRing, TwoAdicField};
 use p3_koala_bear::KoalaBear;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_zk_codes::{ReedSolomonZkEncoding, ZkEncoding, ZkEncodingWithRandomness, stack_codewords};
+use p3_zk_codes::{
+    BaseFieldDft, ReedSolomonZkEncoding, ZkEncoding, ZkEncodingWithRandomness, stack_codewords,
+};
 use rand::distr::{Distribution, StandardUniform};
 use rand::{RngExt, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -62,6 +64,13 @@ fn bench_whir_octic_mask_encoding(c: &mut Criterion) {
     let m = 1 << log_m;
     let encoding = ReedSolomonZkEncoding::<EF, _>::new(t, msg_len, m, dft);
 
+    let base_encoding = ReedSolomonZkEncoding::<EF, _>::new(
+        t,
+        msg_len,
+        m,
+        BaseFieldDft::<KoalaBear, EF, _>::new(Radix2DFTSmallBatch::<KoalaBear>::default()),
+    );
+
     // Widths 8 and 6 model successive folding rounds. Width 1 guards the
     // code-switching case against regressions from taking the batch API.
     for &width in &[1, 6, 8] {
@@ -89,6 +98,13 @@ fn bench_whir_octic_mask_encoding(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("batch", &id), &id, |b, _| {
             b.iter(|| encoding.encode_batch_with_randomness(&messages, &randomness));
+        });
+        assert_eq!(
+            base_encoding.encode_batch_with_randomness(&messages, &randomness),
+            encoding.encode_batch_with_randomness(&messages, &randomness),
+        );
+        group.bench_with_input(BenchmarkId::new("base_dft", &id), &id, |b, _| {
+            b.iter(|| base_encoding.encode_batch_with_randomness(&messages, &randomness));
         });
     }
     group.finish();
