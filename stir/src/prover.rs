@@ -15,6 +15,7 @@ use p3_field::{
     BasedVectorSpace, ExtensionField, Field, PrimeField64, TwoAdicField,
     batch_multiplicative_inverse,
 };
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_ceil_usize;
@@ -177,7 +178,6 @@ struct RoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
     /// evaluation form and therefore already materialized every fold-domain value.
     folded_codeword: Option<Vec<EF>>,
     fold_coeffs: Vec<EF>,
-    next_commit_codeword: Vec<EF>,
     new_data: Option<M::ProverData<RowMajorMatrix<EF>>>,
 
     ood_points: Vec<EF>,
@@ -221,7 +221,6 @@ where
             next_shift: next_domain_shift(current_shift, log_arity),
             folded_codeword: None,
             fold_coeffs: Vec::new(),
-            next_commit_codeword: Vec::new(),
             new_data: None,
             ood_points: Vec::new(),
             ood_answers: Vec::new(),
@@ -238,20 +237,24 @@ where
     /// first prover message and must be absorbed by the caller.
     fn fold_and_commit(
         &mut self,
-        current_oracle: &Oracle<EF>,
+        current_oracle: &mut Oracle<EF>,
         current_shift: F,
         current_log_domain: usize,
         gamma: EF,
     ) -> M::Commitment {
         self.fold_coeffs = match current_oracle {
             Oracle::Evals(codeword) => {
+                // Subsequent queries read the committed matrix or the folded codeword.
+                // Release this redundant natural-order copy as soon as its fold is built.
+                let codeword = core::mem::take(codeword);
                 // `fold_codeword` interpolates at subgroup coordinates `g^{·}`. The codeword
                 // lives on the coset `current_shift · <g>`, so passing `gamma / current_shift`
                 // yields exactly Construction 4.5's coset fold at challenge `gamma`.
                 let fold_beta = gamma * EF::from(current_shift.inverse());
                 let folded = tracing::debug_span!("fold_codeword").in_scope(|| {
-                    fold_codeword::<F, EF>(codeword, fold_beta, self.log_arity, current_log_domain)
+                    fold_codeword::<F, EF>(&codeword, fold_beta, self.log_arity, current_log_domain)
                 });
+                drop(codeword);
                 // The folded polynomial has only `folded_degree_bound` coefficients. Gather
                 // that size sub-coset for interpolation while retaining the full fold codeword
                 // below, since round queries still read it at the original domain size.
@@ -268,7 +271,7 @@ where
             Oracle::Coeffs(coeffs) => fold_poly_coeffs(coeffs, gamma, self.log_arity),
         };
 
-        self.next_commit_codeword = codeword_from_coeffs(
+        let next_commit_codeword = codeword_from_coeffs(
             self.dft,
             self.truncated_fold_coeffs().to_vec(),
             self.next_shift,
@@ -278,7 +281,7 @@ where
             tracing::debug_span!("commit_as_fiber_matrix").in_scope(|| {
                 commit_as_fiber_matrix(
                     &self.config.mmcs,
-                    &self.next_commit_codeword,
+                    &next_commit_codeword,
                     self.config.log_folding_factor,
                 )
             });
@@ -462,12 +465,22 @@ where
             drop(combined_denoms);
 
             let stride = 1usize << (next_log_domain - log_sub_coset);
-            let commit_codeword = core::mem::take(&mut self.next_commit_codeword);
+            // The MMCS owns the same values arranged into fiber rows. Natural index i
+            // is matrix entry (i % height, i / height), so retain only the degree-sized
+            // sample rather than a second full natural-order codeword through the round.
+            let matrices = self
+                .config
+                .mmcs
+                .get_matrices(self.new_data.as_ref().expect("committed"));
+            let matrix = matrices[0];
+            let height = matrix.height();
             let mut next_oracle_evals: Vec<EF> = (0..sub_coset_len)
                 .into_par_iter()
-                .map(|m| commit_codeword[m * stride])
+                .map(|m| {
+                    let i = m * stride;
+                    matrix.get(i % height, i / height).expect("codeword index")
+                })
                 .collect();
-            drop(commit_codeword);
 
             next_oracle_evals
                 .par_chunks_mut(POWER_CHUNK)
@@ -523,7 +536,7 @@ fn prove_round<F, EF, Dft, M, Challenger>(
     round: usize,
     dft: &Dft,
     transcript: &mut ProverTranscript<'_, Challenger, F, EF>,
-    current_oracle: &Oracle<EF>,
+    current_oracle: &mut Oracle<EF>,
     current_shift: F,
     current_log_domain: usize,
     current_commit_data: Option<&M::ProverData<RowMajorMatrix<EF>>>,
@@ -871,7 +884,7 @@ where
             round,
             dft,
             &mut transcript,
-            &current_oracle,
+            &mut current_oracle,
             current_shift,
             current_log_domain,
             current_commit_data.as_ref(),
@@ -1059,12 +1072,9 @@ where
                     states[i].shift,
                     states[i].log_domain,
                 );
-                let commit = rp.fold_and_commit(
-                    &states[i].oracle,
-                    states[i].shift,
-                    states[i].log_domain,
-                    gamma,
-                );
+                let state = &mut states[i];
+                let commit =
+                    rp.fold_and_commit(&mut state.oracle, state.shift, state.log_domain, gamma);
                 transcript.fold_commitment(commit.clone());
                 Phase1 { rp, commit }
             })
