@@ -56,6 +56,23 @@ where
             Radix2Dit::<EF>::default().dft_batch(mat)
         }
     }
+
+    fn dft_batch_padded(&self, mat: RowMajorMatrix<EF>, log_inv_rate: usize) -> Self::Evaluations {
+        let log_n = log2_strict_usize(mat.height());
+        assert!(log_inv_rate <= log_n, "padding exceeds matrix height");
+        if base_domain_matches::<F, EF>(log_n, EF::two_adic_generator(log_n)) {
+            let width = mat.width;
+            let base_mat =
+                RowMajorMatrix::new(EF::flatten_to_base(mat.values), width * EF::DIMENSION);
+            let evaluations = self
+                .dft
+                .dft_batch_padded(base_mat, log_inv_rate)
+                .to_row_major_matrix();
+            RowMajorMatrix::new(EF::reconstitute_from_base(evaluations.values), width)
+        } else {
+            Radix2Dit::<EF>::default().dft_batch_padded(mat, log_inv_rate)
+        }
+    }
 }
 
 /// A Reed-Solomon zero-knowledge encoding.
@@ -118,6 +135,12 @@ impl<F: TwoAdicField, Dft> ReedSolomonZkEncoding<F, Dft> {
             dft,
             _phantom: PhantomData,
         }
+    }
+
+    // Round the live prefix up so a sparse transform may skip only layers
+    // known to contain zeros. The all-zero polynomial uses one live row.
+    fn padding_bits(&self) -> usize {
+        log2_strict_usize(self.m) - log2_strict_usize((self.msg_len + self.t).next_power_of_two())
     }
 
     /// Retrieve the evaluation point `x` at the given index in the DFT domain.
@@ -235,7 +258,9 @@ where
         coeffs.extend_from_slice(randomness);
         coeffs.resize(self.m, F::ZERO);
         let mat = RowMajorMatrix::new_col(coeffs);
-        self.dft.dft_batch(mat).to_row_major_matrix()
+        self.dft
+            .dft_batch_padded(mat, self.padding_bits())
+            .to_row_major_matrix()
     }
 
     // Unlike the trait fallback, this override packs all columns first and
@@ -285,7 +310,9 @@ where
         }
 
         let mat = RowMajorMatrix::new(coeffs, width);
-        self.dft.dft_batch(mat).to_row_major_matrix()
+        self.dft
+            .dft_batch_padded(mat, self.padding_bits())
+            .to_row_major_matrix()
     }
 }
 
@@ -410,6 +437,56 @@ mod tests {
             }
         }
         assert!(dft.calls() > 0, "the shared base-field DFT must be used");
+    }
+
+    #[test]
+    fn degree_aware_mask_encoding_matches_full_fft() {
+        use p3_dft::Radix2DitParallel;
+        use p3_field::extension::BinomialExtensionField;
+        type EF = BinomialExtensionField<KoalaBear, 8>;
+        let dft = BaseFieldDft::<KoalaBear, EF, _>::new(Radix2DitParallel::<KoalaBear>::default());
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(0xcafe);
+        // Cover zero and constant polynomials, both sides of a dyadic
+        // live-prefix boundary, and a completely occupied domain.
+        for (msg_len, t, m) in [
+            (0, 0, 1),
+            (1, 0, 16),
+            (3, 92, 1024),
+            (64, 64, 1024),
+            (65, 64, 1024),
+            (16, 0, 16),
+        ] {
+            let candidate = ReedSolomonZkEncoding::new(t, msg_len, m, dft.clone());
+            for width in [1, 6, 8] {
+                let messages: Vec<Vec<EF>> = (0..width)
+                    .map(|_| (0..msg_len).map(|_| rng.random()).collect())
+                    .collect();
+                let randomness: Vec<Vec<EF>> = (0..width)
+                    .map(|_| (0..t).map(|_| rng.random()).collect())
+                    .collect();
+                let actual = candidate.encode_batch_with_randomness(&messages, &randomness);
+                for (column, (msg, randomness)) in messages.iter().zip(&randomness).enumerate() {
+                    let mut coefficients = msg.clone();
+                    coefficients.extend_from_slice(randomness);
+                    coefficients.resize(m, EF::ZERO);
+                    let expected = Radix2Dit::<EF>::default().dft(coefficients);
+                    assert_eq!(
+                        actual
+                            .values
+                            .iter()
+                            .skip(column)
+                            .step_by(width)
+                            .copied()
+                            .collect::<Vec<_>>(),
+                        expected
+                    );
+                    assert_eq!(
+                        candidate.encode_with_randomness(msg, randomness).values,
+                        expected
+                    );
+                }
+            }
+        }
     }
 
     #[test]
