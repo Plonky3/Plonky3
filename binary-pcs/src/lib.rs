@@ -26,6 +26,8 @@ pub mod testing;
 pub mod transcript;
 mod verifier;
 pub mod whir;
+#[cfg(feature = "experimental-zk")]
+pub mod zk;
 
 pub use boolean::{
     BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError,

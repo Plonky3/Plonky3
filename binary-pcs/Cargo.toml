@@ -16,8 +16,13 @@ criterion.workspace = true
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 test-utils = []
+experimental-zk = ["dep:p3-keccak", "dep:p3-merkle-tree", "dep:p3-symmetric", "dep:rand"]
 
 [dependencies]
+p3-keccak = { workspace = true, optional = true }
+p3-merkle-tree = { workspace = true, optional = true }
+p3-symmetric = { workspace = true, optional = true }
+rand = { workspace = true, optional = true, features = ["std_rng"] }
 p3-binary-dft.workspace = true
 p3-binary-field.workspace = true
 p3-challenger.workspace = true
