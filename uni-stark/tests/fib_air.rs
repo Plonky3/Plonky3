@@ -330,6 +330,10 @@ impl BaseAir<CircleVal> for CirclePeriodicProductAir {
         1
     }
 
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        vec![]
+    }
+
     fn num_periodic_columns(&self) -> usize {
         1
     }
@@ -358,6 +362,7 @@ fn circle_periodic_products_use_full_trace_degree() {
         let trace =
             RowMajorMatrix::new_col((0..16).map(|i| air.column[i % 2].exp_u64(degree)).collect());
         let proof = prove(&config, &air, trace, &[]).unwrap();
+        assert!(proof.opened_values.trace_next.is_none());
         assert_eq!(
             proof.opened_values.quotient_chunks.len(),
             (degree - 1) as usize

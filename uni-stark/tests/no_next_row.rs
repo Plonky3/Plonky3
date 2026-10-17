@@ -114,3 +114,94 @@ fn test_no_next_row_rejects_present_trace_next() {
         "verifier should reject proof with trace_next present when AIR does not use next row"
     );
 }
+
+/// Same current-row constraints with independently declared main/preprocessed windows.
+struct WideCurrentRowAir {
+    main_next: bool,
+    preprocessed_next: bool,
+}
+
+impl<F> BaseAir<F> for WideCurrentRowAir {
+    fn width(&self) -> usize {
+        33
+    }
+    fn preprocessed_width(&self) -> usize {
+        35
+    }
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        if self.main_next {
+            (0..33).collect()
+        } else {
+            vec![]
+        }
+    }
+    fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+        if self.preprocessed_next {
+            (0..35).collect()
+        } else {
+            vec![]
+        }
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for WideCurrentRowAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let preprocessed = builder.preprocessed().current_slice().to_vec();
+        // The unused next windows must retain the AIR's full width.
+        assert_eq!(main.next_slice().len(), 33);
+        assert_eq!(builder.preprocessed().next_slice().len(), 35);
+        for col in 0..33 {
+            let x = main.current(col).unwrap();
+            builder.assert_eq(x * x, preprocessed[col]);
+        }
+    }
+}
+
+#[test]
+fn skipped_next_row_gathers_preserve_wide_quotients() {
+    use p3_commit::PolynomialSpace;
+    use p3_uni_stark::StarkGenericConfig;
+    use p3_uni_stark::{AirLayout, quotient_values};
+
+    let config = make_config();
+    let pcs = config.pcs();
+    for degree in [1, 8, 64] {
+        let trace_domain =
+            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::natural_domain_for_degree(pcs, degree);
+        let quotient_domain = trace_domain.create_disjoint_domain(degree * 4);
+        let main = RowMajorMatrix::new(
+            (0..quotient_domain.size() * 33)
+                .map(|i| Val::from_usize(i + 1))
+                .collect(),
+            33,
+        );
+        let preprocessed = RowMajorMatrix::new(
+            (0..quotient_domain.size() * 35)
+                .map(|i| Val::from_usize(i + 9))
+                .collect(),
+            35,
+        );
+        let evaluate = |main_next, preprocessed_next| {
+            let air = WideCurrentRowAir {
+                main_next,
+                preprocessed_next,
+            };
+            quotient_values::<MyConfig, _, _>(
+                pcs,
+                &air,
+                &[],
+                AirLayout::from_air::<Val>(&air),
+                trace_domain,
+                quotient_domain,
+                &main,
+                Some(&preprocessed),
+                Challenge::from_u64(7),
+            )
+        };
+        let expected = evaluate(true, true);
+        for (main_next, preprocessed_next) in [(false, false), (true, false), (false, true)] {
+            assert_eq!(evaluate(main_next, preprocessed_next), expected);
+        }
+    }
+}

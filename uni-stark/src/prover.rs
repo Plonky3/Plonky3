@@ -759,6 +759,9 @@ where
     let periodic_table =
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
+    let main_next = !air.main_next_row_columns().is_empty();
+    let preprocessed_next = !air.preprocessed_next_row_columns().is_empty();
+
     let pack_width = Pack::<SC, A, Strat>::WIDTH;
     // The packed row groups of the periodic table repeat every `groups_in_period`
     // groups, so only those are materialized and group `g` reads `g % groups_in_period`.
@@ -821,10 +824,16 @@ where
                 bufs.main.extend(
                     trace_on_quotient_domain.vertically_packed_row::<Pack<SC, A, Strat>>(i_start),
                 );
-                bufs.main.extend(
-                    trace_on_quotient_domain
-                        .vertically_packed_row::<Pack<SC, A, Strat>>(i_start + next_step),
-                );
+                if main_next {
+                    bufs.main.extend(
+                        trace_on_quotient_domain
+                            .vertically_packed_row::<Pack<SC, A, Strat>>(i_start + next_step),
+                    );
+                } else {
+                    // Folders retain a full two-row window even when the next row is unused.
+                    bufs.main
+                        .resize(2 * width, Pack::<SC, A, Strat>::broadcast(Val::<SC>::ZERO));
+                }
                 let main = RowMajorMatrixView::new(&bufs.main, width);
 
                 let preprocessed_view = match preprocessed_on_quotient_domain {
@@ -833,10 +842,18 @@ where
                         bufs.preprocessed.extend(
                             preprocessed.vertically_packed_row::<Pack<SC, A, Strat>>(i_start),
                         );
-                        bufs.preprocessed.extend(
-                            preprocessed
-                                .vertically_packed_row::<Pack<SC, A, Strat>>(i_start + next_step),
-                        );
+                        if preprocessed_next {
+                            bufs.preprocessed.extend(
+                                preprocessed.vertically_packed_row::<Pack<SC, A, Strat>>(
+                                    i_start + next_step,
+                                ),
+                            );
+                        } else {
+                            bufs.preprocessed.resize(
+                                2 * preprocessed.width(),
+                                Pack::<SC, A, Strat>::broadcast(Val::<SC>::ZERO),
+                            );
+                        }
                         RowMajorMatrixView::new(&bufs.preprocessed, preprocessed.width())
                     }
                     None => RowMajorMatrixView::new(&[], 0),
