@@ -76,3 +76,7 @@ harness = false
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "lookup_materialization"
+harness = false

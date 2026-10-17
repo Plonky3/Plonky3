@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::symbolic::SymbolicExpression;
+use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
 use p3_air::{AirBuilder, RowWindow};
 use p3_field::{Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, dot_product};
 use p3_lookup::Challenges;
@@ -87,6 +87,82 @@ impl<Var: PrimeCharacteristicRing> Scratch<Var> {
             next: Var::zero_vec(main_width),
             preprocessed_local: Var::zero_vec(preprocessed_width),
             preprocessed_next: Var::zero_vec(preprocessed_width),
+        }
+    }
+}
+
+/// Original scratch indices are retained, but only named row/column sources are loaded.
+struct LookupSources<'a, F: Field> {
+    main: [Vec<(usize, ColumnView<'a, F>)>; 2],
+    preprocessed: [Vec<(usize, ColumnView<'a, F>)>; 2],
+}
+
+impl<'a, F: Field> LookupSources<'a, F> {
+    fn new<'e>(
+        expressions: impl IntoIterator<Item = &'e SymbolicExpression<F>>,
+        main: &'a Table<F>,
+        preprocessed: Option<&'a Table<F>>,
+    ) -> Self
+    where
+        F: 'e,
+    {
+        fn visit<F: Field>(expression: &SymbolicExpression<F>, read: &mut [Vec<usize>; 4]) {
+            match expression {
+                SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => {
+                    let source = match variable.entry {
+                        BaseEntry::Main { offset } => {
+                            assert!(offset < 2, "expressions cannot span more than two rows");
+                            offset
+                        }
+                        BaseEntry::Preprocessed { offset } => {
+                            assert!(offset < 2, "expressions cannot span more than two rows");
+                            2 + offset
+                        }
+                        _ => return,
+                    };
+                    read[source].push(variable.index);
+                }
+                SymbolicExpr::Add { x, y, .. }
+                | SymbolicExpr::Sub { x, y, .. }
+                | SymbolicExpr::Mul { x, y, .. } => {
+                    visit(x, read);
+                    visit(y, read);
+                }
+                SymbolicExpr::Neg { x, .. } => visit(x, read),
+                _ => {}
+            }
+        }
+        let mut read: [Vec<usize>; 4] = core::array::from_fn(|_| Vec::new());
+        for expression in expressions {
+            visit(expression, &mut read);
+        }
+        for indices in &mut read {
+            indices.sort_unstable();
+            indices.dedup();
+        }
+        let [local, next, fixed_local, fixed_next] = read;
+        let main_views = |indices: Vec<usize>| {
+            indices
+                .into_iter()
+                .map(|index| (index, main.column(index)))
+                .collect()
+        };
+        let fixed_views = |indices: Vec<usize>| {
+            indices
+                .into_iter()
+                .map(|index| {
+                    (
+                        index,
+                        preprocessed
+                            .expect("preprocessed column index out of bounds")
+                            .column(index),
+                    )
+                })
+                .collect()
+        };
+        Self {
+            main: [main_views(local), main_views(next)],
+            preprocessed: [fixed_views(fixed_local), fixed_views(fixed_next)],
         }
     }
 }
@@ -217,23 +293,37 @@ impl<F: Field> LookupPlan<F> {
             let main = main[planned.air_index];
             let preprocessed = preprocessed[planned.air_index];
             let height = 1 << planned.num_variables;
+            let sources = LookupSources::new(
+                planned.lookups.iter().flat_map(|lookup| {
+                    lookup
+                        .elements
+                        .iter()
+                        .flatten()
+                        .chain(&lookup.multiplicities)
+                }),
+                main,
+                preprocessed,
+            );
             let mut scratch =
                 Scratch::new(main.num_polys(), preprocessed.map_or(0, Table::num_polys));
             for row in 0..height {
-                let fill = |local: &mut [F], next: &mut [F], table: &Table<F>| {
-                    for ((local, next), column) in local.iter_mut().zip(next).zip(table.columns()) {
-                        *local = column.value(row);
-                        *next = column.value((row + 1).min(height - 1));
-                    }
-                };
-                fill(&mut scratch.local, &mut scratch.next, main);
-                if let Some(preprocessed) = preprocessed {
-                    fill(
-                        &mut scratch.preprocessed_local,
-                        &mut scratch.preprocessed_next,
-                        preprocessed,
-                    );
-                }
+                let fill =
+                    |local: &mut [F],
+                     next: &mut [F],
+                     columns: &[Vec<(usize, ColumnView<'_, F>)>; 2]| {
+                        for &(index, column) in &columns[0] {
+                            local[index] = column.value(row);
+                        }
+                        for &(index, column) in &columns[1] {
+                            next[index] = column.value((row + 1).min(height - 1));
+                        }
+                    };
+                fill(&mut scratch.local, &mut scratch.next, &sources.main);
+                fill(
+                    &mut scratch.preprocessed_local,
+                    &mut scratch.preprocessed_next,
+                    &sources.preprocessed,
+                );
                 let evaluator = LookupRowEvaluator {
                     main_window: RowWindow::from_two_rows(&scratch.local, &scratch.next),
                     preprocessed_window: RowWindow::from_two_rows(
@@ -288,6 +378,17 @@ fn materialize_contributions_packed<F, EF>(
     assert_eq!(numerators.len(), contributions.len() * num_evals);
     assert_eq!(denominators.len(), contributions.len() * packed_len);
 
+    let sources = LookupSources::new(
+        contributions.iter().flat_map(|contribution| {
+            contribution
+                .fields
+                .iter()
+                .chain(core::iter::once(contribution.multiplicity))
+        }),
+        main,
+        preprocessed,
+    );
+
     let numerator_ptr = DisjointMutPtr::new(numerators);
     let denominator_ptr = DisjointMutPtr::new(denominators);
 
@@ -296,31 +397,29 @@ fn materialize_contributions_packed<F, EF>(
         |scratch, packed_row| {
             let row = packed_row * packing_width;
             let fill_columns =
-                |local: &mut [F::Packing], next: &mut [F::Packing], table: &Table<F>| {
-                    local.iter_mut().zip(next).zip(table.columns()).for_each(
-                        |((local, next), column)| {
-                            *local = packed_column_at(column, row);
-                            *next = if row + 1 + packing_width <= num_evals {
-                                packed_column_at(column, row + 1)
-                            } else {
-                                // Match ordinary AIR evaluation: at the final row, `next`
-                                // repeats the local row rather than wrapping to row zero.
-                                F::Packing::from_fn(|lane| {
-                                    column.value(core::cmp::min(row + lane + 1, num_evals - 1))
-                                })
-                            };
-                        },
-                    );
+                |local: &mut [F::Packing],
+                 next: &mut [F::Packing],
+                 columns: &[Vec<(usize, ColumnView<'_, F>)>; 2]| {
+                    for &(index, column) in &columns[0] {
+                        local[index] = packed_column_at(column, row);
+                    }
+                    for &(index, column) in &columns[1] {
+                        next[index] = if row + 1 + packing_width <= num_evals {
+                            packed_column_at(column, row + 1)
+                        } else {
+                            // The final next row repeats the local row, rather than wrapping.
+                            F::Packing::from_fn(|lane| {
+                                column.value((row + lane + 1).min(num_evals - 1))
+                            })
+                        };
+                    }
                 };
-
-            fill_columns(&mut scratch.local, &mut scratch.next, main);
-            if let Some(preprocessed) = preprocessed {
-                fill_columns(
-                    &mut scratch.preprocessed_local,
-                    &mut scratch.preprocessed_next,
-                    preprocessed,
-                );
-            }
+            fill_columns(&mut scratch.local, &mut scratch.next, &sources.main);
+            fill_columns(
+                &mut scratch.preprocessed_local,
+                &mut scratch.preprocessed_next,
+                &sources.preprocessed,
+            );
 
             let evaluator = LookupRowEvaluator {
                 main_window: RowWindow::from_two_rows(&scratch.local, &scratch.next),
@@ -546,6 +645,36 @@ pub(super) mod tests {
         materialization: &Fraction<Poly<F>, PolyMaybePacked<F, EF>>,
     ) -> Poly<EF> {
         materialization.d.clone().unpack()
+    }
+
+    #[test]
+    fn selective_sources_keep_offsets_and_original_indices() {
+        use p3_air::symbolic::SymbolicVariable;
+        let main = Table::new(RowMajorMatrix::new(vec![F::ONE; 512 * 16], 16));
+        let fixed = Table::new(RowMajorMatrix::new(vec![F::TWO; 64 * 16], 16));
+        let variable = |entry, index| SymbolicExpression::from(SymbolicVariable::new(entry, index));
+        let payload = variable(BaseEntry::Main { offset: 0 }, 511)
+            + variable(BaseEntry::Main { offset: 1 }, 7)
+            + variable(BaseEntry::Preprocessed { offset: 1 }, 63);
+        let count = variable(BaseEntry::Main { offset: 0 }, 23);
+        let sources = LookupSources::new([&payload, &count], &main, Some(&fixed));
+        let indices = |columns: &Vec<(usize, ColumnView<'_, F>)>| {
+            columns.iter().map(|&(index, _)| index).collect::<Vec<_>>()
+        };
+        assert_eq!(indices(&sources.main[0]), [23, 511]);
+        assert_eq!(indices(&sources.main[1]), [7]);
+        assert!(sources.preprocessed[0].is_empty());
+        assert_eq!(indices(&sources.preprocessed[1]), [63]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn selective_sources_reject_an_unavailable_column() {
+        use p3_air::symbolic::SymbolicVariable;
+        let main = table(&[&[1, 2]]);
+        let payload =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 1 }, 1));
+        LookupSources::new([&payload], &main, None);
     }
 
     #[test]
