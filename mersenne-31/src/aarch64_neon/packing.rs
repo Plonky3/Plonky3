@@ -733,13 +733,27 @@ mod tests {
     use super::{Mersenne31, PackedMersenne31Neon};
 
     /// Zero has a redundant representation, so let's test both.
-    const ZEROS: PackedMersenne31Neon = PackedMersenne31Neon(Mersenne31::new_array([
-        0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
-    ]));
+    const ZEROS: PackedMersenne31Neon = PackedMersenne31Neon([
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+    ]);
 
     const SPECIAL_VALS: PackedMersenne31Neon = PackedMersenne31Neon(Mersenne31::new_array([
         0x00000000, 0x00000001, 0x00000002, 0x7ffffffe,
     ]));
+
+    #[test]
+    fn redundant_zero_fixture_preserves_raw_limbs() {
+        use p3_field::PrimeCharacteristicRing;
+
+        for (i, lane) in ZEROS.0.iter().enumerate() {
+            let expected = if i % 2 == 0 { 0 } else { 0x7fff_ffff };
+            assert_eq!(lane.value, expected);
+            assert_eq!(*lane, Mersenne31::ZERO);
+        }
+    }
 
     test_packed_field!(
         crate::PackedMersenne31Neon,
@@ -769,13 +783,18 @@ mod tests {
             }
         };
         let packed = |i: u32| {
-            PackedMersenne31Neon(Mersenne31::new_array([
-                val(i),
-                val(i.wrapping_add(1)),
-                val(i.wrapping_add(2)),
-                val(i.wrapping_add(3)),
-            ]))
+            PackedMersenne31Neon(
+                [
+                    val(i),
+                    val(i.wrapping_add(1)),
+                    val(i.wrapping_add(2)),
+                    val(i.wrapping_add(3)),
+                ]
+                .map(Mersenne31::new_reduced),
+            )
         };
+
+        assert_eq!(packed(3).0[0].value, P);
 
         for d in 1..=8usize {
             for len in [
@@ -801,7 +820,8 @@ mod tests {
                 assert_eq!(expected, got, "d = {d}, len = {len}");
 
                 // All operands equal P: the largest raw product is a redundant zero.
-                let max = PackedMersenne31Neon::from(Mersenne31::new(P));
+                let max = PackedMersenne31Neon::from(Mersenne31::new_reduced(P));
+                assert!(max.0.iter().all(|lane| lane.value == P));
                 let coeffs = [max; 8];
                 let got = PackedMersenne31Neon::coeffwise_dot_product(
                     d,
@@ -835,14 +855,17 @@ mod tests {
             }
         };
         let packed = |i: u32| {
-            PackedMersenne31Neon(Mersenne31::new_array([
-                val(i),
-                val(i.wrapping_add(1)),
-                val(i.wrapping_add(2)),
-                val(i.wrapping_add(3)),
-            ]))
+            PackedMersenne31Neon(
+                [
+                    val(i),
+                    val(i.wrapping_add(1)),
+                    val(i.wrapping_add(2)),
+                    val(i.wrapping_add(3)),
+                ]
+                .map(Mersenne31::new_reduced),
+            )
         };
-        let scalar = |i: u32| Mersenne31::new_checked(val(i) % P).unwrap();
+        let scalar = |i: u32| Mersenne31::new_reduced(val(i));
 
         fn check<EF: ExtensionField<Mersenne31>, const N: usize>(
             packed_width: usize,

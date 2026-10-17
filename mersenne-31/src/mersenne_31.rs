@@ -714,9 +714,14 @@ mod tests {
             type PF = <Mersenne31 as Field>::Packing;
             const P: u32 = 0x7fff_ffff;
             for value in [P, P - 1] {
-                let a = [PF::from(Mersenne31::new(value)); N];
-                let coeffs = [Mersenne31::new(value); N];
-                let expected: PF = a.iter().map(|&x| x * Mersenne31::new(value)).sum();
+                let scalar = Mersenne31::new_reduced(value);
+                let packed = PF::from(scalar);
+                // Check raw storage: field equality alone cannot distinguish P from zero.
+                assert_eq!(scalar.value, value);
+                assert!(packed.as_slice().iter().all(|lane| lane.value == value));
+                let a = [packed; N];
+                let coeffs = [scalar; N];
+                let expected: PF = a.iter().map(|&x| x * scalar).sum();
                 assert_eq!(
                     PF::dot_product(&a, &a),
                     expected,

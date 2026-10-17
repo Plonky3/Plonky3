@@ -574,15 +574,38 @@ mod tests {
     use super::{Mersenne31, PackedMersenne31AVX2};
 
     /// Zero has a redundant representation, so let's test both.
-    const ZEROS: PackedMersenne31AVX2 = PackedMersenne31AVX2(Mersenne31::new_array([
-        0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
-        0x7fffffff,
-    ]));
+    const ZEROS: PackedMersenne31AVX2 = PackedMersenne31AVX2([
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+    ]);
 
-    const SPECIAL_VALS: PackedMersenne31AVX2 = PackedMersenne31AVX2(Mersenne31::new_array([
-        0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
-        0x3fffffff,
-    ]));
+    const SPECIAL_VALS: PackedMersenne31AVX2 = PackedMersenne31AVX2([
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000001),
+        Mersenne31::new_reduced(0x7ffffffe),
+        Mersenne31::new_reduced(0x00000002),
+        Mersenne31::new_reduced(0x7ffffffd),
+        Mersenne31::new_reduced(0x40000000),
+        Mersenne31::new_reduced(0x3fffffff),
+    ]);
+
+    #[test]
+    fn redundant_zero_fixture_preserves_raw_limbs() {
+        use p3_field::PrimeCharacteristicRing;
+
+        for (i, lane) in ZEROS.0.iter().enumerate() {
+            let expected = if i % 2 == 0 { 0 } else { 0x7fff_ffff };
+            assert_eq!(lane.value, expected);
+            assert_eq!(*lane, Mersenne31::ZERO);
+        }
+    }
 
     test_packed_field!(
         crate::PackedMersenne31AVX2,
