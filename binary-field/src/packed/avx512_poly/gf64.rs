@@ -97,7 +97,15 @@ impl Lanes64 for Reg {
     }
     #[inline(always)]
     fn xor3(self, b: Self, c: Self) -> Self {
-        unsafe { _mm512_ternarylogic_epi64::<0x96>(self, b, c) }
+        // Truth table 0x96 is a ^ b ^ c; Miri has no ternary-logic shim.
+        #[cfg(miri)]
+        unsafe {
+            _mm512_xor_si512(_mm512_xor_si512(self, b), c)
+        }
+        #[cfg(not(miri))]
+        unsafe {
+            _mm512_ternarylogic_epi64::<0x96>(self, b, c)
+        }
     }
     #[inline(always)]
     fn clmul<const IMM: i32>(self, b: Self) -> Self {
@@ -113,11 +121,38 @@ impl Lanes64 for Reg {
     }
     #[inline(always)]
     fn shl<const N: i32>(self) -> Self {
-        unsafe { _mm512_sll_epi64(self, _mm_cvtsi32_si128(N)) }
+        // Miri has no shim for the 512-bit shifts. Preserve their word-wise semantics,
+        // including zero for a count outside 0..64, while interpreting the real algebra.
+        #[cfg(miri)]
+        {
+            // SAFETY: a register contains exactly eight arbitrary u64 words.
+            let words: [u64; 8] = unsafe { core::mem::transmute(self) };
+            // SAFETY: the mapped array has the same representation as the register.
+            unsafe {
+                core::mem::transmute(words.map(|word| word.checked_shl(N as u32).unwrap_or(0)))
+            }
+        }
+        #[cfg(not(miri))]
+        unsafe {
+            _mm512_sll_epi64(self, _mm_cvtsi32_si128(N))
+        }
     }
     #[inline(always)]
     fn shr<const N: i32>(self) -> Self {
-        unsafe { _mm512_srl_epi64(self, _mm_cvtsi32_si128(N)) }
+        // The right-shift counterpart of the Miri shim above.
+        #[cfg(miri)]
+        {
+            // SAFETY: a register contains exactly eight arbitrary u64 words.
+            let words: [u64; 8] = unsafe { core::mem::transmute(self) };
+            // SAFETY: the mapped array has the same representation as the register.
+            unsafe {
+                core::mem::transmute(words.map(|word| word.checked_shr(N as u32).unwrap_or(0)))
+            }
+        }
+        #[cfg(not(miri))]
+        unsafe {
+            _mm512_srl_epi64(self, _mm_cvtsi32_si128(N))
+        }
     }
     #[inline(always)]
     fn fold_top_nibble(self) -> Self {
@@ -125,5 +160,32 @@ impl Lanes64 for Reg {
             let table = _mm512_broadcast_i32x4(_mm_loadu_si128(TOP_NIBBLE_FOLD.as_ptr().cast()));
             _mm512_shuffle_epi8(table, _mm512_srli_epi64::<60>(self))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gather_3, scatter_3};
+
+    #[test]
+    fn unaligned_coordinate_moves_preserve_every_word_and_the_boundaries() {
+        // Each word has a different value, including lanes separated by five positions
+        // which coincide in the arithmetic corner fixtures.
+        #[repr(align(64))]
+        struct Buffer([u64; 26]);
+        let input = Buffer(core::array::from_fn(|i| (i as u64 + 1) << (i % 32)));
+        // SAFETY: the offset leaves exactly twenty-four readable words and a sentinel.
+        let coordinates = unsafe { gather_3(input.0.as_ptr().add(1)) };
+        for (d, coordinate) in coordinates.iter().enumerate() {
+            // SAFETY: both representations contain exactly eight arbitrary u64 words.
+            let words: [u64; 8] = unsafe { core::mem::transmute(*coordinate) };
+            assert_eq!(words, core::array::from_fn(|k| input.0[1 + 3 * k + d]));
+        }
+        let mut output = Buffer([u64::MAX; 26]);
+        // SAFETY: the offset leaves twenty-four writable words before the sentinel.
+        unsafe { scatter_3(output.0.as_mut_ptr().add(1), coordinates) };
+        assert_eq!(output.0[0], u64::MAX);
+        assert_eq!(&output.0[1..25], &input.0[1..25]);
+        assert_eq!(output.0[25], u64::MAX);
     }
 }
