@@ -54,10 +54,36 @@ fn bench_transpose_goldilocks(c: &mut Criterion) {
     group.finish();
 }
 
+// Byte arrays have alignment 1, forcing the portable fallback on every target,
+// including the 4/8-byte cases on ARM. Buffers are allocated outside b.iter.
+fn bench_transpose_portable<const BYTES: usize>(c: &mut Criterion) {
+    let mut group = c.benchmark_group("transpose_portable");
+    for width in [1, 2, 4, 8, 16, 32, 256, 4096] {
+        for delta in [-1isize, 0, 1] {
+            let height = ((1usize << 22) / width).checked_add_signed(delta).unwrap();
+            let size = width * height;
+            let input: Vec<[u8; BYTES]> = (0..size).map(|i| [i as u8; BYTES]).collect();
+            let mut output = vec![[0u8; BYTES]; size];
+            let name = format!("{BYTES}b_w{width}_h{height}");
+            group.bench_function(name, |b| {
+                b.iter(|| {
+                    transpose(black_box(&input), black_box(&mut output), width, height);
+                    black_box(output[0])
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_transpose_babybear,
-    bench_transpose_goldilocks
+    bench_transpose_goldilocks,
+    bench_transpose_portable::<4>,
+    bench_transpose_portable::<8>,
+    bench_transpose_portable::<16>,
+    bench_transpose_portable::<32>
 );
 
 criterion_main!(benches);

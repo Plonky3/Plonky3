@@ -34,7 +34,7 @@ const SEGMENT: usize = TILE / NBR_SEGMENTS;
 /// At this size a leaf sub-matrix fits in L2, so further splitting only adds overhead.
 const RECURSIVE_LIMIT: usize = 128;
 
-/// Minimum element count before the parallel column-band path is used.
+/// Minimum element count before the parallel band path is used.
 ///
 /// Smaller matrices are dominated by thread fan-out and cache-coherency traffic.
 #[cfg(feature = "parallel")]
@@ -124,7 +124,7 @@ pub(crate) fn transpose<T: Copy + Send + Sync>(
 
     let len = width * height;
 
-    // Large matrices: hand off to the parallel column-band split.
+    // Large matrices: hand off to the parallel band split.
     #[cfg(feature = "parallel")]
     if len >= PARALLEL_THRESHOLD {
         transpose_parallel(input, output, width, height);
@@ -530,9 +530,10 @@ unsafe fn transpose_recursive<T: Copy>(
     }
 }
 
-/// Parallel transpose: one rayon task per disjoint output column-band.
+/// Parallel transpose over disjoint output bands.
 ///
-/// Output rows are cut into contiguous bands of whole source columns.
+/// With enough source columns, output rows are cut into contiguous bands of
+/// whole source columns.
 /// Band `k` holds the transpose of source columns starting at `k * cols_per_task`.
 /// Bands never overlap, so each task gets an exclusive slice — no shared pointers.
 ///
@@ -542,6 +543,11 @@ unsafe fn transpose_recursive<T: Copy>(
 ///     [c, 2c)          ->   output[c*height .. 2c*height)
 ///     ...
 /// ```
+///
+/// If source columns cannot fill the worker pool, each output row is split again
+/// into source-row bands. The band for column `x` and source rows `[a, b)` owns
+/// exactly `output[x * height + a .. x * height + b]`, obtained through safe
+/// slice splitting. Distinct rows and distinct bands within a row never overlap.
 #[cfg(feature = "parallel")]
 fn transpose_parallel<T: Copy + Send + Sync>(
     input: &[T],
@@ -551,9 +557,36 @@ fn transpose_parallel<T: Copy + Send + Sync>(
 ) {
     use p3_maybe_rayon::prelude::*;
 
-    // One band per worker; round up so the final band is the only short one.
     let num_threads = current_num_threads();
-    let cols_per_task = width.div_ceil(num_threads).max(1);
+
+    if width < num_threads {
+        // Whole-column bands would expose only `width` tasks. Split each output
+        // row (one source column) into contiguous source-row bands as well.
+        let bands_per_col = num_threads.div_ceil(width);
+        // Multiples of 64 elements preserve tile alignment and cache-line
+        // offsets for every element size; only the final band can be shorter.
+        // An unaligned output base can still share one line at a boundary.
+        let rows_per_task = height.div_ceil(bands_per_col).next_multiple_of(64);
+        output
+            .par_chunks_mut(height)
+            .enumerate()
+            .for_each(|(x, row)| {
+                row.par_chunks_mut(rows_per_task)
+                    .enumerate()
+                    .for_each(|(task, band)| {
+                        let row_start = task * rows_per_task;
+                        for (offset, dst) in band.iter_mut().enumerate() {
+                            // `band` exclusively owns this contiguous output run.
+                            // Its final source row is < height, and x < width.
+                            *dst = input[(row_start + offset) * width + x];
+                        }
+                    });
+            });
+        return;
+    }
+
+    // One whole-column band per worker for wide matrices; only the last is short.
+    let cols_per_task = width.div_ceil(num_threads);
 
     // Each band is `cols_per_task` output rows of `height` columns.
     output
@@ -718,6 +751,103 @@ mod tests {
         fn portable_matches_reference_32byte((width, height) in dims_small()) {
             check(width, height, [0u64; 4], |i| [i as u64, 0, 0, i as u64]);
         }
+    }
+
+    #[cfg(feature = "parallel")]
+    fn check_parallel<T>(width: usize, height: usize, zero: T, make: impl Fn(usize) -> T)
+    where
+        T: Copy + PartialEq + core::fmt::Debug + Send + Sync,
+    {
+        let input: Vec<T> = (0..width * height).map(make).collect();
+        let mut output = vec![zero; input.len()];
+        transpose_parallel(&input, &mut output, width, height);
+        assert_eq!(output, reference(&input, width, height, zero));
+
+        // These shapes are below the parallel threshold, so this also compares
+        // the parallel decomposition with the existing serial tiled engine.
+        let mut serial = vec![zero; input.len()];
+        transpose(&input, &mut serial, width, height);
+        assert_eq!(output, serial);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn portable_parallel_band_boundaries() {
+        for threads in [1, 4, 16, 32] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for width in [1, 2, 4, 8, 16, 32, 256] {
+                        for height in [1, 15, 16, 17, 63, 64, 65, 127, 128, 129, 257] {
+                            for (w, h) in [(width, height), (height, width)] {
+                                check_parallel(w, h, 0u32, |i| i as u32);
+                                check_parallel(w, h, 0u64, |i| i as u64);
+                                check_parallel(w, h, 0u128, |i| i as u128);
+                                check_parallel(w, h, [0u64; 4], |i| [i as u64; 4]);
+                            }
+                        }
+                    }
+                });
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn portable_parallel_preserves_generic_copy() {
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        #[repr(C)]
+        struct Padded<'a> {
+            value: u8,
+            pointer: &'a u64,
+        }
+        let values = [11u64, 23, 47];
+        for threads in [1, 4, 16, 32] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for (w, h) in [(1, 129), (2, 257), (8, 129), (17, 65), (65, 17)] {
+                        check_parallel(w, h, [0u8; 3], |i| {
+                            [i as u8, (i >> 8) as u8, (i >> 16) as u8]
+                        });
+                        check_parallel(w, h, &values[0], |i| &values[i % values.len()]);
+                        check_parallel(
+                            w,
+                            h,
+                            Padded {
+                                value: 0,
+                                pointer: &values[0],
+                            },
+                            |i| Padded {
+                                value: i as u8,
+                                pointer: &values[i % values.len()],
+                            },
+                        );
+                        check_parallel(w, h, (), |_| ());
+                    }
+                });
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn portable_parallel_threshold_boundaries() {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(32)
+            .build()
+            .unwrap()
+            .install(|| {
+                for width in [1, 2, 4, 8, 16, 32, 256] {
+                    let height = PARALLEL_THRESHOLD / width;
+                    // Immediately below, at, and above the public dispatch threshold.
+                    for height in [height - 1, height, height + 1] {
+                        check(width, height, 0u32, |i| i as u32);
+                    }
+                }
+            });
     }
 
     #[cfg(feature = "parallel")]
