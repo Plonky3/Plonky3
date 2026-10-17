@@ -778,11 +778,13 @@ fn assert_maj_matches<AB: AirBuilder>(
 
 #[cfg(test)]
 mod constraint_order_tests {
-    use super::*;
     use alloc::vec::Vec;
+
     use p3_air::RowWindow;
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeField32;
+
+    use super::*;
 
     struct Recorder<'a> {
         main: RowWindow<'a, BabyBear>,

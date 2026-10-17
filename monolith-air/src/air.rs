@@ -30,7 +30,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
-use crate::mds::MdsStrategy;
 use p3_air::utils::pack_bits_le;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
@@ -42,6 +41,7 @@ use rand::{RngExt, SeedableRng};
 
 use crate::columns::{MonolithCols, MonolithRoundCols, num_cols};
 use crate::generation::generate_trace_rows;
+use crate::mds::MdsStrategy;
 
 /// Limb widths for the Mersenne31 prime, summing to 31 bits.
 ///

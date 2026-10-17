@@ -158,12 +158,13 @@ impl<F: PrimeCharacteristicRing, const WIDTH: usize> MdsStrategy<F, WIDTH> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use p3_field::PrimeField64;
     use p3_goldilocks::Goldilocks;
     use p3_mersenne_31::Mersenne31;
     use p3_monolith::mds::mersenne31::MonolithMdsMatrixMersenne31;
     use p3_symmetric::Permutation;
+
+    use super::*;
 
     fn check<F: PrimeField64, const WIDTH: usize>() {
         let col: [F; WIDTH] = core::array::from_fn(|i| F::from_usize(i * i + 1));

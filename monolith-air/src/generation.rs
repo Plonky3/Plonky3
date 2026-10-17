@@ -26,7 +26,6 @@
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
-use crate::mds::MdsStrategy;
 use p3_field::PrimeField64;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
@@ -35,6 +34,7 @@ use tracing::instrument;
 
 use crate::MonolithAir;
 use crate::columns::{MonolithCols, MonolithRoundCols, num_cols};
+use crate::mds::MdsStrategy;
 
 /// Generate a trace for multiple Monolith permutations (one per row).
 ///
