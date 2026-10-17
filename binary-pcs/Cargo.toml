@@ -39,6 +39,7 @@ postcard = { workspace = true, features = ["alloc"] }
 rand = { workspace = true, features = ["std_rng"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
+tiny-keccak = { workspace = true, features = ["keccak"] }
 tracing.workspace = true
 
 [dev-dependencies]

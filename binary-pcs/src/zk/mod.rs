@@ -30,7 +30,8 @@
 //! copy is converted to the Cantor novel basis and evaluated by additive NTT
 //! on a shifted Cantor domain of n=next_power_of_two(4L)
 //! nonzero points. Keccak256 salted Merkle commitments use two independent
-//! full-field salts per leaf. This is not the novel-basis additive RS encoder.
+//! full-field salts per leaf. Proof coefficients remain in monomial order;
+//! this does not reuse the clear BaseFold PCS.
 //!
 //! Before gamma is sampled, commit an independent uniform L-coefficient u and
 //! disclose sigma=lambda(u_low). Disclose all g=gamma*h+u before sampling q

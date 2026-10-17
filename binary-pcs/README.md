@@ -261,6 +261,9 @@ The transform path allocates an additional `n*batch_width` field elements
 (at most 16 MiB under the unchanged resource caps). The original conservative
 `n*L*batch_width` work cap remains in force. Interpolation and quotient arithmetic
 remain reference implementations.
+Counter-mode Fiat–Shamir expansion reuses an unfinalized Keccak prefix state
+between blocks. Each block still hashes the same complete framed input and
+counter, so transcript bytes and logical random-oracle call counts are unchanged.
 An optimized hiding BaseFold replacement remains future work; this protocol
 does not reuse the existing clear BaseFold reductions as a privacy argument.
 

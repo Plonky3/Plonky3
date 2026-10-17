@@ -13,6 +13,7 @@ use p3_challenger::{CanObserve, CanSample, CanSampleBits};
 use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;
 use p3_symmetric::{CryptographicHasher, MerkleCap};
+use tiny_keccak::{Hasher, Keccak};
 
 use super::{Val, ZkError};
 
@@ -20,9 +21,12 @@ macro_rules! role_hasher {
     ($name:ident, $prefix:literal) => {
         #[derive(Clone, Copy, Debug)]
         pub(super) struct $name;
+        impl $name {
+            const PREFIX: &'static [u8] = $prefix;
+        }
         impl CryptographicHasher<u8, [u8; 32]> for $name {
             fn hash_iter<I: IntoIterator<Item = u8>>(&self, input: I) -> [u8; 32] {
-                Keccak256Hash.hash_iter($prefix.iter().copied().chain(input))
+                Keccak256Hash.hash_iter(Self::PREFIX.iter().copied().chain(input))
             }
         }
     };
@@ -79,18 +83,23 @@ impl Challenger {
     }
 
     fn draw(&mut self, label: &[u8], output_len: usize) -> Vec<u8> {
-        let mut input = Vec::new();
-        input.extend_from_slice(&fixed(label.len()));
-        input.extend_from_slice(label);
-        input.extend_from_slice(&fixed(self.transcript.len()));
-        input.extend_from_slice(&self.transcript);
-        input.extend_from_slice(&self.draw_ordinal.to_le_bytes());
-        input.extend_from_slice(&fixed(output_len));
+        let mut prefix = Keccak::v256();
+        prefix.update(FiatShamirHash::PREFIX);
+        prefix.update(&fixed(label.len()));
+        prefix.update(label);
+        prefix.update(&fixed(self.transcript.len()));
+        prefix.update(&self.transcript);
+        prefix.update(&self.draw_ordinal.to_le_bytes());
+        prefix.update(&fixed(output_len));
         let mut output = Vec::with_capacity(output_len);
         for block in 0..output_len.div_ceil(32) {
             let counter = u32::try_from(block).expect("protocol draw exceeds u32 blocks");
-            let digest =
-                FiatShamirHash.hash_iter(input.iter().copied().chain(counter.to_le_bytes()));
+            // Clone the complete unfinalized prefix, including its partial rate
+            // block. Each counter still hashes the same full canonical input.
+            let mut hash = prefix.clone();
+            hash.update(&counter.to_le_bytes());
+            let mut digest = [0; 32];
+            hash.finalize(&mut digest);
             output.extend_from_slice(&digest[..(output_len - output.len()).min(32)]);
         }
         #[cfg(test)]
@@ -246,6 +255,64 @@ mod tests {
         input.extend_from_slice(&len.to_le_bytes());
         input.extend_from_slice(&block.to_le_bytes());
         Keccak256Hash.hash_slice(&input)
+    }
+
+    #[test]
+    fn complete_prefix_draws_match_full_hashes_at_every_keccak_rate_offset() {
+        // Cover every partial-block offset twice, including a counter that
+        // exactly fills or straddles the 136-byte Keccak-256 rate boundary.
+        for payload_len in 0..272 {
+            let mut c = challenger();
+            c.observe_bytes(&vec![0xa7; payload_len]);
+            let prefix = c.transcript.clone();
+            let expected: Vec<_> = (0..3)
+                .flat_map(|block| independent_block(&prefix, b"rate-boundary", 0, 70, block))
+                .take(70)
+                .collect();
+            assert_eq!(
+                c.draw(b"rate-boundary", 70),
+                expected,
+                "payload_len={payload_len}"
+            );
+        }
+    }
+
+    #[test]
+    fn complete_prefix_draws_preserve_lengths_ordinals_records_and_clones() {
+        let mut c = challenger();
+        c.observe_bytes(&vec![0x59; 275]);
+        for (ordinal, output_len) in [0usize, 1, 31, 32, 33, 70, 256, 3680, 8225]
+            .into_iter()
+            .enumerate()
+        {
+            let label = vec![0x36; ordinal * 17];
+            let prefix = c.transcript.clone();
+            let expected: Vec<_> = (0..output_len.div_ceil(32))
+                .flat_map(|block| {
+                    independent_block(
+                        &prefix,
+                        &label,
+                        ordinal as u64,
+                        output_len as u64,
+                        block as u32,
+                    )
+                })
+                .take(output_len)
+                .collect();
+            let mut replay = c.clone();
+            assert_eq!(c.draw(&label, output_len), expected);
+            assert_eq!(replay.draw(&label, output_len), expected);
+            let mut record = prefix;
+            record.push(5);
+            record.extend_from_slice(&(label.len() as u64).to_le_bytes());
+            record.extend_from_slice(&label);
+            record.extend_from_slice(&(output_len as u64).to_le_bytes());
+            record.extend_from_slice(&expected);
+            assert_eq!(c.transcript, record);
+            assert_eq!(replay.transcript, record);
+            assert_eq!(c.draw_ordinal, ordinal as u64 + 1);
+            assert_eq!(c.draws.last().unwrap().raw, expected);
+        }
     }
 
     #[test]
