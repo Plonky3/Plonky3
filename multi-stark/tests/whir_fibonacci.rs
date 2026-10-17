@@ -331,6 +331,89 @@ fn fib_public_values_for_trace(trace: &RowMajorMatrix<F>) -> [F; 3] {
 }
 
 #[test]
+fn security_assessment_evaluates_each_air_once_per_symbolic_builder() {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingAir {
+        evaluations: AtomicUsize,
+        table: &'static str,
+    }
+
+    impl BaseAir<F> for CountingAir {
+        fn width(&self) -> usize {
+            1
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            Vec::new()
+        }
+
+        fn max_constraint_degree(&self) -> Option<usize> {
+            Some(3)
+        }
+    }
+
+    impl<AB> Air<AB> for CountingAir
+    where
+        AB: AirBuilder<F = F> + InteractionBuilder + IndexedLookupBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            self.evaluations.fetch_add(1, Ordering::Relaxed);
+            let x = builder.main().current_slice()[0];
+            builder.assert_zero(x * x - x);
+            builder.push_local_interaction([
+                (vec![x.into()], Count::bounded(AB::Expr::ONE, 1)),
+                (vec![x.into()], Count::provided(-AB::Expr::ONE)),
+            ]);
+            builder.push_indexed_table(self.table, TraceWindow::Main, [0]);
+            builder.push_indexed_read(self.table, 0, [0]);
+        }
+    }
+
+    let config = batch_config_for(4, 1, 2);
+    let airs = ["first", "second"].map(|table| CountingAir {
+        evaluations: AtomicUsize::new(0),
+        table,
+    });
+    let (_, vk) = setup(&config, &[&airs[0], &airs[1]], &mut challenger()).unwrap();
+    let instances = || {
+        VerifierInstances::new(
+            airs.iter()
+                .map(|air| VerifierInstance::new(air, &vk, 4, &[]))
+                .collect(),
+        )
+    };
+
+    // Each call must derive fresh declarations, with one interaction pass and one bus pass.
+    for _ in 0..2 {
+        for air in &airs {
+            air.evaluations.store(0, Ordering::Relaxed);
+        }
+        let report = p3_multi_stark::security_report(&config, &instances()).unwrap();
+        // Six rounds at the hinted degree three plus the equality weight: 24 roots.
+        // The 32-cell main commitment has a CapacityBound candidate list of 2560.
+        let sumcheck_bits = report
+            .terms()
+            .iter()
+            .find(|term| term.label == "constraint-sumcheck")
+            .unwrap()
+            .bits
+            .bits();
+        assert!((sumcheck_bits - (123.0 - 24f64.log2() - 2560f64.log2())).abs() < 1e-10);
+        for air in &airs {
+            assert_eq!(air.evaluations.load(Ordering::Relaxed), 2);
+        }
+        for label in [
+            "constraint-sumcheck",
+            "logup-fingerprint",
+            "logup-star-entry-challenge",
+        ] {
+            assert!(report.terms().iter().any(|term| term.label == label));
+        }
+    }
+}
+
+#[test]
 fn security_rejects_missing_collision_evidence() {
     let config = config_for(4, NUM_COLS);
     let air = FibAir;

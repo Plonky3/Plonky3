@@ -36,13 +36,14 @@
 //!
 //! Nothing outside that module can append to a report after it is closed.
 
+use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 
 use p3_air::boundary;
 use p3_air::symbolic::AirLayout;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_field::Field;
-use p3_lookup::{IndexedLookupError, InteractionSymbolicBuilder};
+use p3_lookup::{IndexedLookupError, IndexedLookups, InteractionSymbolicBuilder, Lookups};
 use p3_security::multilinear::{
     MultilinearAirParams, MultilinearLogupStarParams, MultilinearLookupParams, reduction_terms,
 };
@@ -59,7 +60,7 @@ use crate::indexed::IndexedPlan;
 use crate::instance::Instances;
 use crate::lookup::{LookupError, LookupPlan};
 use crate::selectors::{PeriodicError, periodic_num_variables};
-use crate::zerocheck::get_air_degrees;
+use crate::zerocheck::get_air_profile_from_builder;
 
 /// Label the report gives the commitment and transcript collision cap.
 const COLLISION_CAP_LABEL: &str = "commitment-and-transcript-collision";
@@ -518,6 +519,7 @@ where
     let mut num_fractions = 0usize;
     let mut max_num_constraints = 0;
     let mut max_degree = 0;
+    let mut symbolic = Vec::with_capacity(instances.len());
 
     for (instance, &height) in instances.iter().zip(&heights) {
         if height == 0 || height >= usize::BITS as usize || height < config.min_num_variables() {
@@ -561,10 +563,8 @@ where
             return Err(invalid("public boundary declaration is malformed"));
         }
 
-        let builder = InteractionSymbolicBuilder::<C::Val, C::Challenge>::from_air(
-            air,
-            AirLayout::from_air::<C::Val>(air),
-        );
+        let layout = AirLayout::from_air::<C::Val>(air);
+        let builder = InteractionSymbolicBuilder::<C::Val, C::Challenge>::from_air(air, layout);
         if !builder.exclusive_interactions().is_empty() {
             return Err(invalid("exclusive lookups are unsupported"));
         }
@@ -624,7 +624,8 @@ where
         if constraints == 0 && tuples == 0 {
             return Err(invalid("AIR declares no constraints or lookup tuples"));
         }
-        max_degree = max_degree.max(get_air_degrees::<C::Val, C::Challenge, A>(air).max());
+        max_degree = max_degree.max(get_air_profile_from_builder(air, &builder).degrees.max());
+        symbolic.push((layout, builder));
     }
     // Both layout engines round the stacked size up to a power of two.
     if main_cells.checked_next_power_of_two().is_none()
@@ -634,7 +635,13 @@ where
     {
         return Err(invalid("padded dimensions or round degree overflow"));
     }
-    let plan = LookupPlan::build::<C::Challenge, A>(&instances.airs(), &heights)?;
+    // Resolve declarations after shape validation, retaining the same error order as before.
+    // Every consumer shares the interaction pass already used to score this AIR.
+    let lookups = symbolic
+        .iter()
+        .map(|(_, builder)| Lookups::from_builder(builder))
+        .collect();
+    let plan = LookupPlan::from_lookups(lookups, &heights)?;
     let lookup = plan.map(|plan| MultilinearLookupParams {
         num_variables: plan.num_variables,
         num_fractions,
@@ -643,7 +650,12 @@ where
     // The same plan feeds the soundness terms and the opening shapes below.
     //
     // An assessment covering fewer batches than the proof opens overstates the bound.
-    let indexed = IndexedPlan::build::<C::Val, C::Challenge, A>(&instances.airs(), &heights)?;
+    let declared = symbolic
+        .iter()
+        .map(|(layout, builder)| IndexedLookups::from_builder(builder, layout))
+        .collect::<Result<Vec<_>, _>>()?;
+    let indexed = IndexedPlan::from_declared::<C::Val>(&declared, &heights)?;
+    drop(symbolic);
     let bus = BusContext::<C::Val, C::Challenge>::build(&instances.airs(), &heights)
         .map_err(|_| invalid("binary-bus declarations do not define a supported plan"))?;
     // The bus family shares the constraint sumcheck.
