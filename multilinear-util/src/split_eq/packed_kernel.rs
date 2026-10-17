@@ -301,7 +301,7 @@ where
 /// - `D == EF::DIMENSION`,
 /// - `F::Packing::WIDTH % CHUNK == 0`,
 /// - `eq1_packed.len() <= MAX_STACK_N` (bounds the pre-multiply stack buffer).
-fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
+fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize, const STRIDED: bool>(
     out: &mut [EF::ExtensionPacking],
     eq1_packed: &[EF::ExtensionPacking],
     chunk: &[F],
@@ -314,7 +314,11 @@ fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
     let n_packed = eq1_packed.len();
     let packed_inner = out.len();
     let w = F::Packing::WIDTH;
-    let packed_stride = inner_stride / w;
+    let packed_stride = if STRIDED {
+        inner_stride / w
+    } else {
+        packed_inner
+    };
 
     // CHUNK divides W: every batch of CHUNK lanes stays inside one w_idx.
     //
@@ -524,7 +528,7 @@ pub(super) fn compress_prefix_to_packed_packed<F, EF>(
     F: Field,
     EF: ExtensionField<F>,
 {
-    compress_prefix_to_packed_packed_strided::<F, EF>(
+    compress_prefix_to_packed_packed_dispatch::<F, EF, false>(
         out,
         eq1_packed,
         chunk,
@@ -543,6 +547,26 @@ pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionFi
     w0: EF,
     inner_stride: usize,
 ) {
+    compress_prefix_to_packed_packed_dispatch::<F, EF, true>(
+        out,
+        eq1_packed,
+        chunk,
+        w0,
+        inner_stride,
+    );
+}
+
+fn compress_prefix_to_packed_packed_dispatch<
+    F: Field,
+    EF: ExtensionField<F>,
+    const STRIDED: bool,
+>(
+    out: &mut [EF::ExtensionPacking],
+    eq1_packed: &[EF::ExtensionPacking],
+    chunk: &[F],
+    w0: EF,
+    inner_stride: usize,
+) {
     if out.is_empty() || eq1_packed.is_empty() {
         return;
     }
@@ -551,7 +575,7 @@ pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionFi
     if F::Packing::WIDTH.is_multiple_of(CHUNK) && eq1_packed.len() <= MAX_STACK_N {
         match EF::DIMENSION {
             1 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 1>(
+                compress_prefix_to_packed_packed_kernel::<F, EF, 1, STRIDED>(
                     out,
                     eq1_packed,
                     chunk,
@@ -561,7 +585,7 @@ pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionFi
                 return;
             }
             2 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 2>(
+                compress_prefix_to_packed_packed_kernel::<F, EF, 2, STRIDED>(
                     out,
                     eq1_packed,
                     chunk,
@@ -571,7 +595,7 @@ pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionFi
                 return;
             }
             3 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 3>(
+                compress_prefix_to_packed_packed_kernel::<F, EF, 3, STRIDED>(
                     out,
                     eq1_packed,
                     chunk,
@@ -581,7 +605,7 @@ pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionFi
                 return;
             }
             4 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 4>(
+                compress_prefix_to_packed_packed_kernel::<F, EF, 4, STRIDED>(
                     out,
                     eq1_packed,
                     chunk,
@@ -591,7 +615,7 @@ pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionFi
                 return;
             }
             5 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 5>(
+                compress_prefix_to_packed_packed_kernel::<F, EF, 5, STRIDED>(
                     out,
                     eq1_packed,
                     chunk,
@@ -601,7 +625,7 @@ pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionFi
                 return;
             }
             6 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 6>(
+                compress_prefix_to_packed_packed_kernel::<F, EF, 6, STRIDED>(
                     out,
                     eq1_packed,
                     chunk,
@@ -611,7 +635,7 @@ pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionFi
                 return;
             }
             7 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 7>(
+                compress_prefix_to_packed_packed_kernel::<F, EF, 7, STRIDED>(
                     out,
                     eq1_packed,
                     chunk,
@@ -621,7 +645,7 @@ pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionFi
                 return;
             }
             8 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 8>(
+                compress_prefix_to_packed_packed_kernel::<F, EF, 8, STRIDED>(
                     out,
                     eq1_packed,
                     chunk,
