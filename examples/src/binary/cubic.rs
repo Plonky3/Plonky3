@@ -398,7 +398,9 @@ pub fn cubic_whir_config<A: BinaryAir, H: HarnessHash>(
         })?;
 
     let (num_claims, successor_tensors) = claim_shape(air, shape, absorbed);
-    let proof_shape = pcs.proof_shape(num_claims, successor_tensors);
+    let proof_shape = pcs
+        .proof_shape(num_claims, successor_tensors)
+        .map_err(|error| BinaryProofError::WhirBudget(error.into()))?;
     whir.budget
         .check_shape(
             &proof_shape,
@@ -413,11 +415,13 @@ pub fn cubic_whir_config<A: BinaryAir, H: HarnessHash>(
         packed_variables,
         cap_height,
         total_opened_positions: proof_shape.stir_queries,
-        pcs_payload_bytes: proof_shape.max_bytes(
-            ENCODED_BASE_ELEMENT_BYTES,
-            ENCODED_EXTENSION_ELEMENT_BYTES,
-            DIGEST_BYTES,
-        ),
+        pcs_payload_bytes: proof_shape
+            .max_bytes(
+                ENCODED_BASE_ELEMENT_BYTES,
+                ENCODED_EXTENSION_ELEMENT_BYTES,
+                DIGEST_BYTES,
+            )
+            .map_err(|error| BinaryProofError::WhirBudget(error.into()))?,
         max_grinding_bits: proof_shape.grinding_bits,
     };
     Ok(CubicWhirStarkConfig {
