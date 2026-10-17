@@ -456,7 +456,7 @@ where
 
         // One set of staging buffers per worker, reused by every block it runs.
         let fill =
-            |scratch: &mut Scratch<P::Value, PW::Value>,
+            |scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
              (j, mut block): (usize, Vec<&mut [[PW::Value; DIGEST_ELEMS]]>)| {
                 for (offset, l) in (lo..=hi).enumerate() {
                     let layer = &self.layers[l];
@@ -518,7 +518,7 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let (hash_lanes, compress_lanes) = (Self::HASH_LANES, Self::COMPRESS_LANES);
 
@@ -556,7 +556,7 @@ where
         matrices: &[&M],
         first: usize,
         out: &mut [[PW::Value; DIGEST_ELEMS]],
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         // Bound the row range once, since the copy loop below skips per-row bounds checks.
         assert!(
@@ -603,7 +603,7 @@ where
         matrices: &[&M],
         first: usize,
         out: &mut [[PW::Value; DIGEST_ELEMS]],
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let lanes = P::WIDTH;
         let (groups, tail) = out.split_at_mut(Self::vector_nodes(out.len()));
@@ -640,7 +640,7 @@ where
         &self,
         matrices: &[&M],
         first: usize,
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) -> [PW; DIGEST_ELEMS] {
         let lanes = P::WIDTH;
         let width: usize = matrices.iter().map(|m| m.width()).sum();
@@ -691,7 +691,7 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let lanes = PW::WIDTH;
         let rows = Self::injected_height(layer);
@@ -748,9 +748,9 @@ where
     /// Each chunk of nodes goes through three passes over small buffers:
     ///
     /// ```text
-    ///     pass 1: compress N children            -> folded
+    ///     pass 1: compress N children            -> out
     ///     pass 2: hash one row per output node    -> injected
-    ///     pass 3: compress [folded, injected]    -> out
+    ///     pass 3: compress [out, injected]       -> out
     /// ```
     ///
     /// Nodes past the injected height mix in the default digest in place of a row digest.
@@ -760,12 +760,14 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let rows = Self::injected_height(layer);
         let default = [PW::Value::default(); DIGEST_ELEMS];
         let (groups, _) = kids[..out.len() * N].as_chunks::<N>();
 
+        // Row hashing also uses `scratch`, so take this buffer until every chunk is finished.
+        let mut injected = mem::take(&mut scratch.injected);
         for (k, (groups, out)) in groups
             .chunks(INJECT_CHUNK_NODES)
             .zip(out.chunks_mut(INJECT_CHUNK_NODES))
@@ -775,26 +777,26 @@ where
             let count = out.len();
 
             // Pass 1: fold the children of every node in this chunk.
-            let mut folded = vec![default; count];
-            self.c.compress_many(groups, &mut folded);
+            self.c.compress_many(groups, out);
 
             // Pass 2: hash one row per node, for as many nodes as the matrices are tall.
             let injected_count = count.min(rows.saturating_sub(base));
-            let mut injected = vec![default; injected_count];
+            injected.resize(injected_count, default);
             self.hash_rows_batched(&layer.matrices, base, &mut injected, scratch);
 
-            // Pass 3: pair each folded digest with its row digest, padding the group to `N`.
-            let pairs: Vec<[_; N]> = (0..count)
-                .map(|node| {
-                    array::from_fn(|slot| match slot {
-                        0 => folded[node],
-                        1 if node < injected_count => injected[node],
-                        _ => default,
-                    })
-                })
-                .collect();
-            self.c.compress_many(&pairs, out);
+            // Pass 3: copy every folded digest into scratch before overwriting the output.
+            let pairs = &mut scratch.pairs;
+            pairs.resize(count, [default; N]);
+            for (node, pair) in pairs.iter_mut().enumerate() {
+                *pair = array::from_fn(|slot| match slot {
+                    0 => out[node],
+                    1 if node < injected_count => injected[node],
+                    _ => default,
+                });
+            }
+            self.c.compress_many(pairs, out);
         }
+        scratch.injected = injected;
     }
 
     /// Leading nodes of a run that go through whole vector groups; the rest take the scalar path.
@@ -872,12 +874,18 @@ where
 
 /// Buffers one task reuses across the layers it builds.
 #[derive(Debug, Default)]
-struct Scratch<F, W> {
+struct Scratch<F, W, const N: usize, const DIGEST_ELEMS: usize> {
     /// Staged row messages, row-major for batched hashing or column-major for packed hashing.
     rows: Vec<F>,
 
     /// Staged children, column-major for packed compression.
     digests: Vec<W>,
+
+    /// Row digests for batched injection, temporarily taken while row hashing uses this scratch.
+    injected: Vec<[W; DIGEST_ELEMS]>,
+
+    /// Folded children paired with injected row digests for batched compression.
+    pairs: Vec<[[W; DIGEST_ELEMS]; N]>,
 }
 
 /// Pack the children of `P::WIDTH` consecutive nodes into one vector per child word.
