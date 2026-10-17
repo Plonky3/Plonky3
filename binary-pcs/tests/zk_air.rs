@@ -1,5 +1,3 @@
-#![cfg(feature = "zk")]
-
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -111,6 +109,9 @@ fn independent_proofs_and_malformed_openings() {
         proof.opening.claimed_values[..2],
         other.opening.claimed_values[..2]
     );
+    // witness() deliberately gives both columns identical all-one traces.
+    // Their claims differ only through independent per-column trace masks;
+    // hoisting one scalar mask outside the column loop must fail this assertion.
     assert_ne!(
         proof.opening.claimed_values[0],
         proof.opening.claimed_values[1]

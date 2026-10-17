@@ -39,6 +39,7 @@ AIR + trace
 | `p3-circle::CirclePcs` | Univariate evaluations on circle-group domains with circle FRI | No; the backend's `ZK` capability is false | Consumed by `p3-uni-stark` and `p3-batch-stark` |
 | `p3-whir` | Multilinear polynomials and constrained Reed–Solomon codes | Yes: `HidingWhirPcs` provides honest-verifier ZK at the PCS layer | Implements `MultilinearPcs`; applications must compose and analyze the complete protocol |
 | `p3-binary-pcs::BinaryPcs` | Multilinear polynomials over `BinaryField128` with an additive-domain code | No; query symbols and the final codeword are revealed | Used by the binary multilinear STARK example in an explicitly non-ZK composition |
+| `p3-binary-pcs::zk::{ReferenceZkAir, ReferenceZkPcs}` | Bounded current-row AIR and monomial polynomials over `BinaryField128` on a shifted Cantor domain | Salted full-blend reference PCS with separate bounded-query classical-ROM guarantees and explicit RO/RNG assumptions | Always available, including without default features; an independent current-row protocol, not the multilinear STARK composition. See its [README](../binary-pcs/README.md#private-current-row-air-reference-protocol) and [security contract](../binary-pcs/src/zk/security.rs) |
 
 Soundness conditions a caller has to discharge itself — transcript ordering, properties of the committed witness, parameters a crate cannot see the other side of — are collected in [the caller-obligations list](caller-obligations.md), together with each reduction's minimum non-degenerate shape.
 

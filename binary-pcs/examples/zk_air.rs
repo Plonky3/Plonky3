@@ -1,6 +1,6 @@
 //! Native end-to-end private current-row AIR reference example.
 //!
-//! Run with `cargo run -p p3-binary-pcs --features zk --example zk_air --release`.
+//! Run with `cargo run -p p3-binary-pcs --example zk_air --release`.
 //! This uses the polynomial-size full-blend protocol, not BaseFold. The target
 //! below declares a classical-ROM adversary-call and global lifetime leaf
 //! budget. See the checked report and security contract for its assumptions.

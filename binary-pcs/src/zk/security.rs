@@ -3,8 +3,8 @@
 //! This module gives protocol-specific derived lemmas, their byte-level
 //! implementation boundary, and the checked public budget API. These are new
 //! classical-ROM arguments, not published certification of this implementation.
-//! Keccak256 instantiates the ideal oracle heuristically. Human review is
-//! pending on the PR; no audit or standard-model guarantee is asserted.
+//! Keccak256 instantiates the ideal oracle heuristically. No audit or
+//! standard-model guarantee is asserted.
 //!
 //! # Relation, experiments and lifecycle
 //!

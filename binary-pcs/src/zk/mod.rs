@@ -1,7 +1,7 @@
 //! Private current-row AIR and a polynomial-size reference PCS.
 //!
-//! Enabled only by `zk`, independently of `BinaryPcs` and its
-//! non-hiding multilinear paths. [`ReferenceZkAir::compile`] admits
+//! Always available, including without default features, independently of
+//! `BinaryPcs` and its non-hiding multilinear paths. [`ReferenceZkAir::compile`] admits
 //! `Air<CurrentRowAirBuilder>`: generic `AirBuilder<F = Val>` AIRs work, while
 //! concrete `SymbolicAirBuilder` implementations must adapt. Explicitly declare
 //! no main next-row columns. Only current-row main variables, public values,
@@ -53,8 +53,8 @@
 //! state. Fresh private RNG state is required across proofs: never clone,
 //! reseed, reset or replay it, including rollback. Single-use state does not
 //! enforce caller RNG freshness. Reusing h and u under distinct gamma reveals
-//! every low message coefficient. This feature is not a security certification;
-//! human review is pending on the PR.
+//! every low message coefficient. This reference protocol is not a security
+//! certification; its modeled assumptions are documented in [`security`].
 //!
 //! Protocol v2 separates leaf/node/Fiat–Shamir Keccak domains and retains the
 //! complete framed public prefix. Each z/gamma uses one fixed 16-candidate draw

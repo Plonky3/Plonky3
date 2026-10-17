@@ -1,5 +1,3 @@
-#![cfg(feature = "zk")]
-
 use std::sync::OnceLock;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};

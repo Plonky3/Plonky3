@@ -62,14 +62,15 @@ This adapter is binding, not hiding.
 
 ## Private current-row AIR reference protocol
 
-The opt-in `zk` feature exposes `p3_binary_pcs::zk`, an independent
-reference protocol over `BinaryField128`. It does not change `BinaryPcs`, the WHIR
-adapter, or existing multilinear AIR paths into zero-knowledge protocols.
+The always-available `p3_binary_pcs::zk` module exposes an independent
+reference protocol over `BinaryField128`, including with `--no-default-features`.
+It does not change `BinaryPcs`, the WHIR adapter, or existing multilinear AIR
+paths into zero-knowledge protocols.
 
 Run the native example with:
 
 ```sh
-cargo run -p p3-binary-pcs --features zk --example zk_air --release
+cargo run -p p3-binary-pcs --example zk_air --release
 ```
 
 It proves that two private columns have the same public product at every row,
@@ -117,8 +118,9 @@ including through VM rollback. Single-use commitment state cannot enforce RNG
 freshness. Reusing the same `h` and `u` under distinct public `gamma` exposes
 `h=(g1+g2)/(gamma1+gamma2)`, including every low message coefficient.
 AIR proving manages single-use state internally; callers still own RNG freshness.
-The `zk` feature does not certify production security; human review is pending
-on the PR. The implementation security contract is in [`zk::security`](src/zk/security.rs).
+This reference protocol does not certify production security. Its modeled
+assumptions and exact implementation security contract are in
+[`zk::security`](src/zk/security.rs).
 
 ### Reference protocol
 
@@ -261,7 +263,7 @@ does not reuse the existing clear BaseFold reductions as a privacy argument.
 Build once, then measure the binary directly so compiler RSS is excluded:
 
 ```sh
-cargo build -p p3-binary-pcs --features zk --example zk_profile --release
+cargo build -p p3-binary-pcs --example zk_profile --release
 /usr/bin/time -l target/release/examples/zk_profile product-4 3
 ```
 

@@ -1,6 +1,6 @@
 //! Finite native profiling of the current-row full-blend reference protocol.
 //!
-//! Build with `cargo build -p p3-binary-pcs --features zk --example zk_profile
+//! Build with `cargo build -p p3-binary-pcs --example zk_profile
 //! --release`, then run the binary directly as `zk_profile product-4 3`.
 //! Accepted cases: product-4, product-64, product-256, four-products-64.
 //! Measure process peak RSS separately, e.g. `/usr/bin/time -l <binary> ...`;
