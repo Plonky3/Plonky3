@@ -25,7 +25,7 @@ use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::transcript::{ProverTranscript, StirShape};
 use crate::utils::{
     OodFilter, eval_poly_at_base, eval_poly_parallel, fold_codeword, fold_domain_params,
-    fold_poly_coeffs, interpolate_poly, next_domain_shift, vanishing_poly_from_roots,
+    fold_poly_coeffs, interpolate_poly_mixed_with_vanishing, next_domain_shift,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -184,12 +184,12 @@ struct RoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
     ood_answers: Vec<EF>,
 
     query_indices: Vec<usize>,
-    query_points: Vec<EF>,
+    query_points: Vec<F>,
     query_answers: Vec<EF>,
     seen_query_indices: Vec<usize>,
 
     ans_poly: Vec<EF>,
-    all_points: Vec<EF>,
+    vanishing_coeffs: Vec<EF>,
 }
 
 impl<'a, F, EF, Dft, M, Challenger> RoundProver<'a, F, EF, Dft, M, Challenger>
@@ -230,7 +230,7 @@ where
             query_answers: Vec::new(),
             seen_query_indices: Vec::new(),
             ans_poly: Vec::new(),
-            all_points: Vec::new(),
+            vanishing_coeffs: Vec::new(),
         }
     }
 
@@ -358,7 +358,7 @@ where
         );
 
         self.query_answers = query_answers;
-        self.query_points = query_base_points.into_iter().map(EF::from).collect();
+        self.query_points = query_base_points;
         self.query_indices = query_indices;
         self.seen_query_indices = seen.into_iter().collect();
     }
@@ -367,20 +367,17 @@ where
     /// caller before rho is squeezed — otherwise a malicious prover could fit Ans to satisfy
     /// the interpolation identity at a known rho.
     fn answer_poly(&mut self) -> &[EF] {
-        self.all_points = self
-            .ood_points
-            .iter()
-            .chain(self.query_points.iter())
-            .copied()
-            .collect();
         let all_values: Vec<EF> = self
             .ood_answers
             .iter()
-            .chain(self.query_answers.iter())
+            .chain(&self.query_answers)
             .copied()
             .collect();
-
-        self.ans_poly = interpolate_poly(&self.all_points, &all_values);
+        (self.ans_poly, self.vanishing_coeffs) = interpolate_poly_mixed_with_vanishing(
+            &self.ood_points,
+            &self.query_points,
+            &all_values,
+        );
         &self.ans_poly
     }
 
@@ -403,12 +400,11 @@ where
         // and the vanishing polynomial still need evaluating — their roots are this round's
         // arbitrary interpolation points — but both go through the low-degree coset evaluation
         // rather than a full-size DFT each.
-        let all_points = core::mem::take(&mut self.all_points);
         let next_shift = self.next_shift;
         let next_log_domain = self.next_log_domain;
-        let num_answers = all_points.len();
+        let num_answers = self.ood_points.len() + self.query_points.len();
 
-        let vanishing_coeffs = vanishing_poly_from_roots(&all_points);
+        let vanishing_coeffs = core::mem::take(&mut self.vanishing_coeffs);
         // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
         // `num_answers + 1` coefficients, so the sub-coset has to be at least that wide for
         // the evaluations below to be the polynomials themselves rather than a truncation.

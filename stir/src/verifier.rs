@@ -18,7 +18,7 @@ use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::transcript::{StirShape, VerifierTranscript};
 use crate::utils::{
     OodFilter, check_ans_interpolates_mixed, eval_poly, eval_poly_at_base, fold_domain_params,
-    interpolate_poly, lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c,
+    interpolate_poly_mixed, lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c,
     vanishing_poly_from_roots,
 };
 
@@ -270,12 +270,13 @@ where
 /// Resolve the explicitly configured encoding before the original transcript observation.
 /// Reconstruction uses the prover's canonical representation, including `[ZERO]` for a
 /// zero interpolant through a nonempty set of points.
-fn resolve_ans_polynomial<'a, EF: Field, MmcsError, InputError>(
+fn resolve_ans_polynomial<'a, F: Field, EF: ExtensionField<F>, MmcsError, InputError>(
     round: RoundLabel,
     compact: bool,
     transmitted: &'a [EF],
     points: &[EF],
     values: &[EF],
+    query_points: &[F],
 ) -> Result<Cow<'a, [EF]>, StirError<MmcsError, InputError>> {
     if !compact {
         check_ans_length(round, transmitted, points.len())?;
@@ -297,7 +298,11 @@ fn resolve_ans_polynomial<'a, EF: Field, MmcsError, InputError>(
     {
         return Err(StirError::InvalidAnsConsistency { round });
     }
-    Ok(Cow::Owned(interpolate_poly(points, values)))
+    Ok(Cow::Owned(interpolate_poly_mixed(
+        &points[..points.len() - query_points.len()],
+        query_points,
+        values,
+    )))
 }
 
 #[cfg(test)]
@@ -311,12 +316,12 @@ mod compact_answer_tests {
     fn compact_answers_reconstruct_canonical_zero_and_reject_invalid_nodes() {
         let round = RoundLabel::Round(2);
         assert!(
-            resolve_ans_polynomial::<F, (), ()>(round, true, &[], &[], &[])
+            resolve_ans_polynomial::<F, F, (), ()>(round, true, &[], &[], &[], &[])
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
-            resolve_ans_polynomial::<F, (), ()>(round, true, &[], &[F::ONE], &[F::ZERO])
+            resolve_ans_polynomial::<F, F, (), ()>(round, true, &[], &[F::ONE], &[F::ZERO], &[])
                 .unwrap()
                 .as_ref(),
             &[F::ZERO]
@@ -326,7 +331,7 @@ mod compact_answer_tests {
             (&[F::ONE, F::ONE][..], &[F::ZERO, F::ZERO][..]),
         ] {
             assert!(matches!(
-                resolve_ans_polynomial::<F, (), ()>(round, true, &[], points, values),
+                resolve_ans_polynomial::<F, F, (), ()>(round, true, &[], points, values, &[]),
                 Err(StirError::InvalidAnsConsistency {
                     round: RoundLabel::Round(2)
                 })
@@ -334,12 +339,13 @@ mod compact_answer_tests {
         }
         // The default representation still borrows the provided coefficients verbatim.
         assert!(matches!(
-            resolve_ans_polynomial::<F, (), ()>(
+            resolve_ans_polynomial::<F, F, (), ()>(
                 round,
                 false,
                 &[F::ZERO, F::ZERO],
                 &[F::ZERO, F::ONE],
-                &[F::ZERO, F::ZERO]
+                &[F::ZERO, F::ZERO],
+                &[]
             )
             .unwrap(),
             Cow::Borrowed([F::ZERO, F::ZERO])
@@ -359,12 +365,13 @@ mod compact_answer_tests {
         //
         // Mutation: send the compact encoding to a default-mode reader.
         assert!(matches!(
-            resolve_ans_polynomial::<F, (), ()>(
+            resolve_ans_polynomial::<F, F, (), ()>(
                 round,
                 false,
                 &[],
                 &[F::ONE, F::TWO],
-                &[F::ZERO, F::ZERO]
+                &[F::ZERO, F::ZERO],
+                &[]
             ),
             Err(StirError::InvalidProofShape(
                 ProofShapeError::MissingAnsPolynomial {
@@ -381,7 +388,7 @@ mod compact_answer_tests {
         //
         // Both spell the same virtual oracle, so the shape is all that separates them.
         assert!(matches!(
-            resolve_ans_polynomial::<F, (), ()>(round, false, &[], &[F::ONE], &[F::ZERO]),
+            resolve_ans_polynomial::<F, F, (), ()>(round, false, &[], &[F::ONE], &[F::ZERO], &[]),
             Err(StirError::InvalidProofShape(
                 ProofShapeError::MissingAnsPolynomial {
                     round: RoundLabel::Round(2),
@@ -392,7 +399,7 @@ mod compact_answer_tests {
 
         // Fixture state: no nodes at all, so the empty vector is the only encoding there is.
         assert!(
-            resolve_ans_polynomial::<F, (), ()>(round, false, &[], &[], &[])
+            resolve_ans_polynomial::<F, F, (), ()>(round, false, &[], &[], &[], &[])
                 .unwrap()
                 .is_empty()
         );
@@ -842,6 +849,7 @@ where
         &rp.ans_polynomial,
         &all_points,
         &all_values,
+        &rv.query_points,
     )?;
 
     // Bind ans_poly into the transcript BEFORE rho. The interpolation identity is a one-point
@@ -1707,6 +1715,7 @@ where
                 &rp.ans_polynomial,
                 &all_points,
                 &all_values,
+                &rv.query_points,
             )?;
 
             let rho = transcript.answer_phase(r, i, &ans)?;

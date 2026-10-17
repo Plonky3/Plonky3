@@ -567,3 +567,57 @@ fn test_mixed_answer_check_matches_extension_check_at_boundaries() {
         ));
     }
 }
+
+#[test]
+fn test_mixed_interpolation_matches_canonical_extension_coefficients() {
+    use p3_stir::utils::interpolate_poly_mixed;
+    let mut rng = SmallRng::seed_from_u64(0xcafe);
+    for q in [0, 1, 2, 9, 32] {
+        for s in [0, 1, 2, 4] {
+            let queries: Vec<F> = (0..q).map(|i| f(i + 1)).collect();
+            let ood: Vec<EF> = (0..s).map(|_| rng.random()).collect();
+            let points: Vec<EF> = ood
+                .iter()
+                .copied()
+                .chain(queries.iter().copied().map(EF::from))
+                .collect();
+            for coeffs in [
+                vec![],
+                vec![EF::ZERO],
+                vec![ef(7)],
+                (0..points.len()).map(|_| rng.random()).collect(),
+            ] {
+                let values: Vec<EF> = points.iter().map(|&x| eval_poly(&coeffs, x)).collect();
+                assert_eq!(
+                    interpolate_poly_mixed(&ood, &queries, &values),
+                    interpolate_poly(&points, &values),
+                    "q={q}, s={s}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "all interpolation points must be distinct")]
+fn test_mixed_interpolation_rejects_query_duplicates() {
+    p3_stir::utils::interpolate_poly_mixed(&[], &[f(1), f(1)], &[ef(2), ef(3)]);
+}
+
+#[test]
+#[should_panic(expected = "all interpolation points must be distinct")]
+fn test_mixed_interpolation_rejects_cross_field_duplicates() {
+    p3_stir::utils::interpolate_poly_mixed(&[ef(1)], &[f(1)], &[ef(2), ef(3)]);
+}
+
+#[test]
+#[should_panic(expected = "all interpolation points must be distinct")]
+fn test_mixed_interpolation_rejects_ood_duplicates() {
+    p3_stir::utils::interpolate_poly_mixed(&[ef(1), ef(1)], &[] as &[F], &[ef(2), ef(3)]);
+}
+
+#[test]
+#[should_panic(expected = "points and values must have the same length")]
+fn test_mixed_interpolation_rejects_wrong_value_count() {
+    p3_stir::utils::interpolate_poly_mixed(&[ef(1)], &[f(2)], &[ef(3)]);
+}

@@ -388,6 +388,13 @@ impl<F: Field> OodFilter<F> {
 /// Panics if `points.len() != values.len()` or if any two points are equal
 /// (duplicate points yield division by zero).
 pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
+    interpolate_poly_at_base(points, values)
+}
+
+fn interpolate_poly_at_base<F: Field, EF: ExtensionField<F>>(
+    points: &[F],
+    values: &[EF],
+) -> Vec<EF> {
     assert_eq!(
         points.len(),
         values.len(),
@@ -428,7 +435,7 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
     // Evaluate Newton's forward difference expansion into coefficient form.
     // poly(x) = dd[0] + dd[1]*(x-p[0]) + dd[2]*(x-p[0])*(x-p[1]) + ...
     // We expand this iteratively.
-    let mut coeffs = vec![F::ZERO; n];
+    let mut coeffs = vec![EF::ZERO; n];
     // Build coefficient form by Horner: accumulate from the highest term.
     // basis[k] = prod_{j<k} (X - points[j]) in coefficient form.
     let mut basis: Vec<F> = vec![F::ONE];
@@ -452,11 +459,82 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
     }
 
     // Remove trailing zeros.
-    while coeffs.last() == Some(&F::ZERO) && coeffs.len() > 1 {
+    while coeffs.last() == Some(&EF::ZERO) && coeffs.len() > 1 {
         coeffs.pop();
     }
 
     coeffs
+}
+
+/// Interpolate extension-field values on OOD nodes followed by base-field query nodes.
+///
+/// Query differences, Newton basis coefficients, and the query vanishing polynomial stay
+/// in the base field. The OOD constraints are added as `A_query + Z_query * H`. The output
+/// uses the same canonical coefficients and duplicate-node checks as [`interpolate_poly`].
+///
+/// # Panics
+///
+/// Panics when the value count differs from the total node count, or nodes coincide.
+pub fn interpolate_poly_mixed<F: Field, EF: ExtensionField<F>>(
+    ood_points: &[EF],
+    query_points: &[F],
+    values: &[EF],
+) -> Vec<EF> {
+    interpolate_poly_mixed_with_vanishing(ood_points, query_points, values).0
+}
+
+/// Also return the vanishing polynomial, sharing the base-field query-root expansion.
+pub(crate) fn interpolate_poly_mixed_with_vanishing<F: Field, EF: ExtensionField<F>>(
+    ood_points: &[EF],
+    query_points: &[F],
+    values: &[EF],
+) -> (Vec<EF>, Vec<EF>) {
+    assert_eq!(
+        ood_points.len() + query_points.len(),
+        values.len(),
+        "interpolate_poly: points and values must have the same length"
+    );
+    for (i, &z) in ood_points.iter().enumerate() {
+        assert!(
+            !ood_points[..i].contains(&z) && !query_points.iter().any(|&y| z == EF::from(y)),
+            "all interpolation points must be distinct"
+        );
+    }
+    let (ood_values, query_values) = values.split_at(ood_points.len());
+    let mut ans = interpolate_poly_at_base(query_points, query_values);
+    let query_vanishing = vanishing_poly_from_roots(query_points);
+    let mut vanishing: Vec<EF> = query_vanishing.iter().copied().map(EF::from).collect();
+    if !ood_points.is_empty() {
+        let denominators: Vec<EF> = ood_points
+            .iter()
+            .map(|&z| eval_poly(&vanishing, z))
+            .collect();
+        let inverses = batch_multiplicative_inverse(&denominators);
+        let residuals: Vec<EF> = ood_points
+            .iter()
+            .zip(ood_values)
+            .zip(inverses)
+            .map(|((&z, &v), inverse)| (v - eval_poly(&ans, z)) * inverse)
+            .collect();
+        let correction = interpolate_poly(ood_points, &residuals);
+        ans.resize(values.len(), EF::ZERO);
+        for (i, &h) in correction.iter().enumerate() {
+            for (j, &z) in query_vanishing.iter().enumerate() {
+                ans[i + j] += h * z;
+            }
+        }
+        for &root in ood_points {
+            vanishing.push(EF::ZERO);
+            for i in (1..vanishing.len()).rev() {
+                vanishing[i] = vanishing[i - 1] - vanishing[i] * root;
+            }
+            vanishing[0] = -vanishing[0] * root;
+        }
+    }
+    while ans.last() == Some(&EF::ZERO) && ans.len() > 1 {
+        ans.pop();
+    }
+    (ans, vanishing)
 }
 
 /// Verify at a random point `rho` that `ans` interpolates `(points, values)`.
