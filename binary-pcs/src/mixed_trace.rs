@@ -335,11 +335,43 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
 fn expand_coordinate_block<A: Coordinates>(values: &[A], out: &mut [u64]) {
     debug_assert!(values.len() <= WORD_BITS);
     debug_assert_eq!(out.len(), A::COORDINATES);
+    // Partial row blocks cannot use the 64-by-64 transpose.
+    if values.len() < WORD_BITS {
+        for (lane, value) in values.iter().enumerate() {
+            for (byte_index, &byte) in coordinate_bytes(core::slice::from_ref(value))
+                .iter()
+                .enumerate()
+            {
+                let mut rest = byte;
+                while rest != 0 {
+                    let bit = rest.trailing_zeros() as usize;
+                    out[byte_index * 8 + bit] |= 1 << lane;
+                    rest &= rest - 1;
+                }
+            }
+        }
+        return;
+    }
     let bytes = coordinate_bytes(values);
     let stride = A::COORDINATES / 8;
     for (tile, output) in out.chunks_mut(WORD_BITS).enumerate() {
         let byte_start = tile * 8;
         let byte_count = output.len() / 8;
+        // A coordinate tail cannot fill a transpose tile either.
+        if output.len() < WORD_BITS {
+            for lane in 0..values.len() {
+                let start = lane * stride + byte_start;
+                for (byte_index, &byte) in bytes[start..start + byte_count].iter().enumerate() {
+                    let mut rest = byte;
+                    while rest != 0 {
+                        let bit = rest.trailing_zeros() as usize;
+                        output[byte_index * 8 + bit] |= 1 << lane;
+                        rest &= rest - 1;
+                    }
+                }
+            }
+            continue;
+        }
         let mut rows = [PackedGf2x64::new(0); WORD_BITS];
         let mut set_bits = 0;
         for (lane, row) in rows.iter_mut().take(values.len()).enumerate() {
