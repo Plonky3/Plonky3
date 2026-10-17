@@ -656,15 +656,24 @@ where
         for m in matrices {
             let cols = m.width();
 
-            // Hold the lane rows while the transpose reads them.
-            //
-            // SAFETY: the caller guarantees rows first .. first + lanes exist.
-            let rows: Vec<_> = (0..lanes)
-                .map(|lane| unsafe { m.row_slice_unchecked(first + lane) })
-                .collect();
-
             let block = &mut staged[start * lanes..(start + cols) * lanes];
-            transpose_rows(lanes, cols, |lane| &*rows[lane], block);
+            if let Some(rows) = m.contiguous_rows(first..first + lanes) {
+                // Keep the handle alive through the transpose: some matrices return owned rows.
+                // Dense matrices lend this whole group without allocating per-row handles.
+                transpose_rows(
+                    lanes,
+                    cols,
+                    |lane| &rows[lane * cols..(lane + 1) * cols],
+                    block,
+                );
+            } else {
+                // Hold every fallback row handle until the transpose has finished reading it.
+                // SAFETY: the caller guarantees rows first .. first + lanes exist.
+                let rows: Vec<_> = (0..lanes)
+                    .map(|lane| unsafe { m.row_slice_unchecked(first + lane) })
+                    .collect();
+                transpose_rows(lanes, cols, |lane| &*rows[lane], block);
+            }
             start += cols;
         }
 
@@ -1171,6 +1180,67 @@ mod tests {
     {
         fn compress(&self, input: [[u64; 4]; N]) -> [u64; 4] {
             to_words(&self.0.compress(input.map(to_bytes)))
+        }
+    }
+
+    /// Exercises both owned contiguous handles and owned per-row fallback handles.
+    struct OwnedRows {
+        matrix: RowMajorMatrix<F>,
+        contiguous: bool,
+    }
+
+    impl Matrix<F> for OwnedRows {
+        fn width(&self) -> usize {
+            self.matrix.width()
+        }
+
+        fn height(&self) -> usize {
+            self.matrix.height()
+        }
+
+        unsafe fn row_unchecked(&self, row: usize) -> impl Iterator<Item = F> + Send + Sync {
+            self.matrix.row_slice(row).unwrap().to_vec().into_iter()
+        }
+
+        fn contiguous_rows(
+            &self,
+            rows: Range<usize>,
+        ) -> Option<impl core::ops::Deref<Target = [F]>> {
+            (self.contiguous && rows.start <= rows.end && rows.end <= self.height()).then(|| {
+                self.matrix.values[rows.start * self.width()..rows.end * self.width()].to_vec()
+            })
+        }
+    }
+
+    #[test]
+    fn packed_rows_match_for_borrowed_owned_and_fallback_storage() {
+        let mut rng = SmallRng::seed_from_u64(10);
+        let perm = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm.clone());
+        let c = TruncatedPermutation::<_, 2, 8, 16>::new(perm);
+        for (heights, width) in [(&[67, 67, 34, 17][..], 3), (&[129, 65][..], 135)] {
+            let leaves = matrices(heights, width);
+            let expected =
+                MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &c, leaves.clone())
+                    .digest_layers;
+            for contiguous in [false, true] {
+                let owned = leaves
+                    .iter()
+                    .cloned()
+                    .map(|matrix| OwnedRows { matrix, contiguous })
+                    .collect();
+                let got = MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &c, owned);
+                assert_eq!(
+                    got.digest_layers, expected,
+                    "width {width}, contiguous {contiguous}"
+                );
+            }
+            let strided = leaves
+                .iter()
+                .map(|m| m.as_view().vertically_strided(1, 0))
+                .collect();
+            let got = MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &c, strided);
+            assert_eq!(got.digest_layers, expected, "width {width}, strided");
         }
     }
 
