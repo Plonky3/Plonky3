@@ -7,6 +7,7 @@ use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::layout::plan_stacked_layout;
 use p3_sumcheck::ring_switch::bits::BitRingSwitchProofError;
 use p3_sumcheck::{OpeningBatch, PrescribedPointPcs, TableSpec};
 use p3_symmetric::CryptographicHasher;
@@ -20,7 +21,6 @@ use super::*;
 use crate::packing::PackedWords;
 use crate::params::BinaryPcsParams;
 use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
-use p3_sumcheck::layout::plan_stacked_layout;
 
 type EF = BinaryField128;
 
@@ -2589,8 +2589,9 @@ fn overflowing_public_protocols_are_refused_before_planning_or_sampling() {
 
 #[test]
 fn hybrid_derived_counts_refuse_multiplication_and_sum_overflow() {
-    use super::plan::ColumnBlock;
     use p3_sumcheck::layout::Selector;
+
+    use super::plan::ColumnBlock;
 
     let block = ColumnBlock {
         prefix: Selector::new(0, 0),
