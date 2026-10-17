@@ -10,7 +10,9 @@ use p3_challenger::GrindingChallenger;
 use p3_commit::{
     CommitmentWithOpeningPoints, Pcs, PeriodicColumns, PolynomialSpace, UnivariateStarkPcs,
 };
-use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{
+    BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, batch_multiplicative_inverse,
+};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_util::zip_eq::zip_eq;
@@ -91,7 +93,40 @@ where
         return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch);
     }
 
-    let zps = quotient_chunks_domains
+    match quotient_chunks.len() {
+        0 => return Ok(SC::Challenge::ZERO),
+        1 => {
+            return SC::Challenge::from_ext_basis_coefficients(&quotient_chunks[0])
+                .ok_or(InvalidProofShapeError::OpenedValuesDimensionMismatch);
+        }
+        _ => {}
+    }
+
+    let vanishing_values = quotient_chunks_domains
+        .iter()
+        .map(|domain| domain.vanishing_poly_at_point(zeta))
+        .collect_vec();
+
+    // Prefix/suffix products give every leave-one-out numerator in linear time.
+    // Dividing the total product by Z_i(zeta) would fail at a chunk-domain point.
+    let mut prefix = SC::Challenge::ONE;
+    let mut zps = vanishing_values
+        .iter()
+        .map(|&z| {
+            let before = prefix;
+            prefix *= z;
+            before
+        })
+        .collect_vec();
+    let mut suffix = SC::Challenge::ONE;
+    for (zp, &z) in zps.iter_mut().zip(&vanishing_values).rev() {
+        *zp *= suffix;
+        suffix *= z;
+    }
+
+    // Domain points and denominator products are in the base field. Invert one
+    // product per chunk in a batch instead of each pair's denominator separately.
+    let denominators = quotient_chunks_domains
         .iter()
         .enumerate()
         .map(|(i, domain)| {
@@ -99,15 +134,16 @@ where
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i)
-                .map(|(_, other_domain)| {
-                    other_domain.vanishing_poly_at_point(zeta)
-                        * other_domain
-                            .vanishing_poly_at_point(domain.first_point())
-                            .inverse()
-                })
-                .product::<SC::Challenge>()
+                .map(|(_, other)| other.vanishing_poly_at_point(domain.first_point()))
+                .product::<Val<SC>>()
         })
         .collect_vec();
+    for (zp, inverse) in zps
+        .iter_mut()
+        .zip(batch_multiplicative_inverse(&denominators))
+    {
+        *zp *= inverse;
+    }
 
     // A chunk of the wrong length has no extension element, and the proof is rejected.
     quotient_chunks
