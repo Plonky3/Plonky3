@@ -257,7 +257,24 @@ pub fn reduce_mod_x_pow_minus_c<F: Field, EF: ExtensionField<F>>(
 pub fn vanishing_poly_from_roots<F: Field>(roots: &[F]) -> Vec<F> {
     let mut coeffs = Vec::with_capacity(roots.len() + 1);
     coeffs.push(F::ONE);
+    extend_vanishing_poly(coeffs, roots)
+}
 
+/// Vanishing polynomial for extension-field OOD roots and base-field query roots.
+///
+/// The quadratic query-root expansion stays in the base field, then the OOD factors
+/// are appended in the extension field. Repeated roots are preserved.
+pub fn vanishing_poly_from_roots_mixed<F: Field, EF: ExtensionField<F>>(
+    ood_points: &[EF],
+    query_points: &[F],
+) -> Vec<EF> {
+    let query_vanishing = vanishing_poly_from_roots(query_points);
+    let coeffs = query_vanishing.into_iter().map(EF::from).collect();
+    extend_vanishing_poly(coeffs, ood_points)
+}
+
+fn extend_vanishing_poly<F: Field>(mut coeffs: Vec<F>, roots: &[F]) -> Vec<F> {
+    coeffs.reserve(roots.len());
     for &root in roots {
         coeffs.push(F::ZERO);
         for i in (1..coeffs.len()).rev() {
@@ -503,7 +520,7 @@ pub(crate) fn interpolate_poly_mixed_with_vanishing<F: Field, EF: ExtensionField
     let (ood_values, query_values) = values.split_at(ood_points.len());
     let mut ans = interpolate_poly_at_base(query_points, query_values);
     let query_vanishing = vanishing_poly_from_roots(query_points);
-    let mut vanishing: Vec<EF> = query_vanishing.iter().copied().map(EF::from).collect();
+    let vanishing: Vec<EF> = query_vanishing.iter().copied().map(EF::from).collect();
     if !ood_points.is_empty() {
         let denominators: Vec<EF> = ood_points
             .iter()
@@ -523,18 +540,11 @@ pub(crate) fn interpolate_poly_mixed_with_vanishing<F: Field, EF: ExtensionField
                 ans[i + j] += h * z;
             }
         }
-        for &root in ood_points {
-            vanishing.push(EF::ZERO);
-            for i in (1..vanishing.len()).rev() {
-                vanishing[i] = vanishing[i - 1] - vanishing[i] * root;
-            }
-            vanishing[0] = -vanishing[0] * root;
-        }
     }
     while ans.last() == Some(&EF::ZERO) && ans.len() > 1 {
         ans.pop();
     }
-    (ans, vanishing)
+    (ans, extend_vanishing_poly(vanishing, ood_points))
 }
 
 /// Verify at a random point `rho` that `ans` interpolates `(points, values)`.

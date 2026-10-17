@@ -19,7 +19,7 @@ use crate::transcript::{StirShape, VerifierTranscript};
 use crate::utils::{
     OodFilter, check_ans_interpolates_mixed, eval_poly, eval_poly_at_base, fold_domain_params,
     interpolate_poly_mixed, lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c,
-    vanishing_poly_from_roots,
+    vanishing_poly_from_roots_mixed,
 };
 
 /// `(index, row)` pairs for a round's queries, in draw order.
@@ -754,7 +754,10 @@ where
         let r_comb_pow_gap1 = self.r_comb.exp_u64((gap + 1) as u64);
         RoundVerifyOutput {
             ctx: VirtualRoundContext {
-                vanishing_coeffs: vanishing_poly_from_roots(all_points),
+                vanishing_coeffs: vanishing_poly_from_roots_mixed(
+                    &self.ood_points,
+                    &self.query_points,
+                ),
                 ans_poly: ans_polynomial,
                 r_comb: self.r_comb,
                 gap,

@@ -621,3 +621,25 @@ fn test_mixed_interpolation_rejects_ood_duplicates() {
 fn test_mixed_interpolation_rejects_wrong_value_count() {
     p3_stir::utils::interpolate_poly_mixed(&[ef(1)], &[f(2)], &[ef(3)]);
 }
+
+#[test]
+fn test_mixed_vanishing_matches_extension_root_expansion() {
+    use p3_stir::utils::{vanishing_poly_from_roots, vanishing_poly_from_roots_mixed};
+    let mut rng = SmallRng::seed_from_u64(0xcafe);
+    for q in [0, 1, 2, 9, 32] {
+        for s in [0, 1, 2, 4] {
+            // Duplicates are valid roots of a vanishing polynomial too.
+            let queries: Vec<F> = (0..q).map(|i| f(i % 3)).collect();
+            let ood: Vec<EF> = (0..s).map(|_| rng.random()).collect();
+            let points: Vec<EF> = ood
+                .iter()
+                .copied()
+                .chain(queries.iter().copied().map(EF::from))
+                .collect();
+            assert_eq!(
+                vanishing_poly_from_roots_mixed(&ood, &queries),
+                vanishing_poly_from_roots(&points)
+            );
+        }
+    }
+}
