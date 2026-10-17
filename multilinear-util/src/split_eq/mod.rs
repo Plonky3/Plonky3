@@ -1041,7 +1041,7 @@ mod tests {
     where
         rand::distr::StandardUniform: rand::distr::Distribution<F> + rand::distr::Distribution<EF>,
     {
-        let mut rng = SmallRng::seed_from_u64(0x7065_6669_78);
+        let mut rng = SmallRng::seed_from_u64(0x0070_6566_6978);
         let k_pack = log2_strict_usize(F::Packing::WIDTH);
         let inner_vars = k_pack + 4;
         let inner_len = 1 << inner_vars;
