@@ -30,11 +30,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
+use crate::mds::MdsStrategy;
 use p3_air::utils::pack_bits_le;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_mds::util::mds_multiply;
 use p3_monolith::MonolithBars;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
@@ -88,6 +88,9 @@ pub struct MonolithAir<
     /// `mds_matrix[row][col]` is the entry at row `row`, column `col`.
     /// The Concrete layer computes `state = mds_matrix * state`.
     pub(crate) mds_matrix: [[F; WIDTH]; WIDTH],
+
+    /// Validated once at construction; arbitrary dense matrices retain the dense path.
+    pub(crate) mds_strategy: MdsStrategy<F, WIDTH>,
 
     /// Bit widths of each limb in the Bar decomposition.
     ///
@@ -281,6 +284,7 @@ impl<
 
         Self {
             round_constants,
+            mds_strategy: MdsStrategy::new(&mds_matrix),
             mds_matrix,
             limb_bits,
             modulus_lsb_to_msb,
@@ -388,7 +392,7 @@ impl<
 
         // Initial Concrete layer: multiply the input state by the MDS matrix.
         // This is a linear operation, so the state remains degree 1.
-        mds_multiply::<_, _, WIDTH>(&mut state, &self.mds_matrix);
+        self.mds_strategy.apply(&mut state, &self.mds_matrix);
 
         // Full rounds: Bars → Bricks → Concrete → AddRoundConstants.
         for round_idx in 0..NUM_FULL_ROUNDS {
@@ -396,6 +400,7 @@ impl<
                 &mut state,
                 &local.full_rounds[round_idx],
                 &self.mds_matrix,
+                &self.mds_strategy,
                 Some(&self.round_constants[round_idx]),
                 self.limb_bits,
                 &self.modulus_lsb_to_msb,
@@ -408,6 +413,7 @@ impl<
             &mut state,
             &local.final_round,
             &self.mds_matrix,
+            &self.mds_strategy,
             None,
             self.limb_bits,
             &self.modulus_lsb_to_msb,
@@ -428,6 +434,7 @@ impl<
 /// The running state is reset to the committed post-state on exit so the next
 /// round restarts from a degree-1 expression.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn eval_round<
     AB: AirBuilder,
     const WIDTH: usize,
@@ -439,6 +446,7 @@ fn eval_round<
     state: &mut [AB::Expr; WIDTH],
     round: &MonolithRoundCols<AB::Var, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS>,
     mds_matrix: &[[AB::F; WIDTH]; WIDTH],
+    mds_strategy: &MdsStrategy<AB::F, WIDTH>,
     round_constants: Option<&[AB::F; WIDTH]>,
     limb_bits: &[usize],
     modulus_lsb_to_msb: &[bool; FIELD_BITS],
@@ -545,7 +553,7 @@ fn eval_round<
     });
 
     // Phase 4: Concrete (linear, keeps degree 2).
-    mds_multiply::<_, _, WIDTH>(&mut post_bricks, mds_matrix);
+    mds_strategy.apply(&mut post_bricks, mds_matrix);
 
     // Phase 5: Round constants (skipped on the final round).
     if let Some(rc) = round_constants {
