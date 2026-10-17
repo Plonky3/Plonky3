@@ -7,6 +7,7 @@ use p3_field::{PrimeCharacteristicRing, TwoAdicField};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use proptest::prelude::*;
 use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
@@ -42,6 +43,30 @@ fn padded_dit_matches_full_dft_across_fields_and_layer_boundaries() {
     check_padded(Radix2DitParallel::<BabyBear>::default());
     check_padded(Radix2DitParallel::<Goldilocks>::default());
     check_padded(Radix2DitParallel::<BinomialExtensionField<BabyBear, 4>>::default());
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+
+    #[test]
+    fn padded_dit_matches_full_dft_for_larger_low_rate_batches(
+        log_height in 9usize..=11,
+        log_inv_rate in 2usize..=3,
+        width in 1usize..=17,
+        seed in any::<u64>(),
+    ) {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut mat = RowMajorMatrix::<BabyBear>::rand(
+            &mut rng,
+            1 << (log_height - log_inv_rate),
+            width,
+        );
+        mat.values.resize((1 << log_height) * width, BabyBear::ZERO);
+        let dft = Radix2DitParallel::default();
+        let expected = dft.dft_batch(mat.clone()).to_row_major_matrix();
+        let actual = dft.dft_batch_padded(mat, log_inv_rate).to_row_major_matrix();
+        prop_assert_eq!(actual, expected);
+    }
 }
 
 #[test]

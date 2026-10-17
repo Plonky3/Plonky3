@@ -134,7 +134,9 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
     ) -> Self::Evaluations {
         let log_h = log2_strict_usize(mat.height());
         assert!(log_inv_rate <= log_h, "padding exceeds matrix height");
-        if log_inv_rate == 0 {
+        // Skipping only the twiddle-free first layer does not repay moving
+        // and replicating nonconstant coefficients.
+        if log_inv_rate == 0 || (log_inv_rate == 1 && log_h > 1) {
             return self.dft_batch(mat);
         }
 
