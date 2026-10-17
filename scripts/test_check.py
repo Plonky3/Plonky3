@@ -121,6 +121,26 @@ class CheckCliTests(unittest.TestCase):
         )
         self.assertEqual(self.dry_run_lines("slow-regressions", "--packages", "p3-util"), [])
 
+    def test_exhaustive_word_shifts_are_selected_as_a_slow_regression(self):
+        expected = [
+            "+ cargo test -p p3-word-backend"
+            " shift::wiring::tests::factorized_transpose_matches_every_shift_pair"
+            " -- --ignored --exact"
+        ]
+        self.assertEqual(
+            self.dry_run_lines("slow-regressions", "--package", "p3-word-backend"),
+            expected,
+        )
+        self.assertIn(expected[0], self.dry_run_lines("slow-regressions"))
+
+    def test_prove_hash_binary_participates_in_default_test_discovery(self):
+        import check  # noqa: PLC0415
+
+        metadata = check.cargo_metadata(REPO)
+        examples = next(p for p in metadata["packages"] if p["name"] == "p3-examples")
+        target = next(t for t in examples["targets"] if t["name"] == "prove_hash_binary")
+        self.assertTrue(target["test"])
+
     def test_lint_can_run_each_existing_ci_check_independently(self):
         expected = {
             "sort": "+ cargo +stable sort --workspace --grouped --check",
