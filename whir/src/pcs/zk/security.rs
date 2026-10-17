@@ -7,11 +7,12 @@ use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, TwoAdicField};
 pub use p3_security::whir::hiding::{
     HidingBaseCaseSecurityReport, HidingBoundClassification, HidingCodeRole,
-    HidingCodeSecurityReport, HidingErrorBound, HidingGammaRoundReport, HidingListBound,
-    HidingQueryRoundReport,
+    HidingCodeSecurityReport, HidingErrorBound, HidingGammaRoundReport,
+    HidingIntermediateSourceSecurityReport, HidingListBound, HidingQueryRoundReport,
 };
 use p3_security::whir::hiding::{
     HidingCodeGeometry, hiding_base_case_security_report as build_hiding_security_report,
+    hiding_intermediate_source_security_report,
 };
 
 use super::config::ZkWhirConfig;
@@ -22,6 +23,39 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
+    /// Reports every intermediate source's randomized geometry and inherited
+    /// query/PoW budget, in code-switching order.
+    ///
+    /// This is diagnostic only: query coordinates apply to their documented
+    /// far-word branch. The full hiding reduction remains unavailable, and
+    /// this method neither changes the schedule nor certifies the compiled
+    /// PCS. The terminal source is reported separately by
+    /// [`Self::hiding_base_case_security_report`].
+    #[must_use]
+    pub fn hiding_intermediate_source_security_reports(
+        &self,
+    ) -> Vec<HidingIntermediateSourceSecurityReport> {
+        self.round_parameters()
+            .iter()
+            .enumerate()
+            .map(|(round, config)| {
+                hiding_intermediate_source_security_report(
+                    round,
+                    self.soundness_type,
+                    HidingCodeGeometry::new(
+                        HidingCodeRole::Source,
+                        1 << config.num_variables,
+                        self.oracle_randomness[round],
+                        config.domain_size >> config.folding_factor,
+                        1,
+                        config.num_queries,
+                    ),
+                    config.pow_bits,
+                )
+            })
+            .collect()
+    }
+
     /// Reports the heterogeneous hiding base case's ideal-IOP RBR terms.
     ///
     /// This is diagnostic only: it neither rejects the configuration nor
@@ -73,6 +107,7 @@ where
 mod tests {
     use alloc::vec;
 
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
     use p3_field::PrimeField32;
     use p3_field::extension::BinomialExtensionField;
@@ -86,6 +121,119 @@ mod tests {
     type EF = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2KoalaBear<16>;
     type Challenger = DuplexChallenger<F, Perm, 16, 8>;
+
+    #[test]
+    fn intermediate_randomized_source_exposes_inherited_query_shortfall() {
+        type BF = BabyBear;
+        type EF5 = BinomialExtensionField<BF, 5>;
+        type BC = DuplexChallenger<BF, Poseidon2BabyBear<16>, 16, 8>;
+        let config = ZkWhirConfig::<EF5, BF, BC>::new(
+            14,
+            ProtocolParameters {
+                security_level: 128,
+                pow_bits: 30,
+                round_log_inv_rates: vec![],
+                folding_factor: FoldingFactor::Constant(5),
+                soundness_type: SecurityAssumption::UniqueDecoding,
+                starting_log_inv_rate: 1,
+            },
+            ZkParameters {
+                ell_zk: 16,
+                mask_log_inv_rate: 5,
+            },
+        )
+        .unwrap();
+
+        let reports = config.hiding_intermediate_source_security_reports();
+        assert_eq!(reports.len(), 1);
+        let report = &reports[0];
+        assert_eq!(report.round, 0);
+        assert_eq!(report.message_len, 512);
+        assert_eq!(report.randomness_len, 237);
+        assert_eq!(report.randomized_dimension, 749);
+        assert_eq!(report.domain_size, 1024);
+        assert_eq!(report.randomized_rate, 749. / 1024.);
+        assert_eq!(report.requested_queries, 237);
+        assert_eq!(report.effective_queries, 237);
+        assert_eq!(report.query_pow_bits, 30);
+        assert_eq!(report.analysis_dimension, 749);
+        assert_eq!(report.analysis_radius, Some(275. / 2048.));
+        assert!((report.query_with_pow.bits.unwrap() - 79.301_493_447_010_8).abs() < 1e-10);
+        assert_eq!(
+            report.query_before_pow.classification,
+            HidingBoundClassification::Proven
+        );
+        assert_eq!(
+            report.query_with_pow.classification,
+            HidingBoundClassification::Conditional
+        );
+        assert_eq!(report.query_with_pow.proven_bits(), None);
+        assert_eq!(report.hiding_reduction.bits, None);
+        assert_eq!(
+            report.hiding_reduction.classification,
+            HidingBoundClassification::Unavailable
+        );
+
+        let inherited = &config.round_parameters()[0];
+        let plain_query_bits = SecurityAssumption::UniqueDecoding
+            .queries_error(1, inherited.num_queries)
+            + inherited.pow_bits as f64;
+        assert!((plain_query_bits - 128.363_887_329_085_97).abs() < 1e-10);
+        assert!(report.query_with_pow.bits.unwrap() < 128.);
+        // Reporting must not silently repair the inherited schedule.
+        assert_eq!((inherited.num_queries, inherited.pow_bits), (237, 30));
+    }
+
+    #[test]
+    fn intermediate_reports_follow_each_oracles_old_geometry_and_query_budget() {
+        for (assumption, randomness) in [
+            (SecurityAssumption::UniqueDecoding, [48, 39]),
+            (SecurityAssumption::JohnsonBound, [35, 23]),
+            (SecurityAssumption::CapacityBound, [17, 11]),
+        ] {
+            let config = ZkWhirConfig::<EF, F, Challenger>::new(
+                16,
+                ProtocolParameters {
+                    security_level: 32,
+                    pow_bits: 0,
+                    round_log_inv_rates: vec![3, 4],
+                    folding_factor: FoldingFactor::Constant(4),
+                    soundness_type: assumption,
+                    starting_log_inv_rate: 2,
+                },
+                ZkParameters {
+                    ell_zk: 4,
+                    mask_log_inv_rate: 1,
+                },
+            )
+            .unwrap();
+            let reports = config.hiding_intermediate_source_security_reports();
+            assert_eq!(reports.len(), 2);
+            for (round, (report, (message, height))) in
+                reports.iter().zip([(4096, 16384), (256, 2048)]).enumerate()
+            {
+                assert_eq!(report.round, round);
+                assert_eq!(report.assumption, assumption);
+                assert_eq!(report.message_len, message);
+                assert_eq!(report.domain_size, height);
+                assert_eq!(report.randomness_len, randomness[round]);
+                assert_eq!(report.requested_queries, randomness[round]);
+                assert_eq!(report.query_pow_bits, 0);
+                assert_eq!(
+                    report.query_before_pow.classification,
+                    HidingBoundClassification::Proven
+                );
+                assert_eq!(
+                    report.query_with_pow.classification,
+                    HidingBoundClassification::Proven
+                );
+                assert_eq!(
+                    report.hiding_reduction.classification,
+                    HidingBoundClassification::Unavailable
+                );
+            }
+        }
+    }
 
     fn stock_config(assumption: SecurityAssumption) -> ZkWhirConfig<EF, F, Challenger> {
         ZkWhirConfig::new(
