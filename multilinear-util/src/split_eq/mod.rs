@@ -79,6 +79,13 @@ const TENSOR_MAX_TABLE_BYTES: usize = 64 << 10;
 /// From 8 rows it breaks even or wins for BabyBear/EF4, Goldilocks/EF2 and GHASH.
 const TENSOR_MIN_ROWS: usize = 8;
 
+// Keep an output tile small enough to stay hot while it visits every prefix row.
+// The conservative shape gate leaves small outputs and long contractions on the
+// existing whole-output / per-prefix-accumulator paths. Tune separately from correctness.
+const PREFIX_TILE_BYTES: usize = 16 << 10;
+const PREFIX_TILE_MIN_OUTPUT_BYTES: usize = 64 << 10;
+const PREFIX_TILE_MAX_VARIABLES: usize = 8;
+
 /// Extension widths one base-by-extension multiply-accumulate is charged as, per lane.
 ///
 /// A base element times an extension weight is a handful of base multiplies.
@@ -463,6 +470,10 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             return self.compress_prefix_to_packed(poly).unpack::<F, EF>();
         }
 
+        if let Some(tile_len) = self.prefix_tile_len::<EF>(1 << k_inner) {
+            return self.compress_prefix_tiled(poly, k_inner, tile_len);
+        }
+
         // One item folds one prefix block of base evals into a whole inner accumulator.
         //
         // The sequential pass accumulates into one shared buffer, which no split can do.
@@ -473,6 +484,51 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         } else {
             self.compress_prefix_whole(poly, k_inner, size_outer)
         }
+    }
+
+    /// Choose output ownership only for a short contraction with enough output work
+    /// to split. A one-worker pool and the serial backend keep the existing path.
+    fn prefix_tile_len<ACC>(&self, output_len: usize) -> Option<usize> {
+        if self.num_variables() > PREFIX_TILE_MAX_VARIABLES
+            || output_len * size_of::<ACC>() < PREFIX_TILE_MIN_OUTPUT_BYTES
+        {
+            return None;
+        }
+        let tile_len = (PREFIX_TILE_BYTES / size_of::<ACC>()).max(1);
+        let rows = 1 << self.num_variables();
+        let item_bytes = base_mul_acc_bytes::<EF>(
+            rows * tile_len * size_of::<ACC>() / size_of::<EF>(),
+            Self::FOLD_LANES,
+        );
+        should_split(output_len.div_ceil(tile_len), item_bytes).then_some(tile_len)
+    }
+
+    /// Each task owns a disjoint output tile and visits every prefix row. There
+    /// are no full-output task accumulators and no element-wise reduction pass.
+    fn compress_prefix_tiled(
+        &self,
+        poly: PolyView<'_, F>,
+        k_inner: usize,
+        tile_len: usize,
+    ) -> Poly<EF> {
+        let mut out = Poly::<EF>::zero(k_inner);
+        let inner_stride = out.num_evals();
+        let size_outer = poly.num_evals() / self.eq0.num_evals();
+        out.as_mut_slice()
+            .par_chunks_mut(tile_len)
+            .enumerate()
+            .with_min_task_bytes(base_mul_acc_bytes::<EF>(
+                (1 << self.num_variables()) * tile_len,
+                Self::FOLD_LANES,
+            ))
+            .for_each(|(tile, out)| {
+                let offset = tile * tile_len;
+                for (chunk, &w0) in poly.as_slice().chunks(size_outer).zip(self.eq0.iter()) {
+                    self.eq1
+                        .compress_prefix_strided_into(out, &chunk[offset..], w0, inner_stride);
+                }
+            });
+        out
     }
 
     /// The prefix compression as one pass, accumulating into a single shared buffer.
@@ -543,6 +599,10 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         let k_inner = poly.num_variables() - self.num_variables() - k_pack;
         let size_outer = poly.num_evals() / self.eq0.num_evals();
 
+        if let Some(tile_len) = self.prefix_tile_len::<EF::ExtensionPacking>(1 << k_inner) {
+            return self.compress_prefix_to_packed_tiled(poly, k_inner, tile_len);
+        }
+
         // One item folds one prefix block of base evals into a whole inner accumulator.
         //
         // The sequential pass accumulates into one shared buffer, which no split can do.
@@ -556,6 +616,37 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         } else {
             self.compress_prefix_to_packed_whole(poly, k_inner, size_outer)
         }
+    }
+
+    /// Packed counterpart of the disjoint output-tile contraction.
+    fn compress_prefix_to_packed_tiled(
+        &self,
+        poly: PolyView<'_, F>,
+        k_inner: usize,
+        tile_len: usize,
+    ) -> Poly<EF::ExtensionPacking> {
+        let mut out = Poly::<EF::ExtensionPacking>::zero(k_inner);
+        let inner_stride = out.num_evals() * F::Packing::WIDTH;
+        let size_outer = poly.num_evals() / self.eq0.num_evals();
+        out.as_mut_slice()
+            .par_chunks_mut(tile_len)
+            .enumerate()
+            .with_min_task_bytes(base_mul_acc_bytes::<EF>(
+                (1 << self.num_variables()) * tile_len * F::Packing::WIDTH,
+                Self::FOLD_LANES,
+            ))
+            .for_each(|(tile, out)| {
+                let offset = tile * tile_len * F::Packing::WIDTH;
+                for (chunk, &w0) in poly.as_slice().chunks(size_outer).zip(self.eq0.iter()) {
+                    self.eq1.compress_prefix_to_packed_strided_into(
+                        out,
+                        &chunk[offset..],
+                        w0,
+                        inner_stride,
+                    );
+                }
+            });
+        out
     }
 
     /// The packed prefix compression as one pass, accumulating into a single shared buffer.
@@ -937,6 +1028,110 @@ mod tests {
     /// A split arm handed the gate's own charge would run these small shapes as one task,
     /// leaving the merge that joins two tasks untested.
     const SPLIT_EVERY_ITEM: usize = usize::MAX;
+
+    // A wrong source-row stride, tile offset, eq split, or lost scale changes the
+    // result against this full-table contraction, independently of the tiled kernels.
+    fn check_tiled_prefix<F: Field, EF: ExtensionField<F>>()
+    where
+        rand::distr::StandardUniform: rand::distr::Distribution<F> + rand::distr::Distribution<EF>,
+    {
+        let mut rng = SmallRng::seed_from_u64(0x7065_6669_78);
+        let k_pack = log2_strict_usize(F::Packing::WIDTH);
+        let inner_vars = k_pack + 4;
+        let inner_len = 1 << inner_vars;
+        for m in [0, 1, 2, 4, 8] {
+            let point = Point::<EF>::rand(&mut rng, m);
+            let poly = Poly::<F>::rand(&mut rng, inner_vars + m);
+            for scale in [EF::ZERO, rng.random()] {
+                let weights = Poly::new_from_point_over::<F>(point.as_slice(), scale);
+                let expected = Poly::new(
+                    (0..inner_len)
+                        .map(|i| {
+                            weights
+                                .iter()
+                                .enumerate()
+                                .map(|(row, &w)| w * poly.as_slice()[row * inner_len + i])
+                                .sum::<EF>()
+                        })
+                        .collect(),
+                );
+                for split in 0..=m {
+                    if m == 8 && ![0, 4, 8].contains(&split) {
+                        continue;
+                    }
+                    let (z0, z1) = point.split_at(split);
+                    for packed in [false, true] {
+                        let eq = SplitEq::<F, EF> {
+                            eq0: Poly::new_from_point_over::<F>(z0.as_slice(), scale),
+                            eq1: if packed {
+                                EqMaybePacked::new_packed(&z1)
+                            } else {
+                                EqMaybePacked::new_unpacked(&z1)
+                            },
+                        };
+                        let size_outer = poly.num_evals() / eq.eq0.num_evals();
+                        assert_eq!(
+                            expected,
+                            eq.compress_prefix_whole(poly.as_view(), inner_vars, size_outer)
+                        );
+                        assert_eq!(expected, eq.compress_prefix(poly.as_view()));
+                        for tile_len in [1, 3, 17] {
+                            assert_eq!(
+                                expected,
+                                eq.compress_prefix_tiled(poly.as_view(), inner_vars, tile_len)
+                            );
+                            assert_eq!(
+                                expected,
+                                eq.compress_prefix_to_packed_tiled(
+                                    poly.as_view(),
+                                    inner_vars - k_pack,
+                                    tile_len
+                                )
+                                .unpack::<F, EF>()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tiled_prefix_preserves_strides_splits_and_scales() {
+        check_tiled_prefix::<F, F>();
+        check_tiled_prefix::<F, EF>();
+        check_tiled_prefix::<
+            p3_goldilocks::Goldilocks,
+            BinomialExtensionField<p3_goldilocks::Goldilocks, 2>,
+        >();
+        check_tiled_prefix::<p3_binary_field::Ghash128, p3_binary_field::Ghash128>();
+    }
+
+    #[test]
+    fn tiled_prefix_dispatch_matches_whole() {
+        let mut rng = SmallRng::seed_from_u64(0x7469_6c65);
+        // Includes large tiled outputs and the long-prefix fallback, on both
+        // scalar and packed equality storage. Rerun with 1 and 8 Rayon workers.
+        for m in [1, 2, 4, 8, 10] {
+            let inner_vars = 13;
+            let poly = Poly::<F>::rand(&mut rng, inner_vars + m);
+            let point = Point::<EF>::rand(&mut rng, m);
+            let scale = rng.random();
+            for eq in [
+                SplitEq::<F, EF>::new_unpacked(&point, scale),
+                SplitEq::<F, EF>::new_packed(&point, scale),
+            ] {
+                let size_outer = poly.num_evals() / eq.eq0.num_evals();
+                let expected = eq.compress_prefix_whole(poly.as_view(), inner_vars, size_outer);
+                assert_eq!(expected, eq.compress_prefix(poly.as_view()));
+                assert_eq!(
+                    expected,
+                    eq.compress_prefix_to_packed(poly.as_view())
+                        .unpack::<F, EF>()
+                );
+            }
+        }
+    }
 
     /// Naive multilinear evaluation by materializing the full eq table.
     fn eval_reference<F: Field, EF: ExtensionField<F>>(evals: &[F], point: &[EF]) -> EF {
