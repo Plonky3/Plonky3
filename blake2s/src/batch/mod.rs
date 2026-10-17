@@ -43,6 +43,17 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; DIGEST_BYTES]]) {
         hash_group(initial_state(PARAM_BLOCK_0), &lanes, len, digests);
     }
 
+    // Very short NEON tails cost less on scalar registers than advancing four groups
+    // of vectors mostly filled with duplicate messages. Keep full batches on SIMD.
+    #[cfg(target_arch = "aarch64")]
+    if rest.len() <= 4 {
+        let first = groups.len() * LANES;
+        for (lane, digest) in rest.iter_mut().enumerate() {
+            *digest = crate::Blake2s256::hash(&input[(first + lane) * len..][..len]);
+        }
+        return;
+    }
+
     // A short final group repeats its messages to fill the spare lanes.
     //
     // Those lanes compute digests that are never written out.

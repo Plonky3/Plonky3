@@ -1326,6 +1326,19 @@ mod tests {
     }
 
     #[test]
+    fn batched_blake2s_matches_reference() {
+        let h = SerializingHasher::new(p3_blake2s::Blake2s256);
+        assert_bytes_match_reference::<_, _, 2>(
+            &h,
+            &CompressionFunctionFromHasher::<_, 2, 32>::new(p3_blake2s::Blake2s256),
+        );
+        assert_bytes_match_reference::<_, _, 4>(
+            &h,
+            &CompressionFunctionFromHasher::<_, 4, 32>::new(p3_blake2s::Blake2s256),
+        );
+    }
+
+    #[test]
     fn batched_keccak_matches_reference() {
         // Batched arm: several whole-row messages per hash call.
         let h = SerializingHasher::new(Keccak256Hash);

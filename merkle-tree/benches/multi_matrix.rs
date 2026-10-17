@@ -95,6 +95,12 @@ where
 }
 
 fn benches(criterion: &mut Criterion) {
+    bench_hash::<F, F, u8, _, _, 32>(
+        criterion,
+        "babybear_blake2s",
+        SerializingHasher::new(p3_blake2s::Blake2s256),
+        CompressionFunctionFromHasher::<_, 2, 32>::new(p3_blake2s::Blake2s256),
+    );
     let sponge = PaddingFreeSponge::<KeccakF, 25, 17, 4>::new(KeccakF);
     bench_hash::<F, [F; VECTOR_LEN], [u64; VECTOR_LEN], _, _, 4>(
         criterion,
