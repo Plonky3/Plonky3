@@ -550,14 +550,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         let values = self.values.borrow();
         let width = self.width;
         let height = self.height();
-        let row = r % height;
-        let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
+        let r = r % height;
+        let no_wrap = P::WIDTH != 1 && P::WIDTH <= height - r;
         let rows = (!no_wrap && P::WIDTH != 1).then(|| self.wrapping_row_slices(r, P::WIDTH));
 
         (0..width).map(move |c| {
             if P::WIDTH == 1 {
-                // SAFETY: row < height (from the `%` above) and c < width (loop bound).
-                unsafe { P::broadcast(*values.get_unchecked(row * width + c)) }
+                // SAFETY: r < height (from the `%` above) and c < width (loop bound).
+                unsafe { P::broadcast(*values.get_unchecked(r * width + c)) }
             } else if no_wrap {
                 // SAFETY: for i in 0..P::WIDTH, r + i < height (fast-path guard) and c < width.
                 P::from_fn(|i| unsafe { *values.get_unchecked((r + i) * width + c) })
@@ -577,14 +577,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         let values = self.values.borrow();
         let width = self.width;
         let height = self.height();
+        let r = r % height;
+        let next_row = crate::add_wrapped_row(r, step, height);
 
         if P::WIDTH == 1 {
-            let row = r % height;
-            let next_row = (r + step) % height;
             let mut out = Vec::with_capacity(width * 2);
             out.extend(
-                // SAFETY: row < height and c < width (loop bound).
-                (0..width).map(|c| unsafe { P::broadcast(*values.get_unchecked(row * width + c)) }),
+                // SAFETY: r < height and c < width (loop bound).
+                (0..width).map(|c| unsafe { P::broadcast(*values.get_unchecked(r * width + c)) }),
             );
             out.extend(
                 // SAFETY: next_row < height and c < width.
@@ -592,18 +592,18 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
                     .map(|c| unsafe { P::broadcast(*values.get_unchecked(next_row * width + c)) }),
             );
             out
-        } else if r + P::WIDTH <= height && r + step + P::WIDTH <= height {
-            // SAFETY: for i in 0..P::WIDTH, both r+i < height and r+step+i < height (fast-path
+        } else if P::WIDTH <= height - r && P::WIDTH <= height - next_row {
+            // SAFETY: for i in 0..P::WIDTH, both r+i < height and next_row+i < height (fast-path
             // guard), and c < width (loop bound).
             (0..width)
                 .map(|c| P::from_fn(|i| unsafe { *values.get_unchecked((r + i) * width + c) }))
                 .chain((0..width).map(|c| {
-                    P::from_fn(|i| unsafe { *values.get_unchecked((r + step + i) * width + c) })
+                    P::from_fn(|i| unsafe { *values.get_unchecked((next_row + i) * width + c) })
                 }))
                 .collect::<Vec<_>>()
         } else {
             let rows = self.wrapping_row_slices(r, P::WIDTH);
-            let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
+            let next_rows = self.wrapping_row_slices(next_row, P::WIDTH);
             (0..width)
                 .map(|c| P::from_fn(|i| rows[i][c]))
                 .chain((0..width).map(|c| P::from_fn(|i| next_rows[i][c])))

@@ -23,9 +23,8 @@ pub trait RowIndexMap: Send + Sync {
     /// Maps a visible row index `r` to the corresponding row index in the underlying matrix.
     ///
     /// The input `r` is assumed to lie in the range `0..self.height()` and the output
-    /// will lie in the range `0..self.inner.height()`.
-    ///
-    /// It is considered undefined behaviour to call `map_row_index` with `r >= self.height()`.
+    /// should lie in the range `0..inner.height()` for the matrix used with this map.
+    /// The view checks this output before accessing an inner row.
     fn map_row_index(&self, r: usize) -> usize;
 
     /// Converts the mapped matrix into a dense row-major matrix.
@@ -37,12 +36,14 @@ pub trait RowIndexMap: Send + Sync {
         inner: Inner,
     ) -> RowMajorMatrix<T> {
         RowMajorMatrix::new(
-            unsafe {
-                // Safety: The output of `map_row_index` is less than `inner.height()` for all inputs in the range `0..self.height()`.
-                (0..self.height())
-                    .flat_map(|r| inner.row_unchecked(self.map_row_index(r)))
-                    .collect()
-            },
+            (0..self.height())
+                .flat_map(|r| {
+                    let mapped = self.map_row_index(r);
+                    assert!(mapped < inner.height(), "Mapped row index out of bounds.");
+                    // Safety: the mapped row was checked against the current inner height.
+                    unsafe { inner.row_unchecked(mapped) }
+                })
+                .collect(),
             inner.width(),
         )
     }
@@ -60,6 +61,15 @@ pub struct RowIndexMappedView<IndexMap, Inner> {
     pub inner: Inner,
 }
 
+impl<IndexMap: RowIndexMap, Inner> RowIndexMappedView<IndexMap, Inner> {
+    #[inline]
+    fn checked_row_index(&self, r: usize, inner_height: usize) -> usize {
+        let mapped = self.index_map.map_row_index(r);
+        assert!(mapped < inner_height, "Mapped row index out of bounds.");
+        mapped
+    }
+}
+
 impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     for RowIndexMappedView<IndexMap, Inner>
 {
@@ -73,8 +83,9 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
 
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
         unsafe {
-            // Safety: The caller must ensure that r < self.height() and c < self.width().
-            self.inner.get_unchecked(self.index_map.map_row_index(r), c)
+            // Safety: the caller bounds the logical row and column; checked_row_index bounds the inner row.
+            self.inner
+                .get_unchecked(self.checked_row_index(r, self.inner.height()), c)
         }
     }
 
@@ -83,8 +94,9 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         r: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
-            // Safety: The caller must ensure that r < self.height().
-            self.inner.row_unchecked(self.index_map.map_row_index(r))
+            // Safety: the caller bounds the logical row; checked_row_index bounds the inner row.
+            self.inner
+                .row_unchecked(self.checked_row_index(r, self.inner.height()))
         }
     }
 
@@ -95,17 +107,20 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         end: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
-            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
-            self.inner
-                .row_subseq_unchecked(self.index_map.map_row_index(r), start, end)
+            // Safety: the caller bounds the logical row and column range; checked_row_index bounds the inner row.
+            self.inner.row_subseq_unchecked(
+                self.checked_row_index(r, self.inner.height()),
+                start,
+                end,
+            )
         }
     }
 
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
         unsafe {
-            // Safety: The caller must ensure that r < self.height().
+            // Safety: the caller bounds the logical row; checked_row_index bounds the inner row.
             self.inner
-                .row_slice_unchecked(self.index_map.map_row_index(r))
+                .row_slice_unchecked(self.checked_row_index(r, self.inner.height()))
         }
     }
 
@@ -116,9 +131,12 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         end: usize,
     ) -> impl Deref<Target = [T]> {
         unsafe {
-            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
-            self.inner
-                .row_subslice_unchecked(self.index_map.map_row_index(r), start, end)
+            // Safety: the caller bounds the logical row and column range; checked_row_index bounds the inner row.
+            self.inner.row_subslice_unchecked(
+                self.checked_row_index(r, self.inner.height()),
+                start,
+                end,
+            )
         }
     }
 
@@ -145,7 +163,7 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         // Why: the inner matrix only sees the remapped index.
         //
         // - A remapping may send a row past the view back inside the inner matrix.
-        // - Remapping a row past the view is undefined by contract.
+        // - Maps only need to support visible row indices.
         assert!(r < self.height(), "Row index out of bounds.");
         self.inner
             .horizontally_packed_row(self.index_map.map_row_index(r))
@@ -181,10 +199,21 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         // captured by value, so the column loop only reads through those slices and no `Vec`
         // of row-slice guards is allocated. Wider packings read each element through
         // `get_unchecked`.
-        let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
+        let r = if width == 0 {
+            0
+        } else if r < height {
+            r
+        } else {
+            r % height
+        };
+        let no_wrap = P::WIDTH != 1 && P::WIDTH <= height - r;
         let lane_rows: [Option<_>; MAX_RESOLVED_LANES] = core::array::from_fn(|i| {
             (P::WIDTH <= MAX_RESOLVED_LANES && i < P::WIDTH && width != 0).then(|| {
-                let lane_row = if no_wrap { r + i } else { (r + i) % height };
+                let lane_row = if no_wrap {
+                    r + i
+                } else {
+                    crate::add_wrapped_row(r, i, height)
+                };
                 // Safety: lane_row < height.
                 let row = unsafe { self.row_slice_unchecked(lane_row) };
                 assert_eq!(
@@ -212,8 +241,10 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
                 // Safety: r + i < height (fast-path guard), and c < width (loop bound).
                 P::from_fn(|i| unsafe { self.get_unchecked(r + i, c) })
             } else {
-                // Safety: (r + i) % height < height, and c < width (loop bound).
-                P::from_fn(|i| unsafe { self.get_unchecked((r + i) % height, c) })
+                // Safety: modular addition yields a row below height, and c < width.
+                P::from_fn(|i| unsafe {
+                    self.get_unchecked(crate::add_wrapped_row(r, i, height), c)
+                })
             }
         })
     }
@@ -224,8 +255,12 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         T: Copy,
         P: PackedValue<Value = T>,
     {
+        if self.width() == 0 {
+            return Vec::new();
+        }
+        let next_row = crate::add_wrapped_row(r % self.height(), step, self.height());
         self.vertically_packed_row::<P>(r)
-            .chain(self.vertically_packed_row::<P>(r + step))
+            .chain(self.vertically_packed_row::<P>(next_row))
             .collect()
     }
 }
@@ -697,6 +732,206 @@ mod tests {
     #[test]
     fn test_vertically_packed_row_matches_scalar_gather_goldilocks() {
         check_packings_for::<Goldilocks>();
+    }
+
+    /// Checked row access lets regressions detect invalid delegation without invoking UB.
+    struct CheckedRows(RowMajorMatrix<BabyBear>);
+
+    impl Matrix<BabyBear> for CheckedRows {
+        fn width(&self) -> usize {
+            self.0.width()
+        }
+
+        fn height(&self) -> usize {
+            self.0.height()
+        }
+
+        unsafe fn row_subseq_unchecked(
+            &self,
+            r: usize,
+            start: usize,
+            end: usize,
+        ) -> impl IntoIterator<Item = BabyBear, IntoIter = impl Iterator<Item = BabyBear> + Send + Sync>
+        {
+            self.0
+                .row_slice(r)
+                .expect("invalid row reached inner matrix")[start..end]
+                .to_vec()
+        }
+    }
+
+    fn check_extreme_packing<P: PackedValue<Value = BabyBear>, M: Matrix<BabyBear>>(matrix: &M) {
+        for r in [0, 3, usize::MAX - 1, usize::MAX] {
+            let expected = |offset: usize| -> Vec<Vec<BabyBear>> {
+                (0..matrix.width())
+                    .map(|c| {
+                        (0..P::WIDTH)
+                            .map(|i| {
+                                // Widen before adding to model mathematical modular addition.
+                                let row = ((r as u128 + offset as u128 + i as u128)
+                                    % matrix.height() as u128)
+                                    as usize;
+                                matrix.get(row, c).unwrap()
+                            })
+                            .collect()
+                    })
+                    .collect()
+            };
+            assert_eq!(
+                lanes(&matrix.vertically_packed_row::<P>(r).collect::<Vec<_>>()),
+                expected(0),
+                "start = {r}, lanes = {}",
+                P::WIDTH
+            );
+            for step in [0, 1, usize::MAX - 1, usize::MAX] {
+                let mut pair = expected(0);
+                pair.extend(expected(step));
+                assert_eq!(
+                    lanes(&matrix.vertically_packed_row_pair::<P>(r, step)),
+                    pair,
+                    "start = {r}, step = {step}, lanes = {}",
+                    P::WIDTH
+                );
+            }
+        }
+    }
+
+    macro_rules! extreme_packing_test {
+        ($name:ident, $packing:ty) => {
+            #[test]
+            fn $name() {
+                let dense = RowMajorMatrix::new((0..15).map(BabyBear::new).collect(), 3);
+                let default = CheckedRows(dense.clone());
+                let mapped = RowIndexMappedView {
+                    index_map: ReverseMap(5),
+                    inner: dense.clone(),
+                };
+                check_extreme_packing::<$packing, _>(&default);
+                check_extreme_packing::<$packing, _>(&mapped);
+                check_extreme_packing::<$packing, _>(&dense);
+            }
+        };
+    }
+
+    extreme_packing_test!(test_vertical_packing_extreme_width_1, BabyBear);
+    extreme_packing_test!(test_vertical_packing_extreme_width_2, FieldArray<BabyBear, 2>);
+    extreme_packing_test!(test_vertical_packing_extreme_width_8, FieldArray<BabyBear, 8>);
+    extreme_packing_test!(test_vertical_packing_extreme_width_16, FieldArray<BabyBear, 16>);
+
+    #[test]
+    fn test_wrapping_row_slices_extreme_start() {
+        let matrix = RowMajorMatrix::new((0..15).map(BabyBear::new).collect(), 3);
+        let rows = matrix.wrapping_row_slices(usize::MAX, 8);
+        // usize::MAX is divisible by five on supported 32- and 64-bit targets.
+        let first_column: Vec<_> = rows.iter().map(|row| row[0]).collect();
+        assert_eq!(first_column, [0, 3, 6, 9, 12, 0, 3, 6].map(BabyBear::new));
+    }
+
+    #[test]
+    fn test_empty_wrapping_requests_remain_empty() {
+        let empty = RowMajorMatrix::<BabyBear>::new(vec![], 3);
+        assert!(empty.wrapping_row_slices(usize::MAX, 0).is_empty());
+        let zero_width = RowIndexMappedView {
+            index_map: IdentityMap(0),
+            inner: RowMajorMatrix::<BabyBear>::new(vec![], 0),
+        };
+        assert_eq!(zero_width.vertically_packed_row::<BabyBear>(0).count(), 0);
+        assert_eq!(
+            zero_width
+                .vertically_packed_row::<FieldArray<BabyBear, 16>>(0)
+                .count(),
+            0
+        );
+        assert!(
+            zero_width
+                .vertically_packed_row_pair::<BabyBear>(0, 0)
+                .is_empty()
+        );
+    }
+
+    macro_rules! rejects_shortened_inner {
+        ($name:ident, $view:ident, $access:expr) => {
+            #[test]
+            #[should_panic(expected = "Mapped row index out of bounds")]
+            fn $name() {
+                let mut $view = RowIndexMappedView {
+                    index_map: IdentityMap(4),
+                    inner: CheckedRows(RowMajorMatrix::new(vec![BabyBear::new(0); 12], 3)),
+                };
+                // Public mutation can invalidate even a previously valid mapping.
+                $view.inner.0.values.truncate(3);
+                let _ = $access;
+            }
+        };
+    }
+
+    rejects_shortened_inner!(test_get_rejects_shortened_inner, view, view.get(1, 0));
+    rejects_shortened_inner!(test_row_rejects_shortened_inner, view, view.row(1));
+    rejects_shortened_inner!(
+        test_row_slice_rejects_shortened_inner,
+        view,
+        view.row_slice(1)
+    );
+    rejects_shortened_inner!(test_row_subseq_rejects_shortened_inner, view, unsafe {
+        // The logical row and column range satisfy the view's unsafe API contract.
+        view.row_subseq_unchecked(1, 0, 1)
+    });
+    rejects_shortened_inner!(test_row_subslice_rejects_shortened_inner, view, unsafe {
+        // The logical row and column range satisfy the view's unsafe API contract.
+        view.row_subslice_unchecked(1, 0, 1)
+    });
+    rejects_shortened_inner!(
+        test_conversion_rejects_shortened_inner,
+        view,
+        view.to_row_major_matrix()
+    );
+    rejects_shortened_inner!(
+        test_map_conversion_rejects_shortened_inner,
+        view,
+        view.index_map.to_row_major_matrix(view.inner)
+    );
+    rejects_shortened_inner!(
+        test_packing_1_rejects_shortened_inner,
+        view,
+        view.vertically_packed_row::<BabyBear>(1)
+            .collect::<Vec<_>>()
+    );
+    rejects_shortened_inner!(
+        test_packing_2_rejects_shortened_inner,
+        view,
+        view.vertically_packed_row::<FieldArray<BabyBear, 2>>(1)
+            .collect::<Vec<_>>()
+    );
+    rejects_shortened_inner!(
+        test_packing_8_rejects_shortened_inner,
+        view,
+        view.vertically_packed_row::<FieldArray<BabyBear, 8>>(1)
+            .collect::<Vec<_>>()
+    );
+    rejects_shortened_inner!(
+        test_packing_16_rejects_shortened_inner,
+        view,
+        view.vertically_packed_row::<FieldArray<BabyBear, 16>>(1)
+            .collect::<Vec<_>>()
+    );
+
+    #[test]
+    #[should_panic(expected = "Mapped row index out of bounds")]
+    fn test_get_rejects_safe_invalid_map() {
+        struct InvalidMap;
+        impl RowIndexMap for InvalidMap {
+            fn height(&self) -> usize {
+                1
+            }
+            fn map_row_index(&self, _: usize) -> usize {
+                usize::MAX
+            }
+        }
+        let view = RowIndexMappedView {
+            index_map: InvalidMap,
+            inner: CheckedRows(RowMajorMatrix::new(vec![BabyBear::new(0); 3], 3)),
+        };
+        let _ = view.get(0, 0);
     }
 
     /// A matrix whose rows hold one element fewer than its declared width.
