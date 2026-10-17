@@ -16,7 +16,7 @@ use p3_binary_field::{
     TowerLevel,
 };
 use p3_challenger::HashChallenger;
-use p3_field::{ExtensionField, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -99,16 +99,32 @@ fn bench_verify(c: &mut Criterion) {
     group.finish();
 }
 
-/// The actual scalar-weight/packed-value caller of the mixed-dot override.
+/// Packed prefix compression reaches the four-term mixed-dot kernel at widths 4/8.
+/// Width 2 uses the existing eager fallback; both paths fold the same prefix variables.
 fn bench_poly_split_eq(c: &mut Criterion) {
-    let mut group = c.benchmark_group("poly64/split_eq_eval_base");
-    for variables in [12, 16, 20] {
+    let mut group = c.benchmark_group("poly64/split_eq_compress_prefix");
+    let width = <Poly64 as Field>::Packing::WIDTH;
+    assert_eq!(<Poly192 as BasedVectorSpace<Poly64>>::DIMENSION, 3);
+    for (variables, eq_variables) in [(12usize, 6usize), (16, 8), (20, 10)] {
+        // The packed suffix of the factored eq table holds 8, 16, or 32 scalars.
+        // At widths 2/4/8 it is packed and has <= 128 entries; the output is packed too.
+        let eq1_evals = 1usize << eq_variables.div_ceil(2);
+        assert!(eq1_evals >= width && eq1_evals / width <= 128);
+        assert!((1usize << (variables - eq_variables)) >= width);
         let mut rng = SmallRng::seed_from_u64(0x64E9);
         let poly = Poly::<Poly64>::rand(&mut rng, variables);
-        let point = Point::<Poly192>::rand(&mut rng, variables);
+        let point = Point::<Poly192>::rand(&mut rng, eq_variables);
         let split = SplitEq::<Poly64, Poly192>::new_packed(&point, Poly192::ONE);
-        group.bench_function(BenchmarkId::from_parameter(variables), |b| {
-            b.iter(|| split.eval_base(black_box(poly.as_view())));
+        let expected = SplitEq::<Poly64, Poly192>::new_unpacked(&point, Poly192::ONE)
+            .compress_prefix(poly.as_view());
+        assert_eq!(
+            split
+                .compress_prefix_to_packed(poly.as_view())
+                .unpack::<Poly64, Poly192>(),
+            expected,
+        );
+        group.bench_function(format!("{variables}/eq{eq_variables}"), |b| {
+            b.iter(|| split.compress_prefix_to_packed(black_box(poly.as_view())));
         });
     }
     group.finish();
