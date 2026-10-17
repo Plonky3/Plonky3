@@ -67,6 +67,10 @@ harness = false
 name = "zk_overhead"
 harness = false
 
+[[bench]]
+name = "zk_masks"
+harness = false
+
 [[example]]
 name = "whir"
 required-features = []

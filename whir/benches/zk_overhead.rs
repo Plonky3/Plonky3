@@ -69,7 +69,7 @@ fn octic_no_pow_protocol_params() -> ProtocolParameters {
     ProtocolParameters {
         security_level: 128,
         pow_bits: 0,
-        round_log_inv_rates: vec![4],
+        round_log_inv_rates: vec![8],
         folding_factor: FoldingFactor::ConstantFromSecondRound(8, 6),
         soundness_type: SecurityAssumption::JohnsonBound,
         starting_log_inv_rate: 1,
