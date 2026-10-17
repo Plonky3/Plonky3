@@ -206,10 +206,15 @@ impl_packed_field_div!(PackedPoly64);
 impl_sum_prod_base_field!(PackedPoly64, Poly64);
 
 impl Algebra<Poly64> for PackedPoly64 {
-    /// Broadcast scalar weights and defer reduction across the whole sum.
+    /// Defer reduction across the whole sum for packings of at least four lanes.
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], weights: &[Poly64; N]) -> Self {
-        Self::dot_product(a, &weights.map(Self::broadcast))
+        if WIDTH_64 >= 4 {
+            Self::dot_product(a, &weights.map(Self::broadcast))
+        } else {
+            let products: [Self; N] = core::array::from_fn(|i| a[i] * weights[i]);
+            Self::sum_array::<N>(&products)
+        }
     }
 }
 
