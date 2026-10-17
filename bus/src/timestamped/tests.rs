@@ -765,6 +765,109 @@ fn image() -> PublicImage<F> {
     .expect("the fixture runs fit")
 }
 
+#[test]
+fn public_image_periodic_rows_read_runs_and_gaps_without_materializing_columns() {
+    let wide_memory = Memory::new(MEMORY, LOW, HIGH, 2).unwrap();
+    let image = PublicImage::new(
+        &wide_memory,
+        3,
+        vec![
+            (1, vec![value(11), value(12), value(21), value(22)]),
+            (5, vec![value(51), value(52)]),
+            (7, vec![value(71), value(72)]),
+        ],
+    )
+    .unwrap();
+    let boundary =
+        TimestampedBoundaryAir::new(wide_memory, TimestampedSeed::Public(image)).unwrap();
+    let expected = [
+        [0, 0],
+        [11, 12],
+        [21, 22],
+        [0, 0],
+        [0, 0],
+        [51, 52],
+        [0, 0],
+        [71, 72],
+    ];
+
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| count.set(0));
+    for row in 0..16 {
+        assert_eq!(boundary.periodic_values(row), expected[row % 8].map(value));
+    }
+    for runs in [vec![], vec![(0, vec![value(4)])]] {
+        let expected = if runs.is_empty() { F::ZERO } else { value(4) };
+        let image = PublicImage::new(&memory(), 0, runs).unwrap();
+        let boundary =
+            TimestampedBoundaryAir::new(memory(), TimestampedSeed::Public(image)).unwrap();
+        assert_eq!(boundary.periodic_values(usize::MAX), [expected]);
+    }
+    for seed in [
+        TimestampedSeed::Zero,
+        TimestampedSeed::Private(PrivateRegion::new(0, 3).unwrap()),
+    ] {
+        let boundary = TimestampedBoundaryAir::new(memory(), seed).unwrap();
+        assert!(boundary.periodic_values(0).is_empty());
+    }
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
+}
+
+#[test]
+fn public_image_diagnostics_materialize_only_for_shape_validation() {
+    use p3_air::check_all_constraints;
+
+    let boundary = TimestampedBoundaryAir::new(memory(), TimestampedSeed::Public(image())).unwrap();
+    let trace = RowMajorMatrix::new(
+        (0..CELLS)
+            .flat_map(|row| [cell(row), time(0), F::ZERO])
+            .collect(),
+        3,
+    );
+
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| count.set(0));
+    check_constraints(&boundary, &trace, &[]);
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 1));
+
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| count.set(0));
+    assert!(check_all_constraints(&boundary, &trace, &[], None).is_ok());
+    super::image::COLUMN_MATERIALIZATIONS.with(|count| assert_eq!(count.get(), 1));
+
+    let mut forged = trace.clone();
+    forged.values[3 * 3] += F::ONE;
+    let report = check_all_constraints(&boundary, &forged, &[], None);
+    assert_eq!(
+        report
+            .failures
+            .iter()
+            .map(|failure| (failure.row, failure.constraint))
+            .collect::<Vec<_>>(),
+        [(2, 1), (3, 1)]
+    );
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        check_constraints(&boundary, &forged, &[]);
+    }))
+    .unwrap_err();
+    let message = panic.downcast_ref::<String>().unwrap();
+    assert!(message.contains("row 2"), "{message}");
+
+    // Sparse row lookup must not bypass the full column-period validation.
+    let short = RowMajorMatrix::new(trace.values[..4 * 3].to_vec(), 3);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| check_constraints(
+            &boundary,
+            &short,
+            &[]
+        )))
+        .is_err()
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            check_all_constraints(&boundary, &short, &[], None)
+        }))
+        .is_err()
+    );
+}
+
 /// A program reading the three image words, then overwriting one.
 const IMAGE_PROGRAM: [(u64, [Op; SLOTS]); 2] =
     [(4, [(5, None), (2, None)]), (9, [(6, None), (5, Some(3))])];
