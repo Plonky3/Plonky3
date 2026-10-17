@@ -14,7 +14,7 @@ use super::columns::{Blake3BinaryCols, Blake3BinaryGCols, NUM_BLAKE3_BINARY_COLS
 use super::{G_SCHEDULE, NUM_ROUNDS, iv_word};
 use crate::constants::permute;
 
-/// The inputs to one Blake-3 compression.
+/// The inputs to one Blake-3 compression, shared by the prime-field and binary AIRs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Blake3CompressionInput {
     /// The chaining value.

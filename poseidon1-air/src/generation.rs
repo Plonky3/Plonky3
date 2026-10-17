@@ -30,6 +30,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_poseidon1::external::mds_multiply;
 use tracing::instrument;
 
+use crate::air::validate_round_constants;
 use crate::columns::{Poseidon1Cols, num_cols};
 use crate::mds_dispatch::mds_dispatch;
 use crate::{FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox};
@@ -51,7 +52,8 @@ use crate::{FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, 
 /// # Panics
 ///
 /// Panics if `inputs.len()` is not a multiple of `VECTOR_LEN`, or if
-/// `inputs.len() / VECTOR_LEN` is not a power of two.
+/// `inputs.len() / VECTOR_LEN` is not a power of two. Also panics if `PARTIAL_ROUNDS`
+/// is zero or any round-constant vector used by the AIR has an inconsistent length.
 #[instrument(name = "generate vectorized Poseidon1 trace", skip_all)]
 pub fn generate_vectorized_trace_rows<
     F: PrimeField,
@@ -67,6 +69,10 @@ pub fn generate_vectorized_trace_rows<
     partial_constants: &PartialRoundConstants<F, WIDTH>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
+    validate_round_constants::<_, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+        full_constants,
+        partial_constants,
+    );
     let n = inputs.len();
     assert!(
         n.is_multiple_of(VECTOR_LEN) && (n / VECTOR_LEN).is_power_of_two(),
@@ -109,7 +115,7 @@ pub fn generate_vectorized_trace_rows<
 
     // Compute each permutation in parallel (one Poseidon1Cols struct per permutation).
     perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
-        generate_trace_rows_for_perm::<
+        generate_trace_rows_for_perm_validated::<
             F,
             WIDTH,
             SBOX_DEGREE,
@@ -119,7 +125,7 @@ pub fn generate_vectorized_trace_rows<
         >(perm, input, full_constants, partial_constants, &circ_col);
     });
 
-    // All elements have been written; mark the Vec as initialized.
+    // The validated round counts ensure every element was written before setting the length.
     unsafe {
         vec.set_len(nrows * ncols);
     }
@@ -140,7 +146,8 @@ pub fn generate_vectorized_trace_rows<
 ///
 /// # Panics
 ///
-/// Panics if `inputs.len()` is not a power of two.
+/// Panics if `inputs.len()` is not a power of two, `PARTIAL_ROUNDS` is zero, or any
+/// round-constant vector used by the AIR has an inconsistent length.
 #[instrument(name = "generate Poseidon1 trace", skip_all)]
 pub fn generate_trace_rows<
     F: PrimeField,
@@ -155,6 +162,10 @@ pub fn generate_trace_rows<
     partial_constants: &PartialRoundConstants<F, WIDTH>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
+    validate_round_constants::<_, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+        full_constants,
+        partial_constants,
+    );
     let n = inputs.len();
     assert!(
         n.is_power_of_two(),
@@ -191,7 +202,7 @@ pub fn generate_trace_rows<
 
     // Compute each permutation in parallel.
     perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
-        generate_trace_rows_for_perm::<
+        generate_trace_rows_for_perm_validated::<
             F,
             WIDTH,
             SBOX_DEGREE,
@@ -201,7 +212,7 @@ pub fn generate_trace_rows<
         >(perm, input, full_constants, partial_constants, &circ_col);
     });
 
-    // All elements have been written; mark the Vec as initialized.
+    // The validated round counts ensure every element was written before setting the length.
     unsafe {
         vec.set_len(n * ncols);
     }
@@ -226,7 +237,48 @@ pub fn generate_trace_rows<
 /// The `state` array tracks the live permutation state and is modified in
 /// place at each step. The committed columns (`sbox`, `post`, `post_sbox`)
 /// are written as side effects.
+///
+/// # Panics
+///
+/// Panics before writing any columns if `PARTIAL_ROUNDS` is zero or any round-constant
+/// vector used by the AIR has an inconsistent length.
 pub fn generate_trace_rows_for_perm<
+    F: PrimeField,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+>(
+    perm: &mut Poseidon1Cols<
+        MaybeUninit<F>,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+    >,
+    state: [F; WIDTH],
+    full_constants: &FullRoundConstants<F, WIDTH>,
+    partial_constants: &PartialRoundConstants<F, WIDTH>,
+    circ_col: &[F; WIDTH],
+) {
+    validate_round_constants::<_, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+        full_constants,
+        partial_constants,
+    );
+    generate_trace_rows_for_perm_validated::<
+        F,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+    >(perm, state, full_constants, partial_constants, circ_col);
+}
+
+// The public entrypoints validate the constant shapes before calling this writer.
+fn generate_trace_rows_for_perm_validated<
     F: PrimeField,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -256,15 +308,11 @@ pub fn generate_trace_rows_for_perm<
         });
 
     // Step 2: Beginning full rounds (RF/2 rounds).
-    for (full_round, rc) in perm
-        .beginning_full_rounds
-        .iter_mut()
-        .zip(&full_constants.initial)
-    {
+    for round in 0..HALF_FULL_ROUNDS {
         generate_full_round::<_, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
-            full_round,
-            rc,
+            &mut perm.beginning_full_rounds[round],
+            &full_constants.initial[round],
             circ_col,
             &full_constants.dense_mds,
         );
@@ -282,9 +330,8 @@ pub fn generate_trace_rows_for_perm<
     mds_multiply(&mut state, &partial_constants.m_i);
 
     // Partial round loop.
-    let rounds_p = partial_constants.sparse_first_row.len();
-    for round in 0..rounds_p {
-        let rc = if round < rounds_p - 1 {
+    for round in 0..PARTIAL_ROUNDS {
+        let rc = if round < PARTIAL_ROUNDS - 1 {
             Some(partial_constants.round_constants[round])
         } else {
             None
@@ -299,15 +346,11 @@ pub fn generate_trace_rows_for_perm<
     }
 
     // Step 4: Ending full rounds (RF/2 rounds).
-    for (full_round, rc) in perm
-        .ending_full_rounds
-        .iter_mut()
-        .zip(&full_constants.terminal)
-    {
+    for round in 0..HALF_FULL_ROUNDS {
         generate_full_round::<_, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
-            full_round,
-            rc,
+            &mut perm.ending_full_rounds[round],
+            &full_constants.terminal[round],
             circ_col,
             &full_constants.dense_mds,
         );
