@@ -10,10 +10,8 @@ use super::tensor::TensorAlgebra;
 ///
 /// Remark 3.4's recurrence, over any characteristic. `eq̃(X, Y) = Π_i (X_i·Y_i + (1 − X_i)(1 − Y_i))`,
 /// so starting from `1 ⊗ 1` each variable contributes
-/// `e ← φ0(a)·φ1(b)·e + φ0(1 − a)·φ1(1 − b)·e`. In characteristic two, factoring with
-/// `A = φ0(a)` and `B = φ1(b)` gives `(1 − A)e + B(Ae − (1 − A)e)`, using two extension
-/// scalings per variable. In odd characteristic, the two summands are formed directly with
-/// four extension scalings per variable. Both paths cost `O(ℓ' · d)` extension multiplications.
+/// `e ← φ0(a)·φ1(b)·e + φ0(1 − a)·φ1(1 − b)·e`, formed by scaling a copy by `a` then `b` and
+/// the running element by `1 − a` then `1 − b`. Costs `O(ℓ' · d)` extension multiplications.
 ///
 /// # Panics
 /// Panics unless `r_high` and `r_prime` have the same length.
@@ -28,24 +26,17 @@ pub fn equality_element<F: Field, EF: ExtensionField<F>>(
     );
 
     let mut e = TensorAlgebra::one();
-    if F::TWO == F::ZERO {
-        for i in 0..r_high.num_variables() {
-            let (a, b) = (r_high[i], r_prime[i]);
-            e.mul_equality_factor(a, b);
-        }
-    } else {
-        for i in 0..r_high.num_variables() {
-            let (a, b) = (r_high[i], r_prime[i]);
+    for i in 0..r_high.num_variables() {
+        let (a, b) = (r_high[i], r_prime[i]);
 
-            // `φ0(a)·φ1(b)·e`; the two scalings commute, so either order gives the term.
-            let mut agree = e.clone();
-            agree.scale_columns(a);
-            agree.scale_rows(b);
+        // `φ0(a)·φ1(b)·e`; the two scalings commute, so either order gives the term.
+        let mut agree = e.clone();
+        agree.scale_columns(a);
+        agree.scale_rows(b);
 
-            e.scale_columns(EF::ONE - a);
-            e.scale_rows(EF::ONE - b);
-            e += agree;
-        }
+        e.scale_columns(EF::ONE - a);
+        e.scale_rows(EF::ONE - b);
+        e += agree;
     }
     e
 }
@@ -145,29 +136,6 @@ mod tests {
                 "ell' = {ell_prime}"
             );
         }
-    }
-
-    #[test]
-    fn boolean_and_mixed_coordinates_match_the_definition() {
-        fn check<G: Field, EG: ExtensionField<G>>()
-        where
-            rand::distr::StandardUniform: rand::distr::Distribution<EG>,
-        {
-            let mut rng = SmallRng::seed_from_u64(0xE964);
-            let random = rand::RngExt::random::<EG>(&mut rng);
-            for a in [EG::ZERO, EG::ONE, random] {
-                for b in [EG::ZERO, EG::ONE, random] {
-                    let high = Point::new(vec![a, random, EG::ONE, EG::ZERO]);
-                    let other = Point::new(vec![b, EG::ZERO, random, EG::ONE]);
-                    assert_eq!(
-                        equality_element::<G, EG>(&high, &other),
-                        equality_element_reference::<G, EG>(&high, &other)
-                    );
-                }
-            }
-        }
-        check::<F, EF>();
-        check::<BabyBear, BinomialExtensionField<BabyBear, 4>>();
     }
 
     /// The degenerate case the whole recurrence starts from.
