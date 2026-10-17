@@ -964,15 +964,9 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
     ///     eq(X, Y) = prod_i ( X_i*Y_i + (1 - X_i)(1 - Y_i) )
     /// ```
     ///
-    /// Each factor lands on a different tensor leg.
-    /// From the identity, every variable adds an agree and a disagree term:
-    ///
-    /// ```text
-    ///     agree     scale a copy's columns by a, its rows by b
-    ///     disagree  scale the element's columns by 1 - a, its rows by 1 - b
-    /// ```
-    ///
-    /// The two scalings commute, so either order gives the term.
+    /// In characteristic two each factor is `1 + a ⊗ 1 + 1 ⊗ b`.
+    /// Starting from the identity, each variable therefore uses one row scaling and one
+    /// scaled column addition through [`BitTensor::mul_equality_factor`].
     /// The alternative sums the element over the hypercube, exponentially.
     fn equality_element(&self, r_prime: &Point<EF>) -> BitTensor<EF, EF> {
         // Boolean leading coordinates select a committed slot directly.
@@ -980,13 +974,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
         let (prefix, _) = self.fixed_prefix();
         let mut element = BitTensor::one();
         for (&a, &b) in self.high()[prefix..].iter().zip(r_prime.as_slice()) {
-            let mut agree = element.clone();
-            agree.scale_columns(a);
-            agree.scale_rows(b);
-
-            element.scale_columns(EF::ONE - a);
-            element.scale_rows(EF::ONE - b);
-            element += agree;
+            element.mul_equality_factor(a, b);
         }
         element
     }
@@ -3000,6 +2988,60 @@ mod tests {
                 "{num_variables} variables"
             );
         }
+    }
+
+    #[test]
+    fn equality_and_closing_weights_match_definitions_across_fields_and_prefixes() {
+        fn check<F: TowerLevel, E: BitCoordinates + ExtensionField<F>>()
+        where
+            rand::distr::StandardUniform: rand::distr::Distribution<E>,
+        {
+            let mut rng = SmallRng::seed_from_u64(0xE964);
+            for prefix in [0, 1, 3] {
+                for free in 0..=4 {
+                    let absorbed = BitRingSwitch::<F, E>::ABSORBED;
+                    let mut coordinates: Vec<E> = (0..prefix)
+                        .map(|i| if i % 2 == 0 { E::ZERO } else { E::ONE })
+                        .collect();
+                    coordinates.extend((0..free + absorbed).map(|_| rng.random::<E>()));
+                    let point = Point::new(coordinates);
+                    for successor in [false, true] {
+                        let reduction = if successor {
+                            BitRingSwitch::<F, E>::with_successor(&point, free + absorbed)
+                        } else {
+                            BitRingSwitch::<F, E>::new(&point)
+                        }
+                        .unwrap();
+                        let (actual_prefix, _) = reduction.fixed_prefix();
+                        let other =
+                            Point::<E>::rand(&mut rng, reduction.num_variables() - actual_prefix);
+                        let high = Poly::new_from_point(&reduction.high()[actual_prefix..], E::ONE);
+                        let other_eq = Poly::new_from_point(other.as_slice(), E::ONE);
+                        let mut expected = BitTensor::zero();
+                        for (&a, &b) in high.as_slice().iter().zip(other_eq.as_slice()) {
+                            expected.add_exterior_product(a, b);
+                        }
+                        assert_eq!(reduction.equality_element(&other), expected);
+                        let batch_point =
+                            Point::<E>::rand(&mut rng, BitRingSwitch::<F, E>::BATCHED);
+                        let batch = if reduction.sends_successor_tensors() {
+                            reduction.batch_with_successor(&batch_point, rng.random())
+                        } else {
+                            reduction.batch(&batch_point)
+                        }
+                        .unwrap();
+                        assert_eq!(
+                            batch.closing_weight(&other).unwrap(),
+                            batch.weights().eval_base(&other)
+                        );
+                    }
+                }
+            }
+        }
+        check::<BinaryField16, BinaryField16>();
+        check::<BinaryField128, BinaryField128>();
+        check::<Ghash128, Ghash128>();
+        check::<p3_binary_field::Poly64, p3_binary_field::Poly192>();
     }
 
     #[test]

@@ -224,12 +224,9 @@ impl<EF: BitCoordinates, R: BitCoordinates> BitTensor<EF, R> {
     /// In characteristic two `eq(X, Y) = XY + (1 + X)(1 + Y) = 1 + X + Y`.
     /// `X` lands on the first leg and `Y` on the second, so one factor is two scalings.
     pub fn mul_equality_factor(&mut self, a: EF, b: R) {
-        let mut first = self.clone();
-        first.scale_columns(a);
-        let mut second = self.clone();
-        second.scale_rows(b);
-        *self += first;
-        *self += second;
+        let original = self.clone();
+        self.scale_rows(R::ONE + b);
+        self.add_scaled_columns(&original, a);
     }
 
     /// `sum_x done(point, x) ⊗ eq(x, other)`, the successor weight lifted into the algebra.
@@ -635,6 +632,52 @@ mod tests {
             factored.mul_equality_factor(a, b);
             assert_eq!(factored, agree);
         }
+    }
+
+    #[test]
+    fn equality_factors_match_four_scalings_across_binary_fields() {
+        fn check<R: BitCoordinates>()
+        where
+            rand::distr::StandardUniform: rand::distr::Distribution<R>,
+        {
+            let mut rng = SmallRng::seed_from_u64(0xE0F64);
+            for _ in 0..8 {
+                // Dense arbitrary tensors exercise column scaling beyond exterior products.
+                let original = BitTensor::<R>::try_from(
+                    (0..<R as BitCoordinates>::DIMENSION)
+                        .map(|_| rng.random())
+                        .collect::<Vec<R>>(),
+                )
+                .unwrap();
+                for (a, b) in [
+                    (R::ZERO, R::ONE),
+                    (R::ONE, R::ZERO),
+                    (rng.random(), rng.random()),
+                ] {
+                    let mut expected = original.clone();
+                    expected.scale_columns(a);
+                    expected.scale_rows(b);
+                    let mut disagree = original.clone();
+                    disagree.scale_columns(R::ONE + a);
+                    disagree.scale_rows(R::ONE + b);
+                    expected += disagree;
+                    let mut actual = original.clone();
+                    actual.mul_equality_factor(a, b);
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+        check::<p3_binary_field::Gf2>();
+        check::<p3_binary_field::BinaryField2>();
+        check::<p3_binary_field::BinaryField4>();
+        check::<p3_binary_field::BinaryField8>();
+        check::<p3_binary_field::BinaryField16>();
+        check::<p3_binary_field::BinaryField32>();
+        check::<p3_binary_field::BinaryField64>();
+        check::<p3_binary_field::BinaryField128>();
+        check::<p3_binary_field::Ghash128>();
+        check::<p3_binary_field::Poly64>();
+        check::<p3_binary_field::Poly192>();
     }
 
     #[test]
