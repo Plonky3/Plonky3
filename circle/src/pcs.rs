@@ -554,6 +554,7 @@ where
             },
         );
         drop(vanishing_parts);
+        drop(permuted_points);
 
         // Iterate over our reduced columns and extract lambda - the multiple of the vanishing polynomial
         // which may appear in the reduced quotient due to CFFT dimension gap.
