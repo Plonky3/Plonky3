@@ -66,12 +66,13 @@
 //!
 //! The prover performs `O(2^m * w^2)` field operations, dominated by the factor tree leaves.
 //!
-//! It also holds `O(2^m * w^2)` field elements, about 600 KB per 64-bit product.
+//! It also holds `O(2^m * w^2)` field elements, roughly 260 KB per padded 64-bit product
+//! with a 128-bit field, plus the proof and transcript.
 //!
 //! ```text
 //!     factor leaves     w^2 per row, 4096 at w = 64
 //!     leaf tables       a, b, and the weights, each repeated over the w^2 leaf cells
-//!     layers            one product tree above the leaves
+//!     layers            consumed before allocating the leaf tables
 //! ```
 
 mod error;
@@ -241,10 +242,6 @@ impl IntegerMulReduction {
             factor_leaves(left, right, width, &powers),
             Tree::Factor.depth(k),
         );
-        let result_layers = product_layers(
-            result_leaves(low, high, width, &powers),
-            Tree::Result.depth(k),
-        );
 
         // One row point compares the two lifts, and the factor root is the shared value.
         let mut transcript = ProverTranscript::<C, F, EF>::new(challenger, self.transcript_shape());
@@ -254,7 +251,7 @@ impl IntegerMulReduction {
         let (layers, point, claim) = prove_layers(
             &mut transcript,
             Tree::Factor,
-            &factor_layers,
+            factor_layers,
             row_point.clone(),
             root,
         );
@@ -269,6 +266,8 @@ impl IntegerMulReduction {
             let [_, a, b, _] = prover.terminal();
             ((proof, end), [a, b])
         });
+        // Folding truncates the tables but retains their allocations.
+        drop(prover);
         let (x, bits) = end.as_slice().split_at(m);
         let factor = TreeProof {
             layers,
@@ -284,11 +283,17 @@ impl IntegerMulReduction {
             value: values[1],
         };
 
+        // The factor tree has been consumed before allocating the result tree.
+        let result_layers = product_layers(
+            result_leaves(low, high, width, &powers),
+            Tree::Result.depth(k),
+        );
+
         // Result tree: the leaf check ends on c(x, s, t), split into its two limbs.
         let (layers, point, claim) = prove_layers(
             &mut transcript,
             Tree::Result,
-            &result_layers,
+            result_layers,
             row_point,
             root,
         );
@@ -489,7 +494,7 @@ fn product_layers<F: Field>(leaves: Vec<F>, depth: usize) -> Vec<Vec<F>> {
 fn prove_layers<C, F, EF>(
     transcript: &mut ProverTranscript<'_, C, F, EF>,
     tree: Tree,
-    layers: &[Vec<EF>],
+    layers: Vec<Vec<EF>>,
     mut point: Vec<EF>,
     mut claim: EF,
 ) -> (Vec<LayerProof<F, EF>>, Vec<EF>, EF)
@@ -499,7 +504,8 @@ where
     C: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
     let mut proofs = Vec::with_capacity(layers.len() - 1);
-    for below in &layers[1..] {
+    // The root is already evaluated; each lower layer is needed only until it is split.
+    for below in layers.into_iter().skip(1) {
         // The new variable is the least significant, so halves are even and odd entries.
         let (even, odd): (Vec<EF>, Vec<EF>) = below
             .as_chunks::<2>()
@@ -508,6 +514,7 @@ where
             .copied()
             .map(|[zero, one]| (zero, one))
             .unzip();
+        drop(below);
         let mut prover = Composite::new(
             [
                 Point::new(point.as_slice()).equality_weights_msb(),
@@ -746,6 +753,64 @@ mod tests {
         [a, b, product as u32, (product >> 32) as u32].map(Word32::new)
     }
 
+    #[test]
+    fn serialized_word64_proofs_keep_the_transcript_schedule() {
+        use p3_symmetric::CryptographicHasher;
+
+        // Baseline proof digests pin both a single row and a padded three-row trace.
+        for (rows, length, digest) in [
+            (
+                1,
+                7316,
+                [
+                    0x39, 0x22, 0xe6, 0xd6, 0xa4, 0x41, 0x7c, 0x76, 0x79, 0xdd, 0xcd, 0x51, 0xa8,
+                    0x2d, 0x7f, 0xf0, 0x6b, 0x96, 0xcb, 0xf5, 0x37, 0x62, 0xcc, 0x22, 0x37, 0xca,
+                    0xb8, 0xb3, 0x89, 0xb4, 0x55, 0x7f,
+                ],
+            ),
+            (
+                3,
+                9739,
+                [
+                    0x8c, 0x42, 0xbb, 0x89, 0x36, 0x56, 0x32, 0x48, 0xcf, 0x67, 0xa1, 0xed, 0x27,
+                    0x00, 0xc3, 0x7a, 0xd3, 0xd0, 0xc0, 0x53, 0x48, 0x27, 0x0f, 0xb7, 0x18, 0x45,
+                    0x7c, 0xdf, 0xb5, 0xc1, 0x71, 0xd5,
+                ],
+            ),
+        ] {
+            let rows = (0..rows)
+                .map(|row| {
+                    let a = (row as u64)
+                        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                        .wrapping_add(0x0123_4567_89ab_cdef);
+                    let b = (row as u64)
+                        .wrapping_mul(0xd1b5_4a32_d192_ed03)
+                        .wrapping_add(0xfedc_ba98_7654_3210);
+                    word64_row(a, b)
+                })
+                .collect::<Vec<_>>();
+            let reduction = IntegerMulReduction::new(rows.len(), 6).unwrap();
+            let mut prover = challenger();
+            let (proof, claims) =
+                reduction.prove::<EF, EF, Word64, _>(&columns(&rows), &mut prover);
+            let bytes = postcard::to_allocvec(&proof).unwrap();
+            assert_eq!(bytes.len(), length);
+            assert_eq!(Keccak256Hash.hash_iter(bytes), digest);
+
+            let mut verifier = challenger();
+            assert_eq!(
+                reduction
+                    .verify::<EF, EF, _>(&proof, &mut verifier)
+                    .unwrap(),
+                claims
+            );
+            assert_eq!(
+                CanSample::<EF>::sample(&mut prover),
+                CanSample::<EF>::sample(&mut verifier)
+            );
+        }
+    }
+
     // One dishonest prover step, each aimed at a single verifier check.
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Forgery {
@@ -797,7 +862,7 @@ mod tests {
         let (layers, point, claim) = prove_layers(
             &mut transcript,
             Tree::Factor,
-            &factor_layers,
+            factor_layers,
             row_point.clone(),
             root,
         );
@@ -825,13 +890,7 @@ mod tests {
         let (layers, point, claim) = match forgery {
             Forgery::ResultTreeFromItsOwnRoot => {
                 let own = evaluate(&result_layers[0], &row_point);
-                prove_layers(
-                    &mut transcript,
-                    Tree::Result,
-                    &result_layers,
-                    row_point,
-                    own,
-                )
+                prove_layers(&mut transcript, Tree::Result, result_layers, row_point, own)
             }
             Forgery::ResultLeafFromItsTrueClaim => {
                 let (layers, point) =
@@ -842,7 +901,7 @@ mod tests {
             Forgery::FactorTreeOverTheClaimedProduct => prove_layers(
                 &mut transcript,
                 Tree::Result,
-                &result_layers,
+                result_layers,
                 row_point,
                 root,
             ),
