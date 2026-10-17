@@ -332,11 +332,18 @@ fn fib_public_values_for_trace(trace: &RowMajorMatrix<F>) -> [F; 3] {
 
 #[test]
 fn security_assessment_evaluates_each_air_once_per_symbolic_builder() {
+    use core::any::{Any, type_name};
     use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, Weak};
+
+    use p3_air::symbolic::SymbolicExpression;
+
+    type ConstraintProbe = Mutex<Option<Weak<SymbolicExpression<F>>>>;
 
     struct CountingAir {
         evaluations: AtomicUsize,
         table: &'static str,
+        previous_constraint: Arc<ConstraintProbe>,
     }
 
     impl BaseAir<F> for CountingAir {
@@ -356,11 +363,27 @@ fn security_assessment_evaluates_each_air_once_per_symbolic_builder() {
     impl<AB> Air<AB> for CountingAir
     where
         AB: AirBuilder<F = F> + InteractionBuilder + IndexedLookupBuilder,
+        AB::Expr: 'static,
     {
         fn eval(&self, builder: &mut AB) {
             self.evaluations.fetch_add(1, Ordering::Relaxed);
             let x = builder.main().current_slice()[0];
-            builder.assert_zero(x * x - x);
+            let square = x * x;
+            if type_name::<AB>() == type_name::<p3_lookup::InteractionSymbolicBuilder<F, EF>>()
+                && let Some(SymbolicExpression::Mul { x, .. }) =
+                    (&square as &dyn Any).downcast_ref::<SymbolicExpression<F>>()
+            {
+                // The weak child reference observes the preceding constraint DAG's lifetime.
+                let mut previous = self.previous_constraint.lock().unwrap();
+                assert!(
+                    previous
+                        .as_ref()
+                        .is_none_or(|node| node.upgrade().is_none()),
+                    "the preceding AIR's constraint DAG must be dropped before the next AIR"
+                );
+                *previous = Some(Arc::downgrade(x));
+            }
+            builder.assert_zero(square - x);
             builder.push_local_interaction([
                 (vec![x.into()], Count::bounded(AB::Expr::ONE, 1)),
                 (vec![x.into()], Count::provided(-AB::Expr::ONE)),
@@ -371,9 +394,11 @@ fn security_assessment_evaluates_each_air_once_per_symbolic_builder() {
     }
 
     let config = batch_config_for(4, 1, 2);
+    let previous_constraint = Arc::new(Mutex::new(None));
     let airs = ["first", "second"].map(|table| CountingAir {
         evaluations: AtomicUsize::new(0),
         table,
+        previous_constraint: Arc::clone(&previous_constraint),
     });
     let (_, vk) = setup(&config, &[&airs[0], &airs[1]], &mut challenger()).unwrap();
     let instances = || {
@@ -409,6 +434,83 @@ fn security_assessment_evaluates_each_air_once_per_symbolic_builder() {
             "logup-star-entry-challenge",
         ] {
             assert!(report.terms().iter().any(|term| term.label == label));
+        }
+    }
+}
+
+#[test]
+fn security_checks_shape_before_lookup_and_lookup_before_indexed_declarations() {
+    struct ErrorOrderAir {
+        mismatched_width: bool,
+        weights: [u32; 2],
+    }
+
+    impl BaseAir<F> for ErrorOrderAir {
+        fn width(&self) -> usize {
+            1
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            Vec::new()
+        }
+    }
+
+    impl<AB> Air<AB> for ErrorOrderAir
+    where
+        AB: AirBuilder<F = F> + InteractionBuilder + IndexedLookupBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let x = builder.main().current_slice()[0];
+            builder.assert_zero(x * x - x);
+            let second = if self.mismatched_width {
+                vec![x.into(), x.into()]
+            } else {
+                vec![x.into()]
+            };
+            builder.push_local_interaction([
+                (
+                    vec![x.into()],
+                    Count::bounded(AB::Expr::ONE, self.weights[0]),
+                ),
+                (second, Count::bounded(-AB::Expr::ONE, self.weights[1])),
+            ]);
+            // This error must be deferred until after ordinary lookup planning.
+            builder.push_indexed_read("out-of-range", 0, [1]);
+        }
+    }
+
+    let config = batch_config_for(4, 1, 2);
+    for (mismatched_width, weights, later_height) in [
+        // Each earlier declaration would panic if converted before the later shape check.
+        (true, [1, 0], 0),
+        (false, [u32::MAX, 1], 0),
+        // The local sum fits u32, but its height bound exceeds the field characteristic.
+        (false, [1 << 30, 0], 4),
+    ] {
+        let air = ErrorOrderAir {
+            mismatched_width,
+            weights,
+        };
+        let (_, vk) = setup(&config, &[&air, &air], &mut challenger()).unwrap();
+        let instances = VerifierInstances::new(vec![
+            VerifierInstance::new(&air, &vk, 4, &[]),
+            VerifierInstance::new(&air, &vk, later_height, &[]),
+        ]);
+        let report = p3_multi_stark::security_report(&config, &instances);
+        if later_height == 0 {
+            assert!(matches!(
+                report,
+                Err(SecurityError::InvalidShape(
+                    "trace arity is outside the supported range"
+                ))
+            ));
+        } else {
+            assert!(matches!(
+                report,
+                Err(SecurityError::Lookup(LookupError::MultiplicityHeightBound(
+                    _
+                )))
+            ));
         }
     }
 }

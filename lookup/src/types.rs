@@ -165,7 +165,12 @@ impl<F: Field> Lookups<F> {
     /// Build from raw symbolic interactions.
     ///
     /// Local interactions first, then global, then exclusive — matching the LogUp column order.
-    fn from_interactions(
+    ///
+    /// # Panics
+    ///
+    /// Panics if a local interaction's tuples disagree on payload width or their total
+    /// count weight exceeds `u32::MAX`.
+    pub fn from_interactions(
         global: &[SymbolicInteraction<F>],
         local: &[SymbolicLocalInteraction<F>],
         exclusive: &[SymbolicExclusiveInteraction<F>],

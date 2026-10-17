@@ -519,7 +519,8 @@ where
     let mut num_fractions = 0usize;
     let mut max_num_constraints = 0;
     let mut max_degree = 0;
-    let mut symbolic = Vec::with_capacity(instances.len());
+    let mut lookup_interactions = Vec::with_capacity(instances.len());
+    let mut declared = Vec::with_capacity(instances.len());
 
     for (instance, &height) in instances.iter().zip(&heights) {
         if height == 0 || height >= usize::BITS as usize || height < config.min_num_variables() {
@@ -625,7 +626,13 @@ where
             return Err(invalid("AIR declares no constraints or lookup tuples"));
         }
         max_degree = max_degree.max(get_air_profile_from_builder(air, &builder).degrees.max());
-        symbolic.push((layout, builder));
+        // Retain only lookup declarations, dropping this AIR's constraint DAGs before the next.
+        lookup_interactions.push((
+            builder.global_interactions().to_vec(),
+            builder.local_interactions().to_vec(),
+        ));
+        // Extraction is fallible, but its errors follow the ordinary lookup plan's errors.
+        declared.push(IndexedLookups::from_builder(&builder, &layout));
     }
     // Both layout engines round the stacked size up to a power of two.
     if main_cells.checked_next_power_of_two().is_none()
@@ -637,9 +644,9 @@ where
     }
     // Resolve declarations after shape validation, retaining the same error order as before.
     // Every consumer shares the interaction pass already used to score this AIR.
-    let lookups = symbolic
-        .iter()
-        .map(|(_, builder)| Lookups::from_builder(builder))
+    let lookups = lookup_interactions
+        .into_iter()
+        .map(|(global, local)| Lookups::from_interactions(&global, &local, &[]))
         .collect();
     let plan = LookupPlan::from_lookups(lookups, &heights)?;
     let lookup = plan.map(|plan| MultilinearLookupParams {
@@ -650,12 +657,8 @@ where
     // The same plan feeds the soundness terms and the opening shapes below.
     //
     // An assessment covering fewer batches than the proof opens overstates the bound.
-    let declared = symbolic
-        .iter()
-        .map(|(layout, builder)| IndexedLookups::from_builder(builder, layout))
-        .collect::<Result<Vec<_>, _>>()?;
+    let declared = declared.into_iter().collect::<Result<Vec<_>, _>>()?;
     let indexed = IndexedPlan::from_declared::<C::Val>(&declared, &heights)?;
-    drop(symbolic);
     let bus = BusContext::<C::Val, C::Challenge>::build(&instances.airs(), &heights)
         .map_err(|_| invalid("binary-bus declarations do not define a supported plan"))?;
     // The bus family shares the constraint sumcheck.
