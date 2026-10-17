@@ -21,7 +21,7 @@ use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::{ColumnView, Table};
 
 use super::error::BusBindingError;
-use crate::selectors::{periodic_num_variables, periodic_table};
+use crate::selectors::periodic_num_variables;
 
 /// Source columns used by one declaration, retaining their original AIR indices.
 struct DeclarationSources {
@@ -30,11 +30,27 @@ struct DeclarationSources {
     periodic: Vec<usize>,
 }
 
+/// A committed column or a compact periodic column repeated over the trace.
+#[derive(Clone, Copy)]
+enum SourceColumn<'a, F: Field> {
+    Trace(ColumnView<'a, F>),
+    Period(&'a [F]),
+}
+
+impl<F: Field> SourceColumn<'_, F> {
+    fn value(self, row: usize) -> F {
+        match self {
+            Self::Trace(column) => column.value(row),
+            Self::Period(period) => period[row & (period.len() - 1)],
+        }
+    }
+}
+
 /// Cheap row selectors; more general expressions keep the full factor evaluator.
 enum RowSelector<'a, F: Field> {
     General,
     Boundary(BusBoundary),
-    Column(ColumnView<'a, F>),
+    Column(SourceColumn<'a, F>),
 }
 
 impl<F: Field> RowSelector<'_, F> {
@@ -50,7 +66,7 @@ impl<F: Field> RowSelector<'_, F> {
 /// An affine expression bound to the original, validated column views.
 struct AffineRow<'a, F: Field, EF: Field> {
     constant: EF,
-    columns: Vec<(ColumnView<'a, F>, EF)>,
+    columns: Vec<(SourceColumn<'a, F>, EF)>,
     first_row: EF,
     last_row: EF,
     transition: EF,
@@ -59,7 +75,7 @@ struct AffineRow<'a, F: Field, EF: Field> {
 impl<'a, F: Field, EF: ExtensionField<F>> AffineRow<'a, F, EF> {
     fn bind(
         expression: BusAffineExpression<EF>,
-        sources: [(&[usize], &[ColumnView<'a, F>]); 3],
+        sources: [(&[usize], &[SourceColumn<'a, F>]); 3],
     ) -> Option<Self> {
         let mut columns = Vec::with_capacity(
             expression.main.len() + expression.preprocessed.len() + expression.periodic.len(),
@@ -90,10 +106,11 @@ impl<'a, F: Field, EF: ExtensionField<F>> AffineRow<'a, F, EF> {
         let mut value = self.constant;
         for &(column, coefficient) in &self.columns {
             value += match column {
-                ColumnView::Dense(values) => coefficient * values[row],
-                ColumnView::Boolean { .. } => {
-                    [EF::ZERO, coefficient][usize::from(column.boolean_bit(row).unwrap())]
+                SourceColumn::Trace(ColumnView::Dense(values)) => coefficient * values[row],
+                SourceColumn::Trace(view @ ColumnView::Boolean { .. }) => {
+                    [EF::ZERO, coefficient][usize::from(view.boolean_bit(row).unwrap())]
                 }
+                SourceColumn::Period(_) => coefficient * column.value(row),
             };
         }
         if row == 0 {
@@ -235,25 +252,13 @@ where
         &self.periodic_columns[air]
     }
 
-    /// Periodic tables at full trace height, for the AIRs whose declarations read one.
-    ///
-    /// An AIR whose declarations read none gets `None`, so its columns are never materialized.
+    /// Compact period vectors used by the product-tree leaves.
     pub(crate) fn periodic_tables<A: BaseAir<F>>(
         &self,
         airs: &[&A],
         num_variables: &[usize],
-    ) -> Vec<Option<Table<F>>> {
-        airs.iter()
-            .zip(num_variables)
-            .zip(&self.periodic_columns)
-            .map(|((air, &num_vars), read)| {
-                if read.is_empty() {
-                    None
-                } else {
-                    periodic_table(*air, num_vars)
-                }
-            })
-            .collect()
+    ) -> Vec<Option<Vec<Vec<F>>>> {
+        self.period_vectors(airs, num_variables)
     }
 
     /// Period vectors of every periodic column, for the AIRs whose declarations read one.
@@ -458,7 +463,7 @@ where
         &self,
         tables: &[&Table<F>],
         preprocessed: &[Option<&Table<F>>],
-        periodic: &[Option<Table<F>>],
+        periodic: &[Option<Vec<Vec<F>>>],
         public_values: &[&[F]],
         challenges: &p3_bus::BusChallenges<EF>,
     ) -> [Vec<EF>; 2] {
@@ -490,7 +495,7 @@ where
     fn try_affine_leaves(
         factor: &BusFactorPlan<'_, F, EF>,
         public: &[F],
-        sources: [(&[usize], &[ColumnView<'_, F>]); 3],
+        sources: [(&[usize], &[SourceColumn<'_, F>]); 3],
         selector: &RowSelector<'_, F>,
         height: usize,
     ) -> Option<Vec<EF>> {
@@ -499,7 +504,7 @@ where
         }
         let columns = || sources.iter().flat_map(|(_, columns)| columns.iter());
         if columns()
-            .filter(|column| matches!(column, ColumnView::Boolean { .. }))
+            .filter(|column| matches!(column, SourceColumn::Trace(ColumnView::Boolean { .. })))
             .take(8)
             .count()
             < 8
@@ -510,13 +515,14 @@ where
         if sources
             .iter()
             .any(|(indices, columns)| indices.len() != columns.len())
-            || columns().any(|column| column.len() != height)
+            || columns()
+                .any(|column| matches!(column, SourceColumn::Trace(view) if view.len() != height))
         {
             return None;
         }
         if let RowSelector::Column(column) = selector
-            && column
-                .values()
+            && (0..height)
+                .map(|row| column.value(row))
                 .filter(|value| !value.is_zero())
                 .take(8)
                 .count()
@@ -554,7 +560,7 @@ where
         block: &BusBlock,
         tables: &[&Table<F>],
         preprocessed: &[Option<&Table<F>>],
-        periodic: &[Option<Table<F>>],
+        periodic: &[Option<Vec<Vec<F>>>],
         public_values: &[&[F]],
         weights: &[EF],
         offset: EF,
@@ -573,17 +579,25 @@ where
         let main_indices = &sources.main;
         let main_columns = main_indices
             .iter()
-            .map(|&column| tables[air].column(column))
+            .map(|&column| SourceColumn::Trace(tables[air].column(column)))
             .collect::<Vec<_>>();
         let fixed_indices = &sources.preprocessed;
         let fixed_columns = preprocessed[air]
             .iter()
-            .flat_map(|table| fixed_indices.iter().map(|&column| table.column(column)))
+            .flat_map(|table| {
+                fixed_indices
+                    .iter()
+                    .map(|&column| SourceColumn::Trace(table.column(column)))
+            })
             .collect::<Vec<_>>();
         let periodic_indices = &sources.periodic;
         let periodic_columns = periodic[air]
             .iter()
-            .flat_map(|table| periodic_indices.iter().map(|&column| table.column(column)))
+            .flat_map(|table| {
+                periodic_indices
+                    .iter()
+                    .map(|&column| SourceColumn::Period(table[column].as_slice()))
+            })
             .collect::<Vec<_>>();
         let main_width = tables[air].num_polys();
         let fixed_width = preprocessed[air].map_or(0, Table::num_polys);
@@ -597,13 +611,14 @@ where
             BusActivation::Boundary(boundary) => RowSelector::Boundary(*boundary),
             BusActivation::Boolean(SymbolicExpr::Leaf(BaseLeaf::Variable(variable))) => {
                 let column = match variable.entry {
-                    BaseEntry::Main { offset: 0 } => Some(tables[air].column(variable.index)),
-                    BaseEntry::Preprocessed { offset: 0 } => {
-                        preprocessed[air].map(|table| table.column(variable.index))
+                    BaseEntry::Main { offset: 0 } => {
+                        Some(SourceColumn::Trace(tables[air].column(variable.index)))
                     }
+                    BaseEntry::Preprocessed { offset: 0 } => preprocessed[air]
+                        .map(|table| SourceColumn::Trace(table.column(variable.index))),
                     BaseEntry::Periodic => periodic[air]
                         .as_ref()
-                        .map(|table| table.column(variable.index)),
+                        .map(|table| SourceColumn::Period(table[variable.index].as_slice())),
                     _ => None,
                 };
                 column.map_or(RowSelector::General, RowSelector::Column)
@@ -614,10 +629,7 @@ where
         // Dense tables cannot use the Boolean coefficient lookup. Check table storage
         // before scanning the declaration's columns or preparing affine coefficients.
         let has_packed_sources = tables[air].packed_bits().is_some()
-            || preprocessed[air].is_some_and(|table| table.packed_bits().is_some())
-            || periodic[air]
-                .as_ref()
-                .is_some_and(|table| table.packed_bits().is_some());
+            || preprocessed[air].is_some_and(|table| table.packed_bits().is_some());
         if has_packed_sources
             && let Some(leaves) = Self::try_affine_leaves(
                 &factor,
@@ -715,7 +727,7 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use super::{BusBindingError, BusContext, RowSelector};
+    use super::{BusBindingError, BusContext, RowSelector, SourceColumn};
 
     struct EmptyAir;
 
@@ -819,6 +831,114 @@ mod tests {
             .unwrap();
 
         context.period_vectors(&[&PeriodicAir], &[1]);
+    }
+
+    struct PeriodViewsAir {
+        periods: Vec<Vec<BabyBear>>,
+        selector: bool,
+    }
+    impl BaseAir<BabyBear> for PeriodViewsAir {
+        fn width(&self) -> usize {
+            1
+        }
+        fn num_periodic_columns(&self) -> usize {
+            self.periods.len()
+        }
+        fn periodic_columns(&self) -> Cow<'_, [Vec<BabyBear>]> {
+            Cow::Borrowed(&self.periods)
+        }
+    }
+    impl<AB: BusInteractionBuilder<F = BabyBear>> Air<AB> for PeriodViewsAir {
+        fn eval(&self, builder: &mut AB) {
+            let value: AB::Expr = builder.periodic_values()[0].into();
+            let activation = if self.selector {
+                BusActivation::Boolean(value.clone())
+            } else {
+                BusActivation::Always
+            };
+            builder.push_bus_interaction(
+                BusName::new("periods"),
+                BusDirection::Push,
+                [value],
+                activation,
+            );
+        }
+    }
+
+    #[test]
+    fn compact_periods_match_full_rows_for_payloads_and_selectors() {
+        let height = 1 << 10;
+        for period in [1, 4, 256, height] {
+            for selector in [false, true] {
+                let air = PeriodViewsAir {
+                    periods: vec![
+                        (0..period)
+                            .map(|i| BabyBear::from_u64(((i + 1) % 5) as u64))
+                            .collect(),
+                    ],
+                    selector,
+                };
+                let context = BusContext::<BabyBear, BabyBear>::build(&[&air], &[10])
+                    .unwrap()
+                    .unwrap();
+                let periodic = context.periodic_tables(&[&air], &[10]);
+                assert_eq!(periodic[0].as_ref().unwrap()[0].len(), period);
+                let main = Table::new(RowMajorMatrix::new(vec![BabyBear::ZERO; height], height));
+                let challenges = p3_bus::BusChallenges {
+                    fingerprint: vec![
+                        BabyBear::from_u64(7);
+                        p3_util::log2_strict_usize(context.plan().fingerprint_width())
+                    ],
+                    offset: BabyBear::from_u64(11),
+                };
+                let weights = challenges.fingerprint_weights();
+                let actual = context.materialize(&[&main], &[None], &periodic, &[&[]], &challenges);
+                let block = &context.plan().blocks(BusDirection::Push)[0];
+                for row in 0..height {
+                    let values = [air.periods[0][row % period]];
+                    let expected = context
+                        .plan()
+                        .evaluate_factor(
+                            block.bus,
+                            context.interaction(block.owner),
+                            p3_bus::BusEvaluation {
+                                main: &[BabyBear::ZERO],
+                                preprocessed: &[],
+                                public: &[],
+                                periodic: &values,
+                                is_first_row: BabyBear::from_bool(row == 0),
+                                is_last_row: BabyBear::from_bool(row + 1 == height),
+                                is_transition: BabyBear::from_bool(row + 1 < height),
+                            },
+                            &weights,
+                            challenges.offset,
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        actual[0][row], expected,
+                        "period={period}, selector={selector}, row={row}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unused_periods_in_a_retained_period_declaration_are_validated() {
+        extern crate std;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        for invalid in [0, 3, 32] {
+            let air = PeriodViewsAir {
+                periods: vec![vec![BabyBear::ONE], vec![BabyBear::ZERO; invalid]],
+                selector: false,
+            };
+            let context = BusContext::<BabyBear, BabyBear>::build(&[&air], &[4])
+                .unwrap()
+                .unwrap();
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| context.periodic_tables(&[&air], &[4]))).is_err()
+            );
+        }
     }
 
     #[test]
@@ -1086,7 +1206,10 @@ mod tests {
                             table.columns().map(|c| c.value(row)).collect()
                         });
                         let periodic = periodic[air].as_ref().map_or_else(Vec::new, |table| {
-                            table.columns().map(|c| c.value(row)).collect()
+                            table
+                                .iter()
+                                .map(|period| period[row % period.len()])
+                                .collect()
                         });
                         expected.push(
                             context
@@ -1344,8 +1467,8 @@ mod tests {
                                     let periodic_row: Vec<F> = periodic[0]
                                         .as_ref()
                                         .unwrap()
-                                        .columns()
-                                        .map(|c| c.value(row))
+                                        .iter()
+                                        .map(|period| period[row % period.len()])
                                         .collect();
                                     let reference = factor
                                         .evaluate(
@@ -1433,17 +1556,17 @@ mod tests {
         use p3_matrix::dense::RowMajorMatrix;
         use p3_sumcheck::layout::{ColumnView, Table};
 
-        use super::{BusContext, RowSelector};
+        use super::{BusContext, RowSelector, SourceColumn};
 
         #[test]
         fn packed_affine_route_requires_reused_columns_and_live_rows() {
             let main_indices: Vec<_> = (0..8).collect();
             let fixed_indices = [0];
             let packed = Table::<F>::from_packed_bits(RowMajorMatrix::new(vec![0x55; 8], 8), 3);
-            let packed_views: Vec<_> = packed.columns().collect();
+            let packed_views: Vec<_> = packed.columns().map(SourceColumn::Trace).collect();
             let dense = [F::ZERO; 8];
             let mut narrow_views = packed_views.clone();
-            narrow_views[7] = ColumnView::Dense(&dense);
+            narrow_views[7] = SourceColumn::Trace(ColumnView::Dense(&dense));
             let variable = |entry, index| {
                 SymbolicExpression::<F>::from(SymbolicVariable::<F>::new(entry, index))
             };
@@ -1486,7 +1609,7 @@ mod tests {
                     if active == 7 {
                         selectors[7] = F::ZERO;
                     }
-                    let fixed = [ColumnView::Dense(&selectors)];
+                    let fixed = [SourceColumn::Trace(ColumnView::Dense(&selectors))];
                     let selector = if boundary {
                         RowSelector::Boundary(BusBoundary::First)
                     } else {
