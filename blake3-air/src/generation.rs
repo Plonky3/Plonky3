@@ -16,24 +16,24 @@ use crate::{Blake3CompressionInput, Blake3State, FullRound};
 /// Each input contains 16 message words followed by eight chaining words. The counter is the
 /// row index, the block length is the batch size cast to `u32`, and flags are zero. Use
 /// [`generate_trace_rows_with_inputs`] to supply explicit compression metadata.
-// TODO: Take generic iterable
+#[instrument(name = "generate Blake3 trace", skip_all)]
 pub fn generate_trace_rows<F: PrimeField64>(
     inputs: Vec<[u32; 24]>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
     let block_len = inputs.len() as u32;
-    let inputs = inputs
-        .into_iter()
-        .enumerate()
-        .map(|(counter, input)| Blake3CompressionInput {
-            chaining_value: array::from_fn(|i| input[16 + i]),
-            block: array::from_fn(|i| input[i]),
-            counter: counter as u64,
-            block_len,
-            flags: 0,
-        })
-        .collect();
-    generate_trace_rows_with_inputs(inputs, extra_capacity_bits)
+    let inputs =
+        inputs
+            .into_par_iter()
+            .enumerate()
+            .map(|(counter, input)| Blake3CompressionInput {
+                chaining_value: array::from_fn(|i| input[16 + i]),
+                block: array::from_fn(|i| input[i]),
+                counter: counter as u64,
+                block_len,
+                flags: 0,
+            });
+    generate_trace_rows_from_iter(inputs, extra_capacity_bits)
 }
 
 /// Generate a prime-field Blake-3 trace with one independent compression per row.
@@ -49,6 +49,13 @@ pub fn generate_trace_rows<F: PrimeField64>(
 #[instrument(name = "generate Blake3 trace", skip_all)]
 pub fn generate_trace_rows_with_inputs<F: PrimeField64>(
     inputs: Vec<Blake3CompressionInput>,
+    extra_capacity_bits: usize,
+) -> RowMajorMatrix<F> {
+    generate_trace_rows_from_iter(inputs.into_par_iter(), extra_capacity_bits)
+}
+
+fn generate_trace_rows_from_iter<F: PrimeField64>(
+    inputs: impl IndexedParallelIterator<Item = Blake3CompressionInput>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
     let num_rows = inputs.len();
@@ -289,13 +296,16 @@ mod tests {
 
     #[test]
     fn trace_counter_words_match_row_indices() {
-        // Fixture: eight rows exercise both zero and nonzero row indices.
-        let trace = generate_trace_rows::<BabyBear>(vec![[0; 24]; 8], 0);
+        // Distinct messages and chaining values also pin the adapter's input ordering.
+        let inputs: Vec<[u32; 24]> = (0..8)
+            .map(|row| array::from_fn(|i| ((24 * row + i) as u32).wrapping_mul(0x9e37_79b9)))
+            .collect();
+        let trace = generate_trace_rows::<BabyBear>(inputs.clone(), 0);
 
         // The AIR ties the counter columns to the first compression round.
         check_constraints(&Blake3Air {}, &trace, &[]);
 
-        for counter in 0..trace.height() {
+        for (counter, input) in inputs.iter().enumerate() {
             // Row indices below 2^32 have no high counter bits.
             let row = trace.row_slice(counter).unwrap();
             let row: &Blake3Cols<BabyBear> = (*row).borrow();
@@ -303,7 +313,10 @@ mod tests {
             assert_eq!(row.counter_hi, [BabyBear::ZERO; 32]);
             assert_eq!(row.block_len, u32_to_bits_le(8));
             assert_eq!(row.flags, [BabyBear::ZERO; 32]);
-            let expected = Platform::Portable.compress_xof(&[0; 8], &[0; 64], 8, counter as u64, 0);
+            let chaining_value = array::from_fn(|i| input[16 + i]);
+            let block = array::from_fn(|i| input[i / 4].to_le_bytes()[i % 4]);
+            let expected =
+                Platform::Portable.compress_xof(&chaining_value, &block, 8, counter as u64, 0);
             for (bits, bytes) in row
                 .outputs
                 .iter()
