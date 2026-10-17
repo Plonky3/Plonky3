@@ -62,9 +62,13 @@ const fn word_tiles<T>() -> bool {
 /// - `start_x`, `start_y`: the block's first source column and row.
 /// - `out_col_start`: the output row that receives the block's first source column.
 /// - `block_width`, `block_height`: the block's extent.
+///
+/// # Safety
+///
+/// Elements must support the integer-word copies required by `super::transpose_words`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn transpose_block_tiled<T: Copy>(
+unsafe fn transpose_block_tiled<T: Copy>(
     input: &[T],
     output: &mut [T],
     total_cols: usize,
@@ -83,7 +87,10 @@ fn transpose_block_tiled<T: Copy>(
 
     // Output run j of the block starts one output stride after run j - 1.
     let dst = &mut output[out_col_start * total_rows + start_y..];
-    super::rows::transpose_rows_strided(block_height, block_width, row, dst, total_rows);
+    // SAFETY: the word engine caller guarantees integer-word-compatible elements.
+    unsafe {
+        super::rows::transpose_rows_strided_words(block_height, block_width, row, dst, total_rows);
+    };
 }
 
 /// Transpose a row-major matrix from `input` into `output`.
@@ -93,7 +100,7 @@ fn transpose_block_tiled<T: Copy>(
 ///
 /// # Panics
 ///
-/// Panics if either slice length differs from `width * height`.
+/// Panics if `width * height` overflows or differs from either slice length.
 #[inline]
 pub(crate) fn transpose<T: Copy + Send + Sync>(
     input: &[T],
@@ -101,33 +108,48 @@ pub(crate) fn transpose<T: Copy + Send + Sync>(
     width: usize,
     height: usize,
 ) {
-    // Both buffers must describe the same `height x width` matrix.
-    assert_eq!(
-        input.len(),
-        width * height,
-        "input length {} != width*height {}",
-        input.len(),
-        width * height
-    );
-    assert_eq!(
-        output.len(),
-        width * height,
-        "output length {} != width*height {}",
-        output.len(),
-        width * height
-    );
+    // SAFETY: the typed engine never reinterprets elements as integer words.
+    unsafe { transpose_impl::<false, T>(input, output, width, height) };
+}
+
+/// # Safety
+/// Elements must satisfy the integer-word contract of `super::transpose_words`.
+#[inline]
+pub(super) unsafe fn transpose_words<T: Copy + Send + Sync>(
+    input: &[T],
+    output: &mut [T],
+    width: usize,
+    height: usize,
+) {
+    // SAFETY: forwarded representation guarantee.
+    unsafe { transpose_impl::<true, T>(input, output, width, height) };
+}
+
+/// # Safety
+/// With `WORDS`, elements must support integer-word copying.
+#[inline]
+unsafe fn transpose_impl<const WORDS: bool, T: Copy + Send + Sync>(
+    input: &[T],
+    output: &mut [T],
+    width: usize,
+    height: usize,
+) {
+    let len = width
+        .checked_mul(height)
+        .expect("transpose dimensions overflow");
+    assert_eq!(input.len(), len, "transpose input has the wrong length");
+    assert_eq!(output.len(), len, "transpose output has the wrong length");
 
     // A zero-size matrix has nothing to move.
     if width == 0 || height == 0 {
         return;
     }
 
-    let len = width * height;
-
     // Large matrices: hand off to the parallel column-band split.
     #[cfg(feature = "parallel")]
     if len >= PARALLEL_THRESHOLD {
-        transpose_parallel(input, output, width, height);
+        // SAFETY: checked shape and, when enabled, the forwarded word representation contract.
+        unsafe { transpose_parallel::<WORDS, T>(input, output, width, height) };
         return;
     }
 
@@ -144,10 +166,12 @@ pub(crate) fn transpose<T: Copy + Send + Sync>(
     unsafe {
         if len <= MEDIUM_LEN {
             // Medium: tile the whole matrix once, no recursion overhead.
-            transpose_region::<false, T>(input, output, 0, height, 0, width, width, height, 0);
+            transpose_region::<false, WORDS, T>(
+                input, output, 0, height, 0, width, width, height, 0,
+            );
         } else {
             // Large: recurse down to cache-resident leaves, then tile.
-            transpose_recursive(input, output, 0, height, 0, width, width, height, 0);
+            transpose_recursive::<WORDS, T>(input, output, 0, height, 0, width, width, height, 0);
         }
     }
 }
@@ -296,12 +320,13 @@ unsafe fn transpose_tile_segmented<T: Copy>(
 ///
 /// # Safety
 ///
+/// - If `WORDS`, elements satisfy `super::transpose_words`'s representation contract.
 /// - `input.len() == total_cols * total_rows`.
 /// - `row_end <= total_rows` and `col_end <= total_cols`.
 /// - `output` covers output rows `[col_start - col_out_base, col_end - col_out_base)`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-unsafe fn transpose_region<const SEGMENTED: bool, T: Copy>(
+unsafe fn transpose_region<const SEGMENTED: bool, const WORDS: bool, T: Copy>(
     input: &[T],
     output: &mut [T],
     row_start: usize,
@@ -323,23 +348,26 @@ unsafe fn transpose_region<const SEGMENTED: bool, T: Copy>(
     // Output row index of this region's first source column.
     let out_col_start = col_start - col_out_base;
 
-    if word_tiles::<T>() {
+    if WORDS && word_tiles::<T>() {
         // Register tiles: walk column stripes, so each output row is written front to back.
         //
         // Row stripes would scatter every tile's stores across the whole output instead.
         for x_tile in 0..x_tiles {
             for y_tile in 0..y_tiles {
-                transpose_block_tiled(
-                    input,
-                    output,
-                    total_cols,
-                    total_rows,
-                    col_start + x_tile * TILE,
-                    row_start + y_tile * TILE,
-                    out_col_start + x_tile * TILE,
-                    TILE,
-                    TILE,
-                );
+                // SAFETY: WORDS forwards the representation guarantee; each tile lies in the region.
+                unsafe {
+                    transpose_block_tiled(
+                        input,
+                        output,
+                        total_cols,
+                        total_rows,
+                        col_start + x_tile * TILE,
+                        row_start + y_tile * TILE,
+                        out_col_start + x_tile * TILE,
+                        TILE,
+                        TILE,
+                    );
+                };
             }
         }
     } else {
@@ -442,7 +470,7 @@ unsafe fn transpose_region<const SEGMENTED: bool, T: Copy>(
 /// Same contract as the tiled-region kernel.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-unsafe fn transpose_recursive<T: Copy>(
+unsafe fn transpose_recursive<const WORDS: bool, T: Copy>(
     input: &[T],
     output: &mut [T],
     row_start: usize,
@@ -462,7 +490,7 @@ unsafe fn transpose_recursive<T: Copy>(
             || nbr_rows <= 2
             || nbr_cols <= 2
         {
-            transpose_region::<true, T>(
+            transpose_region::<true, WORDS, T>(
                 input,
                 output,
                 row_start,
@@ -479,7 +507,7 @@ unsafe fn transpose_recursive<T: Copy>(
         if nbr_rows >= nbr_cols {
             // Taller than wide: cut the row range in half.
             let mid = row_start + nbr_rows / 2;
-            transpose_recursive(
+            transpose_recursive::<WORDS, T>(
                 input,
                 output,
                 row_start,
@@ -490,7 +518,7 @@ unsafe fn transpose_recursive<T: Copy>(
                 total_rows,
                 col_out_base,
             );
-            transpose_recursive(
+            transpose_recursive::<WORDS, T>(
                 input,
                 output,
                 mid,
@@ -504,7 +532,7 @@ unsafe fn transpose_recursive<T: Copy>(
         } else {
             // Wider than tall: cut the column range in half.
             let mid = col_start + nbr_cols / 2;
-            transpose_recursive(
+            transpose_recursive::<WORDS, T>(
                 input,
                 output,
                 row_start,
@@ -515,7 +543,7 @@ unsafe fn transpose_recursive<T: Copy>(
                 total_rows,
                 col_out_base,
             );
-            transpose_recursive(
+            transpose_recursive::<WORDS, T>(
                 input,
                 output,
                 row_start,
@@ -542,8 +570,13 @@ unsafe fn transpose_recursive<T: Copy>(
 ///     [c, 2c)          ->   output[c*height .. 2c*height)
 ///     ...
 /// ```
+///
+/// # Safety
+///
+/// Both slices describe the checked `width * height` shape, with nonzero dimensions.
+/// If `WORDS`, elements satisfy `super::transpose_words`'s representation contract.
 #[cfg(feature = "parallel")]
-fn transpose_parallel<T: Copy + Send + Sync>(
+unsafe fn transpose_parallel<const WORDS: bool, T: Copy + Send + Sync>(
     input: &[T],
     output: &mut [T],
     width: usize,
@@ -562,14 +595,14 @@ fn transpose_parallel<T: Copy + Send + Sync>(
         .for_each(|(task, band)| {
             // Absolute source columns this band owns.
             let col_start = task * cols_per_task;
-            let col_end = (col_start + cols_per_task).min(width);
+            let col_end = col_start.saturating_add(cols_per_task).min(width);
 
             // SAFETY:
             // - `band` is exactly `(col_end - col_start) * height` long (only the last is shorter).
             // - The engine writes output rows `[0, col_end - col_start)`, all inside `band`.
             // - Reads address the shared `input`, valid for `width * height` elements.
             unsafe {
-                transpose_recursive(
+                transpose_recursive::<WORDS, T>(
                     input, band, 0, height, col_start, col_end, width, height, col_start,
                 );
             }
@@ -586,6 +619,14 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "transpose dimensions overflow")]
+    fn rejects_overflowing_dimensions_before_access() {
+        // The old code rejects the mismatched empty slice before accessing it,
+        // so this regression never exercises its unchecked loops.
+        transpose::<u32>(&[], &mut [], usize::MAX, 2);
+    }
 
     /// Independent textbook transpose used as the source of truth.
     fn reference<T: Copy>(input: &[T], width: usize, height: usize, zero: T) -> Vec<T> {

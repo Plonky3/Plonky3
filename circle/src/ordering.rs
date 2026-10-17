@@ -85,6 +85,14 @@ mod tests {
     use super::*;
 
     #[test]
+    #[should_panic(expected = "Mapped row index out of bounds")]
+    fn conversion_rejects_shortened_inner() {
+        let mut view = RowMajorMatrix::new((0u32..4).collect(), 1).cfft_perm_rows();
+        view.inner.values.truncate(1);
+        let _ = view.to_row_major_matrix();
+    }
+
+    #[test]
     fn ordering() {
         // reference ordering derived by hand
         assert_eq!(
