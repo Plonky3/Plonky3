@@ -5,12 +5,10 @@
 //! PCS tails. All commitments precede one common challenge z outside H.
 //! T(z) is jointly uniform and Q(z) is determined by those values and p.
 //!
-//! The INTERACTIVE algebra/query error is at most the PCS bound plus
-//! D/(2^128-N), where D=max(delta*(M-1), N+M-1) uses the committed message
-//! degree M-1, not the honest trace/quotient degrees. Compilation checks
-//! D*2^(s+2)<=2^128-N and selects q=4*(s+2). Hash binding/hiding, salt
-//! guessing, Fiat–Shamir/RO-query/grinding and simulator programming losses
-//! remain unproved. This is a reference prototype, not a production proof.
+//! Checked interactive and classical-ROM policies, and the complete derived
+//! security argument, are documented in [`super::security`]. This canonical
+//! AIR protocol proves the existence of rows satisfying the same current-row
+//! constraints; rows can repeat and there is no implicit execution progression.
 
 use alloc::sync::Arc;
 use alloc::vec;
@@ -25,35 +23,54 @@ use serde::{Deserialize, Serialize};
 
 use super::polynomial::{add, evaluate, exact_divide, interpolate, multiply, scale, vanishing};
 use super::{
-    Challenger, CurrentRowAirBuilder, ReferencePcsConfig, ReferenceZkPcs, Val, ZkCommitment,
-    ZkError, ZkOpeningProof, challenger, observe_bytes, observe_usize,
+    Challenger, CurrentRowAirBuilder, ReferenceZkPcs, Val, ZkCommitment, ZkError, ZkOpeningProof,
+    challenger, observe_bytes, observe_usize,
 };
 
 type Expr = SymbolicExpression<Val>;
 const VERSION: &[u8] = b"p3-binary-reference-zk-air-v2";
 
-/// Checked trace geometry and requested interactive algebra/query target.
+/// Checked trace geometry and an explicit security policy.
 #[derive(Debug, Clone)]
 pub struct ZkAirConfig {
     log_trace_height: usize,
-    security_bits: usize,
+    policy: super::security::SecurityPolicy,
 }
 
 impl ZkAirConfig {
-    /// Trace logarithm 1..=8 and target 1..=96 bits. Compilation additionally
-    /// limits width to 16, augmented constraints to 32, algebraic degree to 4,
-    /// public values to 1024, and each expanded expression to 4096 nodes/128
-    /// levels. The PCS allocation/work limits also apply to the whole batch.
-    pub fn new(log_trace_height: usize, security_bits: usize) -> Result<Self, ZkError> {
-        if !(1..=8).contains(&log_trace_height) || !(1..=96).contains(&security_bits) {
-            return Err(ZkError::InvalidConfig(
-                "AIR height or security target out of range",
-            ));
+    /// Request only the interactive algebra/query target, from 1 through 120.
+    /// This does not budget Fiat–Shamir grinding or commitment privacy. All
+    /// shape-dependent degree and resource checks still apply at compilation.
+    pub fn interactive(log_trace_height: usize, interactive_bits: usize) -> Result<Self, ZkError> {
+        Self::check_height(log_trace_height)?;
+        if !(1..=120).contains(&interactive_bits) {
+            return Err(ZkError::InvalidConfig("interactive target out of range"));
         }
         Ok(Self {
             log_trace_height,
-            security_bits,
+            policy: super::security::SecurityPolicy::Interactive(interactive_bits),
         })
+    }
+
+    /// Request the separate bounded-query classical-ROM guarantees documented
+    /// in [`super::security`]. Deployment-wide budgets are external assumptions,
+    /// not runtime counters. Compilation validates them against the AIR shape.
+    pub fn classical_rom(
+        log_trace_height: usize,
+        budget: super::ClassicalRomBudget,
+    ) -> Result<Self, ZkError> {
+        Self::check_height(log_trace_height)?;
+        Ok(Self {
+            log_trace_height,
+            policy: super::security::SecurityPolicy::ClassicalRom(budget),
+        })
+    }
+
+    fn check_height(log_trace_height: usize) -> Result<(), ZkError> {
+        if !(1..=8).contains(&log_trace_height) {
+            return Err(ZkError::InvalidConfig("AIR height out of range"));
+        }
+        Ok(())
     }
 }
 
@@ -67,13 +84,13 @@ pub struct ZkAirProof {
 /// Compiled, verifier-owned static shape, symbolic constraints and PCS geometry.
 ///
 /// Only current-row static AIR is supported: override the default
-/// `main_next_row_columns` declaration with an empty vector. The interactive
-/// error is the reference PCS bound plus D/(2^128-N), using committed degree
-/// M-1 and D=max(delta*(M-1), N+M-1). Hash and Fiat–Shamir losses remain
-/// unproved; this unaudited reference target is not a production security claim.
+/// `main_next_row_columns` declaration with an empty vector. Rows can repeat.
+/// See [`super::security`] for the exact relation, canonical byte grammar,
+/// separate ideal-ROM probability bounds and external RO/RNG assumptions.
 #[derive(Debug, Clone)]
 pub struct ReferenceZkAir {
     config: ZkAirConfig,
+    security: super::SecurityReport,
     width: usize,
     public_count: usize,
     constraints: Vec<Expr>,
@@ -107,7 +124,7 @@ impl ReferenceZkAir {
     ///     }
     /// }
     /// let _ = ReferenceZkAir::compile(
-    ///     &EmptyPermutationLoop, ZkAirConfig::new(1, 1).unwrap(),
+    ///     &EmptyPermutationLoop, ZkAirConfig::interactive(1, 1).unwrap(),
     /// );
     /// ```
     ///
@@ -128,7 +145,7 @@ impl ReferenceZkAir {
     ///     }
     /// }
     /// let _ = ReferenceZkAir::compile(
-    ///     &IndexedPermutation, ZkAirConfig::new(1, 1).unwrap(),
+    ///     &IndexedPermutation, ZkAirConfig::interactive(1, 1).unwrap(),
     /// );
     /// ```
     pub fn compile<A: Air<CurrentRowAirBuilder>>(
@@ -195,20 +212,17 @@ impl ReferenceZkAir {
         // deg T<=N; deg Q<=delta*N-N. Geometry never depends on witness degree.
         let message_len = (max_degree.saturating_sub(1) * n + 1).max(n + 1);
         let d = (max_degree * (message_len - 1)).max(n + message_len - 1);
-        let denominator = u128::MAX - (n as u128 - 1);
-        if (d as u128)
-            .checked_mul(1u128 << (config.security_bits + 2))
-            .is_none_or(|v| v > denominator)
-        {
-            return Err(ZkError::InvalidConfig(
-                "committed-degree AIR soundness bound exceeds target",
-            ));
-        }
-        let pcs_config = ReferencePcsConfig::new(message_len, 4 * (config.security_bits + 2))?;
         let batch_width = width
             .checked_add(constraints.len())
             .ok_or(ZkError::InvalidConfig("AIR batch width overflow"))?;
-        pcs_config.check_width(batch_width)?;
+        let (pcs_config, security) = super::security::compile_security(
+            config.policy,
+            n,
+            width,
+            constraints.len(),
+            message_len,
+            d,
+        )?;
         let wire = super::wire::WireGeometry::new(batch_width, &pcs_config)?;
         // Normalization removes cached degrees and pointer-sharing differences;
         // postcard's existing symbolic expression encoding fixes the AST bytes.
@@ -216,6 +230,7 @@ impl ReferenceZkAir {
         Ok(Self {
             vanishing: vanishing(config.log_trace_height),
             config,
+            security,
             width,
             public_count,
             constraints,
@@ -223,6 +238,12 @@ impl ReferenceZkAir {
             pcs: ReferenceZkPcs::new(pcs_config),
             wire,
         })
+    }
+
+    /// Return the checked public geometry, policy and separate component bounds.
+    /// See [`super::security`] for modeled RO/RNG assumptions and exact scope.
+    pub const fn security_report(&self) -> super::SecurityReport {
+        self.security
     }
 
     /// Prove a fixed-shape trace, using fresh private randomness for every mask
@@ -320,9 +341,10 @@ impl ReferenceZkAir {
     fn transcript(&self, public_values: &[Val]) -> Challenger {
         let mut transcript = challenger();
         observe_bytes(&mut transcript, VERSION);
+        self.config.policy.observe(&mut transcript);
         for value in [
             self.config.log_trace_height,
-            self.config.security_bits,
+            self.security.interactive_bits,
             self.width,
             self.public_count,
             self.constraints.len(),
@@ -455,3 +477,7 @@ fn scalar_expression(expr: &Expr, main: &[Val], public: &[Val]) -> Val {
         Expr::Leaf(_) => unreachable!("compiled AIR leaves were validated"),
     }
 }
+
+#[cfg(test)]
+#[path = "air_tests.rs"]
+mod tests;

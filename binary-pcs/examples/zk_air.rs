@@ -2,19 +2,19 @@
 //!
 //! Run with `cargo run -p p3-binary-pcs --features zk --example zk_air --release`.
 //! This uses the polynomial-size full-blend protocol, not BaseFold. The target
-//! below budgets interactive algebra/query error only; hash and Fiat–Shamir
-//! compilation losses remain unproved. See the crate README for the exact scope.
+//! below declares a classical-ROM adversary-call and global lifetime leaf
+//! budget. See the checked report and security contract for its assumptions.
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_binary_field::TowerLevel;
-use p3_binary_pcs::zk::{ReferenceZkAir, Val, ZkAirConfig};
+use p3_binary_pcs::zk::{ClassicalRomBudget, ReferenceZkAir, Val, ZkAirConfig};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::{StdRng, SysRng};
 use rand::{RngExt, SeedableRng};
 
 const LOG_TRACE_HEIGHT: usize = 2;
-const INTERACTIVE_TARGET_BITS: usize = 32;
+const TARGET_BITS: usize = 80;
 
 struct PrivateProduct;
 
@@ -62,7 +62,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let trace = RowMajorMatrix::new(values, 2);
     let air = ReferenceZkAir::compile(
         &PrivateProduct,
-        ZkAirConfig::new(LOG_TRACE_HEIGHT, INTERACTIVE_TARGET_BITS)?,
+        ZkAirConfig::classical_rom(
+            LOG_TRACE_HEIGHT,
+            ClassicalRomBudget::new(TARGET_BITS, 32, 49)?,
+        )?,
     )?;
     let proof = air.prove(trace, &[public_product], &mut rng)?;
     let bytes = air.encode_proof(&proof)?;
@@ -72,8 +75,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // seeds, trace values, or unblinded polynomial coefficients.
     println!(
         "Verified serialized proof: {} bytes; {height} rows, 2 private columns, 1 public value; \
-         {INTERACTIVE_TARGET_BITS}-bit interactive algebra/query target",
+         {TARGET_BITS}-bit classical-ROM target; Q_adv<=2^32 primitive calls, GLOBAL N_leaf<=2^49; see zk::security assumptions",
         bytes.len()
+    );
+    println!(
+        "Checked public security report: {:?}",
+        air.security_report()
     );
     Ok(())
 }

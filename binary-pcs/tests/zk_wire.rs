@@ -32,7 +32,7 @@ impl<AB: AirBuilder<F = Val>> Air<AB> for Product {
     }
 }
 fn air() -> ReferenceZkAir {
-    ReferenceZkAir::compile(&Product, ZkAirConfig::new(1, 1).unwrap()).unwrap()
+    ReferenceZkAir::compile(&Product, ZkAirConfig::interactive(1, 1).unwrap()).unwrap()
 }
 fn proof() -> &'static ZkAirProof {
     static PROOF: OnceLock<ZkAirProof> = OnceLock::new();
@@ -94,7 +94,8 @@ fn wire_rejects_foreign_magic_version_and_fixed_width_geometry() {
             assert!(air.decode_proof(&bytes).is_err());
         }
     }
-    let taller = ReferenceZkAir::compile(&Product, ZkAirConfig::new(2, 1).unwrap()).unwrap();
+    let taller =
+        ReferenceZkAir::compile(&Product, ZkAirConfig::interactive(2, 1).unwrap()).unwrap();
     assert!(taller.decode_proof(&encoded).is_err());
 }
 
@@ -257,12 +258,12 @@ fn protocol_v2_fixed_seed_full_proof_and_canonical_wire_digests() {
         ),
         (
             [
-                64, 178, 115, 97, 84, 41, 118, 130, 124, 147, 108, 20, 245, 24, 28, 139, 149, 203,
-                141, 162, 184, 79, 146, 50, 167, 123, 60, 27, 210, 89, 208, 141
+                215, 184, 240, 50, 6, 90, 174, 68, 253, 150, 198, 37, 197, 101, 135, 117, 221, 201,
+                149, 132, 43, 74, 134, 4, 199, 137, 78, 93, 15, 219, 142, 47
             ],
             [
-                104, 236, 85, 72, 84, 83, 81, 85, 57, 232, 29, 216, 237, 228, 180, 43, 23, 68, 47,
-                145, 58, 30, 146, 56, 73, 149, 124, 227, 138, 100, 156, 200
+                204, 255, 59, 103, 58, 121, 97, 60, 0, 190, 81, 222, 26, 142, 124, 22, 121, 125,
+                16, 54, 48, 212, 75, 125, 155, 43, 37, 186, 187, 154, 195, 230
             ]
         )
     );

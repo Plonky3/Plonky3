@@ -75,7 +75,8 @@ cargo run -p p3-binary-pcs --features zk --example zk_air --release
 It proves that two private columns have the same public product at every row,
 using `StdRng` freshly seeded from operating-system entropy for all private
 randomness. It serializes the actual proof, deserializes it, and verifies the
-round-trip. Output contains only proof byte length and public dimensions. The
+round-trip. Output contains only proof byte length and public dimensions, plus the checked
+classical-ROM security report. The
 native `zk_air` integration tests also verify distinct witnesses for one public
 product; the statement does not reveal a unique factorization.
 
@@ -99,8 +100,10 @@ geometry are transcript-bound. Trace logarithms are 1 through 8, widths at most
 16, augmented constraint counts at most 32, constraint degrees at most 4, and
 public-value counts at most 1024. Expressions and PCS allocations/work also have
 limits; a requested geometry can reject even within these individual limits.
-The configured interactive target is 1 through 96 bits, subject to the degree
-bound below. Unsupported AIR metadata and leaves reject during compilation,
+The explicit `ZkAirConfig::interactive(log_height, bits)` target is 1 through
+120 bits, subject to the degree bound below. `ZkAirConfig::classical_rom` instead
+takes a validated `ClassicalRomBudget` and checks the shape-dependent derived
+interactive target and separate classical-ROM components. Unsupported AIR metadata and leaves reject during compilation,
 before private randomness or transcript mutation.
 
 The lower-level `ReferenceZkPcs` takes columns of **monomial coefficients**, not
@@ -114,7 +117,8 @@ including through VM rollback. Single-use commitment state cannot enforce RNG
 freshness. Reusing the same `h` and `u` under distinct public `gamma` exposes
 `h=(g1+g2)/(gamma1+gamma2)`, including every low message coefficient.
 AIR proving manages single-use state internally; callers still own RNG freshness.
-The `zk` feature is unaudited and does not certify production security.
+The `zk` feature does not certify production security; human review is pending
+on the PR. The implementation security contract is in [`zk::security`](src/zk/security.rs).
 
 ### Reference protocol
 
@@ -204,9 +208,46 @@ degree. This uses the committed message degree bound `M-1`, including malicious
 messages, rather than the smaller honest degrees. Compilation chooses
 `M=max(N+1, (delta-1)*N+1)` (with saturating subtraction for `delta=0`) and checks
 `D*2^(s+2)<=2^128-N`. The target budgets these interactive algebra/query terms.
-It excludes hash binding/hiding, salt guessing, and unproved Fiat–Shamir
-compilation, random-oracle-query, grinding and simulator-programming losses.
-There is no end-to-end production noninteractive security certification.
+This explicit interactive mode excludes hash binding/hiding, salt guessing
+and Fiat–Shamir losses. For classical mode, the protocol-specific RBR, direct
+graph and joint privacy proofs and exact canonical AIR grammar are maintained
+in [`zk::security`](src/zk/security.rs). These are derived classical-ROM lemmas,
+not published certification or a standard-model claim about Keccak.
+
+The native example selects `ClassicalRomBudget::new(80, 32, 49)`: target 80,
+at most `2^32` adversarial primitive RO calls across all domains, and a **GLOBAL
+cumulative** cap of `2^49` honest salted leaf slots sharing the v2 leaf domain.
+That history includes h and u trees across all configurations, sessions,
+standalone commitments and aborted/failed attempts after salted leaf creation.
+These are external assumptions, not runtime counters or per-proof allowances.
+The lifetime claim ceases to apply if later leaf creation exceeds the cap.
+
+Compilation includes final-verifier calls: `T=2^b+V_max`, with
+`V_max=2*q*(log2(n)+1)+16+ceil(q/4)`. A monotone integer fixed point chooses
+`c=ceil(log2(T))`, `s=target+c`, `q=4*(s+2)` and checked PCS geometry. The example
+yields c=33, s=113, q=460. A 96-bit target at b=32 rejects at the field-degree
+check. Degree, graph, privacy and combined resource checks never silently
+downgrade a target; `security_report()` exposes their budgets and exponents.
+
+Acceptance with failed theoretical extraction is bounded by
+`T*max(D/(2^128-N),1/(2^128-1),(1-(e+1)/n)^q)+8*(T+1)^2/2^256`.
+The extractor is a theoretical polynomial-time graph-completion/unique-decoding
+algorithm, not a production verifier or practical performance promise. Separate
+privacy advantage is bounded by
+`Delta_rng+C(N_leaf,2)/2^256+N_leaf*Q_leaf/(2^256-N_leaf-Q_leaf)`.
+The constructor checks only the ideal privacy component. A real target-bit
+privacy claim requires bounding the complete CSPRNG lifecycle's `Delta_rng`
+within the remaining margin. These are separate bounded-query probability
+guarantees, not an unqualified target-bit work-security claim.
+
+The relation asserts existence of N rows satisfying the same `C_i(row,p)=0`;
+rows may repeat. It adds no execution progression, distinctness or public-record
+binding unless explicitly constrained within rows. One common opening point,
+fresh private randomness and atomic proving are load-bearing. Private-state
+exposure, side channels, rollback, QROM and simulation extractability are outside
+the contract. Generic external PCS challenger contexts are outside the AIR
+compiler theorem. Review the assumptions, byte contract and pinned raw-draw,
+AST, full-proof and canonical-wire tests together when changing the protocol.
 
 This implementation sends one full `L`-coefficient blend per committed
 polynomial, plus sampled authenticated rows: proof size is polynomial, not
@@ -214,5 +255,23 @@ succinct. Horner encoding costs `O(n*L)` field operations per polynomial, and
 the interpolation/quotient arithmetic is also a reference implementation.
 An optimized hiding BaseFold replacement remains future work; this protocol
 does not reuse the existing clear BaseFold reductions as a privacy argument.
+
+### Finite native profiling
+
+Build once, then measure the binary directly so compiler RSS is excluded:
+
+```sh
+cargo build -p p3-binary-pcs --features zk --example zk_profile --release
+/usr/bin/time -l target/release/examples/zk_profile product-4 3
+```
+
+Accepted cases are `product-4`, `product-64`, `product-256` (two columns), and
+`four-products-64` (eight columns). Each uses the 80/32/49 classical profile and
+fresh OS-seeded randomness per sample, with private factors varying by row and
+pair. The generic AIR explicitly declares no next-row access. Iterations are
+limited to 1 through 10. Output reports public geometry, actual canonical wire
+bytes, compile/prove/encode/decode-plus-verify timings. Process peak RSS from
+`time -l` is not live heap. Compare portable and `-C target-cpu=native` builds
+using the same cases; results depend on CPU, flags and thread count.
 
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.

@@ -41,24 +41,20 @@
 //! on the full blend and sigma. Private masks never come from the separate
 //! public Keccak challenger.
 //!
-//! In the interactive oracle model, put e=floor((n-L)/4). The error is at most
-//! 1/(2^128-1) + (1-(e+1)/n)^q: outside the unique exceptional gamma, any g
-//! satisfying a false low-coefficient claim differs from gamma*h+u at >e
-//! rows. Treating columns as a vector-valued RS code gives the same row minimum
-//! distance n-L+1. Two distinct gamma with at most e bad rows each would decode
-//! the same h matrix and all its low-coefficient claims, so the exceptional-gamma
-//! term does not require a union bound over columns when every column is checked.
-//! In particular q=4*(bits+2) suffices for a query contribution
-//! below 2^-(bits+2). This excludes hash security and Fiat–Shamir compilation
-//! losses. No noninteractive random-oracle simulation/compilation theorem is
-//! claimed; salt/hash simulator programming and grinding losses are unanalysed.
-//! This is an unaudited reference protocol, not a production security
-//! certification. Commitments must only be opened once, as enforced by the
-//! consumed, non-Clone private state. The caller's CryptoRng must remain fresh
-//! across proofs: never clone, reseed, reset or replay it, including VM rollback.
-//! Single-use state cannot enforce caller RNG freshness. Reusing h and u under
-//! distinct public gamma reveals every low message coefficient from the blends.
-//! The `zk` feature name does not certify production security.
+//! [`ZkAirConfig::interactive`] budgets only interactive algebra/query error.
+//! [`ZkAirConfig::classical_rom`] additionally checks explicit adversary RO-call
+//! and GLOBAL lifetime salted-leaf budgets. [`ReferenceZkAir::security_report`]
+//! exposes the checked public geometry and component bounds. See [`security`]
+//! for the full derived classical-ROM RBR/knowledge, graph and joint privacy
+//! arguments, exact canonical bytes and modeled RO/RNG assumptions. Concrete
+//! Keccak/CSPRNG security is assumed; real randomness adds `Delta_rng`.
+//!
+//! Commitments permit one opening only, enforced by consumed non-Clone private
+//! state. Fresh private RNG state is required across proofs: never clone,
+//! reseed, reset or replay it, including rollback. Single-use state does not
+//! enforce caller RNG freshness. Reusing h and u under distinct gamma reveals
+//! every low message coefficient. This feature is not a security certification;
+//! human review is pending on the PR.
 //!
 //! Protocol v2 separates leaf/node/Fiat–Shamir Keccak domains and retains the
 //! complete framed public prefix. Each z/gamma uses one fixed 16-candidate draw
@@ -72,6 +68,8 @@ pub use pcs::*;
 mod air;
 mod builder;
 mod polynomial;
+pub mod security;
+pub use security::{ClassicalRomBudget, ClassicalRomReport, SecurityReport};
 mod wire;
 pub use air::*;
 pub use builder::CurrentRowAirBuilder;

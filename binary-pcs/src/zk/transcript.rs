@@ -37,6 +37,17 @@ role_hasher!(FiatShamirHash, b"p3-binary-zk-v2/fiat-shamir\0");
 pub struct Challenger {
     transcript: Vec<u8>,
     draw_ordinal: u64,
+    #[cfg(test)]
+    pub(super) draws: Vec<RecordedDraw>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(super) struct RecordedDraw {
+    pub(super) prefix: Vec<u8>,
+    pub(super) label: Vec<u8>,
+    pub(super) ordinal: u64,
+    pub(super) raw: Vec<u8>,
 }
 
 /// Start a fresh protocol v2 transcript.
@@ -44,6 +55,8 @@ pub const fn challenger() -> Challenger {
     Challenger {
         transcript: Vec::new(),
         draw_ordinal: 0,
+        #[cfg(test)]
+        draws: Vec::new(),
     }
 }
 
@@ -80,6 +93,13 @@ impl Challenger {
                 FiatShamirHash.hash_iter(input.iter().copied().chain(counter.to_le_bytes()));
             output.extend_from_slice(&digest[..(output_len - output.len()).min(32)]);
         }
+        #[cfg(test)]
+        self.draws.push(RecordedDraw {
+            prefix: self.transcript.clone(),
+            label: label.to_vec(),
+            ordinal: self.draw_ordinal,
+            raw: output.clone(),
+        });
         self.transcript.push(5);
         self.transcript.extend_from_slice(&fixed(label.len()));
         self.transcript.extend_from_slice(label);

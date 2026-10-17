@@ -84,5 +84,9 @@ harness = false
 name = "zk_air"
 required-features = ["zk"]
 
+[[example]]
+name = "zk_profile"
+required-features = ["zk"]
+
 [lints]
 workspace = true
