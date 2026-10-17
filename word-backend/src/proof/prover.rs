@@ -156,6 +156,8 @@ impl<W: PackedWord> WordProofKey<W> {
             prover.prove::<F, _>(challenger, variables, ZEROCHECK_DEGREE, 0, sum)
         });
         let operands = prover.terminal_operands();
+        // Prefix folding retains full table capacities; release them before shift proving.
+        drop(prover);
         transcript.finish();
 
         // Every operand claim shares the point the vanishing check ended on.
