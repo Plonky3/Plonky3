@@ -23,6 +23,7 @@ rand.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-binary-field = { path = "../binary-field" }
 p3-challenger = { path = "../challenger" }
@@ -41,6 +42,10 @@ p3-uni-stark = { path = "../uni-stark" }
 proptest.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+
+[[bench]]
+name = "binary-trace"
+harness = false
 
 [lints]
 workspace = true
