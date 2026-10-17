@@ -366,6 +366,14 @@ fn coordinate_blocks_match_scalar_bits_at_each_density_and_tail() {
         const COORDINATES: usize = 192;
     }
 
+    #[derive(Clone, Copy, Debug)]
+    #[repr(transparent)]
+    struct PartialCoordinates<const BYTES: usize>([u8; BYTES]);
+    // SAFETY: the byte array has no padding; each byte holds eight coordinates.
+    unsafe impl<const BYTES: usize> Coordinates for PartialCoordinates<BYTES> {
+        const COORDINATES: usize = BYTES * 8;
+    }
+
     let mut rng = SmallRng::seed_from_u64(0xD35E);
     for rows in [1, 7, 32, 63, 64] {
         let random64: Vec<BinaryField64> = (0..rows).map(|_| rng.random()).collect();
@@ -385,6 +393,14 @@ fn coordinate_blocks_match_scalar_bits_at_each_density_and_tail() {
         let zero_heavy: Vec<EF> = (0..rows)
             .map(|row| if row % 8 == 0 { rng.random() } else { EF::ZERO })
             .collect();
+        let partial72: Vec<_> = (0..rows)
+            .map(|_| PartialCoordinates::<9>(rng.random()))
+            .collect();
+        let partial136: Vec<_> = (0..rows)
+            .map(|_| PartialCoordinates::<17>(rng.random()))
+            .collect();
+        check(&partial72);
+        check(&partial136);
         check(&random64);
         check(&random128);
         check(&random192);

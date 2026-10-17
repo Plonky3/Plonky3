@@ -49,8 +49,14 @@ impl ColumnBatchShape {
     }
 
     /// Values each batch binds: complete views, followed by any sparse successors.
-    pub(crate) fn values_per_batch(&self) -> usize {
-        self.width * self.num_views() + self.sparse_next.len()
+    pub(crate) fn values_per_batch(&self) -> Option<usize> {
+        self.width
+            .checked_mul(self.num_views())?
+            .checked_add(self.sparse_next.len())
+    }
+
+    pub(crate) fn run_len(&self) -> Option<usize> {
+        self.values_per_batch()?.checked_mul(self.num_batches)
     }
 
     const fn successor_width(&self) -> usize {
@@ -61,13 +67,20 @@ impl ColumnBatchShape {
         }
     }
 
+    pub(crate) fn interaction_count(&self) -> Option<usize> {
+        self.num_batches
+            .checked_mul(3 + usize::from(self.successor_width() != 0))
+    }
+
     fn pattern<F, EF>(&self) -> InteractionPattern
     where
         F: TranscriptField,
         EF: Field + AlgebraIdentity<F>,
     {
-        let per_batch = 3 + usize::from(self.successor_width() != 0);
-        let mut steps = Vec::with_capacity(self.num_batches * per_batch);
+        let mut steps = Vec::with_capacity(
+            self.interaction_count()
+                .expect("the opening route checked the transcript count"),
+        );
         for _ in 0..self.num_batches {
             steps.push(Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,

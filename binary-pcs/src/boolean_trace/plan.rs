@@ -15,6 +15,29 @@ use super::{BooleanTraceCommitment, BooleanTraceCommitmentError};
 use crate::boolean::{BitOpening, BitReadings, BooleanBackend};
 use crate::boolean_trace_transcript::ColumnBatchShape;
 
+/// Validate cell arithmetic and the padded witness before the shared infallible
+/// planner allocates selectors. With this bound every planner offset is <= cells.
+fn checked_layout_arity(shapes: &[TableShape]) -> Option<usize> {
+    let cells = shapes.iter().try_fold(0usize, |total, shape| {
+        let rows = 1usize.checked_shl(shape.num_variables().try_into().ok()?)?;
+        total.checked_add(rows.checked_mul(shape.width())?)
+    })?;
+    let padded = cells.checked_next_power_of_two()?;
+    Some(padded.trailing_zeros() as usize)
+}
+
+/// Count public batches, including empty ones, without wrapping allocation lengths.
+pub(super) fn opening_count(protocol: &OpeningProtocol) -> Option<usize> {
+    protocol
+        .iter_openings()
+        .try_fold(0usize, |count, _| count.checked_add(1))
+}
+
+fn checked_stacked_layout(shapes: &[TableShape]) -> Option<(usize, Vec<TablePlacement>)> {
+    checked_layout_arity(shapes)?;
+    Some(plan_stacked_layout(shapes))
+}
+
 impl<EF, B> BooleanTraceCommitment<EF, B>
 where
     EF: BitCoordinates + ExtensionField<B::Val>,
@@ -31,14 +54,39 @@ where
         shapes: &[TableShape],
     ) -> Result<Vec<TablePlacement>, BooleanTraceCommitmentError<B::Error>> {
         // Prover and verifier both plan from the public shapes, so neither picks its own.
-        let (arity, placements) = plan_stacked_layout(shapes);
+        let arity = checked_layout_arity(shapes)
+            .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
         if arity != self.num_variables() {
             return Err(BooleanTraceCommitmentError::StackedArity {
                 expected: self.num_variables(),
                 actual: arity,
             });
         }
-        Ok(placements)
+        // Reject a mismatched arity before allocating one selector per public column.
+        checked_stacked_layout(shapes)
+            .map(|(_, placements)| placements)
+            .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)
+    }
+
+    /// Validate protocol counts and arity without allocating placements or sampling.
+    pub(super) fn validate_protocol(
+        &self,
+        protocol: &OpeningProtocol,
+    ) -> Result<(), BooleanTraceCommitmentError<B::Error>> {
+        protocol
+            .checked_num_cells()
+            .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+        opening_count(protocol).ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+        value_count(protocol).ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+        let actual = checked_layout_arity(&protocol.table_shapes())
+            .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+        if actual != self.num_variables() {
+            return Err(BooleanTraceCommitmentError::StackedArity {
+                expected: self.num_variables(),
+                actual,
+            });
+        }
+        Ok(())
     }
 
     /// The bit claims the per-column route raises, in transcript order.
@@ -82,6 +130,7 @@ where
         protocol: &OpeningProtocol,
         points: &[Point<EF>],
     ) -> Result<Vec<TablePlacement>, BooleanTraceCommitmentError<B::Error>> {
+        self.validate_protocol(protocol)?;
         let placements = self.placements(&protocol.table_shapes())?;
         protocol
             .check_points(points)
@@ -132,9 +181,11 @@ where
         protocol: &OpeningProtocol,
         known: &[Option<OpeningEvals<EF>>],
     ) -> Result<(), BooleanTraceCommitmentError<B::Error>> {
-        if known.len() != protocol.num_openings() {
+        let count =
+            opening_count(protocol).ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+        if known.len() != count {
             return Err(BooleanTraceCommitmentError::KnownValueCount {
-                expected: protocol.num_openings(),
+                expected: count,
                 actual: known.len(),
             });
         }
@@ -202,11 +253,27 @@ pub(super) struct ColumnBlock {
 
 impl OpeningRoute {
     /// Resolve the route a protocol takes.
-    pub(super) fn new(protocol: &OpeningProtocol) -> Self {
-        if let Some(runs) = batched_runs(protocol) {
-            return Self::Batched(runs);
+    pub(super) fn new(protocol: &OpeningProtocol) -> Option<Self> {
+        protocol.checked_num_cells()?;
+        opening_count(protocol)?;
+        checked_layout_arity(&protocol.table_shapes())?;
+        value_count(protocol)?;
+        let route = if let Some(runs) = batched_runs(protocol) {
+            Self::Batched(runs)
+        } else if let Some(route) = hybrid_route(protocol) {
+            route
+        } else {
+            Self::PerColumn(ClaimPlan::of(protocol)?)
+        };
+        // Check every run and security count before any transcript can be started.
+        for run in route.runs() {
+            run.shape.interaction_count()?;
+            run.value_offset.checked_add(run.shape.run_len()?)?;
+            run.opening.checked_add(run.shape.num_batches)?;
         }
-        hybrid_route(protocol).unwrap_or_else(|| Self::PerColumn(ClaimPlan::of(protocol)))
+        route.num_reductions()?;
+        route.column_claim_count()?;
+        Some(route)
     }
 
     /// Column-batched runs, including those beside ordinary residual claims.
@@ -218,20 +285,28 @@ impl OpeningRoute {
     }
 
     /// Reductions the bit commitment answers on this route.
-    pub(super) fn num_reductions(&self) -> usize {
+    pub(super) fn num_reductions(&self) -> Option<usize> {
+        let blocks = self.runs().iter().try_fold(0usize, |total, run| {
+            total.checked_add(run.shape.num_batches.checked_mul(run.blocks.len())?)
+        })?;
         match self {
-            Self::Batched(runs) => runs
-                .iter()
-                .map(|run| run.shape.num_batches * run.blocks.len())
-                .sum(),
-            Self::PerColumn(plan) => plan.claims().len(),
-            Self::Hybrid { runs, residual } => {
-                runs.iter()
-                    .map(|run| run.shape.num_batches * run.blocks.len())
-                    .sum::<usize>()
-                    + residual.len()
-            }
+            Self::Batched(_) => Some(blocks),
+            Self::PerColumn(plan) => Some(plan.claims().len()),
+            Self::Hybrid { residual, .. } => blocks.checked_add(residual.len()),
         }
+    }
+
+    /// Every block/view combination that draws a column point, checked separately
+    /// from the ordinary residual claims the backend charges.
+    pub(super) fn column_claim_count(&self) -> Option<usize> {
+        self.runs().iter().try_fold(0usize, |total, run| {
+            let claims = run
+                .shape
+                .num_batches
+                .checked_mul(run.shape.num_views())?
+                .checked_mul(run.blocks.len())?;
+            total.checked_add(claims)
+        })
     }
 
     /// Whether some reduction reads a successor view over more rows than one element absorbs.
@@ -261,21 +336,18 @@ impl OpeningRoute {
 /// One row ahead it reads none of it or all of it, the same way across the table's batches.
 fn batched_runs(protocol: &OpeningProtocol) -> Option<Vec<TableRun>> {
     let shapes = protocol.table_shapes();
-    if protocol.num_openings() == 0 {
+    if opening_count(protocol)? == 0 {
         return None;
     }
-    let (arity, placements) = plan_stacked_layout(&shapes);
-    let used = shapes
-        .iter()
-        .map(|shape| shape.width() << shape.num_variables())
-        .sum::<usize>();
+    let (arity, placements) = checked_stacked_layout(&shapes)?;
+    let used = protocol.checked_num_cells()?;
     let mut by_table = alloc::vec![None; shapes.len()];
     for placement in &placements {
         by_table[placement.idx()] = Some(placement);
     }
 
     let mut runs: Vec<TableRun> = Vec::new();
-    let mut value_offset = 0;
+    let mut value_offset = 0usize;
     for (opening, (table, batch)) in protocol.iter_openings().enumerate() {
         let width = shapes[table].width();
         let complete = |read: &[usize]| read.iter().copied().eq(0..width);
@@ -289,7 +361,7 @@ fn batched_runs(protocol: &OpeningProtocol) -> Option<Vec<TableRun>> {
                 if run.shape.next != next {
                     return None;
                 }
-                run.shape.num_batches += 1;
+                run.shape.num_batches = run.shape.num_batches.checked_add(1)?;
             }
             _ => {
                 let placement = by_table[table]?;
@@ -308,7 +380,9 @@ fn batched_runs(protocol: &OpeningProtocol) -> Option<Vec<TableRun>> {
                 });
             }
         }
-        value_offset += batch.len();
+        value_offset = value_offset
+            .checked_add(batch.current().len())?
+            .checked_add(batch.next().len())?;
     }
     Some(runs)
 }
@@ -317,18 +391,15 @@ fn batched_runs(protocol: &OpeningProtocol) -> Option<Vec<TableRun>> {
 /// cost less than the original shared current/successor per-column reductions.
 fn hybrid_route(protocol: &OpeningProtocol) -> Option<OpeningRoute> {
     let shapes = protocol.table_shapes();
-    let (arity, placements) = plan_stacked_layout(&shapes);
-    let used = shapes
-        .iter()
-        .map(|shape| shape.width() << shape.num_variables())
-        .sum();
+    let (arity, placements) = checked_stacked_layout(&shapes)?;
+    let used = protocol.checked_num_cells()?;
     let mut by_table = alloc::vec![None; shapes.len()];
     for placement in &placements {
         by_table[placement.idx()] = Some(placement);
     }
     let mut runs = Vec::new();
-    let mut selected = alloc::vec![None; protocol.num_openings()];
-    let mut offset = 0;
+    let mut selected = alloc::vec![None; opening_count(protocol)?];
+    let mut offset = 0usize;
     for (opening, (table, batch)) in protocol.iter_openings().enumerate() {
         let width = shapes[table].width();
         let complete = |read: &[usize]| read.iter().copied().eq(0..width);
@@ -336,7 +407,7 @@ fn hybrid_route(protocol: &OpeningProtocol) -> Option<OpeningRoute> {
             let blocks = column_blocks(by_table[table]?, shapes[table], arity, used)?;
             let next = complete(batch.next());
             let residual_count = if next { 0 } else { batch.next().len() };
-            if blocks.len() + residual_count < width {
+            if blocks.len().checked_add(residual_count)? < width {
                 selected[opening] = Some(next);
                 runs.push(TableRun {
                     table,
@@ -357,14 +428,16 @@ fn hybrid_route(protocol: &OpeningProtocol) -> Option<OpeningRoute> {
                 });
             }
         }
-        offset += batch.len();
+        offset = offset
+            .checked_add(batch.current().len())?
+            .checked_add(batch.next().len())?;
     }
     if runs.is_empty() {
         return None;
     }
     // Complete current vectors are consumed by the selected runs. Their sparse
     // successor positions remain ordinary claims; all other batches stay intact.
-    let residual = column_claims(protocol)
+    let residual = column_claims(protocol)?
         .into_iter()
         .filter_map(|mut claim| match selected[claim.opening] {
             Some(true) => None,
@@ -396,21 +469,22 @@ fn column_blocks(
     if !selectors
         .iter()
         .enumerate()
-        .all(|(column, selector)| selector.index() == start + column)
+        .all(|(column, selector)| Some(selector.index()) == start.checked_add(column))
     {
         return None;
     }
-    let slots = 1usize << (arity - rows);
-    let end = start + shape.width();
-    let free_tail = end << rows >= used;
-    let column_variables = shape.width().next_power_of_two().trailing_zeros() as usize;
+    let slots = 1usize.checked_shl(arity.checked_sub(rows)?.try_into().ok()?)?;
+    let end = start.checked_add(shape.width())?;
+    let row_count = 1usize.checked_shl(rows.try_into().ok()?)?;
+    let free_tail = end.checked_mul(row_count)? >= used;
+    let column_variables = shape.width().checked_next_power_of_two()?.trailing_zeros() as usize;
 
     let mut blocks = Vec::new();
     let mut position = start;
     while position < end {
         let mut variables = column_variables.min(position.trailing_zeros() as usize);
         loop {
-            let stop = position + (1 << variables);
+            let stop = position.checked_add(1usize.checked_shl(variables.try_into().ok()?)?)?;
             if stop <= end || (free_tail && stop <= slots) || variables == 0 {
                 break;
             }
@@ -421,7 +495,7 @@ fn column_blocks(
             first: position - start,
             variables,
         });
-        position += 1 << variables;
+        position = position.checked_add(1usize.checked_shl(variables.try_into().ok()?)?)?;
     }
     Some(blocks)
 }
@@ -446,11 +520,12 @@ pub(super) struct ColumnClaim {
 /// A batch contributes one claim per entry of its current list, then one per successor
 /// entry no current claim already answers. Each claim carries the positions of its own
 /// values in the run, which is every batch's current values followed by its next ones.
-pub(super) fn column_claims(protocol: &OpeningProtocol) -> Vec<ColumnClaim> {
+pub(super) fn column_claims(protocol: &OpeningProtocol) -> Option<Vec<ColumnClaim>> {
+    value_count(protocol)?;
     let mut claims = Vec::new();
-    let mut cursor = 0;
+    let mut cursor = 0usize;
     for (opening, (table, batch)) in protocol.iter_openings().enumerate() {
-        let next_cursor = cursor + batch.current().len();
+        let next_cursor = cursor.checked_add(batch.current().len())?;
         // Every successor entry is answered exactly once, so no claimed value goes unchecked.
         let mut answered = alloc::vec![false; batch.next().len()];
         for (offset, &column) in batch.current().iter().enumerate() {
@@ -466,8 +541,12 @@ pub(super) fn column_claims(protocol: &OpeningProtocol) -> Vec<ColumnClaim> {
                 table,
                 column,
                 opening,
-                current_at: Some(cursor + offset),
-                next_at: at.map(|at| next_cursor + at),
+                current_at: Some(cursor.checked_add(offset)?),
+                next_at: if let Some(at) = at {
+                    Some(next_cursor.checked_add(at)?)
+                } else {
+                    None
+                },
             });
         }
         for (at, &column) in batch.next().iter().enumerate() {
@@ -477,18 +556,24 @@ pub(super) fn column_claims(protocol: &OpeningProtocol) -> Vec<ColumnClaim> {
                     column,
                     opening,
                     current_at: None,
-                    next_at: Some(next_cursor + at),
+                    next_at: Some(next_cursor.checked_add(at)?),
                 });
             }
         }
-        cursor = next_cursor + batch.next().len();
+        cursor = next_cursor.checked_add(batch.next().len())?;
     }
-    claims
+    Some(claims)
 }
 
 /// Values one protocol opens: per batch, its current readings then its successor ones.
-pub(super) fn value_count(protocol: &OpeningProtocol) -> usize {
-    protocol.iter_openings().map(|(_, batch)| batch.len()).sum()
+pub(super) fn value_count(protocol: &OpeningProtocol) -> Option<usize> {
+    protocol
+        .iter_openings()
+        .try_fold(0usize, |total, (_, batch)| {
+            total
+                .checked_add(batch.current().len())?
+                .checked_add(batch.next().len())
+        })
 }
 
 /// The per-column claims of one protocol, together with the length of the value run they lay
@@ -506,9 +591,8 @@ pub(super) struct ClaimPlan {
 
 impl ClaimPlan {
     /// The plan the per-column route raises for a protocol.
-    pub(super) fn of(protocol: &OpeningProtocol) -> Self {
-        Self::new(column_claims(protocol), value_count(protocol))
-            .expect("the per-column claims write every value position exactly once")
+    pub(super) fn of(protocol: &OpeningProtocol) -> Option<Self> {
+        Self::new(column_claims(protocol)?, value_count(protocol)?)
     }
 
     /// A plan over a run of `len` values, if the claims write each position exactly once.
@@ -571,8 +655,9 @@ pub(super) fn opening_evals<EF: Field>(
     protocol: &OpeningProtocol,
     values: &[EF],
 ) -> Vec<OpeningEvals<EF>> {
-    let mut evals = Vec::with_capacity(protocol.num_openings());
-    let mut cursor = 0;
+    let mut evals =
+        Vec::with_capacity(opening_count(protocol).expect("the protocol count was checked"));
+    let mut cursor = 0usize;
     for (_, batch) in protocol.iter_openings() {
         let next_cursor = cursor + batch.current().len();
         let end = next_cursor + batch.next().len();

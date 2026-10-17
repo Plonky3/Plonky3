@@ -20,6 +20,7 @@ use super::*;
 use crate::packing::PackedWords;
 use crate::params::BinaryPcsParams;
 use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
+use p3_sumcheck::layout::plan_stacked_layout;
 
 type EF = BinaryField128;
 
@@ -732,10 +733,10 @@ fn the_claim_plan_writes_every_value_position_exactly_once() {
             TableShape::new(8, width),
             vec![OpeningBatch::new(current.clone(), next.clone())],
         )]);
-        let len = value_count(&protocol);
+        let len = value_count(&protocol).unwrap();
         assert_eq!(len, current.len() + next.len());
         assert!(
-            ClaimPlan::new(column_claims(&protocol), len).is_some(),
+            ClaimPlan::new(column_claims(&protocol).unwrap(), len).is_some(),
             "{current:?} / {next:?}"
         );
     }
@@ -755,9 +756,9 @@ fn the_claim_plan_writes_every_value_position_exactly_once() {
             vec![OpeningBatch::new(vec![1, 0], vec![0])],
         ),
     ]);
-    let len = value_count(&protocol);
+    let len = value_count(&protocol).unwrap();
     assert_eq!(len, 5 + 3 + 3);
-    assert!(ClaimPlan::new(column_claims(&protocol), len).is_some());
+    assert!(ClaimPlan::new(column_claims(&protocol).unwrap(), len).is_some());
 
     // Both ways a plan can miss are refused, so the checks above are not vacuous.
     //
@@ -829,13 +830,13 @@ fn each_route_emits_the_reductions_its_plan_counts() {
         ),
         (two_tables.to_vec(), protocol(&two_tables), true, 3, 0xB740),
     ] {
-        let route = OpeningRoute::new(&protocol);
+        let route = OpeningRoute::new(&protocol).unwrap();
         assert_eq!(
             matches!(route, OpeningRoute::Batched(_)),
             batched,
             "{seed:#x}"
         );
-        assert_eq!(route.num_reductions(), reductions, "{seed:#x}");
+        assert_eq!(route.num_reductions().unwrap(), reductions, "{seed:#x}");
 
         let scheme = pcs(&shapes);
         let tables = shapes
@@ -858,7 +859,7 @@ fn each_route_emits_the_reductions_its_plan_counts() {
             .unwrap();
         assert_eq!(
             proof.opening.reduction.claims.len(),
-            route.num_reductions(),
+            route.num_reductions().unwrap(),
             "{seed:#x}"
         );
     }
@@ -2181,7 +2182,7 @@ proptest::proptest! {
                 })
                 .collect(),
         );
-        let route = OpeningRoute::new(&protocol);
+        let route = OpeningRoute::new(&protocol).unwrap();
         let OpeningRoute::Batched(runs) = &route else {
             panic!("a complete protocol takes the batched route");
         };
@@ -2216,7 +2217,7 @@ proptest::proptest! {
         let mut proof = scheme
             .open_at(data, &protocol, &points, &mut prover_chal)
             .unwrap();
-        proptest::prop_assert_eq!(proof.opening.reduction.claims.len(), route.num_reductions());
+        proptest::prop_assert_eq!(proof.opening.reduction.claims.len(), route.num_reductions().unwrap());
 
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
@@ -2309,7 +2310,10 @@ fn hybrid_batches_save_reductions_only_below_the_column_cost() {
                 (0..successors).rev().collect()
             };
             let protocol = successor_protocol(&[shape], &next);
-            let actual = OpeningRoute::new(&protocol).num_reductions();
+            let actual = OpeningRoute::new(&protocol)
+                .unwrap()
+                .num_reductions()
+                .unwrap();
             // One aligned padded block. Complete successors share that block;
             // sparse successors remain ordinary claims, one per requested column.
             let expected = if successors == 0 || successors == width {
@@ -2423,14 +2427,17 @@ fn hybrid_mixed_heights_and_interleaved_partial_batches_keep_value_order() {
         .iter_openings()
         .map(|(table, _)| Point::<EF>::rand(&mut rng, shapes[table].num_variables()))
         .collect();
-    let route = OpeningRoute::new(&protocol);
+    let route = OpeningRoute::new(&protocol).unwrap();
     assert!(matches!(route, OpeningRoute::Hybrid { .. }));
     let mut prover = challenger();
     let (root, data) = scheme.commit(sources.clone(), &mut prover).unwrap();
     let proof = scheme
         .open_at(data, &protocol, &points, &mut prover)
         .unwrap();
-    assert_eq!(proof.opening.reduction.claims.len(), route.num_reductions());
+    assert_eq!(
+        proof.opening.reduction.claims.len(),
+        route.num_reductions().unwrap()
+    );
     let mut packed_chal = challenger();
     let (packed_root, packed_data) = scheme
         .commit(sources.iter().map(packed_table).collect(), &mut packed_chal)
@@ -2504,5 +2511,164 @@ fn hybrid_security_charges_column_draws_residuals_and_successor_tensors() {
         // One current block draws six coordinates; sparse successor claims are
         // discharged ordinarily, so they add no column draw.
         assert!((term_bits(&security, "column-batching") - 125.41503749927884).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn overflowing_public_protocols_are_refused_before_planning_or_sampling() {
+    let good = TableShape::new(8, 3);
+    let scheme = pcs(&[good]);
+    let request = protocol(&[good]);
+    let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x0F10), 8);
+    let mut prover = challenger();
+    let (root, data) = scheme
+        .commit(vec![table_with_width(0x0F11, 8, 3)], &mut prover)
+        .unwrap();
+    let proof = scheme
+        .open_at(
+            data.clone(),
+            &request,
+            core::slice::from_ref(&point),
+            &mut prover.clone(),
+        )
+        .unwrap();
+    let top = usize::BITS as usize - 1;
+    for shapes in [
+        vec![TableShape::new(top, 3)], // One table's cell count overflows.
+        vec![TableShape::new(top, 1), TableShape::new(top, 1)], // Sum overflows.
+        vec![TableShape::new(top, 1), TableShape::new(0, 1)], // Padding overflows.
+        vec![TableShape::new(0, usize::MAX)],
+        vec![TableShape::new(0, 1usize << (top - 1))], // Wrong arity, huge width.
+    ] {
+        let bad = OpeningProtocol::new(
+            shapes
+                .iter()
+                .map(|shape| TableSpec::new(*shape, vec![OpeningBatch::new(vec![0], Vec::new())]))
+                .collect(),
+        );
+        assert!(<BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<EF, MyChallenger>>::prescribed_security(&scheme, &bad).is_none());
+        assert!(matches!(
+            scheme.validate_opening(&bad, &[]),
+            Err(BooleanTraceCommitmentError::InvalidOpeningProtocol
+                | BooleanTraceCommitmentError::StackedArity { .. })
+        ));
+        for sampled in [false, true] {
+            let mut verify_chal = challenger();
+            let mut unchanged = verify_chal.clone();
+            let result = if sampled {
+                scheme.verify(&root, &proof, &mut verify_chal, bad.clone())
+            } else {
+                scheme
+                    .verify_at(&root, &proof, &bad, &[], &mut verify_chal)
+                    .map(|_| ())
+            };
+            assert!(matches!(
+                result,
+                Err(BooleanTraceCommitmentError::InvalidOpeningProtocol
+                    | BooleanTraceCommitmentError::StackedArity { .. })
+            ));
+            assert_eq!(
+                p3_challenger::CanSample::<EF>::sample(&mut verify_chal),
+                p3_challenger::CanSample::<EF>::sample(&mut unchanged)
+            );
+            let mut open_chal = prover.clone();
+            let mut unchanged = open_chal.clone();
+            let result = if sampled {
+                scheme.open(data.clone(), bad.clone(), &mut open_chal)
+            } else {
+                scheme.open_at(data.clone(), &bad, &[], &mut open_chal)
+            };
+            assert!(result.is_err());
+            assert_eq!(
+                p3_challenger::CanSample::<EF>::sample(&mut open_chal),
+                p3_challenger::CanSample::<EF>::sample(&mut unchanged)
+            );
+        }
+    }
+}
+
+#[test]
+fn hybrid_derived_counts_refuse_multiplication_and_sum_overflow() {
+    use super::plan::ColumnBlock;
+    use p3_sumcheck::layout::Selector;
+
+    let block = ColumnBlock {
+        prefix: Selector::new(0, 0),
+        first: 0,
+        variables: 0,
+    };
+    let run = TableRun {
+        table: 0,
+        opening: 0,
+        value_offset: 0,
+        shape: ColumnBatchShape {
+            table_variables: 1,
+            width: 1,
+            num_batches: usize::MAX,
+            next: true,
+            sparse_next: Vec::new(),
+        },
+        blocks: vec![block, block],
+    };
+    assert_eq!(run.shape.values_per_batch(), Some(2));
+    assert_eq!(run.shape.run_len(), None);
+    assert_eq!(run.shape.interaction_count(), None);
+    let route = OpeningRoute::Batched(vec![run.clone()]);
+    assert_eq!(route.num_reductions(), None);
+    assert_eq!(route.column_claim_count(), None);
+
+    let mut half = run.clone();
+    half.shape.next = false;
+    half.shape.num_batches = usize::MAX / 2 + 1;
+    half.blocks.truncate(1);
+    assert_eq!(half.shape.run_len(), Some(usize::MAX / 2 + 1));
+    let route = OpeningRoute::Batched(vec![half.clone(), half]);
+    assert_eq!(route.num_reductions(), None);
+    assert_eq!(route.column_claim_count(), None);
+
+    let mut residual_overflow = run;
+    residual_overflow.shape.next = false;
+    residual_overflow.blocks.truncate(1);
+    let route = OpeningRoute::Hybrid {
+        runs: vec![residual_overflow],
+        residual: vec![ColumnClaim {
+            table: 0,
+            column: 0,
+            opening: 0,
+            current_at: None,
+            next_at: Some(0),
+        }],
+    };
+    assert_eq!(route.num_reductions(), None);
+    assert_eq!(route.column_claim_count(), Some(usize::MAX));
+    let mut shape = ColumnBatchShape {
+        table_variables: 1,
+        width: usize::MAX,
+        num_batches: 1,
+        next: true,
+        sparse_next: Vec::new(),
+    };
+    assert_eq!(shape.values_per_batch(), None);
+    shape.next = false;
+    shape.sparse_next.push(0);
+    assert_eq!(shape.values_per_batch(), None);
+}
+
+#[test]
+fn overflowing_shapes_have_no_opening_route() {
+    let top = usize::BITS as usize - 1;
+    for shapes in [
+        vec![TableShape::new(top, 3)],
+        vec![TableShape::new(top, 1), TableShape::new(top, 1)],
+        vec![TableShape::new(top, 1), TableShape::new(0, 1)],
+        vec![TableShape::new(0, usize::MAX)],
+    ] {
+        let protocol = OpeningProtocol::new(
+            shapes
+                .into_iter()
+                .map(|shape| TableSpec::new(shape, vec![OpeningBatch::new(vec![0], Vec::new())]))
+                .collect(),
+        );
+        assert!(OpeningRoute::new(&protocol).is_none());
     }
 }
