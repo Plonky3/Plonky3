@@ -12,7 +12,7 @@ use super::{
 };
 
 // This transport version is independent of the protocol transcript version.
-const MAGIC: &[u8; 8] = b"P3ZKAIR1";
+const MAGIC: &[u8; 8] = b"P3ZKAIR2";
 
 /// Compile-time checked transport dimensions. No wire value controls allocation.
 #[derive(Debug, Clone)]
@@ -37,7 +37,7 @@ impl WireGeometry {
         let field_bytes = width.checked_mul(16).ok_or_else(|| overflow.clone())?;
         let row_bytes = path_len
             .checked_mul(32)
-            .and_then(|v| v.checked_add(16))
+            .and_then(|v| v.checked_add(32))
             .and_then(|v| v.checked_add(field_bytes))
             .ok_or_else(|| overflow.clone())?;
         // Header + roots, claims + sigma, column-major blends, h/u queries.
@@ -59,7 +59,7 @@ impl WireGeometry {
 }
 
 impl ReferenceZkAir {
-    /// Exact canonical v1 proof size for this compiled AIR, in bytes.
+    /// Exact canonical v2 proof size for this compiled AIR, in bytes.
     pub const fn encoded_proof_len(&self) -> usize {
         self.wire.encoded_len
     }
@@ -89,7 +89,7 @@ impl ReferenceZkAir {
         for query in &proof.opening.queries {
             for row in [&query.h, &query.u] {
                 write_fields(&mut bytes, &row.values);
-                write_fields(&mut bytes, &[row.salt]);
+                write_fields(&mut bytes, &row.salts);
                 for hash in &row.authentication_path {
                     bytes.extend_from_slice(hash);
                 }
@@ -98,7 +98,7 @@ impl ReferenceZkAir {
         Ok(bytes)
     }
 
-    /// Decode bounded canonical v1 transport. Exact size, magic, and geometry
+    /// Decode bounded canonical v2 transport. Exact size, magic, and geometry
     /// are checked before allocating any proof vectors; all allocation counts
     /// come from this compiled AIR. Decoding alone does not verify a proof.
     ///
@@ -189,7 +189,7 @@ impl Reader<'_> {
     fn row(&mut self, geometry: &WireGeometry) -> Result<ZkRowOpening, ZkError> {
         Ok(ZkRowOpening {
             values: self.fields(geometry.width)?,
-            salt: self.field()?,
+            salts: [self.field()?, self.field()?],
             authentication_path: (0..geometry.path_len)
                 .map(|_| self.take())
                 .collect::<Result<_, _>>()?,

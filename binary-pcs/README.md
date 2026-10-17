@@ -60,16 +60,16 @@ is unsupported because its assumption is refuted for this domain.
 
 This adapter is binding, not hiding.
 
-## Experimental private current-row AIR
+## Private current-row AIR reference protocol
 
-The opt-in `experimental-zk` feature exposes `p3_binary_pcs::zk`, an independent
+The opt-in `zk` feature exposes `p3_binary_pcs::zk`, an independent
 reference protocol over `BinaryField128`. It does not change `BinaryPcs`, the WHIR
 adapter, or existing multilinear AIR paths into zero-knowledge protocols.
 
 Run the native example with:
 
 ```sh
-cargo run -p p3-binary-pcs --features experimental-zk --example zk_air --release
+cargo run -p p3-binary-pcs --features zk --example zk_air --release
 ```
 
 It proves that two private columns have the same public product at every row,
@@ -109,7 +109,12 @@ commitment and private `ZkProverData`. This state is neither `Clone` nor
 serializable and is consumed by `open`: each commitment permits one common-point
 opening only. Configuration objects are reusable. Use fresh private CSPRNG
 randomness for every proof, column mask and commitment; never seed it from the
-public challenger. AIR proving manages this lifecycle internally.
+public challenger. Never clone, reseed, reset, or replay the supplied `CryptoRng`,
+including through VM rollback. Single-use commitment state cannot enforce RNG
+freshness. Reusing the same `h` and `u` under distinct public `gamma` exposes
+`h=(g1+g2)/(gamma1+gamma2)`, including every low message coefficient.
+AIR proving manages single-use state internally; callers still own RNG freshness.
+The `zk` feature is unaudited and does not certify production security.
 
 ### Reference protocol
 
@@ -129,8 +134,8 @@ For PCS message length `M` and `q` queries, put `kappa=q+1`, `L=M+kappa`, and
 `kappa`-coefficient tail `R`: `h=f+X^M*R`. Encode by Horner evaluation on the
 shifted Cantor domain `S_log2(n) + s_log2(n)`, which excludes zero. Here `S_k`
 is the span of the first `k` Cantor basis vectors and `s_k` is the next basis
-vector. Commit the rows with Keccak256 `MerkleTreeHidingMmcs`, using one
-independent full-field salt per leaf. No monomial coefficients are passed to
+vector. Commit the rows with Keccak256 `MerkleTreeHidingMmcs`, using two
+independent full-field salts per leaf. No monomial coefficients are passed to
 the novel-basis `AdditiveRsEncoder`.
 
 For a claimed message evaluation `v=f(z)`, define
@@ -146,6 +151,38 @@ and indices, with independent masks. Duplicate indices retain transcript order
 and repeat the same authenticated row, adding no privacy rank. The `q+1` tail
 coefficients account for the joint observations, including conditioning on the
 full blend and `sigma`; the salts protect unopened Merkle leaves.
+
+### Protocol v2 framing and public coins
+
+Leaf, node and Fiat–Shamir hashes respectively prepend the disjoint ASCII tags
+`p3-binary-zk-v2/leaf`, `p3-binary-zk-v2/node` and
+`p3-binary-zk-v2/fiat-shamir`, each followed by a NUL byte, on every scalar or
+batched hash. A leaf has two independent field salts (256 bits total); roots and
+path hashes remain 32 bytes. Canonical transport uses `P3ZKAIR2`, two salts per
+row and fixed little-endian fields; the v1 wire protocol is rejected.
+
+The protocol-owned challenger retains every public observation and draw output.
+Records have distinct one-byte tags: field `1 || repr128LE`; root cap
+`2 || count64LE || roots`; bytes `3 || length64LE || bytes`; size
+`4 || value64LE`; draw
+`5 || label_length64LE || label || output_length64LE || raw_output`.
+All lengths, sizes and ordinals are checked fixed-width u64 values.
+
+Each expansion block hashes the Fiat–Shamir tag followed by
+`label_length64LE || label || transcript_length64LE || complete_transcript ||
+draw_ordinal64LE || output_length64LE || block_counter32LE`. Counters start at
+zero; concatenate 32-byte blocks and truncate to the requested length. All blocks
+use the same prefix; the draw record is appended and ordinal incremented only
+after the complete output is produced.
+
+The `air-point` and `blend-scalar` draws each produce 256 bytes: sixteen
+field candidates in tower representation. Select the first outside H or nonzero,
+respectively, and return `ZkError::ChallengeExhausted` if all sixteen fail.
+Unused public candidates add no prover messages or verifier rounds. All q indices
+come from one `8*q`-byte draw whose label is `query-indices || q64LE || logn64LE`;
+each little-endian u64 contributes its low logn bits. Generic trait sampling uses
+separate `generic-field` and `generic-bits || bits64LE` labels for transcript
+continuation, rather than these internal protocol rounds.
 
 ### Interactive bound and reference costs
 

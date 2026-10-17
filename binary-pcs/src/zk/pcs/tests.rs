@@ -64,7 +64,7 @@ fn fixture(seed: u64) -> (ReferenceZkPcs, ZkCommitment, ZkOpeningProof) {
 #[test]
 fn rejects_altered_claim_blend_roots_and_authenticated_rows() {
     let (pcs, commitment, proof) = fixture(7);
-    for edit in 0..9 {
+    for edit in 0..10 {
         let mut bad = proof.clone();
         let mut root = commitment.clone();
         match edit {
@@ -75,7 +75,8 @@ fn rejects_altered_claim_blend_roots_and_authenticated_rows() {
             4 => bad.mask_root = p3_symmetric::MerkleCap::new(vec![[0; 32]]),
             5 => bad.queries[0].h.values[0] += Val::ONE,
             6 => bad.queries[0].u.values[0] += Val::ONE,
-            7 => bad.queries[0].h.salt += Val::ONE,
+            7 => bad.queries[0].h.salts[0] += Val::ONE,
+            9 => bad.queries[0].h.salts[1] += Val::ONE,
             8 => bad.sigma[0] += Val::ONE,
             _ => unreachable!(),
         }
@@ -217,7 +218,7 @@ fn repeated_positions_use_the_same_authenticated_rows() {
             &proof.sigma,
             &mut replay,
         );
-        let _: Val = sample_nonzero(&mut replay);
+        let _: Val = replay.sample_nonzero().unwrap();
         observe_blend(&proof.blended_coefficients, &mut replay);
         let indices = pcs.sample_indices(&mut replay);
         for i in 0..indices.len() {
@@ -346,7 +347,7 @@ fn rejects_empty_caps_and_truncated_fixed_salts_during_deserialization() {
     assert!(postcard::from_bytes::<Root>(&[0]).is_err());
     let (_, _, proof) = fixture(81);
     let bytes = postcard::to_allocvec(&proof).unwrap();
-    // Prefix truncation sweeps through row values, the single fixed-size salt,
+    // Prefix truncation sweeps through row values, both fixed-size salts,
     // and authentication paths. No malformed partial opening reaches verify.
     for end in 0..bytes.len() {
         assert!(postcard::from_bytes::<ZkOpeningProof>(&bytes[..end]).is_err());
@@ -381,4 +382,62 @@ fn observes_outer_commitment_before_sampling_common_point() {
         CanSample::<Val>::sample(&mut prover),
         CanSample::<Val>::sample(&mut verifier)
     );
+}
+
+#[test]
+fn replaying_private_h_and_u_recovers_every_low_message_coefficient() {
+    // Intentional RNG misuse reproduces h, u, tails and salts across proofs.
+    // A different public prefix gives two distinct public blend challenges.
+    let pcs = ReferenceZkPcs::new(ReferencePcsConfig::new(3, 4).unwrap());
+    let message = vec![Val::from_repr(5), Val::from_repr(17), Val::from_repr(31)];
+    let prove = |prefix: Val, open_seed: Option<u64>| {
+        let mut rng = StdRng::seed_from_u64(918);
+        let (root, data) = pcs
+            .commit(RowMajorMatrix::new_col(message.clone()), &mut rng)
+            .unwrap();
+        if let Some(seed) = open_seed {
+            rng = StdRng::seed_from_u64(seed);
+        }
+        let mut transcript = challenger();
+        transcript.observe(prefix);
+        let proof = pcs
+            .open(data, Val::from_repr(8), &mut transcript, &mut rng)
+            .unwrap();
+        let mut replay = challenger();
+        replay.observe(prefix);
+        pcs.verify(&root, Val::from_repr(8), &proof, &mut replay)
+            .unwrap();
+        let mut gamma_transcript = challenger();
+        gamma_transcript.observe(prefix);
+        pcs.bind_opening(
+            &root,
+            Val::from_repr(8),
+            &proof.claimed_values,
+            &proof.mask_root,
+            &proof.sigma,
+            &mut gamma_transcript,
+        );
+        (root, proof, gamma_transcript.sample_nonzero().unwrap())
+    };
+    let (root_a, a, gamma_a) = prove(Val::ONE, None);
+    let (root_b, b, gamma_b) = prove(Val::from_repr(2), None);
+    assert_eq!(root_a.root, root_b.root);
+    assert_eq!(a.mask_root, b.mask_root);
+    assert_ne!(gamma_a, gamma_b);
+    let recovered: Vec<_> = a.blended_coefficients[0]
+        .iter()
+        .zip(&b.blended_coefficients[0])
+        .map(|(&ga, &gb)| (ga + gb) / (gamma_a + gamma_b))
+        .collect();
+    assert_eq!(&recovered[..3], message.as_slice());
+    // Independent fresh u prevents the same two-view cancellation attack.
+    let (_, fresh, gamma_fresh) = prove(Val::from_repr(2), Some(919));
+    assert_ne!(a.mask_root, fresh.mask_root);
+    let guessed: Vec<_> = a.blended_coefficients[0]
+        .iter()
+        .zip(&fresh.blended_coefficients[0])
+        .map(|(&ga, &gb)| (ga + gb) / (gamma_a + gamma_fresh))
+        .take(3)
+        .collect();
+    assert_ne!(guessed, message);
 }

@@ -1,4 +1,4 @@
-#![cfg(feature = "experimental-zk")]
+#![cfg(feature = "zk")]
 
 use std::borrow::Cow;
 use std::sync::Arc;

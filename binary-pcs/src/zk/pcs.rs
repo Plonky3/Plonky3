@@ -4,10 +4,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_binary_field::TowerLevel;
-use p3_challenger::{CanObserve, CanSample, CanSampleBits};
+use p3_challenger::CanObserve;
 use p3_commit::{BatchOpeningRef, Mmcs};
-use p3_field::{Field, PrimeCharacteristicRing};
-use p3_keccak::Keccak256Hash;
+use p3_field::Field;
 use p3_matrix::Dimensions;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeHidingMmcs;
@@ -16,6 +15,7 @@ use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 
+use super::transcript::{LeafHash, NodeHash};
 use super::{Challenger, Val, ZkError, observe_bytes, observe_usize};
 
 // Bound allocations and the deliberately quadratic Horner encoder's work.
@@ -23,25 +23,25 @@ const MAX_CODEWORD_LEN: usize = 1 << 16;
 const MAX_QUERIES: usize = 4096;
 const MAX_CELLS: usize = 1 << 20;
 const MAX_ENCODING_WORK: usize = 1 << 27;
-const VERSION: &[u8] = b"p3-binary-reference-zk-pcs-v1";
+const VERSION: &[u8] = b"p3-binary-reference-zk-pcs-v2";
 
 type SaltedMmcs = MerkleTreeHidingMmcs<
     Val,
     u8,
-    SerializingHasher<Keccak256Hash>,
-    CompressionFunctionFromHasher<Keccak256Hash, 2, 32>,
+    SerializingHasher<LeafHash>,
+    CompressionFunctionFromHasher<NodeHash, 2, 32>,
     StdRng,
     2,
     32,
-    1,
+    2,
 >;
 type Tree = <SaltedMmcs as Mmcs<Val>>::ProverData<RowMajorMatrix<Val>>;
 type Root = MerkleCap<Val, [u8; 32]>;
 
 const fn mmcs(rng: StdRng) -> SaltedMmcs {
     SaltedMmcs::new(
-        SerializingHasher::new(Keccak256Hash),
-        CompressionFunctionFromHasher::new(Keccak256Hash),
+        SerializingHasher::new(LeafHash),
+        CompressionFunctionFromHasher::new(NodeHash),
         0,
         rng,
     )
@@ -147,7 +147,7 @@ pub struct ZkProverData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ZkRowOpening {
     pub values: Vec<Val>,
-    pub salt: Val,
+    pub salts: [Val; 2],
     pub authentication_path: Vec<[u8; 32]>,
 }
 
@@ -185,7 +185,9 @@ impl ReferenceZkPcs {
     }
 
     /// Commit columns of M monomial coefficients with independent random tails.
-    /// Shape validation precedes every private random draw.
+    /// Shape validation precedes every private random draw. The caller's RNG
+    /// must be fresh across proofs; cloning, reseeding, resetting or VM rollback
+    /// can replay masks even though prover state is single-use.
     pub fn commit<R: CryptoRng>(
         &self,
         messages: RowMajorMatrix<Val>,
@@ -234,6 +236,8 @@ impl ReferenceZkPcs {
     }
 
     /// Consume state and open the low-coefficient polynomial at one common point.
+    /// The private RNG must remain fresh across proofs. Replaying h and u under
+    /// distinct public blend challenges reveals the complete low message.
     #[allow(
         clippy::needless_pass_by_value,
         reason = "single-use prover state must be consumed"
@@ -278,7 +282,7 @@ impl ReferenceZkPcs {
             &sigma,
             challenger,
         );
-        let gamma = sample_nonzero(challenger);
+        let gamma = challenger.sample_nonzero()?;
         let blended_coefficients: Vec<Vec<_>> = data
             .coefficients
             .iter()
@@ -322,7 +326,7 @@ impl ReferenceZkPcs {
             &proof.sigma,
             challenger,
         );
-        let gamma = sample_nonzero(challenger);
+        let gamma = challenger.sample_nonzero()?;
         for ((g, &claim), &sigma) in proof
             .blended_coefficients
             .iter()
@@ -438,9 +442,10 @@ impl ReferenceZkPcs {
     }
 
     fn sample_indices(&self, challenger: &mut Challenger) -> Vec<usize> {
-        (0..self.config.num_queries)
-            .map(|_| challenger.sample_bits(self.config.codeword_len.ilog2() as usize))
-            .collect()
+        challenger.sample_indices(
+            self.config.num_queries,
+            self.config.codeword_len.ilog2() as usize,
+        )
     }
 
     fn domain_point(&self, index: usize) -> Val {
@@ -471,15 +476,6 @@ fn evaluate<F: Field>(coefficients: &[F], x: F) -> F {
         .fold(F::ZERO, |acc, &coefficient| acc * x + coefficient)
 }
 
-fn sample_nonzero(challenger: &mut Challenger) -> Val {
-    loop {
-        let gamma: Val = challenger.sample();
-        if gamma != Val::ZERO {
-            return gamma;
-        }
-    }
-}
-
 fn observe_blend(coefficients: &[Vec<Val>], challenger: &mut Challenger) {
     observe_bytes(challenger, b"complete-monomial-blend-before-queries");
     observe_usize(challenger, coefficients.len());
@@ -493,7 +489,7 @@ fn open_row(salted: &SaltedMmcs, tree: &Tree, index: usize) -> ZkRowOpening {
     let (mut values, (salts, authentication_path)) = salted.open_batch(index, tree).unpack();
     ZkRowOpening {
         values: values.remove(0),
-        salt: salts[0][0],
+        salts: salts[0].clone().try_into().expect("two leaf salts"),
         authentication_path,
     }
 }
@@ -506,7 +502,7 @@ fn verify_row(
     row: &ZkRowOpening,
 ) -> Result<(), ZkError> {
     let values = vec![row.values.clone()];
-    let proof = (vec![vec![row.salt]], row.authentication_path.clone());
+    let proof = (vec![row.salts.to_vec()], row.authentication_path.clone());
     salted
         .verify_batch(
             root,

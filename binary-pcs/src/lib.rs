@@ -26,7 +26,7 @@ pub mod testing;
 pub mod transcript;
 mod verifier;
 pub mod whir;
-#[cfg(feature = "experimental-zk")]
+#[cfg(feature = "zk")]
 pub mod zk;
 
 pub use boolean::{

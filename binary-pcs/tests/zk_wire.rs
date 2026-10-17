@@ -1,4 +1,4 @@
-#![cfg(feature = "experimental-zk")]
+#![cfg(feature = "zk")]
 
 use std::sync::OnceLock;
 
@@ -51,9 +51,9 @@ fn proof() -> &'static ZkAirProof {
 fn wire_roundtrip_preserves_every_field_and_verifies_statement() {
     let air = air();
     let encoded = air.encode_proof(proof()).unwrap();
-    // M=3, q=12, batch width=3, L=16, n=64: 96+96+768+24*256.
-    assert_eq!(air.encoded_proof_len(), 7104);
-    assert_eq!(encoded.len(), 7104);
+    // M=3, q=12, batch width=3, L=16, n=64: 96+96+768+24*272.
+    assert_eq!(air.encoded_proof_len(), 7488);
+    assert_eq!(encoded.len(), 7488);
     let decoded = air.decode_proof(&encoded).unwrap();
     assert_eq!(
         postcard::to_allocvec(&decoded).unwrap(),
@@ -147,7 +147,7 @@ fn wire_known_fixture_pins_little_endian_geometry_field_repr_and_row_order() {
     // bytes distinguish tower representation from integer embedding/truncation.
     let repr = u128::from_le_bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 128]);
     let mut fixture = Vec::new();
-    fixture.extend_from_slice(b"P3ZKAIR1\x03\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\0\x0c\0\0\0\0\0\0\0");
+    fixture.extend_from_slice(b"P3ZKAIR2\x03\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\0\x0c\0\0\0\0\0\0\0");
     fixture.extend_from_slice(&[0x42; 32]);
     for delta in 0..3 {
         fixture.extend_from_slice(&(repr + delta).to_le_bytes());
@@ -158,9 +158,9 @@ fn wire_known_fixture_pins_little_endian_geometry_field_repr_and_row_order() {
     }
     for query in 0..12u8 {
         for row in 0..2u8 {
-            for column in 0..4 {
+            for column in 0..5 {
                 fixture.extend_from_slice(
-                    &(repr + 1000 + u128::from(query) * 8 + u128::from(row) * 4 + column)
+                    &(repr + 1000 + u128::from(query) * 10 + u128::from(row) * 5 + column)
                         .to_le_bytes(),
                 );
             }
@@ -169,7 +169,7 @@ fn wire_known_fixture_pins_little_endian_geometry_field_repr_and_row_order() {
             }
         }
     }
-    assert_eq!(fixture.len(), 7104);
+    assert_eq!(fixture.len(), 7488);
     let decoded = air.decode_proof(&fixture).unwrap();
     assert_eq!(decoded.commitment.num_polynomials, 3);
     assert_eq!(decoded.commitment.message_len, 3);
@@ -184,9 +184,12 @@ fn wire_known_fixture_pins_little_endian_geometry_field_repr_and_row_order() {
     );
     assert_eq!(
         decoded.opening.queries[11].u.values[2].to_repr(),
-        repr + 1094
+        repr + 1117
     );
-    assert_eq!(decoded.opening.queries[11].u.salt.to_repr(), repr + 1095);
+    assert_eq!(
+        decoded.opening.queries[11].u.salts[0].to_repr(),
+        repr + 1118
+    );
     assert_eq!(
         decoded.opening.queries[11].u.authentication_path[5],
         [143; 32]
@@ -202,7 +205,7 @@ fn wire_tampering_each_authenticated_component_fails_verification() {
     // Commitment, claims, mask root, sigma, blend, then each h/u leaf,
     // salt and path. The header has separate rejection tests above.
     for offset in [
-        32, 64, 112, 144, 192, 960, 1008, 1024, 1216, 1264, 1280, 7103,
+        32, 64, 112, 144, 192, 960, 1008, 1024, 1040, 1232, 1280, 1296, 1312, 7487,
     ] {
         let mut bytes = encoded.clone();
         bytes[offset] ^= 1;
@@ -224,10 +227,44 @@ proptest! {
         let _ = air.verify_bytes(&bytes, &[Val::ONE]);
     }
     #[test]
-    fn wire_valid_proof_single_bit_mutations_reject_without_panics(offset in 0usize..7104, bit in 0u8..8) {
+    fn wire_valid_proof_single_bit_mutations_reject_without_panics(offset in 0usize..7488, bit in 0u8..8) {
         let air = air();
         let mut bytes = air.encode_proof(proof()).unwrap();
         bytes[offset] ^= 1 << bit;
         prop_assert!(air.verify_bytes(&bytes, &[Val::ONE]).is_err());
     }
+}
+
+#[test]
+fn wire_rejects_v1_magic() {
+    let air = air();
+    let mut bytes = air.encode_proof(proof()).unwrap();
+    bytes[..8].copy_from_slice(b"P3ZKAIR1");
+    assert!(air.decode_proof(&bytes).is_err());
+}
+
+#[test]
+fn protocol_v2_fixed_seed_full_proof_and_canonical_wire_digests() {
+    use p3_keccak::Keccak256Hash;
+    use p3_symmetric::CryptographicHasher;
+    let air = air();
+    let wire = air.encode_proof(proof()).unwrap();
+    let serde = postcard::to_allocvec(proof()).unwrap();
+    assert_eq!(
+        (
+            Keccak256Hash.hash_slice(&wire),
+            Keccak256Hash.hash_slice(&serde)
+        ),
+        (
+            [
+                64, 178, 115, 97, 84, 41, 118, 130, 124, 147, 108, 20, 245, 24, 28, 139, 149, 203,
+                141, 162, 184, 79, 146, 50, 167, 123, 60, 27, 210, 89, 208, 141
+            ],
+            [
+                104, 236, 85, 72, 84, 83, 81, 85, 57, 232, 29, 216, 237, 228, 180, 43, 23, 68, 47,
+                145, 58, 30, 146, 56, 73, 149, 124, 227, 138, 100, 156, 200
+            ]
+        )
+    );
+    air.verify_bytes(&wire, &[Val::ONE]).unwrap();
 }

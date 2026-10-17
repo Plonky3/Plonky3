@@ -1,6 +1,6 @@
 //! Native end-to-end private current-row AIR reference example.
 //!
-//! Run with `cargo run -p p3-binary-pcs --features experimental-zk --example zk_air --release`.
+//! Run with `cargo run -p p3-binary-pcs --features zk --example zk_air --release`.
 //! This uses the polynomial-size full-blend protocol, not BaseFold. The target
 //! below budgets interactive algebra/query error only; hash and Fiat–Shamir
 //! compilation losses remain unproved. See the crate README for the exact scope.

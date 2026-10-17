@@ -17,7 +17,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{Air, AirLayout, BaseEntry, BaseLeaf, SymbolicExpression, SymbolicVariable};
-use p3_challenger::{CanObserve, CanSample};
+use p3_challenger::CanObserve;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::{CryptoRng, RngExt};
@@ -30,7 +30,7 @@ use super::{
 };
 
 type Expr = SymbolicExpression<Val>;
-const VERSION: &[u8] = b"p3-binary-reference-zk-air-v1";
+const VERSION: &[u8] = b"p3-binary-reference-zk-air-v2";
 
 /// Checked trace geometry and requested interactive algebra/query target.
 #[derive(Debug, Clone)]
@@ -70,7 +70,7 @@ pub struct ZkAirProof {
 /// `main_next_row_columns` declaration with an empty vector. The interactive
 /// error is the reference PCS bound plus D/(2^128-N), using committed degree
 /// M-1 and D=max(delta*(M-1), N+M-1). Hash and Fiat–Shamir losses remain
-/// unproved; this experimental target is not a production security claim.
+/// unproved; this unaudited reference target is not a production security claim.
 #[derive(Debug, Clone)]
 pub struct ReferenceZkAir {
     config: ZkAirConfig,
@@ -227,6 +227,9 @@ impl ReferenceZkAir {
 
     /// Prove a fixed-shape trace, using fresh private randomness for every mask
     /// and PCS commitment. Invalid shapes/public lengths fail before RNG draws.
+    /// The supplied private RNG must be fresh across proofs. Never clone,
+    /// reseed, reset or replay its state (including after a VM rollback).
+    /// Single-use commitment state cannot enforce freshness of caller randomness.
     pub fn prove<R: CryptoRng>(
         &self,
         trace: RowMajorMatrix<Val>,
@@ -270,7 +273,7 @@ impl ReferenceZkAir {
             .commit(RowMajorMatrix::new(messages, batch_width), rng)?;
         let mut transcript = self.transcript(public_values);
         self.pcs.observe_commitment(&commitment, &mut transcript);
-        let z = self.sample_point(&mut transcript);
+        let z = self.sample_point(&mut transcript)?;
         let opening = self.pcs.open(data, z, &mut transcript, rng)?;
         Ok(ZkAirProof {
             commitment,
@@ -292,7 +295,7 @@ impl ReferenceZkAir {
         let mut transcript = self.transcript(public_values);
         self.pcs
             .observe_commitment(&proof.commitment, &mut transcript);
-        let z = self.sample_point(&mut transcript);
+        let z = self.sample_point(&mut transcript)?;
         let wz = evaluate(&self.vanishing, z);
         let claims = &proof.opening.claimed_values;
         for (index, constraint) in self.constraints.iter().enumerate() {
@@ -332,15 +335,11 @@ impl ReferenceZkAir {
         transcript
     }
 
-    fn sample_point(&self, transcript: &mut Challenger) -> Val {
-        // Public rejection sampling: conditional uniformity over F\H. The
-        // identical fixed procedure is used by prover and verifier.
-        loop {
-            let point: Val = transcript.sample();
-            if evaluate(&self.vanishing, point) != Val::ZERO {
-                return point;
-            }
-        }
+    fn sample_point(&self, transcript: &mut Challenger) -> Result<Val, ZkError> {
+        // One public round: a fixed batch of 16 independent field candidates.
+        transcript.sample_accepted(b"air-point", "air-point", |point| {
+            evaluate(&self.vanishing, point) != Val::ZERO
+        })
     }
 }
 
