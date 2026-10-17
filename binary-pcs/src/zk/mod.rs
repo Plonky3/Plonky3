@@ -1,9 +1,34 @@
-//! A polynomial-size reference opening, deliberately independent of `BinaryPcs`.
+//! Experimental private current-row AIR and a polynomial-size reference PCS.
+//!
+//! Enabled only by `experimental-zk`, independently of `BinaryPcs` and its
+//! non-hiding multilinear paths. [`ReferenceZkAir::compile`] admits
+//! `Air<CurrentRowAirBuilder>`: generic `AirBuilder<F = Val>` AIRs work, while
+//! concrete `SymbolicAirBuilder` implementations must adapt. Explicitly declare
+//! no main next-row columns. Only current-row main variables, public values,
+//! constants and arithmetic are supported. Successor access, preprocessing,
+//! periodic columns, row selectors, public boundaries, extension constraints,
+//! permutation arguments, lookups and buses are unsupported. Boolean column
+//! metadata adds explicit Booleanity constraints or rejects if inconsistent.
+//!
+//! The verifier owns the public fixed shape and canonical symbolic constraints.
+//! On the Cantor trace subspace H, interpolate each column T0 and mask it as
+//! T=T0+rW with independent uniform r and W=product_{a in H}(X-a). Commit T
+//! and each separate unsplit quotient Q_i=C_i(T,p)/W before sampling one z
+//! outside H in the interactive model. At any fixed such z the trace claims
+//! T_j(z) are jointly uniform; quotient claims are determined by these claims
+//! and the public statement. See
+//! [`ReferenceZkAir`] for the additional committed-degree algebraic bound.
+//!
+//! The native `zk_air` example uses an OS-seeded private CSPRNG and verifies
+//! a serialized proof round-trip. This reference sends full coefficient blends
+//! and uses O(n*L) Horner encoding per polynomial; optimized hiding BaseFold is
+//! future work. The existing clear BaseFold reductions are not used here.
 //!
 //! For message length M and q queries, append kappa=q+1 independent uniform
 //! monomial coefficients. Thus h=f+X^M R has L=M+kappa coefficients. Horner
 //! evaluation encodes h on a shifted Cantor domain of n=next_power_of_two(4L)
-//! nonzero points. This is not the novel-basis additive RS encoder.
+//! nonzero points. Keccak256 salted Merkle commitments use one independent
+//! full-field salt per leaf. This is not the novel-basis additive RS encoder.
 //!
 //! Before gamma is sampled, commit an independent uniform L-coefficient u and
 //! disclose sigma=lambda(u_low). Disclose all g=gamma*h+u before sampling q
@@ -11,6 +36,10 @@
 //! authenticate h/u at each index. Each column has independent tails and u;
 //! only gamma and query positions are shared. Duplicate queries repeat the same
 //! authenticated row and contribute no additional information or rank.
+//! Configuration, commitment, point and claims are bound before the u/sigma
+//! commitment. The q+1 tail masks account for observations jointly conditioned
+//! on the full blend and sigma. Private masks never come from the separate
+//! public Keccak challenger.
 //!
 //! In the interactive oracle model, put e=floor((n-L)/4). The error is at most
 //! 1/(2^128-1) + (1-(e+1)/n)^q: outside the unique exceptional gamma, any g

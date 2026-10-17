@@ -12,31 +12,42 @@ categories.workspace = true
 # criterion pulls rayon transitively and rayon does not build on wasi.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion.workspace = true
+rand = { workspace = true, features = ["sys_rng"] }
+
+[package.metadata.plonky3.ci]
+test-features = ["experimental-zk"]
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 test-utils = []
-experimental-zk = ["dep:p3-air", "dep:postcard", "dep:p3-keccak", "dep:p3-merkle-tree", "dep:p3-symmetric", "dep:rand"]
+experimental-zk = [
+    "dep:p3-air",
+    "dep:postcard",
+    "dep:p3-keccak",
+    "dep:p3-merkle-tree",
+    "dep:p3-symmetric",
+    "dep:rand",
+]
 
 [dependencies]
 p3-air = { workspace = true, optional = true }
-postcard = { workspace = true, optional = true, features = ["alloc"] }
-p3-keccak = { workspace = true, optional = true }
-p3-merkle-tree = { workspace = true, optional = true }
-p3-symmetric = { workspace = true, optional = true }
-rand = { workspace = true, optional = true, features = ["std_rng"] }
 p3-binary-dft.workspace = true
 p3-binary-field.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-field.workspace = true
+p3-keccak = { workspace = true, optional = true }
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
+p3-merkle-tree = { workspace = true, optional = true }
 p3-multilinear-util.workspace = true
 p3-security.workspace = true
 p3-sumcheck.workspace = true
+p3-symmetric = { workspace = true, optional = true }
 p3-util.workspace = true
 p3-whir.workspace = true
+postcard = { workspace = true, optional = true, features = ["alloc"] }
+rand = { workspace = true, optional = true, features = ["std_rng"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tracing.workspace = true
@@ -68,6 +79,10 @@ harness = false
 [[bench]]
 name = "whir"
 harness = false
+
+[[example]]
+name = "zk_air"
+required-features = ["experimental-zk"]
 
 [lints]
 workspace = true

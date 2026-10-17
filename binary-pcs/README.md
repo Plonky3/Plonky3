@@ -60,4 +60,122 @@ is unsupported because its assumption is refuted for this domain.
 
 This adapter is binding, not hiding.
 
+## Experimental private current-row AIR
+
+The opt-in `experimental-zk` feature exposes `p3_binary_pcs::zk`, an independent
+reference protocol over `BinaryField128`. It does not change `BinaryPcs`, the WHIR
+adapter, or existing multilinear AIR paths into zero-knowledge protocols.
+
+Run the native example with:
+
+```sh
+cargo run -p p3-binary-pcs --features experimental-zk --example zk_air --release
+```
+
+It proves that two private columns have the same public product at every row,
+using `StdRng` freshly seeded from operating-system entropy for all private
+randomness. It serializes the actual proof, deserializes it, and verifies the
+round-trip. Output contains only proof byte length and public dimensions. The
+native `zk_air` integration tests also verify distinct witnesses for one public
+product; the statement does not reveal a unique factorization.
+
+### Supported statements and lifecycle
+
+`ReferenceZkAir::compile` accepts `Air<CurrentRowAirBuilder>`. Ordinary generic
+`impl<AB: AirBuilder<F = Val>> Air<AB>` implementations work; implementations
+specific to `SymbolicAirBuilder` must adapt to this restricted builder. It has
+no permutation, interaction/bus, or runtime-context capabilities. Compilation
+admits only current-row main variables, public values, constants and arithmetic.
+Set `BaseAir::main_next_row_columns()` explicitly to an empty vector: its default
+allows successor columns. Compilation rejects successor access, preprocessing,
+periodic columns, row selectors, public boundary declarations, extension
+constraints, and unsupported or out-of-range symbolic leaves. Leading Boolean
+column declarations add explicit `x*(x+1)` constraints; inconsistent Boolean
+metadata rejects. Lookup and bus arguments are unsupported.
+
+Shape and constraints are public and fixed by the verifier's compiled AIR. The
+version, canonical symbolic constraints, dimensions, public values and PCS
+geometry are transcript-bound. Trace logarithms are 1 through 8, widths at most
+16, augmented constraint counts at most 32, constraint degrees at most 4, and
+public-value counts at most 1024. Expressions and PCS allocations/work also have
+limits; a requested geometry can reject even within these individual limits.
+The configured interactive target is 1 through 96 bits, subject to the degree
+bound below. Unsupported AIR metadata and leaves reject during compilation,
+before private randomness or transcript mutation.
+
+The lower-level `ReferenceZkPcs` takes columns of **monomial coefficients**, not
+multilinear tables or novel-basis coefficients. `commit` returns a public
+commitment and private `ZkProverData`. This state is neither `Clone` nor
+serializable and is consumed by `open`: each commitment permits one common-point
+opening only. Configuration objects are reusable. Use fresh private CSPRNG
+randomness for every proof, column mask and commitment; never seed it from the
+public challenger. AIR proving manages this lifecycle internally.
+
+### Reference protocol
+
+Let `H` be the unshifted Cantor subspace of size `N`, and
+`W(X) = product_{a in H}(X-a)`. For each trace column, interpolate `T0` over `H`
+and choose an independent uniform field scalar `r` to form `T = T0 + r*W`.
+For each constraint `C_i`, compute the separate, unsplit quotient
+`Q_i = C_i(T,p)/W`, rejecting a nonzero remainder. Commit all `T` and `Q_i`
+together before deriving one point `z` uniformly outside `H` in the interactive
+model. For any fixed such point, the trace openings `t_j = T_j(z)` are jointly
+uniform; quotient openings are determined by them and the public statement as
+`q_i = C_i(t,p)/W(z)`. Verification checks every quotient identity and the PCS
+opening.
+
+For PCS message length `M` and `q` queries, put `kappa=q+1`, `L=M+kappa`, and
+`n=next_power_of_two(4L)`. Each message `f` gets an independent uniform
+`kappa`-coefficient tail `R`: `h=f+X^M*R`. Encode by Horner evaluation on the
+shifted Cantor domain `S_log2(n) + s_log2(n)`, which excludes zero. Here `S_k`
+is the span of the first `k` Cantor basis vectors and `s_k` is the next basis
+vector. Commit the rows with Keccak256 `MerkleTreeHidingMmcs`, using one
+independent full-field salt per leaf. No monomial coefficients are passed to
+the novel-basis `AdditiveRsEncoder`.
+
+For a claimed message evaluation `v=f(z)`, define
+`lambda(a_low)=sum_{j=0}^{M-1} a_j*z^j`. After binding the configuration,
+commitment, point and claims, independently sample a uniform `L`-coefficient
+polynomial `u`, commit it with fresh leaf salts, and disclose
+`sigma=lambda(u_low)`. Bind these before sampling a uniform nonzero `gamma`.
+Disclose all coefficients of `g=gamma*h+u` and check
+`lambda(g_low)=gamma*v+sigma`. Absorb the complete `g` before sampling `q`
+uniform indices with replacement. Authenticate both committed rows and check
+`g(x)=gamma*h(x)+u(x)` at every index, for every column. Columns share `gamma`
+and indices, with independent masks. Duplicate indices retain transcript order
+and repeat the same authenticated row, adding no privacy rank. The `q+1` tail
+coefficients account for the joint observations, including conditioning on the
+full blend and `sigma`; the salts protect unopened Merkle leaves.
+
+### Interactive bound and reference costs
+
+Put `e=floor((n-L)/4)`. In the interactive oracle model the PCS error is at most
+
+```text
+1/(2^128-1) + (1-(e+1)/n)^q.
+```
+
+Outside at most one exceptional `gamma`, a false low-coefficient claim leaves
+more than `e` inconsistent rows. Treating the columns as a vector-valued RS code
+gives minimum row distance `n-L+1`, so the exceptional-challenge term does not
+need a union bound over columns. Since `n>=4L`, choosing `q=4*(s+2)` makes the
+query contribution less than `2^-(s+2)`.
+
+The AIR adds at most `D/(2^128-N)`, where
+`D=max(delta*(M-1), N+M-1)` and `delta` is the maximum augmented constraint
+degree. This uses the committed message degree bound `M-1`, including malicious
+messages, rather than the smaller honest degrees. Compilation chooses
+`M=max(N+1, (delta-1)*N+1)` (with saturating subtraction for `delta=0`) and checks
+`D*2^(s+2)<=2^128-N`. The target budgets these interactive algebra/query terms.
+It excludes hash binding/hiding, salt guessing, and unproved Fiat–Shamir
+compilation, random-oracle-query, grinding and simulator-programming losses.
+There is no end-to-end production noninteractive security certification.
+
+This implementation sends one full `L`-coefficient blend per committed
+polynomial, plus sampled authenticated rows: proof size is polynomial, not
+succinct. Horner encoding costs `O(n*L)` field operations per polynomial, and
+the interpolation/quotient arithmetic is also a reference implementation.
+An optimized hiding BaseFold replacement remains future work; this protocol
+does not reuse the existing clear BaseFold reductions as a privacy argument.
+
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.

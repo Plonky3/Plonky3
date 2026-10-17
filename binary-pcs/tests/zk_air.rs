@@ -57,6 +57,23 @@ fn public_product_roundtrip_and_statement_binding() {
 }
 
 #[test]
+fn distinct_private_witnesses_prove_the_same_public_product() {
+    let air = protocol();
+    let product = Val::from_repr(7);
+    let first = RowMajorMatrix::new(vec![Val::ONE, product, Val::ONE, product], 2);
+    let second = RowMajorMatrix::new(vec![product, Val::ONE, product, Val::ONE], 2);
+    assert_ne!(first.values, second.values);
+    let mut rng = StdRng::seed_from_u64(19);
+    for trace in [first, second] {
+        let proof = air.prove(trace, &[product], &mut rng).unwrap();
+        let encoded = postcard::to_allocvec(&proof).unwrap();
+        let decoded: ZkAirProof = postcard::from_bytes(&encoded).unwrap();
+        air.verify(&decoded, &[product]).unwrap();
+        assert!(air.verify(&decoded, &[Val::ZERO]).is_err());
+    }
+}
+
+#[test]
 fn invalid_witness_and_shapes_are_typed_errors() {
     let air = protocol();
     let mut rng = StdRng::seed_from_u64(7);
