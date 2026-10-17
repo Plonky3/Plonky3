@@ -532,6 +532,72 @@ pub fn check_ans_interpolates<F: Field>(ans: &[F], points: &[F], values: &[F], r
     eval_poly(ans, rho) * denominator == numerator
 }
 
+/// Check an answer polynomial with extension-field OOD nodes followed by base-field queries.
+///
+/// Has the same rejection rules as [`check_ans_interpolates`]. Values are in OOD-then-query
+/// order. Query-query factors of the barycentric weights are computed in the base field;
+/// the final weight and distance denominators still share one extension-field batch inverse.
+#[must_use]
+pub fn check_ans_interpolates_mixed<F: Field, EF: ExtensionField<F>>(
+    ans: &[EF],
+    ood_points: &[EF],
+    query_points: &[F],
+    values: &[EF],
+    rho: EF,
+) -> bool {
+    let n = ood_points.len() + query_points.len();
+    if n != values.len() {
+        return false;
+    }
+    if n == 0 {
+        return ans.iter().all(|c| c.is_zero());
+    }
+    if ood_points.contains(&rho) || query_points.iter().any(|&y| rho == EF::from(y)) {
+        return false;
+    }
+    let mut denominators = Vec::with_capacity(2 * n);
+    for (i, &y) in ood_points.iter().enumerate() {
+        let mut product: EF = ood_points
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != i)
+            .map(|(_, &z)| y - z)
+            .product();
+        for &z in query_points {
+            product *= y - z;
+        }
+        denominators.push(product);
+    }
+    for (i, &y) in query_points.iter().enumerate() {
+        let base_product: F = query_points
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != i)
+            .map(|(_, &z)| y - z)
+            .product();
+        let mut product = EF::from(base_product);
+        for &z in ood_points {
+            product *= EF::from(y) - z;
+        }
+        denominators.push(product);
+    }
+    if denominators.contains(&EF::ZERO) {
+        return false;
+    }
+    denominators.extend(ood_points.iter().map(|&y| rho - y));
+    denominators.extend(query_points.iter().map(|&y| rho - y));
+    let inverses = batch_multiplicative_inverse(&denominators);
+    let (weights, diff_invs) = inverses.split_at(n);
+    let mut numerator = EF::ZERO;
+    let mut denominator = EF::ZERO;
+    for ((&w, &diff_inv), &v) in weights.iter().zip(diff_invs).zip(values) {
+        let term = w * diff_inv;
+        numerator += term * v;
+        denominator += term;
+    }
+    eval_poly(ans, rho) * denominator == numerator
+}
+
 /// Fold an entire natural-order codeword of size `N` by arity `k = 2^log_arity`.
 ///
 /// The codeword is on domain `shift * <g>` where `g = two_adic_generator(log_domain_size)`.

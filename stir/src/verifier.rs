@@ -17,7 +17,7 @@ use crate::error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel,
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::transcript::{StirShape, VerifierTranscript};
 use crate::utils::{
-    OodFilter, check_ans_interpolates, eval_poly, eval_poly_at_base, fold_domain_params,
+    OodFilter, check_ans_interpolates_mixed, eval_poly, eval_poly_at_base, fold_domain_params,
     interpolate_poly, lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c,
     vanishing_poly_from_roots,
 };
@@ -592,7 +592,7 @@ struct RoundVerifier<F, EF: Field> {
 
     fold_beta: EF,
     ood_points: Vec<EF>,
-    query_points: Vec<EF>,
+    query_points: Vec<F>,
     query_answers: Vec<EF>,
     first_round_pairs: FirstRoundPairs<EF>,
     first_round_draws: Vec<usize>,
@@ -695,7 +695,7 @@ where
             alloc::collections::BTreeSet::new();
 
         for (q, (&j, row_evals)) in query_indices.iter().zip(&round_rows).enumerate() {
-            let fold_point = EF::from(self.fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
+            let fold_point = self.fold_shift * fold_gen.exp_u64(j as u64);
 
             let fold_val = query_fold_value(
                 row_evals,
@@ -729,8 +729,8 @@ where
         let all_points: Vec<EF> = self
             .ood_points
             .iter()
-            .chain(self.query_points.iter())
             .copied()
+            .chain(self.query_points.iter().copied().map(EF::from))
             .collect();
         let all_values: Vec<EF> = ood_answers
             .iter()
@@ -848,7 +848,7 @@ where
     // check; observing Ans first means the prover commits to it before learning rho.
     let rho = transcript.answer_phase(round, 0, &ans)?;
 
-    if !check_ans_interpolates(&ans, &all_points, &all_values, rho) {
+    if !check_ans_interpolates_mixed(&ans, &rv.ood_points, &rv.query_points, &all_values, rho) {
         return Err(StirError::InvalidAnsConsistency {
             round: RoundLabel::Round(round),
         });
@@ -1711,7 +1711,13 @@ where
 
             let rho = transcript.answer_phase(r, i, &ans)?;
 
-            if !check_ans_interpolates(&ans, &all_points, &all_values, rho) {
+            if !check_ans_interpolates_mixed(
+                &ans,
+                &rv.ood_points,
+                &rv.query_points,
+                &all_values,
+                rho,
+            ) {
                 return Err(StirError::InvalidAnsConsistency {
                     round: RoundLabel::Round(local_r),
                 });

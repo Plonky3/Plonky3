@@ -517,3 +517,53 @@ proptest! {
         );
     }
 }
+
+#[test]
+fn test_mixed_answer_check_matches_extension_check_at_boundaries() {
+    use p3_stir::utils::check_ans_interpolates_mixed;
+    let mut rng = SmallRng::seed_from_u64(0xace);
+    for q in [0, 1, 2, 9] {
+        for s in [0, 1, 2, 4] {
+            let queries: Vec<F> = (0..q).map(|i| f(i + 1)).collect();
+            let ood: Vec<EF> = (0..s).map(|_| rng.random()).collect();
+            let points: Vec<EF> = ood
+                .iter()
+                .copied()
+                .chain(queries.iter().copied().map(EF::from))
+                .collect();
+            let values: Vec<EF> = points.iter().map(|_| rng.random()).collect();
+            let ans = interpolate_poly(&points, &values);
+            let mut rhos: Vec<EF> = (0..4).map(|_| rng.random()).collect();
+            rhos.extend_from_slice(&points);
+            for rho in rhos {
+                for candidate in [&ans[..], &[EF::ONE][..], &[][..]] {
+                    assert_eq!(
+                        check_ans_interpolates_mixed(candidate, &ood, &queries, &values, rho),
+                        check_ans_interpolates(candidate, &points, &values, rho)
+                    );
+                }
+            }
+            assert!(!check_ans_interpolates_mixed(
+                &ans,
+                &ood,
+                &queries,
+                &[EF::ZERO; 30],
+                ef(99)
+            ));
+        }
+    }
+    for (ood, queries) in [
+        (vec![], vec![f(1), f(1)]),
+        (vec![ef(1)], vec![f(1)]),
+        (vec![ef(1), ef(1)], vec![]),
+    ] {
+        let values = vec![EF::ONE; ood.len() + queries.len()];
+        assert!(!check_ans_interpolates_mixed(
+            &[EF::ONE],
+            &ood,
+            &queries,
+            &values,
+            ef(99)
+        ));
+    }
+}
