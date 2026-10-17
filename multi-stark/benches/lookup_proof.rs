@@ -1,5 +1,9 @@
 //! Full WHIR lookup proofs, including dormant AIR rounds and compact bus periods.
 //! Set P3_LOOKUP_REPORT=1 to print one allocation/proof-size measurement per fixture.
+use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
+use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
+
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_air::{Air, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -22,9 +26,6 @@ use p3_util::log2_ceil_usize;
 use p3_whir::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirProver};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
-use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
-use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
 type Perm = Poseidon2BabyBear<16>;
