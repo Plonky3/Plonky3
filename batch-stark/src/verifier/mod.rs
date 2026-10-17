@@ -49,8 +49,7 @@ pub type OpeningArgumentWithQuotientDomains<SC> = (
 /// This is exactly what [`verify_batch`] builds internally before checking the PCS — pulled
 /// out so a caller that has already sampled `zeta` from its own transcript replay (and already
 /// has the per-instance shape data `verify_batch`'s own precompute loop derives) can build the
-/// same structure without needing a live `A: Air<...>` reference for anything beyond
-/// [`BaseAir::main_next_row_columns`]/[`BaseAir::preprocessed_next_row_columns`] — e.g. a
+/// same structure using only [`BaseAir`] shape and next-row metadata — e.g. a
 /// recursive verifier that reads trace width and quotient degree from the proof's own
 /// opened-value shape instead of a live AIR.
 ///
@@ -69,20 +68,15 @@ pub type OpeningArgumentWithQuotientDomains<SC> = (
 ///
 /// # Omitted checks
 ///
-/// Only the shape checks this construction itself needs are performed (degree-bit bounds,
-/// quotient-domain sizes, matching quotient-chunk counts, preprocessed metadata agreement).
+/// This construction checks per-instance collection counts, degree-bit bounds,
+/// quotient-domain sizes, matching quotient-chunk counts, randomization presence/dimensions,
+/// next-row presence/widths, and preprocessed metadata and opening shapes.
 /// A caller assembling the opening argument itself inherits the rest of `verify_batch`'s
 /// proof-shape validation, none of which happens here:
 ///
-/// - per-instance counts agreeing across `airs`, opened values, public values, degree bits,
-///   lookup terminals and lookups ([`InvalidProofShapeError::InstanceCountMismatch`]);
-/// - presence of the ZK randomization commitment and its per-instance opened values matching
-///   [`UnivariateStarkPcs::ZK`], and each random opening's dimension;
-/// - public-value counts, trace-width agreement (local and next) and the
-///   `main_next_row_columns` presence rule;
-/// - quotient-chunk counts and per-chunk dimensions;
-/// - preprocessed presence/width agreement against `CommonData` and the
-///   `preprocessed_next_row_columns` presence rule;
+/// - public-value and lookup-terminal counts (these are not arguments to this helper);
+/// - public-value counts per AIR and local trace-width agreement;
+/// - per-quotient-chunk dimensions;
 /// - one lookup terminal per AIR with lookups and none otherwise, plus the lookup-commitment
 ///   consistency check (`commitments.permutation.is_some()` iff some AIR has lookups);
 /// - [`check_multiplicity_height_bound`], the LogUp bound that stops multiplicities wrapping
@@ -117,6 +111,107 @@ where
 {
     let pcs = config.pcs();
     let is_zk = config.is_zk();
+
+    // This public helper also serves callers that do not run verify_batch's preflight.
+    // Check parallel collections before any zip can truncate or index can panic.
+    let num_instances = airs.len();
+    if opened_values.instances.len() != num_instances
+        || degree_bits.len() != num_instances
+        || preprocessed_widths.len() != num_instances
+        || log_num_quotient_chunks.len() != num_instances
+        || common.lookups.len() != num_instances
+        || common
+            .preprocessed
+            .as_ref()
+            .is_some_and(|global| global.instances.len() != num_instances)
+    {
+        return Err(InvalidProofShapeError::InstanceCountMismatch.into());
+    }
+    if commitments.random.is_some() != SC::Pcs::ZK
+        || opened_values.instances.iter().any(|instance| {
+            let random = &instance.base_opened_values.random;
+            random.is_some() != SC::Pcs::ZK
+                || random
+                    .as_ref()
+                    .is_some_and(|values| values.len() != Challenge::<SC>::DIMENSION)
+        })
+    {
+        return Err(VerificationError::RandomizationError.into());
+    }
+    if let Some(global) = &common.preprocessed {
+        for (matrix_index, &instance_index) in global.matrix_to_instance.iter().enumerate() {
+            if global
+                .instances
+                .get(instance_index)
+                .and_then(Option::as_ref)
+                .is_none_or(|meta| meta.matrix_index != matrix_index)
+            {
+                return Err(InvalidProofShapeError::PreprocessedMetadataMismatch {
+                    air: instance_index,
+                }
+                .into());
+            }
+        }
+    }
+    for (i, (air, instance)) in airs.iter().zip(&opened_values.instances).enumerate() {
+        let opened = &instance.base_opened_values;
+        if !air.main_next_row_columns().is_empty() {
+            if opened
+                .trace_next
+                .as_ref()
+                .is_none_or(|next| next.len() != air.width())
+            {
+                return Err(InvalidProofShapeError::TraceNextMismatch { air: Some(i) }.into());
+            }
+        } else if opened.trace_next.is_some() {
+            return Err(InvalidProofShapeError::UnexpectedTraceNext { air: Some(i) }.into());
+        }
+
+        let width = preprocessed_widths[i];
+        let meta = common
+            .preprocessed
+            .as_ref()
+            .and_then(|global| global.instances[i].as_ref());
+        if meta.map_or(0, |meta| meta.width) != width
+            || meta.is_some_and(|meta| {
+                meta.width == 0
+                    || meta.degree_bits != degree_bits[i]
+                    || common
+                        .preprocessed
+                        .as_ref()
+                        .and_then(|global| global.matrix_to_instance.get(meta.matrix_index))
+                        != Some(&i)
+            })
+        {
+            return Err(InvalidProofShapeError::PreprocessedMetadataMismatch { air: i }.into());
+        }
+        let next_used = !air.preprocessed_next_row_columns().is_empty();
+        match &opened.preprocessed {
+            Some(_) if width == 0 => {
+                return Err(
+                    InvalidProofShapeError::UnexpectedPreprocessedValues { air: Some(i) }.into(),
+                );
+            }
+            Some(preprocessed) => {
+                let expected_next = if next_used { width } else { 0 };
+                if preprocessed.local.len() != width
+                    || preprocessed.next.as_ref().map_or(0, Vec::len) != expected_next
+                {
+                    return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
+                }
+                if !next_used && preprocessed.next.is_some() {
+                    return Err(InvalidProofShapeError::UnexpectedPreprocessedNext {
+                        air: Some(i),
+                    }
+                    .into());
+                }
+            }
+            None if width > 0 => {
+                return Err(InvalidProofShapeError::MissingPreprocessedValues { air: i }.into());
+            }
+            None => {}
+        }
+    }
     let mut coms_to_verify = vec![];
 
     // Trace round: per instance, open at zeta and zeta_next.
