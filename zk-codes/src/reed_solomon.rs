@@ -139,7 +139,7 @@ impl<F: TwoAdicField, Dft> ReedSolomonZkEncoding<F, Dft> {
 
     // Round the live prefix up so a sparse transform may skip only layers
     // known to contain zeros. The all-zero polynomial uses one live row.
-    fn padding_bits(&self) -> usize {
+    const fn padding_bits(&self) -> usize {
         log2_strict_usize(self.m) - log2_strict_usize((self.msg_len + self.t).next_power_of_two())
     }
 
