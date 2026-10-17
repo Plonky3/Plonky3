@@ -465,8 +465,8 @@ fn fold_u64(val: __m256i) -> __m256i {
 /// Each product fits in 62 bits, so the raw `32x32 -> 64`-bit products are accumulated in
 /// 64-bit lanes (even and odd 32-bit indices kept apart, since `vpmuludq` reads only the
 /// low half of each 64-bit lane). Inputs are in `0..=P`, so a product is at most `P^2`;
-/// folding the accumulators below `2^33` every 3 iterations keeps `2^33 + 3 * P^2 < 2^64`,
-/// so the lanes never overflow.
+/// a fold of any u64 is at most `5 * P + 3`. Folding every four products keeps
+/// `4 * P^2 + 5 * P + 3 < 2^64`, so the lanes never overflow, including for redundant zero.
 #[inline]
 fn dot_product<const N: usize>(
     u: &[PackedMersenne31AVX2; N],
@@ -486,15 +486,14 @@ fn dot_product<const N: usize>(
                 x86_64::_mm256_mul_epu32(movehdup_epi32(lhs), movehdup_epi32(rhs)),
             );
             unreduced += 1;
-            if unreduced == 3 {
+            if unreduced == 4 {
                 unreduced = 0;
                 acc_evn = fold_u64(acc_evn);
                 acc_odd = fold_u64(acc_odd);
             }
         }
 
-        // At most 2 unreduced products sit on top of a folded value: the lanes are below
-        // `2^33 + 2 * P^2 < 2^64`, so two folds bring them to `0..=2 P` in the low 32 bits.
+        // Two folds of any u64 give at most P + 4 <= 2 P, fitting in the low 32 bits.
         let evn = fold_u64(fold_u64(acc_evn));
         let odd = fold_u64(fold_u64(acc_odd));
 
@@ -534,7 +533,7 @@ fn mixed_dot_product<const N: usize>(
                 x86_64::_mm256_mul_epu32(movehdup_epi32(lhs), rhs),
             );
             unreduced += 1;
-            if unreduced == 3 {
+            if unreduced == 4 {
                 unreduced = 0;
                 acc_evn = fold_u64(acc_evn);
                 acc_odd = fold_u64(acc_odd);
