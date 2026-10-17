@@ -489,9 +489,15 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     /// Choose output ownership only for a short contraction with enough output work
     /// to split. A one-worker pool and the serial backend keep the existing path.
     fn prefix_tile_len<ACC>(&self, output_len: usize) -> Option<usize> {
+        let output_bytes = output_len.saturating_mul(size_of::<ACC>());
         if self.num_variables() > PREFIX_TILE_MAX_VARIABLES
-            || output_len * size_of::<ACC>() < PREFIX_TILE_MIN_OUTPUT_BYTES
+            || output_bytes < PREFIX_TILE_MIN_OUTPUT_BYTES
         {
+            return None;
+        }
+        // Native x86-64 measurements favor whole-output folding from 32 MiB
+        // for a single compressed variable; smaller folds still use output tiles.
+        if cfg!(target_arch = "x86_64") && self.num_variables() == 1 && output_bytes >= 32 << 20 {
             return None;
         }
         let tile_len = (PREFIX_TILE_BYTES / size_of::<ACC>()).max(1);
