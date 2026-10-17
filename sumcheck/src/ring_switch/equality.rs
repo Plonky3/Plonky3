@@ -10,9 +10,10 @@ use super::tensor::TensorAlgebra;
 ///
 /// Remark 3.4's recurrence, over any characteristic. `eq̃(X, Y) = Π_i (X_i·Y_i + (1 − X_i)(1 − Y_i))`,
 /// so starting from `1 ⊗ 1` each variable contributes
-/// `e ← φ0(a)·φ1(b)·e + φ0(1 − a)·φ1(1 − b)·e`. Factoring with `A = φ0(a)` and
-/// `B = φ1(b)` gives `(1 − A)e + B(Ae − (1 − A)e)`, using two extension scalings per
-/// variable. Costs `O(ℓ' · d)` extension multiplications.
+/// `e ← φ0(a)·φ1(b)·e + φ0(1 − a)·φ1(1 − b)·e`. In characteristic two, factoring with
+/// `A = φ0(a)` and `B = φ1(b)` gives `(1 − A)e + B(Ae − (1 − A)e)`, using two extension
+/// scalings per variable. In odd characteristic, the two summands are formed directly with
+/// four extension scalings per variable. Both paths cost `O(ℓ' · d)` extension multiplications.
 ///
 /// # Panics
 /// Panics unless `r_high` and `r_prime` have the same length.
@@ -27,10 +28,24 @@ pub fn equality_element<F: Field, EF: ExtensionField<F>>(
     );
 
     let mut e = TensorAlgebra::one();
-    for i in 0..r_high.num_variables() {
-        let (a, b) = (r_high[i], r_prime[i]);
+    if F::TWO == F::ZERO {
+        for i in 0..r_high.num_variables() {
+            let (a, b) = (r_high[i], r_prime[i]);
+            e.mul_equality_factor(a, b);
+        }
+    } else {
+        for i in 0..r_high.num_variables() {
+            let (a, b) = (r_high[i], r_prime[i]);
 
-        e.mul_equality_factor(a, b);
+            // `φ0(a)·φ1(b)·e`; the two scalings commute, so either order gives the term.
+            let mut agree = e.clone();
+            agree.scale_columns(a);
+            agree.scale_rows(b);
+
+            e.scale_columns(EF::ONE - a);
+            e.scale_rows(EF::ONE - b);
+            e += agree;
+        }
     }
     e
 }
