@@ -306,6 +306,9 @@ where
         alpha,
     );
 
+    drop(trace_on_quotient_domain);
+    drop(preprocessed_on_quotient_domain);
+
     // Due to `alpha`, evaluations of `Q` all lie in the extension field `E`.
     // We flatten this into a matrix of `F` values by treating `E` as an `F`
     // vector space and so separating each element of `E` into `e + 1 = [E: F]` elements of `F`.
