@@ -5,10 +5,12 @@ use std::sync::Arc;
 
 use p3_air::{
     Air, AirBuilder, BaseAir, BaseEntry, BaseLeaf, BoundaryEnd, BoundaryPublic, ExtensionBuilder,
-    SymbolicAirBuilder, SymbolicExpression, SymbolicVariable,
+    SymbolicExpression, SymbolicVariable, WindowAccess,
 };
 use p3_binary_field::TowerLevel;
-use p3_binary_pcs::zk::{ReferenceZkAir, Val, ZkAirConfig, ZkAirProof, ZkError};
+use p3_binary_pcs::zk::{
+    CurrentRowAirBuilder, ReferenceZkAir, Val, ZkAirConfig, ZkAirProof, ZkError,
+};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::StdRng;
@@ -26,10 +28,11 @@ impl BaseAir<Val> for Product {
         vec![]
     }
 }
-impl Air<SymbolicAirBuilder<Val>> for Product {
-    fn eval(&self, builder: &mut SymbolicAirBuilder<Val>) {
+impl<AB: AirBuilder<F = Val>> Air<AB> for Product {
+    fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        builder.assert_zero(main.values[0] * main.values[1] - builder.public_values()[0]);
+        let public: AB::Expr = builder.public_values()[0].into();
+        builder.assert_zero(main.current_slice()[0] * main.current_slice()[1] - public);
     }
 }
 fn protocol() -> ReferenceZkAir {
@@ -231,8 +234,8 @@ impl BaseAir<Val> for Fixture {
         Some(0)
     }
 }
-impl Air<SymbolicAirBuilder<Val>> for Fixture {
-    fn eval(&self, builder: &mut SymbolicAirBuilder<Val>) {
+impl Air<CurrentRowAirBuilder> for Fixture {
+    fn eval(&self, builder: &mut CurrentRowAirBuilder) {
         for expr in &self.constraints {
             builder.assert_zero(expr.clone());
         }

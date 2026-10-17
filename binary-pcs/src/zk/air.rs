@@ -16,10 +16,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::{
-    Air, AirLayout, BaseEntry, BaseLeaf, SymbolicAirBuilder, SymbolicExpression, SymbolicVariable,
-    get_all_symbolic_constraints,
-};
+use p3_air::{Air, AirLayout, BaseEntry, BaseLeaf, SymbolicExpression, SymbolicVariable};
 use p3_challenger::{CanObserve, CanSample};
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
@@ -28,8 +25,8 @@ use serde::{Deserialize, Serialize};
 
 use super::polynomial::{add, evaluate, exact_divide, interpolate, multiply, scale, vanishing};
 use super::{
-    Challenger, ReferencePcsConfig, ReferenceZkPcs, Val, ZkCommitment, ZkError, ZkOpeningProof,
-    challenger, observe_bytes, observe_usize,
+    Challenger, CurrentRowAirBuilder, ReferencePcsConfig, ReferenceZkPcs, Val, ZkCommitment,
+    ZkError, ZkOpeningProof, challenger, observe_bytes, observe_usize,
 };
 
 type Expr = SymbolicExpression<Val>;
@@ -89,7 +86,51 @@ impl ReferenceZkAir {
     /// Compile current Main(offset=0), Public and Constant expressions only.
     /// Unsupported metadata and actual leaves are rejected. Leading Boolean
     /// columns receive explicit x*(x+1) constraints before sizing or binding.
-    pub fn compile<A: Air<SymbolicAirBuilder<Val>>>(
+    ///
+    /// Permutation AIRs are rejected by the builder's capabilities, even when
+    /// an empty permutation loop would emit no symbolic constraints:
+    ///
+    /// ```compile_fail,E0277
+    /// use p3_air::{Air, BaseAir, PermutationAirBuilder};
+    /// use p3_binary_pcs::zk::{ReferenceZkAir, Val, ZkAirConfig};
+    /// struct EmptyPermutationLoop;
+    /// impl BaseAir<Val> for EmptyPermutationLoop {
+    ///     fn width(&self) -> usize { 1 }
+    ///     fn main_next_row_columns(&self) -> Vec<usize> { vec![] }
+    /// }
+    /// impl<AB: PermutationAirBuilder<F = Val>> Air<AB> for EmptyPermutationLoop {
+    ///     fn eval(&self, builder: &mut AB) {
+    ///         for value in builder.permutation_values().to_vec() {
+    ///             builder.assert_zero_ext(value);
+    ///         }
+    ///     }
+    /// }
+    /// let _ = ReferenceZkAir::compile(
+    ///     &EmptyPermutationLoop, ZkAirConfig::new(1, 1).unwrap(),
+    /// );
+    /// ```
+    ///
+    /// Indexed permutation access is also rejected before evaluating the AIR:
+    ///
+    /// ```compile_fail,E0277
+    /// use p3_air::{Air, BaseAir, PermutationAirBuilder, WindowAccess};
+    /// use p3_binary_pcs::zk::{ReferenceZkAir, Val, ZkAirConfig};
+    /// struct IndexedPermutation;
+    /// impl BaseAir<Val> for IndexedPermutation {
+    ///     fn width(&self) -> usize { 1 }
+    ///     fn main_next_row_columns(&self) -> Vec<usize> { vec![] }
+    /// }
+    /// impl<AB: PermutationAirBuilder<F = Val>> Air<AB> for IndexedPermutation {
+    ///     fn eval(&self, builder: &mut AB) {
+    ///         let permutation = builder.permutation();
+    ///         builder.assert_zero_ext(permutation.current_slice()[0]);
+    ///     }
+    /// }
+    /// let _ = ReferenceZkAir::compile(
+    ///     &IndexedPermutation, ZkAirConfig::new(1, 1).unwrap(),
+    /// );
+    /// ```
+    pub fn compile<A: Air<CurrentRowAirBuilder>>(
         air: &A,
         config: ZkAirConfig,
     ) -> Result<Self, ZkError> {
@@ -125,10 +166,12 @@ impl ReferenceZkAir {
             num_public_values: public_count,
             ..Default::default()
         };
-        let (mut constraints, extension) = get_all_symbolic_constraints::<Val, Val, _>(air, layout);
-        if !extension.is_empty() {
+        let mut builder = CurrentRowAirBuilder::new(layout);
+        air.eval(&mut builder);
+        if builder.has_extension_constraints() {
             return Err(ZkError::UnsupportedAir("extension constraints"));
         }
+        let mut constraints = builder.base_constraints();
         if constraints
             .len()
             .checked_add(boolean_columns)

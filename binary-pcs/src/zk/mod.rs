@@ -36,8 +36,10 @@ use p3_keccak::Keccak256Hash;
 mod pcs;
 pub use pcs::*;
 mod air;
+mod builder;
 mod polynomial;
 pub use air::*;
+pub use builder::CurrentRowAirBuilder;
 
 /// Fixed witness and challenge field.
 pub type Val = BinaryField128;
