@@ -106,7 +106,7 @@ impl ReferencePcsConfig {
         self.num_queries
     }
 
-    fn check_width(&self, width: usize) -> Result<(), ZkError> {
+    pub(super) fn check_width(&self, width: usize) -> Result<(), ZkError> {
         if width == 0
             || self
                 .codeword_len
@@ -375,7 +375,7 @@ impl ReferenceZkPcs {
         challenger.observe(&commitment.root);
     }
 
-    fn validate_commitment(&self, commitment: &ZkCommitment) -> Result<(), ZkError> {
+    pub(super) fn validate_commitment(&self, commitment: &ZkCommitment) -> Result<(), ZkError> {
         if commitment.message_len != self.config.message_len
             || commitment.num_queries != self.config.num_queries
         {
@@ -388,7 +388,11 @@ impl ReferenceZkPcs {
         Ok(())
     }
 
-    fn validate_proof(&self, width: usize, proof: &ZkOpeningProof) -> Result<(), ZkError> {
+    pub(super) fn validate_proof(
+        &self,
+        width: usize,
+        proof: &ZkOpeningProof,
+    ) -> Result<(), ZkError> {
         let path_len = self.config.codeword_len.ilog2() as usize;
         if proof.claimed_values.len() != width
             || proof.sigma.len() != width

@@ -16,9 +16,11 @@ criterion.workspace = true
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 test-utils = []
-experimental-zk = ["dep:p3-keccak", "dep:p3-merkle-tree", "dep:p3-symmetric", "dep:rand"]
+experimental-zk = ["dep:p3-air", "dep:postcard", "dep:p3-keccak", "dep:p3-merkle-tree", "dep:p3-symmetric", "dep:rand"]
 
 [dependencies]
+p3-air = { workspace = true, optional = true }
+postcard = { workspace = true, optional = true, features = ["alloc"] }
 p3-keccak = { workspace = true, optional = true }
 p3-merkle-tree = { workspace = true, optional = true }
 p3-symmetric = { workspace = true, optional = true }

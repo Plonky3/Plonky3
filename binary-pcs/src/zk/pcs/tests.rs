@@ -1,11 +1,14 @@
-use super::*;
-use crate::zk::challenger;
 use alloc::vec;
+
 use p3_binary_field::TowerLevel;
 use p3_challenger::CanSample;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+
+use super::*;
+use crate::zk::challenger;
 
 #[test]
 fn opens_monomial_columns_and_replays_transcript() {
@@ -247,6 +250,7 @@ fn full_blend_and_repeated_query_joint_distribution_is_witness_independent() {
     // Enumerating independent u, rather than only the marginal query values, catches
     // masks that cease to hide after disclosing the entire blend.
     use alloc::collections::BTreeMap;
+
     use p3_binary_field::BinaryField8 as Small;
     let z = Small::from_repr(2);
     for gamma_repr in 1..4 {
