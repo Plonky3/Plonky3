@@ -12,6 +12,20 @@ use crate::dense::RowMajorMatrix;
 /// That path expects the inner matrix's `row_slice_unchecked` to borrow the row cheaply.
 const MAX_RESOLVED_LANES: usize = 8;
 
+/// Largest packing width whose physical row indices are stored on the stack.
+const MAX_STACK_LANES: usize = 32;
+
+/// Keep the resolved row guards and physical index buffers in overlapping storage.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Common packing widths must avoid heap allocation"
+)]
+enum PackingRows<Row> {
+    Slices([Option<Row>; MAX_RESOLVED_LANES]),
+    Stack([usize; MAX_STACK_LANES]),
+    Heap(Vec<usize>),
+}
+
 /// A trait for remapping row indices of a matrix.
 ///
 /// Implementations can change the number of visible rows (`height`)
@@ -204,6 +218,7 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         // captured by value, so the column loop only reads through those slices and no `Vec`
         // of row-slice guards is allocated. Wider packings resolve and validate physical row
         // indices once, then read the inner elements directly through those same indices.
+        // Common native widths fit in stack storage; arbitrary larger widths use a Vec.
         let r = if width == 0 {
             0
         } else if r < height {
@@ -212,57 +227,72 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
             r % height
         };
         let no_wrap = P::WIDTH != 1 && P::WIDTH <= height - r;
-        let lane_rows: [Option<_>; MAX_RESOLVED_LANES] = core::array::from_fn(|i| {
-            (P::WIDTH <= MAX_RESOLVED_LANES && i < P::WIDTH && width != 0).then(|| {
-                let lane_row = if no_wrap {
-                    r + i
-                } else {
-                    crate::add_wrapped_row(r, i, height)
-                };
-                // Safety: lane_row < height.
-                let row = unsafe { self.row_slice_unchecked(lane_row) };
-                assert_eq!(
-                    row.len(),
-                    width,
-                    "inner row length differs from the matrix width"
-                );
-                row
-            })
-        });
-        let mapped_rows = if P::WIDTH > MAX_RESOLVED_LANES && width != 0 {
-            let inner_height = self.inner.height();
-            (0..P::WIDTH)
-                .map(|i| {
+        let rows = if P::WIDTH <= MAX_RESOLVED_LANES {
+            PackingRows::Slices(core::array::from_fn(|i| {
+                (i < P::WIDTH && width != 0).then(|| {
                     let lane_row = if no_wrap {
                         r + i
                     } else {
                         crate::add_wrapped_row(r, i, height)
                     };
-                    self.checked_row_index(lane_row, inner_height)
+                    // Safety: lane_row < height.
+                    let row = unsafe { self.row_slice_unchecked(lane_row) };
+                    assert_eq!(
+                        row.len(),
+                        width,
+                        "inner row length differs from the matrix width"
+                    );
+                    row
                 })
-                .collect::<Vec<_>>()
+            }))
         } else {
-            Vec::new()
+            let inner_height = self.inner.height();
+            let map_lane = |i| {
+                let lane_row = if no_wrap {
+                    r + i
+                } else {
+                    crate::add_wrapped_row(r, i, height)
+                };
+                self.checked_row_index(lane_row, inner_height)
+            };
+            if P::WIDTH <= MAX_STACK_LANES {
+                PackingRows::Stack(core::array::from_fn(|i| {
+                    if i < P::WIDTH && width != 0 {
+                        map_lane(i)
+                    } else {
+                        0
+                    }
+                }))
+            } else {
+                PackingRows::Heap(if width != 0 {
+                    (0..P::WIDTH).map(map_lane).collect()
+                } else {
+                    Vec::new()
+                })
+            }
         };
         (0..width).map(move |c| {
-            if P::WIDTH <= MAX_RESOLVED_LANES {
-                // Safety: `from_fn` calls this with i < P::WIDTH <= MAX_RESOLVED_LANES, so the
-                // array index is in bounds. width != 0 here, so every lane below P::WIDTH is
-                // `Some` and holds a row whose length was asserted to be width, and c < width
-                // (loop bound).
-                P::from_fn(|i| unsafe {
-                    *lane_rows
-                        .get_unchecked(i)
-                        .as_deref()
-                        .unwrap_unchecked()
-                        .get_unchecked(c)
-                })
-            } else {
-                // Safety: every lane's stored physical index was checked against inner height,
-                // i < P::WIDTH = mapped_rows.len(), and c < width. Do not remap after validation.
-                P::from_fn(|i| unsafe {
-                    self.inner.get_unchecked(*mapped_rows.get_unchecked(i), c)
-                })
+            let gather = |indices: &[usize]| {
+                // Safety: every used physical index was checked against inner height,
+                // i < P::WIDTH <= indices.len(), and c < width. Do not remap after validation.
+                P::from_fn(|i| unsafe { self.inner.get_unchecked(*indices.get_unchecked(i), c) })
+            };
+            match &rows {
+                PackingRows::Slices(lane_rows) => {
+                    // Safety: `from_fn` calls this with i < P::WIDTH <= MAX_RESOLVED_LANES, so the
+                    // array index is in bounds. width != 0 here, so every lane below P::WIDTH is
+                    // `Some` and holds a row whose length was asserted to be width, and c < width
+                    // (loop bound).
+                    P::from_fn(|i| unsafe {
+                        *lane_rows
+                            .get_unchecked(i)
+                            .as_deref()
+                            .unwrap_unchecked()
+                            .get_unchecked(c)
+                    })
+                }
+                PackingRows::Stack(indices) => gather(indices),
+                PackingRows::Heap(indices) => gather(indices),
             }
         })
     }
@@ -842,6 +872,19 @@ mod tests {
     extreme_packing_test!(test_vertical_packing_extreme_width_2, FieldArray<BabyBear, 2>);
     extreme_packing_test!(test_vertical_packing_extreme_width_8, FieldArray<BabyBear, 8>);
     extreme_packing_test!(test_vertical_packing_extreme_width_16, FieldArray<BabyBear, 16>);
+    extreme_packing_test!(test_vertical_packing_extreme_width_32, FieldArray<BabyBear, 32>);
+    extreme_packing_test!(test_vertical_packing_extreme_width_64, FieldArray<BabyBear, 64>);
+
+    #[test]
+    fn test_wide_packing_with_and_without_wraparound() {
+        let view = RowIndexMappedView {
+            index_map: ReverseMap(65),
+            inner: RowMajorMatrix::new((0..195).map(BabyBear::new).collect(), 3),
+        };
+        check_extreme_packing::<FieldArray<BabyBear, 16>, _>(&view);
+        check_extreme_packing::<FieldArray<BabyBear, 32>, _>(&view);
+        check_extreme_packing::<FieldArray<BabyBear, 64>, _>(&view);
+    }
 
     #[test]
     fn test_wrapping_row_slices_extreme_start() {
@@ -989,15 +1032,15 @@ mod tests {
     fn test_wide_packing_uses_the_validated_physical_indices() {
         use core::sync::atomic::{AtomicUsize, Ordering};
 
-        struct ChangingMap(AtomicUsize);
-        impl RowIndexMap for ChangingMap {
+        struct ChangingMap<const N: usize>(AtomicUsize);
+        impl<const N: usize> RowIndexMap for ChangingMap<N> {
             fn height(&self) -> usize {
                 16
             }
 
             fn map_row_index(&self, r: usize) -> usize {
                 // A second resolution must not replace an already validated physical row.
-                if self.0.fetch_add(1, Ordering::Relaxed) < 16 {
+                if self.0.fetch_add(1, Ordering::Relaxed) < N {
                     r
                 } else {
                     usize::MAX
@@ -1005,21 +1048,32 @@ mod tests {
             }
         }
 
-        let view = RowIndexMappedView {
-            index_map: ChangingMap(AtomicUsize::new(0)),
-            // CheckedRows keeps an incorrect precheck-then-remap implementation safe to test.
-            inner: CheckedRows(RowMajorMatrix::new((0..48).map(BabyBear::new).collect(), 3)),
-        };
-        let packed = view
-            .vertically_packed_row::<FieldArray<BabyBear, 16>>(0)
-            .collect::<Vec<_>>();
-        let expected = [
-            [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45],
-            [1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46],
-            [2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38, 41, 44, 47],
-        ]
-        .map(|row| row.map(BabyBear::new).to_vec());
-        assert_eq!(lanes(&packed), expected);
+        fn check<const N: usize>() {
+            let view = RowIndexMappedView {
+                index_map: ChangingMap::<N>(AtomicUsize::new(0)),
+                // CheckedRows keeps an incorrect precheck-then-remap implementation safe to test.
+                inner: CheckedRows(RowMajorMatrix::new((0..48).map(BabyBear::new).collect(), 3)),
+            };
+            let packed = view
+                .vertically_packed_row::<FieldArray<BabyBear, N>>(0)
+                .collect::<Vec<_>>();
+            let expected = [
+                [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45],
+                [1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46],
+                [2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38, 41, 44, 47],
+            ]
+            .map(|row| {
+                row.into_iter()
+                    .cycle()
+                    .take(N)
+                    .map(BabyBear::new)
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(lanes(&packed), expected);
+        }
+        check::<16>();
+        check::<32>();
+        check::<64>();
     }
 
     /// A matrix whose rows hold one element fewer than its declared width.
