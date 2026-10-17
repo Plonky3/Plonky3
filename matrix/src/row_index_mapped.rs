@@ -145,6 +145,11 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         Self: Sized,
         T: Clone,
     {
+        // Optimized map conversions also need to reject a mapping invalidated by inner mutation.
+        let inner_height = self.inner.height();
+        for r in 0..self.height() {
+            self.checked_row_index(r, inner_height);
+        }
         // Use Perm's optimized permutation routine, if it has one.
         self.index_map.to_row_major_matrix(self.inner)
     }
@@ -282,6 +287,7 @@ mod tests {
     use super::*;
     use crate::bitrev::BitReversibleMatrix;
     use crate::dense::RowMajorMatrix;
+    use crate::horizontally_truncated::HorizontallyTruncated;
     use crate::stack::HorizontalPair;
 
     /// Mock implementation of RowIndexMap
@@ -806,6 +812,10 @@ mod tests {
                     index_map: ReverseMap(5),
                     inner: dense.clone(),
                 };
+                let horizontal = HorizontalPair::new(dense.clone(), dense.clone());
+                let truncated = HorizontallyTruncated::new_with_range(dense.clone(), 1..3).unwrap();
+                check_extreme_packing::<$packing, _>(&horizontal);
+                check_extreme_packing::<$packing, _>(&truncated);
                 check_extreme_packing::<$packing, _>(&default);
                 check_extreme_packing::<$packing, _>(&mapped);
                 check_extreme_packing::<$packing, _>(&dense);
@@ -932,6 +942,32 @@ mod tests {
             inner: CheckedRows(RowMajorMatrix::new(vec![BabyBear::new(0); 3], 3)),
         };
         let _ = view.get(0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Mapped row index out of bounds")]
+    fn test_bit_reversed_conversion_rejects_shortened_inner() {
+        let mut view = RowMajorMatrix::new((0u32..4).collect(), 1).bit_reverse_rows();
+        view.inner.values.truncate(1);
+        let _ = view.to_row_major_matrix();
+    }
+
+    #[test]
+    fn test_conversion_preserves_valid_subset_map() {
+        let view = RowIndexMappedView {
+            index_map: ConstantMap,
+            inner: RowMajorMatrix::new(vec![0u32, 1, 2, 3, 4, 5], 2),
+        };
+        assert_eq!(view.to_row_major_matrix().values, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_bit_reversed_conversion_preserves_optimized_storage() {
+        let matrix = RowMajorMatrix::new((0u32..8).collect(), 2);
+        let storage = matrix.values.as_ptr();
+        let converted = matrix.bit_reverse_rows().to_row_major_matrix();
+        assert_eq!(converted.values, vec![0, 1, 4, 5, 2, 3, 6, 7]);
+        assert_eq!(converted.values.as_ptr(), storage);
     }
 
     /// A matrix whose rows hold one element fewer than its declared width.
