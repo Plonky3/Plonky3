@@ -34,10 +34,12 @@ impl BinaryWhirBudget {
 
     /// Grade a schedule against the ceiling, before anything is committed.
     ///
+    /// The shape bounds payload bytes. Callers must reserve serializer framing separately.
+    ///
     /// # Errors
     ///
-    /// Returns an error naming the first figure the schedule exceeds.
-    pub const fn check_shape(
+    /// Returns an error naming the first figure the schedule exceeds, or on size overflow.
+    pub fn check_shape(
         &self,
         shape: &ProofShape,
         base_element_bytes: usize,
@@ -56,7 +58,7 @@ impl BinaryWhirBudget {
                 budget: self.max_grinding_bits,
             });
         }
-        let bytes = shape.max_bytes(base_element_bytes, extension_element_bytes, digest_bytes);
+        let bytes = shape.max_bytes(base_element_bytes, extension_element_bytes, digest_bytes)?;
         if bytes > self.max_proof_bytes {
             return Err(BudgetError::Bytes {
                 actual: bytes,
@@ -101,6 +103,35 @@ mod tests {
         BinaryWhirBudget::PRODUCTION
             .check_shape(&SHAPE, 4, 16, 32)
             .unwrap();
+    }
+
+    #[test]
+    fn unrepresentable_byte_counts_are_refused() {
+        use crate::whir::ProofShapeError;
+
+        let unlimited = BinaryWhirBudget {
+            max_proof_bytes: usize::MAX,
+            ..BinaryWhirBudget::PRODUCTION
+        };
+        let overflow = Err(BudgetError::Shape(ProofShapeError::SizeOverflow));
+        assert_eq!(unlimited.check_shape(&SHAPE, usize::MAX, 0, 0), overflow);
+        let shape = ProofShape {
+            opened_base_elements: usize::MAX,
+            sent_base_elements: 1,
+            ..SHAPE
+        };
+        assert_eq!(unlimited.check_shape(&shape, 1, 0, 0), overflow);
+        assert_eq!(unlimited.check_shape(&SHAPE, 0, usize::MAX, 0), overflow);
+        assert_eq!(unlimited.check_shape(&SHAPE, 0, 0, usize::MAX), overflow);
+        let shape = ProofShape {
+            opened_base_elements: usize::MAX - 1,
+            sent_base_elements: 0,
+            opened_extension_elements: 2,
+            sent_extension_elements: 0,
+            merkle_digests: 0,
+            ..SHAPE
+        };
+        assert_eq!(unlimited.check_shape(&shape, 1, 1, 0), overflow);
     }
 
     #[test]
