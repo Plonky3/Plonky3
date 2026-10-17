@@ -387,6 +387,7 @@ fn forged_successor_proof(
         width,
         num_batches: points.len(),
         next: true,
+        sparse_next: Vec::new(),
     };
     let mut transcript = ColumnBatchProverTranscript::new(challenger, batch_shape);
     let mut openings = Vec::with_capacity(points.len());
@@ -804,7 +805,7 @@ fn each_route_emits_the_reductions_its_plan_counts() {
     //     every column, current row              batched      1 reduction
     //     every column, both rows, two batches   batched      2 reductions
     //     current [2, 0]                         per column   2 reductions
-    //     current [0, 1, 2], next [1]            per column   3 reductions
+    //     current [0, 1, 2], next [1]            hybrid       2 reductions
     //     two tables, every column               batched      2 + 1 reductions
     //
     // The first table's three slots split into blocks of two and one.
@@ -823,7 +824,7 @@ fn each_route_emits_the_reductions_its_plan_counts() {
             vec![shape],
             successor_protocol(&[shape], &[1]),
             false,
-            3,
+            2,
             0xB730,
         ),
         (two_tables.to_vec(), protocol(&two_tables), true, 3, 0xB740),
@@ -1570,14 +1571,14 @@ fn the_per_column_route_reads_its_values_off_the_readings_whatever_is_supplied()
     // Invariant: the per-column route takes every value from its readings, so a supplied run
     // changes nothing, not even a wrong one. Its count and shape are still checked.
     //
-    // Fixture state: one batch reading a subset one row ahead, which takes that route.
+    // Fixture state: incomplete current and successor views keep the per-column route.
     let shape = TableShape::new(8, 3);
     let scheme = pcs(&[shape]);
     let table = table_with_width(0xB710, 8, 3);
     let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB711), 8);
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
         shape,
-        vec![OpeningBatch::new(vec![0, 1, 2], vec![1])],
+        vec![OpeningBatch::new(vec![0, 2], vec![1])],
     )]);
     let open_known = |known: Option<&[Option<OpeningEvals<EF>>]>| {
         let mut chal = challenger();
@@ -1593,7 +1594,7 @@ fn the_per_column_route_reads_its_values_off_the_readings_whatever_is_supplied()
 
     let (evaluated, mut evaluated_chal, _) = open_known(None);
     let evaluated = evaluated.unwrap();
-    let wrong = OpeningEvals::new(vec![EF::ONE; 3], vec![EF::ONE]);
+    let wrong = OpeningEvals::new(vec![EF::ONE; 2], vec![EF::ONE]);
     let (supplied, mut supplied_chal, _) = open_known(Some(&[Some(wrong)]));
     assert_eq!(
         postcard::to_allocvec(&supplied.unwrap()).unwrap(),
@@ -1619,9 +1620,10 @@ fn the_per_column_route_reads_its_values_off_the_readings_whatever_is_supplied()
 }
 
 #[test]
-fn partial_successor_views_use_the_fallback_column_route() {
-    // Invariant: a batch naming the two views differently is answered column by column,
-    // one claim per column either view names, a column in both sharing one claim.
+fn partial_successor_views_choose_hybrid_or_shared_column_claims() {
+    // Complete current views use a block plus sparse successor claims when cheaper.
+    // Incomplete current views keep one claim per column either view names, sharing
+    // current and successor readings for a column named by both.
     //
     //     current [0, 1, 2], next [1]   a subset read one row ahead
     //     current [0],       next [1]   a column read one row ahead and nowhere else
@@ -1633,7 +1635,7 @@ fn partial_successor_views_use_the_fallback_column_route() {
     let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB60F), 8);
 
     for (current, next, claims) in [
-        (vec![0, 1, 2], vec![1], 3),
+        (vec![0, 1, 2], vec![1], 2),
         (vec![0], vec![1], 2),
         (vec![0, 1], vec![1], 2),
         (vec![2, 0], vec![0], 2),
@@ -1797,7 +1799,7 @@ fn a_second_table_is_read_one_row_ahead_at_its_own_point() {
 }
 
 #[test]
-fn a_tampered_successor_value_is_rejected_on_either_route() {
+fn a_tampered_successor_value_is_rejected_on_every_route() {
     // Invariant: every value of the run is bound before the challenges that combine it,
     // so moving any one of them, on either route, breaks the proof.
     let shape = TableShape::new(8, 3);
@@ -1809,10 +1811,17 @@ fn a_tampered_successor_value_is_rejected_on_either_route() {
     for (per_column, protocol) in [
         (false, both_views_protocol(shape, 1)),
         (
-            true,
+            false,
             OpeningProtocol::new(vec![TableSpec::new(
                 shape,
                 vec![OpeningBatch::new(vec![0, 1, 2], vec![1])],
+            )]),
+        ),
+        (
+            true,
+            OpeningProtocol::new(vec![TableSpec::new(
+                shape,
+                vec![OpeningBatch::new(vec![2, 0], vec![1])],
             )]),
         ),
     ] {
@@ -1858,7 +1867,7 @@ fn a_tampered_successor_value_is_rejected_on_either_route() {
                 .unwrap_err();
             // Combining feeds every value into one column point the current claim answers.
             // Named apart, the lone next value is the one the successor claim answers.
-            let expected = if per_column && index >= shape.width() {
+            let expected = if per_column && index >= 2 {
                 BitRingSwitchProofError::SuccessorClaimMismatch
             } else {
                 BitRingSwitchProofError::ClaimMismatch
@@ -1898,7 +1907,7 @@ fn successor_security_charges_both_views_of_every_batch() {
     // The per-column route prices a successor protocol too, with no batching term.
     let fallback = OpeningProtocol::new(vec![TableSpec::new(
         shape,
-        vec![OpeningBatch::new(vec![0, 1, 2], vec![1])],
+        vec![OpeningBatch::new(vec![0, 2], vec![1])],
     )]);
     let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
         EF,
@@ -2020,7 +2029,7 @@ fn opening_routes_and_their_security_are_pinned() {
         assert!((security.log2_max_candidates - 0.0).abs() < 1e-9);
     }
 
-    // (c) Per-column: three tables, a reordered subset, a complete batch and a partial
+    // (c) Hybrid: three tables, a reordered subset, a complete batch and a partial
     // successor batch.
     {
         let shapes = [
@@ -2075,7 +2084,7 @@ fn opening_routes_and_their_security_are_pinned() {
         assert_eq!(after_open, after_verify);
         assert_eq!(
             pinned_digest(&(&proof, after_open)),
-            "7bff6b57739b0e69f24e7ece7dc4ced96212c9a1f0503262547f8d309a9484b5"
+            "ed1b3579d71463fcac036a7c2926d13d7318224133b51c29628b250163d03ef6"
         );
 
         let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
@@ -2083,11 +2092,11 @@ fn opening_routes_and_their_security_are_pinned() {
             MyChallenger,
         >>::prescribed_security(&scheme, &protocol)
         .unwrap();
-        assert_eq!(security.terms.len(), 3);
+        assert_eq!(security.terms.len(), 4);
         assert!((term_bits(&security, "binary-pcs-opening") - 121.97763218697155).abs() < 1e-9);
         assert!((term_bits(&security, "bit-ring-switch") - 124.2995602818589).abs() < 1e-9);
         assert!(
-            (term_bits(&security, "bit-ring-switch-claim-batching") - 124.67807190511263).abs()
+            (term_bits(&security, "bit-ring-switch-claim-batching") - 125.1926450779424).abs()
                 < 1e-9
         );
         assert!((security.log2_max_candidates - 0.0).abs() < 1e-9);
@@ -2284,4 +2293,216 @@ fn commit_binds_what_the_verifier_binds() {
     };
     let (first, second) = (witness(), witness());
     assert_multilinear_commit_contract::<_, EF, _>(&scheme, &challenger(), first, second);
+}
+
+#[test]
+fn hybrid_batches_save_reductions_only_below_the_column_cost() {
+    for width in [3, 64, 1024] {
+        let shape = TableShape::new(3, width);
+        for successors in [0, 1, 8, width - 1, width] {
+            if successors > width {
+                continue;
+            }
+            let next: Vec<_> = if successors == width {
+                (0..width).collect()
+            } else {
+                (0..successors).rev().collect()
+            };
+            let protocol = successor_protocol(&[shape], &next);
+            let actual = OpeningRoute::new(&protocol).num_reductions();
+            // One aligned padded block. Complete successors share that block;
+            // sparse successors remain ordinary claims, one per requested column.
+            let expected = if successors == 0 || successors == width {
+                1
+            } else {
+                (1 + successors).min(width)
+            };
+            assert_eq!(actual, expected, "width {width}, successors {successors}");
+        }
+    }
+}
+
+#[test]
+fn hybrid_openings_preserve_values_boundaries_and_supplied_runs() {
+    for (width, rows, successors) in [(64, 3, 1), (64, 7, 8), (64, 8, 1), (1024, 3, 8)] {
+        let shape = TableShape::new(rows, width);
+        let next: Vec<_> = (0..successors).rev().collect();
+        let protocol = successor_protocol(&[shape], &next);
+        let scheme = pcs(&[shape]);
+        let source = table_with_width(0xBA70 + width as u64, rows, width);
+        // The last Boolean row exercises the repeat-last successor boundary.
+        let points = [Point::new(vec![EF::ONE; rows])];
+        let mut prover = challenger();
+        let (root, data) = scheme.commit(vec![source.clone()], &mut prover).unwrap();
+        let proof = scheme
+            .open_at(data.clone(), &protocol, &points, &mut prover.clone())
+            .unwrap();
+        assert_eq!(proof.opening.reduction.claims.len(), 1 + successors);
+        let mut verifier = challenger();
+        scheme.observe_commitment(&root, &mut verifier);
+        let evals = scheme
+            .verify_at(&root, &proof, &protocol, &points, &mut verifier)
+            .unwrap();
+        for column in 0..width {
+            assert_eq!(
+                evals[0].current()[column],
+                source.column(column).value((1 << rows) - 1)
+            );
+        }
+        for (at, &column) in next.iter().enumerate() {
+            assert_eq!(
+                evals[0].next()[at],
+                source.column(column).value((1 << rows) - 1)
+            );
+        }
+        let known = [Some(evals[0].clone())];
+        let supplied = scheme
+            .open_at_known(
+                data.clone(),
+                &protocol,
+                &points,
+                &known,
+                &mut prover.clone(),
+            )
+            .unwrap();
+        assert_eq!(
+            postcard::to_allocvec(&supplied).unwrap(),
+            postcard::to_allocvec(&proof).unwrap()
+        );
+        for at in [0, width - 1, width, width + successors - 1] {
+            let mut forged = proof.clone();
+            forged.values[at] += EF::ONE;
+            let mut verifier = challenger();
+            scheme.observe_commitment(&root, &mut verifier);
+            assert!(
+                scheme
+                    .verify_at(&root, &forged, &protocol, &points, &mut verifier)
+                    .is_err()
+            );
+            // Bind the forged value before the column draw, then open the honest bits.
+            // This tests the random comparison itself, including residual successor claims.
+            let current = forged.values[..width].to_vec();
+            let successor = forged.values[width..].to_vec();
+            let bad = [Some(OpeningEvals::new(current, successor))];
+            assert!(
+                scheme
+                    .open_at_known(data.clone(), &protocol, &points, &bad, &mut prover.clone())
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn hybrid_mixed_heights_and_interleaved_partial_batches_keep_value_order() {
+    let shapes = [TableShape::new(8, 64), TableShape::new(3, 5)];
+    let protocol = OpeningProtocol::new(vec![
+        TableSpec::new(
+            shapes[0],
+            vec![
+                OpeningBatch::new((0..64).collect(), vec![63, 0]),
+                OpeningBatch::new(vec![63, 2, 0], vec![2, 62]),
+                OpeningBatch::new((0..64).collect(), Vec::new()),
+            ],
+        ),
+        TableSpec::new(
+            shapes[1],
+            vec![
+                OpeningBatch::new((0..5).collect(), vec![4]),
+                OpeningBatch::new(vec![4, 1], vec![0, 4]),
+            ],
+        ),
+    ]);
+    let sources = vec![
+        table_with_width(0xBA80, 8, 64),
+        table_with_width(0xBA81, 3, 5),
+    ];
+    let scheme = pcs(&shapes);
+    let mut rng = SmallRng::seed_from_u64(0xBA82);
+    let points: Vec<_> = protocol
+        .iter_openings()
+        .map(|(table, _)| Point::<EF>::rand(&mut rng, shapes[table].num_variables()))
+        .collect();
+    let route = OpeningRoute::new(&protocol);
+    assert!(matches!(route, OpeningRoute::Hybrid { .. }));
+    let mut prover = challenger();
+    let (root, data) = scheme.commit(sources.clone(), &mut prover).unwrap();
+    let proof = scheme
+        .open_at(data, &protocol, &points, &mut prover)
+        .unwrap();
+    assert_eq!(proof.opening.reduction.claims.len(), route.num_reductions());
+    let mut packed_chal = challenger();
+    let (packed_root, packed_data) = scheme
+        .commit(sources.iter().map(packed_table).collect(), &mut packed_chal)
+        .unwrap();
+    let packed_proof = scheme
+        .open_at(packed_data, &protocol, &points, &mut packed_chal)
+        .unwrap();
+    assert_eq!(
+        postcard::to_allocvec(&root).unwrap(),
+        postcard::to_allocvec(&packed_root).unwrap()
+    );
+    assert_eq!(
+        postcard::to_allocvec(&proof).unwrap(),
+        postcard::to_allocvec(&packed_proof).unwrap()
+    );
+
+    let mut verifier = challenger();
+    scheme.observe_commitment(&root, &mut verifier);
+    let evals = scheme
+        .verify_at(&root, &proof, &protocol, &points, &mut verifier)
+        .unwrap();
+    for (((table, request), point), actual) in protocol.iter_openings().zip(&points).zip(&evals) {
+        let (current, successor) =
+            BooleanTracePcs::<EF, MyMmcs, MyMmcs>::evaluate_views(&sources[table], point, true);
+        assert_eq!(
+            actual.current(),
+            request
+                .current()
+                .iter()
+                .map(|&column| current[column])
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            actual.next(),
+            request
+                .next()
+                .iter()
+                .map(|&column| successor[column])
+                .collect::<Vec<_>>()
+        );
+    }
+    for at in 0..proof.values.len() {
+        let mut forged = proof.clone();
+        forged.values[at] += EF::ONE;
+        let mut verifier = challenger();
+        scheme.observe_commitment(&root, &mut verifier);
+        assert!(
+            scheme
+                .verify_at(&root, &forged, &protocol, &points, &mut verifier)
+                .is_err(),
+            "value {at}"
+        );
+    }
+}
+
+#[test]
+fn hybrid_security_charges_column_draws_residuals_and_successor_tensors() {
+    for rows in [3, 8] {
+        let shape = TableShape::new(rows, 64);
+        let scheme = pcs(&[shape]);
+        let protocol = successor_protocol(&[shape], &[63, 1, 0]);
+        let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
+            EF,
+            MyChallenger,
+        >>::prescribed_security(&scheme, &protocol)
+        .unwrap();
+        let expected = scheme.inner.readings_security(4, rows > 7);
+        for term in &expected.terms {
+            assert_eq!(term_bits(&security, term.label), term.bits.bits());
+        }
+        // One current block draws six coordinates; sparse successor claims are
+        // discharged ordinarily, so they add no column draw.
+        assert!((term_bits(&security, "column-batching") - 125.41503749927884).abs() < 1e-9);
+    }
 }

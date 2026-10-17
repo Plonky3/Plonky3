@@ -159,8 +159,13 @@ pub(super) enum OpeningRoute {
     /// Every batch reads all of its table at the current row, and either none or all of it
     /// one row ahead: one reduction per aligned column block, over one shared column point.
     Batched(Vec<TableRun>),
-    /// Any other protocol: one reduction per column read, in transcript order.
+    /// Protocols with no profitable complete view: one reduction per column read.
     PerColumn(ClaimPlan),
+    /// Complete current views batched separately from residual ordinary claims.
+    Hybrid {
+        runs: Vec<TableRun>,
+        residual: Vec<ColumnClaim>,
+    },
 }
 
 /// The batches of one table, run through one column-batching transcript.
@@ -168,6 +173,9 @@ pub(super) enum OpeningRoute {
 pub(super) struct TableRun {
     /// Table every batch of the run opens.
     pub(super) table: usize,
+    /// First batch and first value of this run in protocol order.
+    pub(super) opening: usize,
+    pub(super) value_offset: usize,
     /// Shape the run's transcript binds.
     pub(super) shape: ColumnBatchShape,
     /// Aligned blocks the table's column slots split into, each one reduction per batch.
@@ -195,8 +203,18 @@ pub(super) struct ColumnBlock {
 impl OpeningRoute {
     /// Resolve the route a protocol takes.
     pub(super) fn new(protocol: &OpeningProtocol) -> Self {
-        batched_runs(protocol)
-            .map_or_else(|| Self::PerColumn(ClaimPlan::of(protocol)), Self::Batched)
+        if let Some(runs) = batched_runs(protocol) {
+            return Self::Batched(runs);
+        }
+        hybrid_route(protocol).unwrap_or_else(|| Self::PerColumn(ClaimPlan::of(protocol)))
+    }
+
+    /// Column-batched runs, including those beside ordinary residual claims.
+    pub(super) fn runs(&self) -> &[TableRun] {
+        match self {
+            Self::Batched(runs) | Self::Hybrid { runs, .. } => runs,
+            Self::PerColumn(_) => &[],
+        }
     }
 
     /// Reductions the bit commitment answers on this route.
@@ -207,6 +225,12 @@ impl OpeningRoute {
                 .map(|run| run.shape.num_batches * run.blocks.len())
                 .sum(),
             Self::PerColumn(plan) => plan.claims().len(),
+            Self::Hybrid { runs, residual } => {
+                runs.iter()
+                    .map(|run| run.shape.num_batches * run.blocks.len())
+                    .sum::<usize>()
+                    + residual.len()
+            }
         }
     }
 
@@ -216,6 +240,13 @@ impl OpeningRoute {
             Self::Batched(runs) => runs
                 .iter()
                 .any(|run| run.shape.next && run.shape.table_variables > absorbed),
+            Self::Hybrid { runs, residual } => {
+                runs.iter()
+                    .any(|run| run.shape.next && run.shape.table_variables > absorbed)
+                    || residual.iter().any(|claim| {
+                        claim.next_at.is_some() && shapes[claim.table].num_variables() > absorbed
+                    })
+            }
             Self::PerColumn(plan) => plan.claims().iter().any(|claim| {
                 claim.next_at.is_some() && shapes[claim.table].num_variables() > absorbed
             }),
@@ -244,7 +275,8 @@ fn batched_runs(protocol: &OpeningProtocol) -> Option<Vec<TableRun>> {
     }
 
     let mut runs: Vec<TableRun> = Vec::new();
-    for (table, batch) in protocol.iter_openings() {
+    let mut value_offset = 0;
+    for (opening, (table, batch)) in protocol.iter_openings().enumerate() {
         let width = shapes[table].width();
         let complete = |read: &[usize]| read.iter().copied().eq(0..width);
         let next = !batch.next().is_empty();
@@ -263,18 +295,87 @@ fn batched_runs(protocol: &OpeningProtocol) -> Option<Vec<TableRun>> {
                 let placement = by_table[table]?;
                 runs.push(TableRun {
                     table,
+                    opening,
+                    value_offset,
                     shape: ColumnBatchShape {
                         table_variables: shapes[table].num_variables(),
                         width,
                         num_batches: 1,
                         next,
+                        sparse_next: Vec::new(),
                     },
                     blocks: column_blocks(placement, shapes[table], arity, used)?,
                 });
             }
         }
+        value_offset += batch.len();
     }
     Some(runs)
+}
+
+/// Batch a complete current view only when its blocks plus sparse successor claims
+/// cost less than the original shared current/successor per-column reductions.
+fn hybrid_route(protocol: &OpeningProtocol) -> Option<OpeningRoute> {
+    let shapes = protocol.table_shapes();
+    let (arity, placements) = plan_stacked_layout(&shapes);
+    let used = shapes
+        .iter()
+        .map(|shape| shape.width() << shape.num_variables())
+        .sum();
+    let mut by_table = alloc::vec![None; shapes.len()];
+    for placement in &placements {
+        by_table[placement.idx()] = Some(placement);
+    }
+    let mut runs = Vec::new();
+    let mut selected = alloc::vec![None; protocol.num_openings()];
+    let mut offset = 0;
+    for (opening, (table, batch)) in protocol.iter_openings().enumerate() {
+        let width = shapes[table].width();
+        let complete = |read: &[usize]| read.iter().copied().eq(0..width);
+        if complete(batch.current()) {
+            let blocks = column_blocks(by_table[table]?, shapes[table], arity, used)?;
+            let next = complete(batch.next());
+            let residual_count = if next { 0 } else { batch.next().len() };
+            if blocks.len() + residual_count < width {
+                selected[opening] = Some(next);
+                runs.push(TableRun {
+                    table,
+                    opening,
+                    value_offset: offset,
+                    blocks,
+                    shape: ColumnBatchShape {
+                        table_variables: shapes[table].num_variables(),
+                        width,
+                        num_batches: 1,
+                        next,
+                        sparse_next: if next {
+                            Vec::new()
+                        } else {
+                            batch.next().to_vec()
+                        },
+                    },
+                });
+            }
+        }
+        offset += batch.len();
+    }
+    if runs.is_empty() {
+        return None;
+    }
+    // Complete current vectors are consumed by the selected runs. Their sparse
+    // successor positions remain ordinary claims; all other batches stay intact.
+    let residual = column_claims(protocol)
+        .into_iter()
+        .filter_map(|mut claim| match selected[claim.opening] {
+            Some(true) => None,
+            Some(false) => {
+                claim.current_at = None;
+                claim.next_at.map(|_| claim)
+            }
+            None => Some(claim),
+        })
+        .collect();
+    Some(OpeningRoute::Hybrid { runs, residual })
 }
 
 /// Split a table's column slots into aligned blocks, largest first.
