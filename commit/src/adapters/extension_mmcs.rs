@@ -8,6 +8,40 @@ use p3_matrix::{Dimensions, Matrix};
 
 use crate::{BatchOpening, BatchOpeningRef, Mmcs};
 
+/// Errors encountered while verifying an extension-field MMCS opening.
+#[derive(Debug, thiserror::Error)]
+pub enum ExtensionMmcsError<E> {
+    /// A claimed extension width cannot be represented in base-field coordinates.
+    #[error("extension width {width} for matrix {matrix} overflows in base-field coordinates")]
+    WidthOverflow {
+        /// Index of the matrix in the batch.
+        matrix: usize,
+        /// Claimed width in extension-field elements.
+        width: usize,
+    },
+    /// A query count or matrix count does not match the verifier's dimensions.
+    #[error("batch size mismatch: expected {expected} entries, got {got}")]
+    WrongBatchSize {
+        /// Number of queries or matrices expected by the verifier.
+        expected: usize,
+        /// Number supplied in the opening.
+        got: usize,
+    },
+    /// An opened row does not have its claimed extension-field width.
+    #[error("wrong extension width: matrix {matrix} expected {expected} values, got {got}")]
+    WrongWidth {
+        /// Index of the matrix in the batch.
+        matrix: usize,
+        /// Claimed width in extension-field elements.
+        expected: usize,
+        /// Number of extension-field elements in the opened row.
+        got: usize,
+    },
+    /// Verification by the underlying base-field MMCS failed.
+    #[error("inner MMCS verification failed: {0:?}")]
+    Inner(E),
+}
+
 /// A wrapper to lift an MMCS from a base field `F` to an extension field `EF`.
 ///
 /// `ExtensionMmcs` allows committing to and opening matrices over an extension field by internally
@@ -30,6 +64,51 @@ impl<F, EF, InnerMmcs> ExtensionMmcs<F, EF, InnerMmcs> {
     }
 }
 
+impl<F, EF, InnerMmcs> ExtensionMmcs<F, EF, InnerMmcs>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    InnerMmcs: Mmcs<F>,
+{
+    fn base_dimensions(
+        dimensions: &[Dimensions],
+    ) -> Result<Vec<Dimensions>, ExtensionMmcsError<InnerMmcs::Error>> {
+        dimensions
+            .iter()
+            .enumerate()
+            .map(|(matrix, dim)| {
+                let width = dim.width.checked_mul(EF::DIMENSION).ok_or(
+                    ExtensionMmcsError::WidthOverflow {
+                        matrix,
+                        width: dim.width,
+                    },
+                )?;
+                Ok(Dimensions {
+                    width,
+                    height: dim.height,
+                })
+            })
+            .collect()
+    }
+
+    fn check_widths<R: AsRef<[EF]>>(
+        dimensions: &[Dimensions],
+        rows: &[R],
+    ) -> Result<(), ExtensionMmcsError<InnerMmcs::Error>> {
+        for (matrix, (dim, row)) in dimensions.iter().zip(rows).enumerate() {
+            let got = row.as_ref().len();
+            if dim.width != got {
+                return Err(ExtensionMmcsError::WrongWidth {
+                    matrix,
+                    expected: dim.width,
+                    got,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<F, EF, InnerMmcs> Mmcs<EF> for ExtensionMmcs<F, EF, InnerMmcs>
 where
     F: Field,
@@ -40,7 +119,7 @@ where
     type Commitment = InnerMmcs::Commitment;
     type Proof = InnerMmcs::Proof;
     type MultiProof = InnerMmcs::MultiProof;
-    type Error = InnerMmcs::Error;
+    type Error = ExtensionMmcsError<InnerMmcs::Error>;
 
     fn commit<M: Matrix<EF>>(&self, inputs: Vec<M>) -> (Self::Commitment, Self::ProverData<M>) {
         self.inner
@@ -75,25 +154,28 @@ where
         index: usize,
         batch_opening: BatchOpeningRef<'_, EF, Self>,
     ) -> Result<(), Self::Error> {
+        if batch_opening.opened_values.len() != dimensions.len() {
+            return Err(ExtensionMmcsError::WrongBatchSize {
+                expected: dimensions.len(),
+                got: batch_opening.opened_values.len(),
+            });
+        }
+        let base_dimensions = Self::base_dimensions(dimensions)?;
+        Self::check_widths(dimensions, batch_opening.opened_values)?;
         let opened_base_values: Vec<Vec<F>> = batch_opening
             .opened_values
             .iter()
             .cloned()
             .map(EF::flatten_to_base)
             .collect();
-        let base_dimensions = dimensions
-            .iter()
-            .map(|dim| Dimensions {
-                width: dim.width * EF::DIMENSION,
-                height: dim.height,
-            })
-            .collect::<Vec<_>>();
-        self.inner.verify_batch(
-            commit,
-            &base_dimensions,
-            index,
-            BatchOpeningRef::new(&opened_base_values, batch_opening.opening_proof),
-        )
+        self.inner
+            .verify_batch(
+                commit,
+                &base_dimensions,
+                index,
+                BatchOpeningRef::new(&opened_base_values, batch_opening.opening_proof),
+            )
+            .map_err(ExtensionMmcsError::Inner)
     }
 
     fn open_multi_batch<M: Matrix<EF>>(
@@ -117,6 +199,24 @@ where
         opened_values: &[Vec<R>],
         proof: &Self::MultiProof,
     ) -> Result<(), Self::Error> {
+        if opened_values.len() != indices.len() {
+            return Err(ExtensionMmcsError::WrongBatchSize {
+                expected: indices.len(),
+                got: opened_values.len(),
+            });
+        }
+        for rows in opened_values {
+            if rows.len() != dimensions.len() {
+                return Err(ExtensionMmcsError::WrongBatchSize {
+                    expected: dimensions.len(),
+                    got: rows.len(),
+                });
+            }
+        }
+        let base_dimensions = Self::base_dimensions(dimensions)?;
+        for rows in opened_values {
+            Self::check_widths(dimensions, rows)?;
+        }
         // Each extension row reinterprets as `EF::DIMENSION` base elements.
         // This layer always materializes owned base rows.
         let opened_base_values: Vec<Vec<Vec<F>>> = opened_values
@@ -127,19 +227,14 @@ where
                     .collect()
             })
             .collect();
-        let base_dimensions = dimensions
-            .iter()
-            .map(|dim| Dimensions {
-                width: dim.width * EF::DIMENSION,
-                height: dim.height,
-            })
-            .collect::<Vec<_>>();
-        self.inner.verify_multi_batch(
-            commit,
-            &base_dimensions,
-            indices,
-            &opened_base_values,
-            proof,
-        )
+        self.inner
+            .verify_multi_batch(
+                commit,
+                &base_dimensions,
+                indices,
+                &opened_base_values,
+                proof,
+            )
+            .map_err(ExtensionMmcsError::Inner)
     }
 }
