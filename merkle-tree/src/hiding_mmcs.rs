@@ -109,6 +109,30 @@ impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS
     ///     hash, compress, 0, StdRng::seed_from_u64(2),
     /// );
     /// ```
+    ///
+    /// Nor can a caller outside this crate skip `new`: the fields are private, so a struct literal
+    /// does not compile.
+    ///
+    /// ```compile_fail
+    /// use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    /// use p3_field::Field;
+    /// use p3_merkle_tree::MerkleTreeHidingMmcs;
+    /// use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    /// use rand::SeedableRng;
+    /// use rand::rngs::StdRng;
+    ///
+    /// type Perm = Poseidon2BabyBear<16>;
+    /// type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    /// type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+    /// type Packed = <BabyBear as Field>::Packing;
+    ///
+    /// let perm = Perm::new_from_rng_128(&mut StdRng::seed_from_u64(1));
+    /// let (hash, compress) = (Hash::new(perm.clone()), Compress::new(perm));
+    /// let _mmcs = MerkleTreeHidingMmcs::<Packed, Packed, Hash, Compress, StdRng, 2, 8, 4> {
+    ///     inner: p3_merkle_tree::MerkleTreeMmcs::new(hash, compress, 0),
+    ///     rng: spin::Mutex::new(StdRng::seed_from_u64(2)),
+    /// };
+    /// ```
     pub const fn new(hash: H, compress: C, cap_height: usize, rng: R) -> Self {
         const {
             assert!(
