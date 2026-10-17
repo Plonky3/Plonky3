@@ -102,48 +102,70 @@ where
         _ => {}
     }
 
-    let vanishing_values = quotient_chunks_domains
-        .iter()
-        .map(|domain| domain.vanishing_poly_at_point(zeta))
-        .collect_vec();
+    // For two chunks, direct products avoid the temporary product buffers.
+    let zps = if quotient_chunks.len() == 2 {
+        quotient_chunks_domains
+            .iter()
+            .enumerate()
+            .map(|(i, domain)| {
+                quotient_chunks_domains
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, other_domain)| {
+                        other_domain.vanishing_poly_at_point(zeta)
+                            * other_domain
+                                .vanishing_poly_at_point(domain.first_point())
+                                .inverse()
+                    })
+                    .product::<SC::Challenge>()
+            })
+            .collect_vec()
+    } else {
+        let vanishing_values = quotient_chunks_domains
+            .iter()
+            .map(|domain| domain.vanishing_poly_at_point(zeta))
+            .collect_vec();
 
-    // Prefix/suffix products give every leave-one-out numerator in linear time.
-    // Dividing the total product by Z_i(zeta) would fail at a chunk-domain point.
-    let mut prefix = SC::Challenge::ONE;
-    let mut zps = vanishing_values
-        .iter()
-        .map(|&z| {
-            let before = prefix;
-            prefix *= z;
-            before
-        })
-        .collect_vec();
-    let mut suffix = SC::Challenge::ONE;
-    for (zp, &z) in zps.iter_mut().zip(&vanishing_values).rev() {
-        *zp *= suffix;
-        suffix *= z;
-    }
+        // Prefix/suffix products give every leave-one-out numerator in linear time.
+        // Dividing the total product by Z_i(zeta) would fail at a chunk-domain point.
+        let mut prefix = SC::Challenge::ONE;
+        let mut zps = vanishing_values
+            .iter()
+            .map(|&z| {
+                let before = prefix;
+                prefix *= z;
+                before
+            })
+            .collect_vec();
+        let mut suffix = SC::Challenge::ONE;
+        for (zp, &z) in zps.iter_mut().zip(&vanishing_values).rev() {
+            *zp *= suffix;
+            suffix *= z;
+        }
 
-    // Domain points and denominator products are in the base field. Invert one
-    // product per chunk in a batch instead of each pair's denominator separately.
-    let denominators = quotient_chunks_domains
-        .iter()
-        .enumerate()
-        .map(|(i, domain)| {
-            quotient_chunks_domains
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| *j != i)
-                .map(|(_, other)| other.vanishing_poly_at_point(domain.first_point()))
-                .product::<Val<SC>>()
-        })
-        .collect_vec();
-    for (zp, inverse) in zps
-        .iter_mut()
-        .zip(batch_multiplicative_inverse(&denominators))
-    {
-        *zp *= inverse;
-    }
+        // Domain points and denominator products are in the base field. Invert one
+        // product per chunk in a batch instead of each pair's denominator separately.
+        let denominators = quotient_chunks_domains
+            .iter()
+            .enumerate()
+            .map(|(i, domain)| {
+                quotient_chunks_domains
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, other)| other.vanishing_poly_at_point(domain.first_point()))
+                    .product::<Val<SC>>()
+            })
+            .collect_vec();
+        for (zp, inverse) in zps
+            .iter_mut()
+            .zip(batch_multiplicative_inverse(&denominators))
+        {
+            *zp *= inverse;
+        }
+        zps
+    };
 
     // A chunk of the wrong length has no extension element, and the proof is rejected.
     quotient_chunks
