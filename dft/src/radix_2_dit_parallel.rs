@@ -134,9 +134,16 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
     ) -> Self::Evaluations {
         let log_h = log2_strict_usize(mat.height());
         assert!(log_inv_rate <= log_h, "padding exceeds matrix height");
+        if log_inv_rate == 0 {
+            return self.dft_batch(mat);
+        }
+        assert!(
+            log_h <= F::TWO_ADICITY,
+            "transform height exceeds field two-adicity"
+        );
         // Skipping only the twiddle-free first layer does not repay moving
         // and replicating nonconstant coefficients.
-        if log_inv_rate == 0 || (log_inv_rate == 1 && log_h > 1) {
+        if log_inv_rate == 1 && log_h > 1 {
             return self.dft_batch(mat);
         }
 
@@ -166,10 +173,6 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
                 }
             });
 
-        assert!(
-            log_h <= F::TWO_ADICITY,
-            "transform height exceeds field two-adicity"
-        );
         // Constant polynomials are already fully evaluated, without twiddles.
         if log_inv_rate == log_h {
             return mat.bit_reverse_rows();

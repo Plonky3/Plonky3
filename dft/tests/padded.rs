@@ -148,3 +148,78 @@ fn padded_dit_evaluates_sparse_coefficients_at_declared_roots() {
         zero
     );
 }
+
+// A field with only two subgroup points keeps invalid-domain tests small.
+mod small_domain {
+    use p3_monty_31::{
+        FieldParameters, MontyField31, MontyParameters, PackedMontyParameters, TwoAdicData,
+    };
+
+    use super::*;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct MersenneParameters;
+
+    type F = MontyField31<MersenneParameters>;
+
+    impl MontyParameters for MersenneParameters {
+        const PRIME: u32 = (1 << 31) - 1;
+        const MONTY_BITS: u32 = 32;
+        const MONTY_MU: u32 = Self::PRIME;
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    impl p3_monty_31::MontyParametersNeon for MersenneParameters {
+        // SAFETY: These arrays are the corresponding broadcast vector representations.
+        const PACKED_P: core::arch::aarch64::uint32x4_t =
+            unsafe { core::mem::transmute([Self::PRIME; 4]) };
+        const PACKED_MU: core::arch::aarch64::int32x4_t =
+            unsafe { core::mem::transmute([Self::MONTY_MU as i32; 4]) };
+    }
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(target_feature = "avx512f")
+    ))]
+    impl p3_monty_31::MontyParametersAVX2 for MersenneParameters {
+        // SAFETY: These arrays are the corresponding broadcast vector representations.
+        const PACKED_P: core::arch::x86_64::__m256i =
+            unsafe { core::mem::transmute([Self::PRIME; 8]) };
+        const PACKED_MU: core::arch::x86_64::__m256i =
+            unsafe { core::mem::transmute([Self::MONTY_MU; 8]) };
+    }
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    impl p3_monty_31::MontyParametersAVX512 for MersenneParameters {
+        // SAFETY: These arrays are the corresponding broadcast vector representations.
+        const PACKED_P: core::arch::x86_64::__m512i =
+            unsafe { core::mem::transmute([Self::PRIME; 16]) };
+        const PACKED_MU: core::arch::x86_64::__m512i =
+            unsafe { core::mem::transmute([Self::MONTY_MU; 16]) };
+    }
+
+    impl PackedMontyParameters for MersenneParameters {}
+
+    impl FieldParameters for MersenneParameters {
+        const MONTY_GEN: F = F::new(7);
+    }
+
+    impl TwoAdicData for MersenneParameters {
+        const TWO_ADICITY: usize = 1;
+        type ArrayLike = &'static [F];
+        const TWO_ADIC_GENERATORS: Self::ArrayLike = &[F::ONE, F::NEG_ONE];
+        // This field has no eighth or sixteenth roots of unity.
+        const ROOTS_8: Self::ArrayLike = &[];
+        const INV_ROOTS_8: Self::ArrayLike = &[];
+        const ROOTS_16: Self::ArrayLike = &[];
+        const INV_ROOTS_16: Self::ArrayLike = &[];
+    }
+
+    #[test]
+    #[should_panic(expected = "transform height exceeds field two-adicity")]
+    fn padded_dit_rejects_rate_two_height_above_field_two_adicity() {
+        let mat = RowMajorMatrix::new_col(vec![F::ONE, F::ONE, F::ZERO, F::ZERO]);
+        let _ = Radix2DitParallel::default().dft_batch_padded(mat, 1);
+    }
+}
