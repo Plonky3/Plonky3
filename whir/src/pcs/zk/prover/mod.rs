@@ -183,6 +183,12 @@ where
         // sumcheck's packed construction; the eq table is accumulated
         // per-claim through the split-eq factorization instead of a full
         // 2^n scalar materialization.
+        let HidingWhirProverData {
+            message,
+            randomness,
+            merkle,
+            ..
+        } = prover_data;
         let k_pack = log2_strict_usize(F::Packing::WIDTH);
         let product = if num_variables >= k_pack {
             let mut weights = Poly::<EF::ExtensionPacking>::zero(num_variables - k_pack);
@@ -191,7 +197,7 @@ where
                     .accumulate_into_packed(weights.as_mut_slice(), None);
             }
             let evals = Poly::new(
-                F::Packing::pack_slice(prover_data.message.as_slice())
+                F::Packing::pack_slice(message.as_slice())
                     .par_iter()
                     .map(|&p| EF::ExtensionPacking::from(p))
                     .collect(),
@@ -202,16 +208,10 @@ where
             for ((point, _), &coeff) in claims.iter().zip(&coeffs) {
                 SplitEq::new_unpacked(point, coeff).accumulate_into(weights.as_mut_slice(), None);
             }
-            let evals = Poly::new(
-                prover_data
-                    .message
-                    .as_slice()
-                    .par_iter()
-                    .map(|&v| v.into())
-                    .collect(),
-            );
+            let evals = Poly::new(message.as_slice().par_iter().map(|&v| v.into()).collect());
             ProductPolynomial::new_unpacked(VariableOrder::Prefix, evals, weights)
         };
+        drop(message);
         let sumcheck_prover = SumcheckProver::new(product, claim);
 
         // Initial masked sumcheck batch.
@@ -248,12 +248,10 @@ where
         // Current oracle state: message randomness folds along with the
         // message (Lemma 3.26), the Merkle data answers the spot checks.
         // Mixed-field fold: base-field chunks against the extension eq table.
-        let mut oracle_randomness: Vec<EF> = fold_limb_chunks(
-            &prover_data.randomness,
-            config.oracle_randomness[0],
-            &batch.randomness,
-        );
-        let mut round_data = ZkRoundData::<F, EF, MT>::Base(prover_data.merkle);
+        let mut oracle_randomness: Vec<EF> =
+            fold_limb_chunks(&randomness, config.oracle_randomness[0], &batch.randomness);
+        drop(randomness);
+        let mut round_data = ZkRoundData::<F, EF, MT>::Base(merkle);
 
         // Code-switching rounds.
         for round in 0..config.n_rounds() {
