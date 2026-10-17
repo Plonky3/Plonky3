@@ -161,8 +161,7 @@ impl<AB: AirBuilder> Air<AB> for WideCurrentRowAir {
 #[test]
 fn skipped_next_row_gathers_preserve_wide_quotients() {
     use p3_commit::PolynomialSpace;
-    use p3_uni_stark::StarkGenericConfig;
-    use p3_uni_stark::{AirLayout, quotient_values};
+    use p3_uni_stark::{AirLayout, StarkGenericConfig, quotient_values};
 
     let config = make_config();
     let pcs = config.pcs();
