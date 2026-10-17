@@ -163,15 +163,25 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             mat.values
                 .copy_within(row * width..(row + 1) * width, row * block_len);
         }
-        mat.values
-            .par_chunks_exact_mut(block_len)
-            .for_each(|block| {
-                let mut initialized = width;
-                while initialized < block.len() {
-                    block.copy_within(..initialized, initialized);
-                    initialized *= 2;
-                }
-            });
+        let replicate = |block: &mut [F]| {
+            let mut initialized = width;
+            while initialized < block.len() {
+                block.copy_within(..initialized, initialized);
+                initialized *= 2;
+            }
+        };
+        // Serial replication avoids measured dispatch overhead for small batches
+        // with few live rows.
+        if live_rows <= 256 && core::mem::size_of_val(mat.values.as_slice()) <= 64 * 1024 {
+            mat.values.chunks_exact_mut(block_len).for_each(replicate);
+        } else {
+            let replication_bytes = (block_len - width)
+                .saturating_mul(core::mem::size_of::<F>())
+                .saturating_mul(2);
+            mat.values
+                .par_chunks_exact_mut(block_len)
+                .for_each_min_task_bytes(replication_bytes, replicate);
+        }
 
         // Constant polynomials are already fully evaluated, without twiddles.
         if log_inv_rate == log_h {
