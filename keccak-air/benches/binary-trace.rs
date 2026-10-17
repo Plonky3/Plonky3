@@ -1,5 +1,5 @@
 //! Packed binary Keccak witness generation, including padding-only block boundaries.
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_binary_field::Gf2;
 use p3_keccak_air::generate_binary_trace_packed;
 
@@ -10,7 +10,11 @@ fn bench_packed_trace(c: &mut Criterion) {
             .map(|i| core::array::from_fn(|j| (i * 25 + j) as u64))
             .collect();
         group.bench_with_input(BenchmarkId::from_parameter(count), &inputs, |b, inputs| {
-            b.iter(|| generate_binary_trace_packed::<Gf2>(std::hint::black_box(inputs.clone())));
+            b.iter_batched(
+                || inputs.clone(),
+                |inputs| generate_binary_trace_packed::<Gf2>(std::hint::black_box(inputs)),
+                BatchSize::LargeInput,
+            );
         });
     }
     group.finish();
