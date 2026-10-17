@@ -175,21 +175,8 @@ pub(crate) const fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) ->
 // Additionally note that the output is `< P` if `sub < 0` and otherwise is `< x/2^{64}`. Hence if we assume
 // that `x < 2^{64}P`, then the output is always `< P`.
 //
-// We will apply this algorithm 4 times, once for each limb of the input number.
-// Given two inputs x, y, we compute `x * y * 2^{-256} mod P` as follows:
-// 1. Compute `acc0 = x * y[0]` and `res0 = IMR(acc0)`.
-// 2. Compute `acc1 = x * y[1] + res0` and `res1 = IMR(acc1)`.
-// 3. Compute `acc2 = x * y[2] + res1` and `res2 = IMR(acc2)`.
-// 4. Compute `acc3 = x * y[3] + res2` and `res3 = IMR(acc3)`.
-// 5. Return `res3`.
-//
-// Assume that x < P. (We make no assumptions about y). Then `res0 < P` as either `sub < 0` or
-// `res0 < x * y[0]/(2^{64})` and `y[0] < 2^64`.
-//
-// Now assume that `resi < P`. Then `res{i+1} < P` as either `sub < 0` or
-// `res{i+1} < (x * y[i+1] + resi)/(2^{64}) < P * (y[i+1] + 1)/(2^{64}) < P`.
-//
-// Hence by induction we have `res3 < P`.
+// This subtractive reduction is retained for the GCD inversion's linear combinations.
+// Montgomery multiplication below uses additive CIOS to defer its corrections.
 
 /// The incoming number is split into 5 64-bit limbs with the
 /// first limb separated out as it will be treated differently.
@@ -219,18 +206,30 @@ pub(crate) const fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     // algorithm to fail and produce a value which is too large.
     debug_assert!(const_lt(lhs, BN254_PRIME));
 
-    // Our accumulator starts at 0 so we start with mul_small
-    let (acc0, acc) = mul_small(lhs, rhs[0]);
-    let res0 = interleaved_monty_reduction(acc0, acc);
-
-    // Then we repeat the above process for the remaining rhs limbs
-    // including the previous result as an accumulator.
-    let (acc0, acc) = mul_small_and_acc(lhs, rhs[1], res0);
-    let res1 = interleaved_monty_reduction(acc0, acc);
-    let (acc0, acc) = mul_small_and_acc(lhs, rhs[2], res1);
-    let res2 = interleaved_monty_reduction(acc0, acc);
-    let (acc0, acc) = mul_small_and_acc(lhs, rhs[3], res2);
-    interleaved_monty_reduction(acc0, acc)
+    // Additive coarsely integrated operand scanning (CIOS), with B = 2^64:
+    //   x = acc + lhs * rhs[i]
+    //   q = -x[0] / P (mod B)
+    //   acc = (x + q * P) / B
+    // The low limb cancels exactly. If acc < lhs + P before a round, then
+    // acc' <= (acc + (lhs + P) * (B - 1)) / B < lhs + P.
+    // Starting at zero, every round therefore leaves acc < lhs + P < 2P.
+    // Since 2P < 2^256, no sixth input limb or fifth output limb is needed,
+    // even when rhs is an arbitrary 256-bit integer. Only the final result
+    // needs a conditional subtraction of P.
+    let mut acc = [0; 4];
+    let mut i = 0;
+    while i < 4 {
+        let (low, high) = mul_small_and_acc(lhs, rhs[i], acc);
+        let q = low.wrapping_mul(BN254_MONTY_MU_64.wrapping_neg());
+        let (_, mut reduced) = mul_small_and_acc(BN254_PRIME, q, [low, high[0], high[1], high[2]]);
+        // The high input limb sits one position above the second multiply-add.
+        // The bound acc' < 2P < 2^256 proves this addition cannot overflow.
+        reduced[3] += high[3];
+        acc = reduced;
+        i += 1;
+    }
+    let (corrected, underflow) = wrapping_sub(acc, BN254_PRIME);
+    if underflow { acc } else { corrected }
 }
 
 /// The BN254 prime represented as a little-endian array of 2-u128s.
@@ -543,4 +542,74 @@ pub(crate) const fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
 
     // We can now compute the final result:
     linear_comb_monty_red(u, v, f1, g1)
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+    use zkhash::ark_ff::{BigInteger, Field, PrimeField};
+    use zkhash::fields::bn256::FpBN256;
+
+    use super::*;
+
+    // Also checks that Montgomery multiplication remains available in const evaluation.
+    const CONST_PRODUCT: [u64; 4] = monty_mul(crate::BN254_MONTY_R_SQ, [u64::MAX; 4]);
+
+    #[test]
+    fn monty_mul_unrestricted_rhs_matches_biguint_and_ark() {
+        let prime = to_biguint(BN254_PRIME);
+        let r = BigUint::from(1u32) << 256usize;
+        let r_inv = r.modpow(&(&prime - BigUint::from(2u32)), &prime);
+        let ark_r_inv = FpBN256::from_le_bytes_mod_order(&r.to_bytes_le())
+            .inverse()
+            .unwrap();
+        let check = |lhs, rhs| {
+            let got = monty_mul(lhs, rhs);
+            let lhs = to_biguint(lhs);
+            let rhs = to_biguint(rhs);
+            let expected = (&lhs * &rhs * &r_inv) % &prime;
+            assert_eq!(to_biguint(got), expected);
+            assert!(const_lt(got, BN254_PRIME));
+            let ark = FpBN256::from_le_bytes_mod_order(&lhs.to_bytes_le())
+                * FpBN256::from_le_bytes_mod_order(&rhs.to_bytes_le())
+                * ark_r_inv;
+            assert_eq!(
+                to_biguint(got),
+                BigUint::from_bytes_le(&ark.into_bigint().to_bytes_le())
+            );
+        };
+        let pm1 = wrapping_sub(BN254_PRIME, [1, 0, 0, 0]).0;
+        let pm2 = wrapping_sub(BN254_PRIME, [2, 0, 0, 0]).0;
+        let boundaries = [
+            [0; 4],
+            [1, 0, 0, 0],
+            pm1,
+            pm2,
+            BN254_PRIME,
+            [u64::MAX; 4],
+            [u64::MAX, 0, 0, 0],
+            [0, u64::MAX, 0, 0],
+            [0, 0, u64::MAX, 0],
+            [0, 0, 0, u64::MAX],
+            [u64::MAX, u64::MAX, u64::MAX, 0],
+        ];
+        for lhs in [[0; 4], [1, 0, 0, 0], pm1, pm2, crate::BN254_MONTY_R_SQ] {
+            for rhs in boundaries {
+                check(lhs, rhs);
+            }
+        }
+        assert_eq!(
+            CONST_PRODUCT,
+            monty_mul(crate::BN254_MONTY_R_SQ, [u64::MAX; 4])
+        );
+        let mut rng = SmallRng::seed_from_u64(0xd131_0ba6_98df_b5ac);
+        for _ in 0..10_000 {
+            let mut lhs = [0; 4];
+            let reduced = to_biguint(rng.random::<[u64; 4]>()) % &prime;
+            let digits = reduced.to_u64_digits();
+            lhs[..digits.len()].copy_from_slice(&digits);
+            check(lhs, rng.random::<[u64; 4]>());
+        }
+    }
 }
