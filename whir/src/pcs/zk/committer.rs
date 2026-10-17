@@ -16,8 +16,9 @@
 use alloc::vec::Vec;
 
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, PackedFieldExtension, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_multilinear_util::poly::{PolyMaybePacked, PolyMaybePackedView};
 use p3_util::log2_strict_usize;
 
 use crate::utils::padded_ood_t1;
@@ -60,6 +61,46 @@ pub(crate) fn zk_padded_matrix<A: Field>(
     }
 
     RowMajorMatrix::new(values, width)
+}
+
+/// Builds an extension oracle directly from the residual sumcheck storage.
+/// Packed messages are unpacked into their transposed destination, with no
+/// intermediate message-sized scalar buffer.
+pub(crate) fn zk_padded_matrix_view<F, EF>(
+    message: PolyMaybePackedView<'_, F, EF>,
+    randomness: &[EF],
+    folding: usize,
+    height: usize,
+) -> RowMajorMatrix<EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    match message {
+        PolyMaybePacked::Scalar(poly) => {
+            zk_padded_matrix(poly.as_slice(), randomness, folding, height)
+        }
+        PolyMaybePacked::Packed(poly) => {
+            let width = 1 << folding;
+            let message_len = message.num_scalar_evals();
+            let msg_rows = message_len >> folding;
+            let randomness_rows = randomness.len() >> folding;
+            assert_eq!(randomness.len(), randomness_rows << folding);
+            assert!(msg_rows + randomness_rows <= height);
+            let mut values = EF::zero_vec(height * width);
+            EF::ExtensionPacking::unpack_transpose_into(
+                poly.as_slice(),
+                &mut values[..message_len],
+                msg_rows,
+            );
+            for b in 0..width {
+                for j in 0..randomness_rows {
+                    values[(msg_rows + j) * width + b] = randomness[b * randomness_rows + j];
+                }
+            }
+            RowMajorMatrix::new(values, width)
+        }
+    }
 }
 
 /// The folded ZK Reed-Solomon code seen through one committed oracle's leaves.
@@ -171,6 +212,38 @@ mod tests {
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
     type MyDft = Radix2DFTSmallBatch<F>;
+
+    #[test]
+    fn packed_padded_matrix_matches_scalar_staging() {
+        use p3_field::{Field, PackedValue};
+        use p3_multilinear_util::poly::PolyMaybePacked;
+
+        let mut rng = SmallRng::seed_from_u64(917);
+        let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
+        for extra in 0..=4 {
+            let n = k_pack + extra;
+            let message = Poly::<EF>::rand(&mut rng, n);
+            let packed = message.pack::<F, EF>();
+            for folding in 0..=n {
+                for randomness_rows in [0usize, 1, 3] {
+                    let randomness = (0..randomness_rows << folding)
+                        .map(|_| rng.random())
+                        .collect::<Vec<EF>>();
+                    let height = ((1usize << (n - folding)) + randomness_rows).next_power_of_two();
+                    let expected =
+                        zk_padded_matrix(message.as_slice(), &randomness, folding, height);
+                    for view in [
+                        PolyMaybePacked::Scalar(message.as_view()),
+                        PolyMaybePacked::Packed(packed.as_view()),
+                    ] {
+                        let actual =
+                            zk_padded_matrix_view::<F, EF>(view, &randomness, folding, height);
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+    }
 
     /// Folds a limb-major chunked vector by the eq table at `gamma`.
     fn fold_chunks(values: &[EF], chunk: usize, gamma: &Point<EF>) -> Vec<EF> {
