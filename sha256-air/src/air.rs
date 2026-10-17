@@ -32,9 +32,10 @@ use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-use crate::columns::{CHAIN_LEN, NUM_SHA256_COLS, Sha256Cols};
+use crate::columns::{NUM_SHA256_COLS, Sha256Cols};
 use crate::constants::{
-    BITS_PER_LIMB, BLOCK_WORDS, SCHEDULE_EXTENSIONS, SHA256_K, STATE_WORDS, U32_LIMBS, WORD_BITS,
+    BITS_PER_LIMB, BLOCK_WORDS, NUM_COMPRESSION_ROUNDS, SCHEDULE_EXTENSIONS, SHA256_K, STATE_WORDS,
+    U32_LIMBS, WORD_BITS,
 };
 use crate::generation::generate_trace_rows;
 
@@ -110,13 +111,21 @@ impl<AB: AirBuilder> Air<AB> for Sha256Air {
         // Phase 1: ensure every unpacked column actually holds a boolean.
         eval_bit_range_checks::<AB>(builder, local);
         // Phase 2: tie the packed input state to the first four chain entries.
-        eval_initial_state::<AB>(builder, local);
+        let mut a_packed: [[AB::Expr; U32_LIMBS]; 4] =
+            core::array::from_fn(|i| pack_word::<AB>(&local.a_chain[i]));
+        let mut e_packed: [[AB::Expr; U32_LIMBS]; 4] =
+            core::array::from_fn(|i| pack_word::<AB>(&local.e_chain[i]));
+        eval_initial_state::<AB>(builder, local, &a_packed, &e_packed);
         // Phase 3: enforce the 48 message-schedule recurrence equations.
-        eval_message_schedule::<AB>(builder, local);
+        // Each schedule word is consumed repeatedly. Pack it once, retaining only
+        // the eight live working words for the compression chains below.
+        let w_packed: [[AB::Expr; U32_LIMBS]; NUM_COMPRESSION_ROUNDS] =
+            core::array::from_fn(|i| pack_word::<AB>(&local.w[i]));
+        eval_message_schedule::<AB>(builder, local, &w_packed);
         // Phase 4: enforce the 64 compression rounds.
-        eval_compression::<AB>(builder, local);
+        eval_compression::<AB>(builder, local, &w_packed, &mut a_packed, &mut e_packed);
         // Phase 5: enforce the output equals input + final working variables.
-        eval_finalization::<AB>(builder, local);
+        eval_finalization::<AB>(builder, local, &a_packed, &e_packed);
     }
 }
 
@@ -161,19 +170,26 @@ fn eval_bit_range_checks<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB
 ///     H_2 <-> a_chain[1]   H_6 <-> e_chain[1]
 ///     H_3 <-> a_chain[0]   H_7 <-> e_chain[0]
 /// ```
-fn eval_initial_state<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var>) {
+fn eval_initial_state<AB: AirBuilder>(
+    builder: &mut AB,
+    local: &Sha256Cols<AB::Var>,
+    a_packed: &[[AB::Expr; U32_LIMBS]; 4],
+    e_packed: &[[AB::Expr; U32_LIMBS]; 4],
+) {
     // Words H_0..H_3 live in the reversed prefix of the `a` chain.
     for i in 0..4 {
         // The chain stores (d, c, b, a) at indices (0, 1, 2, 3), so invert.
         let chain_idx = 3 - i;
-        let bits = &local.a_chain[chain_idx];
-        assert_packed_equals_bits::<AB>(builder, &local.h_in[i], bits);
+        builder.assert_zeros(core::array::from_fn::<_, U32_LIMBS, _>(|j| {
+            local.h_in[i][j].into() - a_packed[chain_idx][j].dup()
+        }));
     }
     // Words H_4..H_7 live in the reversed prefix of the `e` chain.
     for i in 0..4 {
         let chain_idx = 3 - i;
-        let bits = &local.e_chain[chain_idx];
-        assert_packed_equals_bits::<AB>(builder, &local.h_in[4 + i], bits);
+        builder.assert_zeros(core::array::from_fn::<_, U32_LIMBS, _>(|j| {
+            local.h_in[4 + i][j].into() - e_packed[chain_idx][j].dup()
+        }));
     }
 }
 
@@ -190,7 +206,11 @@ fn eval_initial_state<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::V
 ///
 /// The four-term sum is split into two three-term sums because the shared
 /// add helpers saturate at three addends.
-fn eval_message_schedule<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var>) {
+fn eval_message_schedule<AB: AirBuilder>(
+    builder: &mut AB,
+    local: &Sha256Cols<AB::Var>,
+    w_packed: &[[AB::Expr; U32_LIMBS]; NUM_COMPRESSION_ROUNDS],
+) {
     // Loop over the 48 expanded schedule positions. `i` indexes the packed
     // auxiliary columns; `t` indexes into the unpacked `w` array.
     for i in 0..SCHEDULE_EXTENSIONS {
@@ -214,29 +234,28 @@ fn eval_message_schedule<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB
 
         // Three-term add #1: tmp = small_sigma1 + W[t - 7].
         //
-        // W[t - 7] is consumed as an expression packed on the fly from its
-        // bit decomposition - no extra column is needed for it.
-        let w_tm7_packed_expr = pack_word::<AB>(&local.w[t - 7]);
+        // W[t - 7] reuses its cached packing; no extra column is needed.
+        let w_tm7_packed_expr = &w_packed[t - 7];
         add2(
             builder,
             &local.sched_tmp[i],
             &local.sched_sigma1[i],
-            &w_tm7_packed_expr,
+            w_tm7_packed_expr,
         );
 
         // Three-term add #2: pack(W[t]) = tmp + small_sigma_0 + W[t - 16].
         //
         // Output slot is an expression, not a committed column — `W[t]` is
         // already boolean-checked bit-wise, so its packing is free.
-        let w_t_packed_expr = pack_word::<AB>(&local.w[t]);
+        let w_t_packed_expr = &w_packed[t];
         let sched_sigma0_expr: [AB::Expr; U32_LIMBS] = local.sched_sigma0[i].map(Into::into);
-        let w_tm16_packed_expr = pack_word::<AB>(&local.w[t - 16]);
+        let w_tm16_packed_expr = &w_packed[t - 16];
         add3_expr_out(
             builder,
-            &w_t_packed_expr,
+            w_t_packed_expr,
             &local.sched_tmp[i],
             &sched_sigma0_expr,
-            &w_tm16_packed_expr,
+            w_tm16_packed_expr,
         );
     }
 }
@@ -270,7 +289,13 @@ fn eval_message_schedule<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB
 ///
 /// - Drops the `T_2` column.
 /// - Constraint degree stays at 3.
-fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var>) {
+fn eval_compression<AB: AirBuilder>(
+    builder: &mut AB,
+    local: &Sha256Cols<AB::Var>,
+    w_packed: &[[AB::Expr; U32_LIMBS]; NUM_COMPRESSION_ROUNDS],
+    a_packed: &mut [[AB::Expr; U32_LIMBS]; 4],
+    e_packed: &mut [[AB::Expr; U32_LIMBS]; 4],
+) {
     for (t, round) in local.rounds.iter().enumerate() {
         // Read the eight working variables for round `t` from the chains.
         //
@@ -281,11 +306,9 @@ fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var
         let a_bits = &local.a_chain[t + 3];
         let b_bits = &local.a_chain[t + 2];
         let c_bits = &local.a_chain[t + 1];
-        let d_bits = &local.a_chain[t];
         let e_bits = &local.e_chain[t + 3];
         let f_bits = &local.e_chain[t + 2];
         let g_bits = &local.e_chain[t + 1];
-        let h_bits = &local.e_chain[t];
 
         // big_sigma1 check: reduces to a per-bit XOR3 of rotated `e` bits.
         assert_sigma_matches::<AB>(builder, e_bits, SigmaSpec::BigSigma1, &round.sigma1_e);
@@ -297,13 +320,13 @@ fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var
 
         // Three-term add: tmp1 = big_sigma1 + ch + h.
         let ch_expr: [AB::Expr; U32_LIMBS] = round.ch.map(Into::into);
-        let h_packed_expr = pack_word::<AB>(h_bits);
+        let h_packed_expr = &e_packed[0];
         add3(
             builder,
             &round.tmp1,
             &round.sigma1_e,
             &ch_expr,
-            &h_packed_expr,
+            h_packed_expr,
         );
 
         // Inject K[t] as a constant expression, one 16-bit limb at a time.
@@ -314,8 +337,8 @@ fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var
             AB::Expr::from_u32(SHA256_K[t] >> BITS_PER_LIMB),
         ];
         // Three-term add: T1 = tmp1 + K[t] + W[t].
-        let w_packed_expr = pack_word::<AB>(&local.w[t]);
-        add3(builder, &round.t1, &round.tmp1, &k_expr, &w_packed_expr);
+        let w_packed_expr = &w_packed[t];
+        add3(builder, &round.t1, &round.tmp1, &k_expr, w_packed_expr);
 
         // big_sigma0 check: per-bit XOR3 of rotated `a` bits.
         assert_sigma_matches::<AB>(builder, a_bits, SigmaSpec::BigSigma0, &round.sigma0_a);
@@ -344,8 +367,12 @@ fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var
         // Two-term add directly into the next `e`-chain slot:
         //     pack(e_chain[t + 4]) = d + T1.
         let new_e_packed_expr = pack_word::<AB>(&local.e_chain[t + 4]);
-        let d_packed_expr = pack_word::<AB>(d_bits);
-        add2_expr_out(builder, &new_e_packed_expr, &round.t1, &d_packed_expr);
+        let d_packed_expr = &a_packed[0];
+        add2_expr_out(builder, &new_e_packed_expr, &round.t1, d_packed_expr);
+        a_packed.rotate_left(1);
+        a_packed[3] = new_a_packed_expr;
+        e_packed.rotate_left(1);
+        e_packed[3] = new_e_packed_expr;
     }
 }
 
@@ -391,20 +418,23 @@ fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var
 /// `h_out` has no consumer.
 ///
 /// Committing it as bits makes both limbs 16-bit by construction.
-fn eval_finalization<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var>) {
+fn eval_finalization<AB: AirBuilder>(
+    builder: &mut AB,
+    local: &Sha256Cols<AB::Var>,
+    a_packed: &[[AB::Expr; U32_LIMBS]; 4],
+    e_packed: &[[AB::Expr; U32_LIMBS]; 4],
+) {
     // H'_0..H'_3 are obtained by adding H[i] and the tail of the `a` chain.
     for i in 0..4 {
-        let final_bits = &local.a_chain[CHAIN_LEN - 1 - i];
-        let packed_expr = pack_word::<AB>(final_bits);
+        let packed_expr = &a_packed[3 - i];
         let h_out_expr = pack_word::<AB>(&local.h_out[i]);
-        add2_expr_out(builder, &h_out_expr, &local.h_in[i], &packed_expr);
+        add2_expr_out(builder, &h_out_expr, &local.h_in[i], packed_expr);
     }
     // H'_4..H'_7 are obtained by adding H[i] and the tail of the `e` chain.
     for i in 0..4 {
-        let final_bits = &local.e_chain[CHAIN_LEN - 1 - i];
-        let packed_expr = pack_word::<AB>(final_bits);
+        let packed_expr = &e_packed[3 - i];
         let h_out_expr = pack_word::<AB>(&local.h_out[4 + i]);
-        add2_expr_out(builder, &h_out_expr, &local.h_in[4 + i], &packed_expr);
+        add2_expr_out(builder, &h_out_expr, &local.h_in[4 + i], packed_expr);
     }
 }
 
@@ -427,21 +457,6 @@ fn pack_word<AB: AirBuilder>(bits: &[AB::Var; WORD_BITS]) -> [AB::Expr; U32_LIMB
         // High limb: bits 16..32.
         pack_bits_le::<AB::Expr, _, _>(bits[BITS_PER_LIMB..].iter().copied()),
     ]
-}
-
-/// Assert `packed` equals the packing of `bits`.
-///
-/// Bridges the packed and unpacked views of a single 32-bit word.
-#[inline]
-fn assert_packed_equals_bits<AB: AirBuilder>(
-    builder: &mut AB,
-    packed: &[AB::Var; U32_LIMBS],
-    bits: &[AB::Var; WORD_BITS],
-) {
-    // Re-derive the packed expression from the bits.
-    let [lo, hi] = pack_word::<AB>(bits);
-    // Emit one equality per limb.
-    builder.assert_zeros([packed[0].into() - lo, packed[1].into() - hi]);
 }
 
 /// Wrapper around `p3_air::utils::add2` to keep this file self-contained.
@@ -759,4 +774,73 @@ fn assert_maj_matches<AB: AirBuilder>(
 
     let [built_lo, built_hi] = built;
     builder.assert_zeros([packed[0].into() - built_lo, packed[1].into() - built_hi]);
+}
+
+#[cfg(test)]
+mod constraint_order_tests {
+    use super::*;
+    use alloc::vec::Vec;
+    use p3_air::RowWindow;
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeField32;
+
+    struct Recorder<'a> {
+        main: RowWindow<'a, BabyBear>,
+        empty: RowWindow<'a, BabyBear>,
+        constraints: Vec<BabyBear>,
+    }
+
+    impl<'a> AirBuilder for Recorder<'a> {
+        type F = BabyBear;
+        type Expr = BabyBear;
+        type Var = BabyBear;
+        type MainWindow = RowWindow<'a, BabyBear>;
+        type PreprocessedWindow = RowWindow<'a, BabyBear>;
+        type PublicVar = BabyBear;
+        type PeriodicVar = BabyBear;
+        fn main(&self) -> Self::MainWindow {
+            self.main
+        }
+        fn preprocessed(&self) -> &Self::PreprocessedWindow {
+            &self.empty
+        }
+        fn is_first_row(&self) -> Self::Expr {
+            BabyBear::ONE
+        }
+        fn is_last_row(&self) -> Self::Expr {
+            BabyBear::ONE
+        }
+        fn is_transition(&self) -> Self::Expr {
+            BabyBear::ZERO
+        }
+        fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
+            self.constraints.push(x.into());
+        }
+    }
+
+    #[test]
+    fn constraint_sequence_matches_reference() {
+        // Arbitrary field-valued cells exercise the actual polynomials, rather than
+        // checking only that valid witnesses produce an all-zero constraint sequence.
+        let row: Vec<BabyBear> = (0..NUM_SHA256_COLS)
+            .map(|i| BabyBear::from_usize(i * 12345 + 42))
+            .collect();
+        let mut builder = Recorder {
+            main: RowWindow::from_two_rows(&row, &row),
+            empty: RowWindow::from_two_rows(&[], &[]),
+            constraints: Vec::new(),
+        };
+        Sha256Air.eval(&mut builder);
+        let digest = builder
+            .constraints
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325u64, |hash, x| {
+                (hash ^ u64::from(x.as_canonical_u32())).wrapping_mul(0x100_0000_01b3)
+            });
+        // Snapshot of the f98331687 scalar evaluation, including assertion order.
+        assert_eq!(
+            (builder.constraints.len(), digest),
+            (8096, 2265138267473897018)
+        );
+    }
 }
