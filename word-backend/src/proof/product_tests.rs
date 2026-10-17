@@ -240,6 +240,83 @@ fn word32_statement(
     )
 }
 
+#[test]
+fn every_relation_family_subset_keeps_terminal_slots_and_rejects_false_witnesses() {
+    use p3_challenger::CanSample;
+
+    for mask in 1..8 {
+        for seed in [0, 0xFEDC_BA98_7654_3210] {
+            let (mixed, public, mut words) =
+                word64_statement(seed, seed.rotate_right(17), seed, seed);
+            let system = ConstraintSystem::new(
+                mixed.public_len(),
+                mixed.witness_len(),
+                if mask & 1 != 0 {
+                    mixed.zero_constraints().to_vec()
+                } else {
+                    vec![]
+                },
+                if mask & 2 != 0 {
+                    mixed.and_constraints().to_vec()
+                } else {
+                    vec![]
+                },
+                if mask & 4 != 0 {
+                    mixed.integer_mul_constraints().to_vec()
+                } else {
+                    vec![]
+                },
+            )
+            .unwrap();
+            assert_eq!(system.verify(&public, &words), Ok(()));
+            let fixture = Fixture::new(system.clone(), public.clone(), &words);
+            let mut prover = challenger();
+            let (commitment, proof) = fixture
+                .key
+                .prove::<EF, EF, _, _>(&fixture.scheme, &fixture.values, &mut prover)
+                .unwrap();
+            let mut verifier = challenger();
+            fixture
+                .key
+                .verify::<EF, EF, _, _>(
+                    &fixture.scheme,
+                    &commitment,
+                    &public,
+                    &proof,
+                    &mut verifier,
+                )
+                .unwrap();
+            let prover_next: EF = prover.sample();
+            let verifier_next: EF = verifier.sample();
+            assert_eq!(prover_next, verifier_next);
+            if mask & 1 == 0 {
+                assert_eq!(proof.operands[0], EF::ZERO);
+            }
+            if mask & 2 == 0 {
+                assert_eq!(proof.operands[1..4], [EF::ZERO; 3]);
+            }
+            if mask & 4 == 0 {
+                assert_eq!(proof.operands[4..], [EF::ZERO; 4]);
+            }
+
+            let position = if mask & 1 != 0 {
+                14
+            } else if mask & 2 != 0 {
+                9
+            } else {
+                2
+            };
+            if mask != 0 {
+                words[position] = Word64::new(words[position].get() ^ 1);
+                assert!(system.verify(&public, &words).is_err());
+                let broken = Fixture::new(system, public, &words);
+                let (commitment, proof) = broken.prove();
+                assert!(broken.check(&commitment, &proof).is_err());
+            }
+        }
+    }
+}
+
 /// Boundary factors: zero, one, the top bit alone, and the largest word.
 const WORD64_EDGES: [u64; 4] = [0, 1, 1 << 63, u64::MAX];
 

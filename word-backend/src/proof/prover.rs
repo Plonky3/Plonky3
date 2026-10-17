@@ -137,13 +137,18 @@ impl<W: PackedWord> WordProofKey<W> {
             }
             None => (None, None, EF::ZERO),
         };
+        // Only the public statement shape decides which local families are absent.
+        // Their eight-slot operand claims still carry explicit zero evaluations.
+        let counts = self.statement().relation_counts();
         let mut prover = RelationZerocheck::new(
             Point::new(vanishing_point.as_slice()).equality_weights_msb(),
-            bit_table::<W, EF>(columns.zero(), rows),
-            columns
-                .bitwise_and()
-                .each_ref()
-                .map(|column| bit_table::<W, EF>(column, rows)),
+            (counts[0] != 0).then(|| bit_table::<W, EF>(columns.zero(), rows)),
+            (counts[1] != 0).then(|| {
+                columns
+                    .bitwise_and()
+                    .each_ref()
+                    .map(|column| bit_table::<W, EF>(column, rows))
+            }),
             tables,
             batching,
         );

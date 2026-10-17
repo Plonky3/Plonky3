@@ -628,7 +628,8 @@ mod tests {
         assert_ne!(claimed, EF::ZERO, "a false statement has a nonzero sum");
 
         // Everything after the claimed sum is an honest run over that sum.
-        let mut prover = RelationZerocheck::new(equality, linear, bitwise, None, batching);
+        let mut prover =
+            RelationZerocheck::new(equality, Some(linear), Some(bitwise), None, batching);
         let (zerocheck, point) = transcript.zerocheck(|challenger| {
             prover.prove::<EF, _>(challenger, variables, ZEROCHECK_DEGREE, 0, claimed)
         });
