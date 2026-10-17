@@ -9,7 +9,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::MerkleTreeMmcs;
+use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_mersenne_31::{Mersenne31, Poseidon2Mersenne31, QM31};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{AirLayout, OpeningShape, StarkConfig, StarkSecurityParams, prove, verify};
@@ -62,6 +62,33 @@ fn setup() -> (Perm, ValMmcs, FriParameters<ChallengeMmcs>) {
     (perm, mmcs, fri)
 }
 
+/// The input MMCS of a hiding PCS must salt its leaves.
+type HidingValMmcs = MerkleTreeHidingMmcs<
+    <Val as Field>::Packing,
+    <Val as Field>::Packing,
+    Hash,
+    Compress,
+    StdRng,
+    2,
+    8,
+    4,
+>;
+type HidingChallengeMmcs = ExtensionMmcs<Val, Challenge, HidingValMmcs>;
+
+/// The same parameters as [`setup`], over the salted MMCS.
+fn hiding_setup() -> (Perm, HidingValMmcs, FriParameters<HidingChallengeMmcs>) {
+    let mut rng = StdRng::seed_from_u64(42);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = HidingValMmcs::new(
+        Hash::new(perm.clone()),
+        Compress::new(perm.clone()),
+        0,
+        StdRng::seed_from_u64(44),
+    );
+    let fri = FriParameters::new_testing(HidingChallengeMmcs::new(mmcs.clone()), 0);
+    (perm, mmcs, fri)
+}
+
 fn trace() -> RowMajorMatrix<Val> {
     let values = (1..=16)
         .flat_map(|i| {
@@ -109,7 +136,7 @@ fn opening_count_matches_proof_with_overestimated_degree_hint() {
 
 #[test]
 fn opening_count_matches_hiding_proof() {
-    let (perm, mmcs, fri) = setup();
+    let (perm, mmcs, fri) = hiding_setup();
     let air = SquareAir { degree_hint: None };
     let params = StarkSecurityParams::from_air::<Val, Challenge, _>(
         fri.security_regime(),

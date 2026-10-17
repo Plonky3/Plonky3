@@ -5,7 +5,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{
-    CommitmentOpening, Mmcs, OpenedValues, OpeningRequest, Pcs, PolynomialSpace, UnivariateStarkPcs,
+    CommitmentOpening, HidingMmcs, Mmcs, OpenedValues, OpeningRequest, Pcs, PolynomialSpace,
+    UnivariateStarkPcs,
 };
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
@@ -49,8 +50,107 @@ pub enum HidingFriProverError {
     },
 }
 
-/// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
-/// the user's responsibility to configure.
+/// A hiding FRI PCS.
+///
+/// Both MMCSs must be hiding, so the [`Pcs`] implementation requires [`HidingMmcs`] of each.
+///
+/// Configuring it with a plain Merkle tree is therefore a compile error rather than a silent loss of zero-knowledge.
+///
+/// A salted Merkle tree satisfies the bound:
+///
+/// ```
+/// use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+/// use p3_commit::{ExtensionMmcs, HidingMmcs};
+/// use p3_field::Field;
+/// use p3_field::extension::BinomialExtensionField;
+/// use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
+/// use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+/// use rand::rngs::StdRng;
+///
+/// type Perm = Poseidon2BabyBear<16>;
+/// type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+/// type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+/// type Packed = <BabyBear as Field>::Packing;
+/// type Challenge = BinomialExtensionField<BabyBear, 4>;
+/// type Salted = MerkleTreeHidingMmcs<Packed, Packed, Hash, Compress, StdRng, 2, 8, 4>;
+/// type Plain = MerkleTreeMmcs<Packed, Packed, Hash, Compress, 2, 8>;
+///
+/// fn requires_hiding<C: Send + Sync + Clone, M: HidingMmcs<C>>() {}
+/// requires_hiding::<BabyBear, Salted>();
+/// ```
+///
+/// A plain Merkle tree does not:
+///
+/// ```compile_fail
+/// use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+/// use p3_commit::{ExtensionMmcs, HidingMmcs};
+/// use p3_field::Field;
+/// use p3_field::extension::BinomialExtensionField;
+/// use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
+/// use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+/// use rand::rngs::StdRng;
+///
+/// type Perm = Poseidon2BabyBear<16>;
+/// type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+/// type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+/// type Packed = <BabyBear as Field>::Packing;
+/// type Challenge = BinomialExtensionField<BabyBear, 4>;
+/// type Salted = MerkleTreeHidingMmcs<Packed, Packed, Hash, Compress, StdRng, 2, 8, 4>;
+/// type Plain = MerkleTreeMmcs<Packed, Packed, Hash, Compress, 2, 8>;
+///
+/// fn requires_hiding<C: Send + Sync + Clone, M: HidingMmcs<C>>() {}
+/// requires_hiding::<BabyBear, Plain>();
+/// ```
+///
+/// The FRI MMCS commits over the challenge field, through an extension MMCS that is hiding
+/// exactly when its inner MMCS is:
+///
+/// ```
+/// use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+/// use p3_commit::{ExtensionMmcs, HidingMmcs};
+/// use p3_field::Field;
+/// use p3_field::extension::BinomialExtensionField;
+/// use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
+/// use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+/// use rand::rngs::StdRng;
+///
+/// type Perm = Poseidon2BabyBear<16>;
+/// type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+/// type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+/// type Packed = <BabyBear as Field>::Packing;
+/// type Challenge = BinomialExtensionField<BabyBear, 4>;
+/// type Salted = MerkleTreeHidingMmcs<Packed, Packed, Hash, Compress, StdRng, 2, 8, 4>;
+/// type Plain = MerkleTreeMmcs<Packed, Packed, Hash, Compress, 2, 8>;
+///
+/// fn requires_hiding<C: Send + Sync + Clone, M: HidingMmcs<C>>() {}
+/// requires_hiding::<Challenge, ExtensionMmcs<BabyBear, Challenge, Salted>>();
+/// ```
+///
+/// One over a plain tree is not:
+///
+/// ```compile_fail
+/// use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+/// use p3_commit::{ExtensionMmcs, HidingMmcs};
+/// use p3_field::Field;
+/// use p3_field::extension::BinomialExtensionField;
+/// use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
+/// use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+/// use rand::rngs::StdRng;
+///
+/// type Perm = Poseidon2BabyBear<16>;
+/// type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+/// type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+/// type Packed = <BabyBear as Field>::Packing;
+/// type Challenge = BinomialExtensionField<BabyBear, 4>;
+/// type Salted = MerkleTreeHidingMmcs<Packed, Packed, Hash, Compress, StdRng, 2, 8, 4>;
+/// type Plain = MerkleTreeMmcs<Packed, Packed, Hash, Compress, 2, 8>;
+///
+/// fn requires_hiding<C: Send + Sync + Clone, M: HidingMmcs<C>>() {}
+/// requires_hiding::<Challenge, ExtensionMmcs<BabyBear, Challenge, Plain>>();
+/// ```
+///
+/// These four check which types implement [`HidingMmcs`]. The bounds on [`Self::new`] are
+/// checked by its own examples.
 ///
 /// Each call that draws masks seeds a private [`StdRng`] from the caller-supplied `R`, then draws every mask from it.
 ///
@@ -132,14 +232,82 @@ where
     }
 }
 
-impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> {
-    pub const fn new(
+impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R>
+where
+    Val: Send + Sync + Clone,
+    InputMmcs: HidingMmcs<Val>,
+{
+    /// Both MMCSs must be hiding, so a plain Merkle tree is rejected here, at construction,
+    /// rather than at the first use as a [`Pcs`].
+    ///
+    /// `new` takes `Challenge` as its own type parameter, inferred from the FRI MMCS, since
+    /// `HidingFriPcs` does not name it. Inference works because each [`HidingMmcs`] type in this
+    /// tree implements it for exactly one `T`. A type with a second impl would make `Challenge`
+    /// ambiguous, and every `new` call over it would have to name it, as `new::<Challenge>`.
+    ///
+    /// The examples below name `Challenge`, so it cannot be ambiguous, and each `compile_fail`
+    /// example differs from the first in one bound: while the first compiles, a missing
+    /// [`HidingMmcs`] impl is the only error left to fail one. Left to inference, a call over a
+    /// plain FRI MMCS would fail even without the bound, with `Challenge` ambiguous.
+    ///
+    /// ```
+    /// use p3_baby_bear::BabyBear;
+    /// use p3_commit::{HidingMmcs, Mmcs};
+    /// use p3_fri::{FriParameters, HidingFriPcs};
+    ///
+    /// fn build<Dft, M: HidingMmcs<BabyBear>, C: Send + Sync + Clone, F: HidingMmcs<C>, R>(
+    ///     dft: Dft,
+    ///     mmcs: M,
+    ///     params: FriParameters<F>,
+    ///     rng: R,
+    /// ) -> HidingFriPcs<BabyBear, Dft, M, F, R> {
+    ///     HidingFriPcs::new::<C>(dft, mmcs, params, 4, rng)
+    /// }
+    /// ```
+    ///
+    /// Over a plain FRI MMCS it does not compile:
+    ///
+    /// ```compile_fail
+    /// use p3_baby_bear::BabyBear;
+    /// use p3_commit::{HidingMmcs, Mmcs};
+    /// use p3_fri::{FriParameters, HidingFriPcs};
+    ///
+    /// fn build<Dft, M: HidingMmcs<BabyBear>, C: Send + Sync + Clone, F: Mmcs<C>, R>(
+    ///     dft: Dft,
+    ///     mmcs: M,
+    ///     params: FriParameters<F>,
+    ///     rng: R,
+    /// ) -> HidingFriPcs<BabyBear, Dft, M, F, R> {
+    ///     HidingFriPcs::new::<C>(dft, mmcs, params, 4, rng)
+    /// }
+    /// ```
+    ///
+    /// Nor over a plain input MMCS:
+    ///
+    /// ```compile_fail
+    /// use p3_baby_bear::BabyBear;
+    /// use p3_commit::{HidingMmcs, Mmcs};
+    /// use p3_fri::{FriParameters, HidingFriPcs};
+    ///
+    /// fn build<Dft, M: Mmcs<BabyBear>, C: Send + Sync + Clone, F: HidingMmcs<C>, R>(
+    ///     dft: Dft,
+    ///     mmcs: M,
+    ///     params: FriParameters<F>,
+    ///     rng: R,
+    /// ) -> HidingFriPcs<BabyBear, Dft, M, F, R> {
+    ///     HidingFriPcs::new::<C>(dft, mmcs, params, 4, rng)
+    /// }
+    /// ```
+    pub const fn new<Challenge: Send + Sync + Clone>(
         dft: Dft,
         mmcs: InputMmcs,
         params: FriParameters<FriMmcs>,
         num_random_codewords: usize,
         rng: R,
-    ) -> Self {
+    ) -> Self
+    where
+        FriMmcs: HidingMmcs<Challenge>,
+    {
         let inner = TwoAdicFriPcs::new(dft, mmcs, params);
         Self {
             inner,
@@ -206,8 +374,8 @@ where
     Val: TwoAdicField + PrimeField64,
     StandardUniform: Distribution<Val>,
     Dft: TwoAdicSubgroupDft<Val> + Sync,
-    InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
-    FriMmcs: Mmcs<Challenge>,
+    InputMmcs: HidingMmcs<Val> + Mmcs<Val, MultiProof: Sync, Error: Sync>,
+    FriMmcs: HidingMmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
     Challenger:
         FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
@@ -302,8 +470,8 @@ where
     Val: TwoAdicField + PrimeField64,
     StandardUniform: Distribution<Val>,
     Dft: TwoAdicSubgroupDft<Val> + Sync,
-    InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
-    FriMmcs: Mmcs<Challenge>,
+    InputMmcs: HidingMmcs<Val> + Mmcs<Val, MultiProof: Sync, Error: Sync>,
+    FriMmcs: HidingMmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
     Challenger:
         FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
@@ -800,7 +968,7 @@ mod tests {
     use p3_dft::{Radix2Bowers, Radix2DFTSmallBatch, Radix2Dit, Radix2DitParallel};
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, PrimeCharacteristicRing};
-    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_merkle_tree::MerkleTreeHidingMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::rngs::SmallRng;
     use rand::{SeedableRng, TryCryptoRng, TryRng};
@@ -813,8 +981,17 @@ mod tests {
     type Perm = Poseidon2BabyBear<16>;
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-    type ValMmcs =
-        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
+    /// The input MMCS must be hiding, so its leaves are salted from a fixed seed that keeps the tests deterministic.
+    type ValMmcs = MerkleTreeHidingMmcs<
+        <Val as Field>::Packing,
+        <Val as Field>::Packing,
+        MyHash,
+        MyCompress,
+        StdRng,
+        2,
+        8,
+        4,
+    >;
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     type Dft = Radix2Dit<Val>;
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
@@ -864,7 +1041,7 @@ mod tests {
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm.clone());
 
-        let val_mmcs = ValMmcs::new(hash, compress, 0);
+        let val_mmcs = ValMmcs::new(hash, compress, 0, StdRng::seed_from_u64(3));
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
         // Minimal sound parameters: blowup 2, binary folding, 2 queries.
@@ -1706,7 +1883,12 @@ mod tests {
         for (log_h, width, num_chunks) in [(4, 4, 2), (4, 3, 4)] {
             let mut rng = SmallRng::seed_from_u64(11);
             let perm = Perm::new_from_rng_128(&mut rng);
-            let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+            let val_mmcs = ValMmcs::new(
+                MyHash::new(perm.clone()),
+                MyCompress::new(perm),
+                0,
+                StdRng::seed_from_u64(3),
+            );
             let fri_params = FriParameters {
                 log_blowup: QUOTIENT_LOG_BLOWUP,
                 log_final_poly_len: 0,
@@ -1870,7 +2052,12 @@ mod tests {
     fn probed_pcs() -> (Arc<ProbedPcs>, LockProbe, Arc<AtomicUsize>) {
         let mut rng = SmallRng::seed_from_u64(1);
         let perm = Perm::new_from_rng_128(&mut rng);
-        let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+        let val_mmcs = ValMmcs::new(
+            MyHash::new(perm.clone()),
+            MyCompress::new(perm),
+            0,
+            StdRng::seed_from_u64(3),
+        );
         let fri_params = FriParameters {
             log_blowup: QUOTIENT_LOG_BLOWUP,
             log_final_poly_len: 0,
