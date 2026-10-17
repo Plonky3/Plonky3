@@ -3,7 +3,10 @@ use alloc::vec::Vec;
 
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
 use p3_air::{AirBuilder, RowWindow};
-use p3_field::{Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, dot_product};
+use p3_field::{
+    Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    dot_product,
+};
 use p3_lookup::Challenges;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
@@ -11,7 +14,7 @@ use p3_sumcheck::layout::{ColumnView, Table};
 use p3_util::DisjointMutPtr;
 
 use super::Fraction;
-use crate::lookup::LookupPlan;
+use crate::lookup::{LookupInstancePlan, LookupPlan};
 use crate::selectors::BoundaryEvals;
 
 #[inline]
@@ -185,7 +188,8 @@ impl<F: Field> LookupPlan<F> {
     /// `alpha` and `beta` are the lookup challenges used to separate buses and
     /// compress each contribution's payload.
     ///
-    /// Uses scalar materialization when any active trace is shorter than a SIMD lane group.
+    /// Packs aligned tall traces and evaluates sub-lane traces directly into the packed tail.
+    /// A logical lookup cube smaller than one lane group retains scalar storage.
     ///
     /// # Panics
     ///
@@ -204,11 +208,7 @@ impl<F: Field> LookupPlan<F> {
     where
         EF: ExtensionField<F>,
     {
-        if self
-            .instances
-            .iter()
-            .any(|planned| 1usize << planned.num_variables < F::Packing::WIDTH)
-        {
+        if 1usize << self.num_variables < F::Packing::WIDTH {
             return self.materialize_fraction_scalar(
                 main,
                 preprocessed,
@@ -229,6 +229,7 @@ impl<F: Field> LookupPlan<F> {
         let mut numerators = F::zero_vec(height);
         let mut denominators = vec![EF::ExtensionPacking::ONE; height / F::Packing::WIDTH];
 
+        let mut scalar_beta_powers = None;
         for planned in &self.instances {
             let main = main[planned.air_index];
             let preprocessed = preprocessed[planned.air_index];
@@ -238,6 +239,26 @@ impl<F: Field> LookupPlan<F> {
                 debug_assert_eq!(preprocessed.num_variables(), planned.num_variables);
             }
             let num_evals = 1 << planned.num_variables;
+            if num_evals < F::Packing::WIDTH {
+                let beta_powers = scalar_beta_powers
+                    .get_or_insert_with(|| beta.powers().take(self.max_width).collect());
+                materialize_instance_scalar(
+                    planned,
+                    main,
+                    preprocessed,
+                    public_values,
+                    &challenges,
+                    beta_powers,
+                    &mut numerators,
+                    |offset, value| {
+                        // Every scalar leaf is written once into an initially neutral denominator.
+                        denominators[offset / F::Packing::WIDTH]
+                            .add_assign_lane(offset % F::Packing::WIDTH, value - EF::ONE);
+                    },
+                );
+                continue;
+            }
+            // Instances are sorted tallest-first, so every full SIMD block is aligned.
             let packed_len = num_evals / F::Packing::WIDTH;
             let beta_powers = packed_beta_powers.as_slice();
             let contributions = planned
@@ -292,64 +313,87 @@ impl<F: Field> LookupPlan<F> {
         for planned in &self.instances {
             let main = main[planned.air_index];
             let preprocessed = preprocessed[planned.air_index];
-            let height = 1 << planned.num_variables;
-            let sources = LookupSources::new(
-                planned.lookups.iter().flat_map(|lookup| {
-                    lookup
-                        .elements
-                        .iter()
-                        .flatten()
-                        .chain(&lookup.multiplicities)
-                }),
+            materialize_instance_scalar(
+                planned,
                 main,
                 preprocessed,
+                public_values[planned.air_index],
+                &challenges,
+                &beta_powers,
+                &mut numerators,
+                |offset, value| denominators[offset] = value,
             );
-            let mut scratch =
-                Scratch::new(main.num_polys(), preprocessed.map_or(0, Table::num_polys));
-            for row in 0..height {
-                let fill =
-                    |local: &mut [F],
-                     next: &mut [F],
-                     columns: &[Vec<(usize, ColumnView<'_, F>)>; 2]| {
-                        for &(index, column) in &columns[0] {
-                            local[index] = column.value(row);
-                        }
-                        for &(index, column) in &columns[1] {
-                            next[index] = column.value((row + 1).min(height - 1));
-                        }
-                    };
-                fill(&mut scratch.local, &mut scratch.next, &sources.main);
-                fill(
-                    &mut scratch.preprocessed_local,
-                    &mut scratch.preprocessed_next,
-                    &sources.preprocessed,
-                );
-                let evaluator = LookupRowEvaluator {
-                    main_window: RowWindow::from_two_rows(&scratch.local, &scratch.next),
-                    preprocessed_window: RowWindow::from_two_rows(
-                        &scratch.preprocessed_local,
-                        &scratch.preprocessed_next,
-                    ),
-                    boundary: BoundaryEvals::from_row(row, height),
-                    public_values: public_values[planned.air_index],
-                };
-                let mut offset = planned.base_offset + row;
-                for (lookup, &bus_id) in planned.lookups.iter().zip(&planned.bus_ids) {
-                    for (fields, count) in lookup.elements.iter().zip(&lookup.multiplicities) {
-                        numerators[offset] = count.resolve(&evaluator);
-                        denominators[offset] = challenges.bus_prefix[bus_id]
-                            - dot_product::<EF, _, _>(
-                                beta_powers.iter().copied(),
-                                fields.iter().map(|field| field.resolve(&evaluator)),
-                            );
-                        offset += height;
-                    }
-                }
-            }
         }
         Fraction {
             n: Poly::new(numerators),
             d: PolyMaybePacked::Scalar(Poly::new(denominators)),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_instance_scalar<F: Field, EF: ExtensionField<F>>(
+    planned: &LookupInstancePlan<F>,
+    main: &Table<F>,
+    preprocessed: Option<&Table<F>>,
+    public_values: &[F],
+    challenges: &Challenges<EF>,
+    beta_powers: &[EF],
+    numerators: &mut [F],
+    mut write_denominator: impl FnMut(usize, EF),
+) {
+    let height = 1 << planned.num_variables;
+    let sources = LookupSources::new(
+        planned.lookups.iter().flat_map(|lookup| {
+            lookup
+                .elements
+                .iter()
+                .flatten()
+                .chain(&lookup.multiplicities)
+        }),
+        main,
+        preprocessed,
+    );
+    let mut scratch = Scratch::new(main.num_polys(), preprocessed.map_or(0, Table::num_polys));
+    for row in 0..height {
+        let fill =
+            |local: &mut [F], next: &mut [F], columns: &[Vec<(usize, ColumnView<'_, F>)>; 2]| {
+                for &(index, column) in &columns[0] {
+                    local[index] = column.value(row);
+                }
+                for &(index, column) in &columns[1] {
+                    next[index] = column.value((row + 1).min(height - 1));
+                }
+            };
+        fill(&mut scratch.local, &mut scratch.next, &sources.main);
+        fill(
+            &mut scratch.preprocessed_local,
+            &mut scratch.preprocessed_next,
+            &sources.preprocessed,
+        );
+        let evaluator = LookupRowEvaluator {
+            main_window: RowWindow::from_two_rows(&scratch.local, &scratch.next),
+            preprocessed_window: RowWindow::from_two_rows(
+                &scratch.preprocessed_local,
+                &scratch.preprocessed_next,
+            ),
+            boundary: BoundaryEvals::from_row(row, height),
+            public_values,
+        };
+        let mut offset = planned.base_offset + row;
+        for (lookup, &bus_id) in planned.lookups.iter().zip(&planned.bus_ids) {
+            for (fields, count) in lookup.elements.iter().zip(&lookup.multiplicities) {
+                numerators[offset] = count.resolve(&evaluator);
+                write_denominator(
+                    offset,
+                    challenges.bus_prefix[bus_id]
+                        - dot_product::<EF, _, _>(
+                            beta_powers.iter().copied(),
+                            fields.iter().map(|field| field.resolve(&evaluator)),
+                        ),
+                );
+                offset += height;
+            }
         }
     }
 }
@@ -977,6 +1021,56 @@ pub(super) mod tests {
             );
             assert_eq!(denominators.as_slice()[row], bus_prefix - EF::from(payload));
         }
+    }
+
+    #[test]
+    fn tiny_instances_share_the_packed_tail_without_disabling_tall_simd() {
+        let air = TestAir(Declaration::NextGlobal);
+        let tall_log = test_lookup_num_variables();
+        let width = <F as Field>::Packing::WIDTH;
+        for tiny_log in 0..=log2_strict_usize(width) {
+            // Unsorted input and multiple tiny blocks exercise lane sharing and a padded tail.
+            let logs = [tiny_log, tall_log, 0, tiny_log];
+            let tables = logs.map(|log| {
+                let height = 1 << log;
+                let left = (0..height).map(|row| row as u64 + 2).collect::<Vec<_>>();
+                let right = (0..height).map(|row| row as u64 + 3).collect::<Vec<_>>();
+                let counts = (0..height).map(|row| (row % 4) as u64).collect::<Vec<_>>();
+                table(&[&left, &right, &counts])
+            });
+            let main = tables.each_ref();
+            let plan = LookupPlan::<F>::build::<EF, _>(&[&air; 4], &logs)
+                .unwrap()
+                .unwrap();
+            let alpha = EF::from_u64(1000);
+            let beta = EF::from_u64(7);
+            let packed = plan.materialize_fraction(&main, &[None; 4], &[&[][..]; 4], alpha, beta);
+            let scalar =
+                plan.materialize_fraction_scalar(&main, &[None; 4], &[&[][..]; 4], alpha, beta);
+            assert!(matches!(packed.d, PolyMaybePacked::Packed(_)));
+            assert_eq!(packed.n.as_slice(), scalar.n.as_slice());
+            assert_eq!(packed.d.unpack().as_slice(), scalar.d.unpack().as_slice());
+        }
+    }
+
+    #[test]
+    fn a_sub_lane_logical_cube_keeps_scalar_storage() {
+        if <F as Field>::Packing::WIDTH == 1 {
+            return;
+        }
+        let air = TestAir(Declaration::NextGlobal);
+        let main = table(&[&[2], &[3], &[1]]);
+        let result = materialize(
+            &[&air],
+            &[&main],
+            &[None],
+            &[&[]],
+            EF::from_u64(100),
+            EF::from_u64(7),
+        )
+        .unwrap();
+        assert_eq!(result.n.num_evals(), 1);
+        assert!(matches!(result.d, PolyMaybePacked::Scalar(_)));
     }
 
     #[test]
