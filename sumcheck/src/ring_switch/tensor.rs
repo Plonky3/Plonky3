@@ -154,6 +154,21 @@ impl<F: Field, EF: ExtensionField<F>> TensorAlgebra<F, EF> {
         }
     }
 
+    /// Multiply by `φ0(a)φ1(b) + φ0(1 - a)φ1(1 - b)` with two extension scalings.
+    pub(super) fn mul_equality_factor(&mut self, a: EF, b: EF) {
+        let mut term = self.clone();
+        term.scale_columns(a);
+        for (coefficient, &scaled) in self.coeffs.iter_mut().zip(&term.coeffs) {
+            *coefficient -= scaled;
+        }
+        // self = (1 - A)e, term = Ae - (1 - A)e, so self + B term is the factor.
+        for (scaled, &coefficient) in term.coeffs.iter_mut().zip(&self.coeffs) {
+            *scaled -= coefficient;
+        }
+        term.scale_rows(b);
+        *self += term;
+    }
+
     /// `φ1(a) · self`: scales each row, read as an `EF`, by `a`.
     pub fn scale_rows(&mut self, a: EF) {
         let d = Self::DIMENSION;
