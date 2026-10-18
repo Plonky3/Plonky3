@@ -310,7 +310,7 @@ fn bench_lookup_proof(c: &mut Criterion) {
             );
         }
         group.bench_function(BenchmarkId::new(label, log), |b| {
-            b.iter_batched(|| tables.clone(), &prove_tables, BatchSize::SmallInput)
+            b.iter_batched(|| tables.clone(), &prove_tables, BatchSize::SmallInput);
         });
     }
     group.finish();

@@ -78,7 +78,7 @@ fn bench_materialization(c: &mut Criterion) {
                             EF::from_u64(98765),
                             EF::from_u64(13),
                         )
-                    })
+                    });
                 },
             );
         }

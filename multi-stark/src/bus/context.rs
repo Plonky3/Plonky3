@@ -894,7 +894,8 @@ mod tests {
                 let weights = challenges.fingerprint_weights();
                 let actual = context.materialize(&[&main], &[None], &periodic, &[&[]], &challenges);
                 let block = &context.plan().blocks(BusDirection::Push)[0];
-                for row in 0..height {
+                assert_eq!(actual[0].len(), height);
+                for (row, &actual) in actual[0].iter().enumerate() {
                     let values = [air.periods[0][row % period]];
                     let expected = context
                         .plan()
@@ -915,7 +916,7 @@ mod tests {
                         )
                         .unwrap();
                     assert_eq!(
-                        actual[0][row], expected,
+                        actual, expected,
                         "period={period}, selector={selector}, row={row}"
                     );
                 }
