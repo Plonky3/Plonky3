@@ -183,41 +183,7 @@ where
         batch_opening: BatchOpeningRef<'_, P::Value, Self>,
     ) -> Result<(), Self::Error> {
         let (opened_values, (salts, siblings)) = batch_opening.unpack();
-
-        // Pin each opened row to its matrix width before salting.
-        // The inner tree only sees salted widths.
-        // Without this, an over-long row could be masked by an under-long salt.
-        check_widths(dimensions, opened_values)?;
-
-        let expected_salts = opened_values.len();
-        let got_salts = salts.len();
-        let opened_salted_values = zip_eq(
-            opened_values,
-            salts,
-            MerkleTreeError::WrongBatchSize {
-                expected: expected_salts,
-                got: got_salts,
-            },
-        )?
-        .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
-        .collect_vec();
-
-        // The inner tree commits to rows widened by the salt columns,
-        // so the widths must be widened the same way.
-        let salted_dimensions = dimensions
-            .iter()
-            .map(|dims| Dimensions {
-                width: dims.width + SALT_ELEMS,
-                height: dims.height,
-            })
-            .collect_vec();
-
-        self.inner.verify_batch(
-            commit,
-            &salted_dimensions,
-            index,
-            BatchOpeningRef::new(&opened_salted_values, siblings),
-        )
+        self.verify_batch_borrowed(commit, dimensions, index, opened_values, salts, siblings)
     }
 
     fn open_multi_batch<M: Matrix<P::Value>>(
@@ -305,6 +271,79 @@ where
 
         self.inner
             .verify_multi_batch(commit, &salted_dimensions, indices, &salted_values, pruned)
+    }
+}
+
+impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
+    MerkleTreeHidingMmcs<P, PW, H, C, R, N, DIGEST_ELEMS, SALT_ELEMS>
+where
+    P: PackedValue,
+    P::Value: Serialize + DeserializeOwned,
+    PW: PackedValue,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
+        + Sync,
+    R: CryptoRng + SeedableRng + Send,
+    PW::Value: Eq + Clone,
+    [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<P::Value>,
+{
+    /// Verify rows, salts and an authentication path borrowed separately.
+    ///
+    /// This performs the same checks as [`Mmcs::verify_batch`] without requiring callers to assemble an owned `(salts, siblings)` proof tuple.
+    pub fn verify_batch_borrowed<S: AsRef<[P::Value]>>(
+        &self,
+        commit: &MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>,
+        dimensions: &[Dimensions],
+        index: usize,
+        opened_values: &[Vec<P::Value>],
+        salts: &[S],
+        siblings: &[[PW::Value; DIGEST_ELEMS]],
+    ) -> Result<(), MerkleTreeError> {
+        // Pin each opened row to its matrix width before salting.
+        // The inner tree only sees salted widths.
+        // Without this, an over-long row could be masked by an under-long salt.
+        check_widths(dimensions, opened_values)?;
+
+        let expected_salts = opened_values.len();
+        let got_salts = salts.len();
+        let opened_salted_values = zip_eq(
+            opened_values,
+            salts,
+            MerkleTreeError::WrongBatchSize {
+                expected: expected_salts,
+                got: got_salts,
+            },
+        )?
+        .map(|(opened, salt)| {
+            opened
+                .iter()
+                .chain(salt.as_ref().iter())
+                .copied()
+                .collect_vec()
+        })
+        .collect_vec();
+
+        // The inner tree commits to rows widened by the salt columns,
+        // so the widths must be widened the same way.
+        let salted_dimensions = dimensions
+            .iter()
+            .map(|dims| Dimensions {
+                width: dims.width + SALT_ELEMS,
+                height: dims.height,
+            })
+            .collect_vec();
+
+        self.inner.verify_batch_borrowed(
+            commit,
+            &salted_dimensions,
+            index,
+            &opened_salted_values,
+            siblings,
+        )
     }
 }
 

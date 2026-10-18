@@ -2,6 +2,7 @@ use alloc::vec;
 
 use p3_binary_field::TowerLevel;
 use p3_challenger::CanSample;
+use p3_commit::BatchOpeningRef;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::SeedableRng;
@@ -734,6 +735,54 @@ fn committed_query_rows_hide_the_known_low_polynomials() {
                     "seed={seed} index={index} column={column}"
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn borrowed_row_authentication_matches_mmcs_for_every_position_and_corruption() {
+    let pcs = ReferenceZkPcs::new(ReferencePcsConfig::new(3, 4).unwrap());
+    let mut rng = StdRng::seed_from_u64(0x424f_5252_4f57);
+    let (root, data) = pcs
+        .commit(
+            RowMajorMatrix::new((1..=6).map(Val::from_repr).collect(), 2),
+            &mut rng,
+        )
+        .unwrap();
+    let salted = mmcs(StdRng::seed_from_u64(0));
+    let dimensions = [Dimensions {
+        width: 2,
+        height: pcs.config.codeword_len,
+    }];
+    for index in 0..pcs.config.codeword_len {
+        let row = open_row(&salted, &data.tree, index);
+        for edit in 0..row.authentication_path.len() + 4 {
+            let mut candidate = row.clone();
+            match edit {
+                0 => {}
+                1 => candidate.values[0] += Val::ONE,
+                2 => candidate.salts[0] += Val::ONE,
+                3 => candidate.salts[1] += Val::ONE,
+                _ => candidate.authentication_path[edit - 4][0] ^= 1,
+            }
+            let proof = (
+                vec![candidate.salts.to_vec()],
+                candidate.authentication_path.clone(),
+            );
+            let expected = salted
+                .verify_batch(
+                    &root.root,
+                    &dimensions,
+                    index,
+                    BatchOpeningRef::new(core::slice::from_ref(&candidate.values), &proof),
+                )
+                .is_ok();
+            assert_eq!(
+                verify_row(&salted, &root.root, &dimensions, index, &candidate).is_ok(),
+                expected,
+                "index={index} edit={edit}"
+            );
+            assert_eq!(expected, edit == 0);
         }
     }
 }

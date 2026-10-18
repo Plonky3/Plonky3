@@ -1,12 +1,11 @@
 //! Reference PCS implementation; see the public [`super`] protocol documentation.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_binary_dft::{AdditiveNtt, LchNtt};
 use p3_binary_field::TowerLevel;
 use p3_challenger::CanObserve;
-use p3_commit::{BatchOpeningRef, Mmcs};
+use p3_commit::Mmcs;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Dimensions;
 use p3_matrix::dense::RowMajorMatrix;
@@ -520,14 +519,14 @@ fn verify_row(
     index: usize,
     row: &ZkRowOpening,
 ) -> Result<(), ZkError> {
-    let values = vec![row.values.clone()];
-    let proof = (vec![row.salts.to_vec()], row.authentication_path.clone());
     salted
-        .verify_batch(
+        .verify_batch_borrowed(
             root,
             dimensions,
             index,
-            BatchOpeningRef::new(&values, &proof),
+            core::slice::from_ref(&row.values),
+            core::slice::from_ref(&row.salts),
+            &row.authentication_path,
         )
         .map_err(|_| ZkError::InvalidOpening("salted Merkle authentication"))
 }

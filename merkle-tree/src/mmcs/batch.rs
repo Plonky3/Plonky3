@@ -169,10 +169,60 @@ where
         &self,
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
-        mut index: usize,
+        index: usize,
         batch_proof: BatchOpeningRef<'_, P::Value, Self>,
     ) -> Result<(), Self::Error> {
         let (opened_values, opening_proof) = batch_proof.unpack();
+        self.verify_batch_borrowed(commit, dimensions, index, opened_values, opening_proof)
+    }
+
+    fn open_multi_batch<M: Matrix<P::Value>>(
+        &self,
+        indices: &[usize],
+        prover_data: &Self::ProverData<M>,
+    ) -> (Vec<Vec<Vec<P::Value>>>, Self::MultiProof) {
+        // Open every index against one shared, pruned authentication path.
+        let opening = self.open_batch_pruned(indices, prover_data);
+        // Return the opened rows and that shared proof as separate values.
+        (opening.opened_values, opening.pruned_proof)
+    }
+
+    fn verify_multi_batch<R: AsRef<[P::Value]> + PartialEq>(
+        &self,
+        commit: &Self::Commitment,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+        opened_values: &[Vec<R>],
+        proof: &Self::MultiProof,
+    ) -> Result<(), Self::Error> {
+        self.verify_batch_pruned(commit, dimensions, indices, opened_values, proof)
+    }
+}
+
+impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
+    MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>
+where
+    P: PackedValue,
+    PW: PackedValue,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
+        + Sync,
+    PW::Value: Eq + Clone,
+    [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
+{
+    // The hiding wrapper can borrow its authentication path without constructing
+    // the owned proof object required by the Mmcs trait.
+    pub(crate) fn verify_batch_borrowed(
+        &self,
+        commit: &MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>,
+        dimensions: &[Dimensions],
+        mut index: usize,
+        opened_values: &[Vec<P::Value>],
+        opening_proof: &[[PW::Value; DIGEST_ELEMS]],
+    ) -> Result<(), MerkleTreeError> {
         // Check that the openings have the correct shape.
         if dimensions.len() != opened_values.len() {
             return Err(WrongBatchSize {
@@ -286,28 +336,6 @@ where
         } else {
             Err(CapMismatch)
         }
-    }
-
-    fn open_multi_batch<M: Matrix<P::Value>>(
-        &self,
-        indices: &[usize],
-        prover_data: &Self::ProverData<M>,
-    ) -> (Vec<Vec<Vec<P::Value>>>, Self::MultiProof) {
-        // Open every index against one shared, pruned authentication path.
-        let opening = self.open_batch_pruned(indices, prover_data);
-        // Return the opened rows and that shared proof as separate values.
-        (opening.opened_values, opening.pruned_proof)
-    }
-
-    fn verify_multi_batch<R: AsRef<[P::Value]> + PartialEq>(
-        &self,
-        commit: &Self::Commitment,
-        dimensions: &[Dimensions],
-        indices: &[usize],
-        opened_values: &[Vec<R>],
-        proof: &Self::MultiProof,
-    ) -> Result<(), Self::Error> {
-        self.verify_batch_pruned(commit, dimensions, indices, opened_values, proof)
     }
 }
 
