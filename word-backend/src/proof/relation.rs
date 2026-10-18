@@ -66,10 +66,10 @@ pub(super) struct ProductTables<F> {
 pub(super) struct RelationZerocheck<F> {
     /// Equality weights of the sampled vanishing point.
     equality: Poly<F>,
-    /// The operand every linear relation requires to vanish.
-    linear: Poly<F>,
-    /// The left input, right input, and output of every bitwise product.
-    bitwise: [Poly<F>; 3],
+    /// The linear operand column, absent exactly when the statement has no linear rows.
+    linear: Option<Poly<F>>,
+    /// The three AND columns, absent exactly when the statement has no bitwise rows.
+    bitwise: Option<[Poly<F>; 3]>,
     /// Product columns, then their weights, when the statement declares products.
     product: Option<ProductPolys<F>>,
     /// Powers of the coefficient separating every term, starting at one.
@@ -80,18 +80,26 @@ impl<F: Field> RelationZerocheck<F> {
     /// Creates a prover state over one shared Boolean cube.
     pub(super) fn new(
         equality: Vec<F>,
-        linear: Vec<F>,
-        bitwise: [Vec<F>; 3],
+        linear: Option<Vec<F>>,
+        bitwise: Option<[Vec<F>; 3]>,
         product: Option<ProductTables<F>>,
         batching: F,
     ) -> Self {
         // Every column spans the padded constraint rows times the word width.
-        debug_assert!(bitwise.iter().all(|column| column.len() == equality.len()));
-        debug_assert_eq!(linear.len(), equality.len());
+        debug_assert!(
+            bitwise
+                .as_ref()
+                .is_none_or(|columns| columns.iter().all(|column| column.len() == equality.len()))
+        );
+        debug_assert!(
+            linear
+                .as_ref()
+                .is_none_or(|column| column.len() == equality.len())
+        );
         Self {
             equality: Poly::new(equality),
-            linear: Poly::new(linear),
-            bitwise: bitwise.map(Poly::new),
+            linear: linear.map(Poly::new),
+            bitwise: bitwise.map(|columns| columns.map(Poly::new)),
             product: product
                 .map(|tables| (tables.columns.map(Poly::new), tables.weights.map(Poly::new))),
             powers: batching_powers(batching),
@@ -105,9 +113,13 @@ impl<F: Field> RelationZerocheck<F> {
                 .expect("every zerocheck variable was bound")
         };
         let mut operands = [F::ZERO; OPERAND_EVALUATIONS];
-        operands[0] = constant(&self.linear);
-        for (slot, column) in operands[1..4].iter_mut().zip(&self.bitwise) {
-            *slot = constant(column);
+        if let Some(column) = &self.linear {
+            operands[0] = constant(column);
+        }
+        if let Some(columns) = &self.bitwise {
+            for (slot, column) in operands[1..4].iter_mut().zip(columns) {
+                *slot = constant(column);
+            }
         }
         if let Some((columns, _)) = &self.product {
             for (slot, column) in operands[4..].iter_mut().zip(columns) {
@@ -128,9 +140,13 @@ impl<F: Field> RelationZerocheck<F> {
         (0..half)
             .map(|row| {
                 let mut operands = [F::ZERO; OPERAND_EVALUATIONS];
-                operands[0] = interpolate(&self.linear, row);
-                for (slot, column) in operands[1..4].iter_mut().zip(&self.bitwise) {
-                    *slot = interpolate(column, row);
+                if let Some(column) = &self.linear {
+                    operands[0] = interpolate(column, row);
+                }
+                if let Some(columns) = &self.bitwise {
+                    for (slot, column) in operands[1..4].iter_mut().zip(columns) {
+                        *slot = interpolate(column, row);
+                    }
                 }
                 let mut weights = [F::ZERO; 4];
                 if let Some((columns, tables)) = &self.product {
@@ -154,9 +170,13 @@ impl<F: Field> RoundProver<F> for RelationZerocheck<F> {
     fn fold(&mut self, challenge: F) {
         // Every column binds the same most-significant active variable.
         self.equality.fix_prefix_var_mut(challenge);
-        self.linear.fix_prefix_var_mut(challenge);
-        for column in &mut self.bitwise {
+        if let Some(column) = &mut self.linear {
             column.fix_prefix_var_mut(challenge);
+        }
+        if let Some(columns) = &mut self.bitwise {
+            for column in columns {
+                column.fix_prefix_var_mut(challenge);
+            }
         }
         if let Some((columns, weights)) = &mut self.product {
             for column in columns.iter_mut().chain(weights.iter_mut()) {
@@ -264,12 +284,75 @@ mod tests {
     }
 
     #[test]
+    fn absent_families_match_materialized_zero_tables_and_transcripts() {
+        use p3_challenger::CanSample;
+
+        for product_present in [false, true] {
+            for mask in 0..4 {
+                let equality = column(1, 8);
+                let linear = (mask & 1 != 0).then(|| column(100, 8));
+                let bitwise =
+                    (mask & 2 != 0).then(|| [column(200, 8), column(300, 8), column(400, 8)]);
+                let product = || {
+                    product_present.then(|| ProductTables {
+                        columns: [
+                            column(500, 8),
+                            column(600, 8),
+                            column(700, 8),
+                            column(800, 8),
+                        ],
+                        weights: [column(11, 8), column(21, 8), column(31, 8), column(41, 8)],
+                    })
+                };
+                let batching = F::from_repr(7);
+                let mut sparse = RelationZerocheck::new(
+                    equality.clone(),
+                    linear.clone(),
+                    bitwise.clone(),
+                    product(),
+                    batching,
+                );
+                let mut explicit = RelationZerocheck::new(
+                    equality,
+                    Some(linear.unwrap_or_else(|| F::zero_vec(8))),
+                    Some(bitwise.unwrap_or_else(|| core::array::from_fn(|_| F::zero_vec(8)))),
+                    product(),
+                    batching,
+                );
+                let mut sparse_sponge = challenger();
+                let mut explicit_sponge = challenger();
+                let (sparse_proof, sparse_point) =
+                    sparse.prove::<F, _>(&mut sparse_sponge, 3, ZEROCHECK_DEGREE, 0, F::ZERO);
+                let (explicit_proof, explicit_point) =
+                    explicit.prove::<F, _>(&mut explicit_sponge, 3, ZEROCHECK_DEGREE, 0, F::ZERO);
+                assert_eq!(
+                    postcard::to_allocvec(&sparse_proof).unwrap(),
+                    postcard::to_allocvec(&explicit_proof).unwrap()
+                );
+                assert_eq!(sparse_point, explicit_point);
+                let operands = sparse.terminal_operands();
+                assert_eq!(operands, explicit.terminal_operands());
+                if mask & 1 == 0 {
+                    assert_eq!(operands[0], F::ZERO);
+                }
+                if mask & 2 == 0 {
+                    assert_eq!(operands[1..4], [F::ZERO; 3]);
+                }
+                let next_sparse: F = sparse_sponge.sample();
+                let next_explicit: F = explicit_sponge.sample();
+                assert_eq!(next_sparse, next_explicit);
+            }
+        }
+    }
+
+    #[test]
     fn round_message_matches_direct_interpolation() {
         // Fixture state: a four-row cube with four distinct operand columns.
         let equality = column(1, 4);
         let linear = column(100, 4);
         let bitwise = [column(200, 4), column(300, 4), column(400, 4)];
-        let prover = RelationZerocheck::new(equality, linear, bitwise, None, F::from_repr(7));
+        let prover =
+            RelationZerocheck::new(equality, Some(linear), Some(bitwise), None, F::from_repr(7));
 
         // The helper transmits the values at the nodes zero, two, and three.
         assert_eq!(
@@ -290,8 +373,8 @@ mod tests {
         let zeros = F::zero_vec(4);
         let mut prover = RelationZerocheck::new(
             weights,
-            zeros.clone(),
-            [zeros.clone(), zeros.clone(), zeros],
+            Some(zeros.clone()),
+            Some([zeros.clone(), zeros.clone(), zeros]),
             None,
             F::ONE,
         );
@@ -347,8 +430,8 @@ mod tests {
 
         let mut prover = RelationZerocheck::new(
             equality,
-            linear,
-            bitwise,
+            Some(linear),
+            Some(bitwise),
             Some(ProductTables { columns, weights }),
             batching,
         );

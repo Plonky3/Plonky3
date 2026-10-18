@@ -95,14 +95,18 @@ fn shift_transpose<W: Word, F: Field>(shift: Shift<W>, output: &[F]) -> Vec<F> {
     }
 
     // Column `j` records where input basis bit `j` reaches after this shift.
+    // Every basis image of one shift has at most one bit, except that sign extension fans the top bit out.
+    // The set bits across all images therefore total at most two word widths, so walking only set bits is linear.
     (0..W::BITS as usize)
         .map(|input| {
             let basis = W::from_low_bits(1_u64 << input);
-            let shifted = shift.apply(basis).to_u64();
-            (0..W::BITS as usize)
-                .filter(|&bit| (shifted >> bit) & 1 == 1)
-                .map(|bit| output[bit])
-                .sum()
+            let mut shifted = shift.apply(basis).to_u64();
+            let mut sum = F::ZERO;
+            while shifted != 0 {
+                sum += output[shifted.trailing_zeros() as usize];
+                shifted &= shifted - 1;
+            }
+            sum
         })
         .collect()
 }
@@ -364,7 +368,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_binary_field::{BinaryField128, TowerLevel};
-    use p3_word::{ShiftKind, Word64};
+    use p3_word::{ShiftKind, Word32, Word64};
 
     use super::*;
 
@@ -408,6 +412,37 @@ mod tests {
                 shift_weights(sequence, &output),
                 direct_weights(sequence, &output)
             );
+        }
+    }
+
+    #[test]
+    fn word32_transpose_matches_every_single_shift_and_edge_composition() {
+        let output = (0..32)
+            .map(|bit| F::from_repr(1_u128 << bit))
+            .collect::<Vec<_>>();
+        for code in 0..4 {
+            let kind = ShiftKind::from_code(code).unwrap();
+            for amount in 0..32 {
+                let inner = Shift::<Word32>::new(kind, amount).unwrap();
+                for outer_kind in 0..4 {
+                    for outer_amount in [0, 1, 15, 31] {
+                        let outer =
+                            Shift::new(ShiftKind::from_code(outer_kind).unwrap(), outer_amount)
+                                .unwrap();
+                        let expected = (0..32)
+                            .map(|input| {
+                                let basis = Word32::from_low_bits(1_u64 << input);
+                                let shifted = outer.apply(inner.apply(basis)).to_u64();
+                                (0..32)
+                                    .filter(|&bit| (shifted >> bit) & 1 == 1)
+                                    .map(|bit| output[bit])
+                                    .sum::<F>()
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(shift_weights([inner, outer], &output), expected);
+                    }
+                }
+            }
         }
     }
 
