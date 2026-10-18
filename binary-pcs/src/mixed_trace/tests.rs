@@ -335,3 +335,141 @@ fn commit_binds_what_the_verifier_binds() {
         vec![mixed_table(12, 6, 3, 1)],
     );
 }
+
+#[test]
+fn coordinate_blocks_match_scalar_bits_at_each_density_and_tail() {
+    use p3_binary_field::{BinaryField8, BinaryField64};
+
+    fn check<A: Coordinates + core::fmt::Debug>(values: &[A]) {
+        let mut actual = vec![0; A::COORDINATES];
+        expand_coordinate_block(values, &mut actual);
+        let mut expected = vec![0; A::COORDINATES];
+        for (lane, value) in values.iter().enumerate() {
+            for (byte, value) in coordinate_bytes(core::slice::from_ref(value))
+                .iter()
+                .enumerate()
+            {
+                for bit in 0..8 {
+                    expected[8 * byte + bit] |= u64::from((value >> bit) & 1) << lane;
+                }
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
+    // A source coordinate layout need not have a power-of-two dimension (Poly192).
+    #[derive(Clone, Copy, Debug)]
+    #[repr(transparent)]
+    struct Coordinates192([u64; 3]);
+    // SAFETY: three full words with no padding, little-endian coordinate order.
+    unsafe impl Coordinates for Coordinates192 {
+        const COORDINATES: usize = 192;
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    #[repr(transparent)]
+    struct PartialCoordinates<const BYTES: usize>([u8; BYTES]);
+    // SAFETY: the byte array has no padding; each byte holds eight coordinates.
+    unsafe impl<const BYTES: usize> Coordinates for PartialCoordinates<BYTES> {
+        const COORDINATES: usize = BYTES * 8;
+    }
+
+    let mut rng = SmallRng::seed_from_u64(0xD35E);
+    for rows in [1, 7, 32, 63, 64] {
+        let random64: Vec<BinaryField64> = (0..rows).map(|_| rng.random()).collect();
+        let random128: Vec<EF> = (0..rows).map(|_| rng.random()).collect();
+        let random192: Vec<_> = (0..rows).map(|_| Coordinates192(rng.random())).collect();
+        let narrow: Vec<_> = (0..rows)
+            .map(|_| BinaryField8::from_le_bytes([rng.random()]))
+            .collect();
+        let small: Vec<_> = (0..rows)
+            .map(|_| {
+                EF::from_coordinate_bytes(
+                    core::iter::once(rng.random::<u8>()).chain(core::iter::repeat(0)),
+                )
+            })
+            .collect();
+        let zeros = vec![EF::ZERO; rows];
+        let zero_heavy: Vec<EF> = (0..rows)
+            .map(|row| if row % 8 == 0 { rng.random() } else { EF::ZERO })
+            .collect();
+        let partial72: Vec<_> = (0..rows)
+            .map(|_| PartialCoordinates::<9>(rng.random()))
+            .collect();
+        let partial136: Vec<_> = (0..rows)
+            .map(|_| PartialCoordinates::<17>(rng.random()))
+            .collect();
+        check(&partial72);
+        check(&partial136);
+        check(&random64);
+        check(&random128);
+        check(&random192);
+        check(&narrow);
+        check(&small);
+        check(&zeros);
+        check(&zero_heavy);
+    }
+}
+
+#[test]
+fn dense_expansion_preserves_commitment_and_serialized_proof() {
+    for log_height in [3, 6, 7] {
+        let shapes = [TableShape::new(log_height, 3)];
+        let mixed = scheme(&shapes, &[1]);
+        let source = mixed_table(0xB10C, log_height, 3, 1);
+        let committed_width = 257;
+        let height = 1usize << log_height;
+        let mut words = vec![0u64; height.div_ceil(64) * committed_width];
+        for row in 0..height {
+            if source.column(0).value(row) == EF::ONE {
+                words[(row / 64) * committed_width] |= 1 << (row % 64);
+            }
+            for column in 1..3 {
+                let value = source.column(column).value(row);
+                for (byte, &value) in coordinate_bytes(core::slice::from_ref(&value))
+                    .iter()
+                    .enumerate()
+                {
+                    for bit in 0..8 {
+                        if value & (1 << bit) != 0 {
+                            let coordinate = 1 + (column - 1) * 128 + byte * 8 + bit;
+                            words[(row / 64) * committed_width + coordinate] |= 1 << (row % 64);
+                        }
+                    }
+                }
+            }
+        }
+        let reference =
+            Table::from_packed_bits(RowMajorMatrix::new(words, committed_width), log_height);
+        let request = protocol(&shapes, &[2]);
+        let mut rng = SmallRng::seed_from_u64(0xB10D);
+        let points = [Point::<EF>::rand(&mut rng, log_height)];
+        let mut fast_chal = challenger();
+        let (fast_root, fast_data) = mixed.commit(vec![source], &mut fast_chal).unwrap();
+        let fast = mixed
+            .open_at(fast_data, &request, &points, &mut fast_chal)
+            .unwrap();
+        let mut reference_chal = challenger();
+        let (reference_root, reference_data) = mixed
+            .inner()
+            .commit(vec![reference], &mut reference_chal)
+            .unwrap();
+        let reference = mixed
+            .inner()
+            .open_at(
+                reference_data,
+                &mixed.expand_protocol(&request),
+                &points,
+                &mut reference_chal,
+            )
+            .unwrap();
+        assert_eq!(
+            postcard::to_allocvec(&fast_root).unwrap(),
+            postcard::to_allocvec(&reference_root).unwrap()
+        );
+        assert_eq!(
+            postcard::to_allocvec(&fast).unwrap(),
+            postcard::to_allocvec(&reference).unwrap()
+        );
+    }
+}

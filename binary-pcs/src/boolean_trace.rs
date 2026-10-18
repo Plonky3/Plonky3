@@ -26,7 +26,7 @@
 //!
 //! A complete batch reads every column of its table at the current row.
 //!
-//! One row ahead it reads no column or every column, as the table's other batches do.
+//! Complete successor views can share those blocks; sparse successor views keep ordinary claims.
 //!
 //! A protocol of complete batches combines columns at a fresh column point `u`.
 //!
@@ -40,7 +40,7 @@
 //!
 //! A block may run past the table only where no table follows, so a lone table is one block.
 //!
-//! Any other protocol keeps one reduction per opened column.
+//! Complete current views can also be batched beside ordinary sparse claims when the aligned blocks plus separate successor claims cost less than per-column reductions.
 //!
 //! If one element holds `2^d_log` bits, a column folds `2^max(a - d_log, 0)` elements.
 //!
@@ -66,8 +66,9 @@
 //! The step stays inside the table's own row variables, so it never enters a slot address.
 //!
 //! ```text
-//!     every batch complete    ->  one reduction per aligned block per batch
-//!     anything else           ->  one reduction per column read
+//!     complete views          ->  one reduction per aligned block per batch
+//!     complete current only   ->  blocks plus sparse successor claims, when cheaper
+//!     other readings          ->  one reduction per column read
 //! ```
 //!
 //! A column named by both views of a batch is one reduction answering both readings.
@@ -94,7 +95,7 @@ use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
-use p3_sumcheck::layout::{Table, plan_stacked_layout};
+use p3_sumcheck::layout::Table;
 use p3_sumcheck::ring_switch::bits::BitRingSwitch;
 use p3_sumcheck::{
     OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
@@ -102,14 +103,16 @@ use p3_sumcheck::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use self::plan::{OpeningRoute, TableRun, opening_evals, sample_points, value_count};
+use self::plan::{
+    OpeningRoute, TableRun, opening_count, opening_evals, sample_points, value_count,
+};
 use crate::boolean::{
     BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError,
     BooleanProof,
 };
-use crate::boolean_trace_transcript::{
-    ColumnBatchProverTranscript, ColumnBatchShape, ColumnBatchVerifierTranscript,
-};
+#[cfg(test)]
+use crate::boolean_trace_transcript::ColumnBatchShape;
+use crate::boolean_trace_transcript::{ColumnBatchProverTranscript, ColumnBatchVerifierTranscript};
 use crate::fold::{ChallengeField, FoldAlphabet};
 use crate::packing::Coordinates;
 use crate::params::BinaryPcsConfig;
@@ -284,6 +287,10 @@ pub type BooleanTraceError<EF, MmcsError> =
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum BooleanTraceCommitmentError<E> {
+    /// Public opening shapes or counts cannot be represented without overflow.
+    #[error("invalid Boolean trace opening protocol")]
+    InvalidOpeningProtocol,
+
     /// The bit commitment underneath refused the witness or the opening.
     #[error(transparent)]
     Boolean(E),
@@ -477,6 +484,7 @@ where
         challenger: &mut Challenger,
     ) -> Result<Self::Proof, Self::ProverError> {
         Self::validate_source_shapes(&prover_data.tables, &protocol)?;
+        self.validate_protocol(&protocol)?;
         // The sampled convention draws every batch's point from the transcript.
         let points = sample_points(&protocol, challenger);
         self.open_at(prover_data, &protocol, &points, challenger)
@@ -489,6 +497,7 @@ where
         challenger: &mut Challenger,
         protocol: Self::OpeningProtocol,
     ) -> Result<(), Self::Error> {
+        self.validate_protocol(&protocol)?;
         // Committing bound the root on the prover's sponge, so this binds it here.
         //
         // The points are then sampled from that sponge, as the prover sampled them.
@@ -520,19 +529,19 @@ where
 
     fn prescribed_security(&self, protocol: &OpeningProtocol) -> Option<PrescribedOpeningSecurity> {
         // A protocol this scheme would refuse gets no assessment, so a caller fails closed.
+        self.validate_protocol(protocol).ok()?;
         let shapes = protocol.table_shapes();
-        if plan_stacked_layout(&shapes).0 != self.num_variables() {
-            return None;
-        }
         // A reduction sends carry and last once its successor view outruns one element.
         let absorbed = BitRingSwitch::<B::Val, EF>::ABSORBED;
-        let route = OpeningRoute::new(protocol);
+        let route = OpeningRoute::new(protocol)?;
         let mut security = self.inner.readings_security(
-            route.num_reductions(),
+            route.num_reductions()?,
             route.successor_tensors(&shapes, absorbed),
         )?;
-        if let OpeningRoute::Batched(runs) = route {
+        let runs = route.runs();
+        if !runs.is_empty() {
             // Every combined claim of a batch reads one column point, so each is charged.
+            // Residual ordinary claims draw no column point: their tensors, successor elements and claim batching are already charged by the inner reduction.
             //
             // A table split into several blocks raises one combined claim per block and view.
             //
@@ -541,10 +550,7 @@ where
             // So it pays the same list the ring-switch reduction below it paid for.
             //
             // A union bound taken once does not shrink the set the next draw faces.
-            let claims = runs
-                .iter()
-                .map(|run| run.shape.num_batches * run.shape.num_views() * run.blocks.len())
-                .sum();
+            let claims = route.column_claim_count()?;
             let column_variables = runs
                 .iter()
                 .map(|run| run.shape.column_variables())
@@ -566,7 +572,10 @@ where
         points: &[Point<EF>],
         challenger: &mut Challenger,
     ) -> Result<Self::Proof, Self::ProverError> {
-        let known = alloc::vec![None; protocol.num_openings()];
+        Self::validate_source_shapes(&prover_data.tables, protocol)?;
+        self.validate_protocol(protocol)?;
+        let known = alloc::vec![None; opening_count(protocol)
+            .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?];
         self.open_at_known(prover_data, protocol, points, &known, challenger)
     }
 
@@ -582,7 +591,9 @@ where
         Self::validate_source_shapes(&prover_data.tables, protocol)?;
         let placements = self.validate_opening(protocol, points)?;
         Self::validate_known(protocol, known)?;
-        let runs = match OpeningRoute::new(protocol) {
+        let (runs, residual) = match OpeningRoute::new(protocol)
+            .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?
+        {
             OpeningRoute::PerColumn(plan) => {
                 let openings = Self::bit_openings(protocol, plan.claims(), points, &placements);
                 let (readings, opening) = self
@@ -592,48 +603,76 @@ where
                 let values = plan.values(&readings);
                 return Ok(BooleanTraceCommitmentProof { values, opening });
             }
-            OpeningRoute::Batched(runs) => runs,
+            OpeningRoute::Batched(runs) => (runs, Vec::new()),
+            OpeningRoute::Hybrid { runs, residual } => (runs, residual),
         };
 
         let BooleanTraceCommitmentData { inner, tables } = prover_data;
-        let mut values = Vec::with_capacity(value_count(protocol));
+        let mut values = EF::zero_vec(
+            value_count(protocol).ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?,
+        );
+        let mut selected = vec![false; points.len()];
+        for run in &runs {
+            selected[run.opening..run.opening + run.shape.num_batches].fill(true);
+        }
         let mut openings = Vec::new();
         let mut expected = Vec::new();
-        let mut batch_points = points.iter();
-        let mut batch_known = known.iter();
-        for run in &runs {
-            let ColumnBatchShape {
-                width,
-                next,
-                num_batches,
-                ..
-            } = run.shape;
-            let run_points: Vec<_> = batch_points.by_ref().take(num_batches).collect();
-            let run_known = batch_known.by_ref().take(num_batches);
-            let offset = values.len();
-            tracing::info_span!("evaluate boolean columns", width, next).in_scope(|| {
-                for (point, known) in run_points.iter().zip(run_known) {
-                    // A supplied run is bound as it stands; the reduction below compares each
-                    // block's combination of it against the committed bits. That comparison is
-                    // a random check, the only one the run meets: a wrong run passes it with
-                    // probability at most `j / |EF|` per block of `2^j` columns.
-                    if let Some(known) = known {
-                        values.extend_from_slice(known.current());
-                        values.extend_from_slice(known.next());
-                        continue;
-                    }
-                    let (current, successor) =
-                        Self::evaluate_views(&tables[run.table], point, next);
-                    values.extend(current);
-                    values.extend(successor);
+        // Only selected batches bind their values before a column draw.
+        // Fully residual batches take their values from the bit readings below.
+        let mut offset = 0;
+        for (batch_index, (table, request)) in protocol.iter_openings().enumerate() {
+            let end = offset + request.current().len() + request.next().len();
+            if selected[batch_index] {
+                let (current, successor) =
+                    values[offset..end].split_at_mut(request.current().len());
+                if let Some(known) = &known[batch_index] {
+                    // Supplied values remain untrusted until the committed readings are checked.
+                    current.copy_from_slice(known.current());
+                    successor.copy_from_slice(known.next());
+                } else {
+                    let (evaluated_current, evaluated_successor) = tracing::info_span!(
+                        "evaluate boolean columns",
+                        width = request.current().len(),
+                        next = request.next().len()
+                    )
+                    .in_scope(|| {
+                        Self::evaluate_requested(
+                            &tables[table],
+                            &points[batch_index],
+                            request.current(),
+                            request.next(),
+                        )
+                    });
+                    current.copy_from_slice(&evaluated_current);
+                    successor.copy_from_slice(&evaluated_successor);
                 }
-            });
-
-            let mut transcript = ColumnBatchProverTranscript::new(challenger, run.shape);
-            let chunks = values[offset..].chunks_exact(run.shape.values_per_batch());
-            for (point, batch_values) in run_points.into_iter().zip(chunks) {
-                let (current, successor) = batch_values.split_at(width);
-                // Both value runs are bound before the point that combines either of them.
+            }
+            offset = end;
+        }
+        for run in &runs {
+            let run_len = run
+                .shape
+                .run_len()
+                .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+            let value_end = run
+                .value_offset
+                .checked_add(run_len)
+                .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+            let point_end = run
+                .opening
+                .checked_add(run.shape.num_batches)
+                .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+            let run_values = &values[run.value_offset..value_end];
+            let run_points = &points[run.opening..point_end];
+            let mut transcript = ColumnBatchProverTranscript::new(challenger, run.shape.clone());
+            for (point, batch_values) in run_points.iter().zip(
+                run_values.chunks_exact(
+                    run.shape
+                        .values_per_batch()
+                        .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?,
+                ),
+            ) {
+                let (current, successor) = batch_values.split_at(run.shape.width);
                 let column_point = transcript.batch(point, current, successor);
                 for (opening, readings) in
                     Self::block_claims(run, point, &column_point, current, successor)
@@ -644,16 +683,33 @@ where
             }
             transcript.finish();
         }
-
+        openings.extend(Self::bit_openings(protocol, &residual, points, &placements));
         let (readings, opening) = self
             .inner
             .open_readings(inner, &openings, challenger)
             .map_err(BooleanTraceCommitmentError::Boolean)?;
-        if readings.len() != expected.len() {
+        if readings.len() != expected.len() + residual.len() {
             return Err(BooleanTraceCommitmentError::ColumnBatchValueMismatch {
-                batch: expected.len(),
+                batch: expected.len() + residual.len(),
             });
         }
+        for (claim, reading) in residual.iter().zip(&readings[expected.len()..]) {
+            if selected[claim.opening] {
+                continue;
+            }
+            if let Some(at) = claim.current_at {
+                values[at] = reading
+                    .current
+                    .expect("a current claim carries its reading");
+            }
+            if let Some(at) = claim.next_at {
+                values[at] = reading.next.expect("a successor claim carries its reading");
+            }
+        }
+        expected.extend(residual.iter().map(|claim| BitReadings {
+            current: claim.current_at.map(|at| values[at]),
+            next: claim.next_at.map(|at| values[at]),
+        }));
         for (batch, (actual, expected)) in readings.iter().zip(&expected).enumerate() {
             if actual != expected {
                 return Err(BooleanTraceCommitmentError::ColumnBatchValueMismatch { batch });
@@ -672,7 +728,8 @@ where
     ) -> Result<Vec<OpeningEvals<EF>>, Self::Error> {
         // Every shape, point and value count is checked before the transcript moves.
         let placements = self.validate_opening(protocol, points)?;
-        let expected_values = value_count(protocol);
+        let expected_values =
+            value_count(protocol).ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
         if proof.values.len() != expected_values {
             return Err(BooleanTraceCommitmentError::ValueCount {
                 expected: expected_values,
@@ -680,7 +737,9 @@ where
             });
         }
 
-        let runs = match OpeningRoute::new(protocol) {
+        let (runs, residual) = match OpeningRoute::new(protocol)
+            .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?
+        {
             OpeningRoute::PerColumn(plan) => {
                 let openings = Self::bit_openings(protocol, plan.claims(), points, &placements);
 
@@ -696,25 +755,36 @@ where
                     .map_err(BooleanTraceCommitmentError::Boolean)?;
                 return Ok(opening_evals(protocol, &proof.values));
             }
-            OpeningRoute::Batched(runs) => runs,
+            OpeningRoute::Batched(runs) => (runs, Vec::new()),
+            OpeningRoute::Hybrid { runs, residual } => (runs, residual),
         };
 
         let mut openings = Vec::new();
         let mut readings = Vec::new();
-        let mut batch_points = points.iter();
-        let mut batch_values = proof.values.as_slice();
         for run in &runs {
-            let run_len = run.shape.values_per_batch() * run.shape.num_batches;
-            let (run_values, rest) = batch_values.split_at(run_len);
-            batch_values = rest;
-            let mut transcript = ColumnBatchVerifierTranscript::new(challenger, run.shape);
-            for (point, values) in batch_points
-                .by_ref()
-                .take(run.shape.num_batches)
-                .zip(run_values.chunks_exact(run.shape.values_per_batch()))
-            {
+            let run_len = run
+                .shape
+                .run_len()
+                .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+            let value_end = run
+                .value_offset
+                .checked_add(run_len)
+                .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+            let point_end = run
+                .opening
+                .checked_add(run.shape.num_batches)
+                .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
+            let run_values = &proof.values[run.value_offset..value_end];
+            let run_points = &points[run.opening..point_end];
+            let mut transcript = ColumnBatchVerifierTranscript::new(challenger, run.shape.clone());
+            for (point, values) in run_points.iter().zip(
+                run_values.chunks_exact(
+                    run.shape
+                        .values_per_batch()
+                        .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?,
+                ),
+            ) {
                 let (current, successor) = values.split_at(run.shape.width);
-                // Both value runs are bound before the point that combines either of them.
                 let column_point = transcript.batch(point, current, successor)?;
                 for (opening, reading) in
                     Self::block_claims(run, point, &column_point, current, successor)
@@ -725,6 +795,11 @@ where
             }
             transcript.finish();
         }
+        openings.extend(Self::bit_openings(protocol, &residual, points, &placements));
+        readings.extend(residual.iter().map(|claim| BitReadings {
+            current: claim.current_at.map(|at| proof.values[at]),
+            next: claim.next_at.map(|at| proof.values[at]),
+        }));
 
         // One bit proof answers for every batched claim at once.
         self.inner

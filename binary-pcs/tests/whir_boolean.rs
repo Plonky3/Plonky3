@@ -1073,3 +1073,70 @@ mod wide_challenge {
         assert!(switch.bits.bits() > 128.0);
     }
 }
+
+#[test]
+fn sparse_successors_and_indexed_extras_use_hybrid_claims_through_whir() {
+    let shape = TableShape::new(8, 64);
+    let (arity, _) = plan_stacked_layout(&[shape]);
+    let domain = BooleanWhirDomain::default();
+    let config = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING)
+        .config::<EF, EF, MyChallenger, _>(arity - ABSORBED, &domain)
+        .unwrap();
+    let cap_height = recommended_cap_height(&config);
+    let bits = BooleanWhirPcs::new(Prover::new(config, domain, mmcs(cap_height)), arity).unwrap();
+    let pcs = TracePcs::from_commitment(bits);
+    let mut rng = SmallRng::seed_from_u64(0x7ACE_B418);
+    let rows = 1usize << shape.num_variables();
+    let cells = (0..64 * rows)
+        .map(|_| EF::from_bool(rng.random()))
+        .collect();
+    let source = Table::new(RowMajorMatrix::new(cells, rows));
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        shape,
+        vec![
+            OpeningBatch::new((0..64).collect(), vec![63]),
+            OpeningBatch::new(vec![63, 0], vec![0]),
+        ],
+    )]);
+    let points = [Point::<EF>::rand(&mut rng, 8), Point::new(vec![EF::ONE; 8])];
+    let security =
+        PrescribedPointPcs::<EF, MyChallenger>::prescribed_security(&pcs, &protocol).unwrap();
+    let column = security
+        .terms
+        .iter()
+        .find(|term| term.label == p3_security::COLUMN_BATCH_LABEL)
+        .unwrap();
+    let expected = p3_security::multilinear::column_batch_term(1, 6, 128)
+        .bits
+        .bits();
+    assert!((column.bits.bits() - (expected - security.log2_max_candidates)).abs() < 1e-9);
+    assert!(
+        security
+            .terms
+            .iter()
+            .any(|term| term.label == p3_security::BIT_RING_SWITCH_CLAIM_BATCHING_LABEL)
+    );
+    let mut prover = challenger();
+    let (root, data) = pcs.commit(vec![source.clone()], &mut prover).unwrap();
+    let proof = pcs.open_at(data, &protocol, &points, &mut prover).unwrap();
+    // One current block, one sparse successor, two shared indexed claims.
+    assert_eq!(proof.opening.reduction.claims.len(), 4);
+    let mut verifier = challenger();
+    pcs.observe_commitment(&root, &mut verifier);
+    let evals = pcs
+        .verify_at(&root, &proof, &protocol, &points, &mut verifier)
+        .unwrap();
+    let last = source.column(0).value(rows - 1);
+    assert_eq!(evals[1].current()[1], last);
+    assert_eq!(evals[1].next()[0], last);
+    for position in [0, 63, 64, 65, 67] {
+        let mut forged = proof.clone();
+        forged.values[position] += EF::ONE;
+        let mut verifier = challenger();
+        pcs.observe_commitment(&root, &mut verifier);
+        assert!(
+            pcs.verify_at(&root, &forged, &protocol, &points, &mut verifier)
+                .is_err()
+        );
+    }
+}
