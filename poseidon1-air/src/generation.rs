@@ -51,9 +51,9 @@ use crate::{FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, 
 ///
 /// # Panics
 ///
-/// Panics if `inputs.len()` is not a multiple of `VECTOR_LEN`, or if
-/// `inputs.len() / VECTOR_LEN` is not a power of two. Also panics if `PARTIAL_ROUNDS`
-/// is zero or any round-constant vector used by the AIR has an inconsistent length.
+/// - `inputs.len()` is not a multiple of `VECTOR_LEN`, or the quotient is not a power of two.
+/// - `PARTIAL_ROUNDS` is zero.
+/// - A round-constant vector used by the AIR has an inconsistent length.
 #[instrument(name = "generate vectorized Poseidon1 trace", skip_all)]
 pub fn generate_vectorized_trace_rows<
     F: PrimeField,
@@ -146,8 +146,9 @@ pub fn generate_vectorized_trace_rows<
 ///
 /// # Panics
 ///
-/// Panics if `inputs.len()` is not a power of two, `PARTIAL_ROUNDS` is zero, or any
-/// round-constant vector used by the AIR has an inconsistent length.
+/// - `inputs.len()` is not a power of two.
+/// - `PARTIAL_ROUNDS` is zero.
+/// - A round-constant vector used by the AIR has an inconsistent length.
 #[instrument(name = "generate Poseidon1 trace", skip_all)]
 pub fn generate_trace_rows<
     F: PrimeField,
@@ -240,8 +241,10 @@ pub fn generate_trace_rows<
 ///
 /// # Panics
 ///
-/// Panics before writing any columns if `PARTIAL_ROUNDS` is zero or any round-constant
-/// vector used by the AIR has an inconsistent length.
+/// Panics before writing any columns if:
+///
+/// - `PARTIAL_ROUNDS` is zero.
+/// - A round-constant vector used by the AIR has an inconsistent length.
 pub fn generate_trace_rows_for_perm<
     F: PrimeField,
     const WIDTH: usize,

@@ -13,9 +13,9 @@ use crate::{Blake3CompressionInput, Blake3State, FullRound};
 
 /// Generate a prime-field Blake-3 trace using legacy benchmark metadata.
 ///
-/// Each input contains 16 message words followed by eight chaining words. The counter is the
-/// row index, the block length is the batch size cast to `u32`, and flags are zero. Use
-/// [`generate_trace_rows_with_inputs`] to supply explicit compression metadata.
+/// Each input contains 16 message words followed by eight chaining words.
+/// The counter is the row index, the block length is the batch size cast to `u32`, and flags are zero.
+/// Use [`generate_trace_rows_with_inputs`] to supply explicit compression metadata.
 #[instrument(name = "generate Blake3 trace", skip_all)]
 pub fn generate_trace_rows<F: PrimeField64>(
     inputs: Vec<[u32; 24]>,
@@ -39,9 +39,8 @@ pub fn generate_trace_rows<F: PrimeField64>(
 /// Generate a prime-field Blake-3 trace with one independent compression per row.
 ///
 /// Metadata comes entirely from each input and is independent of its position or batch size.
-/// This is the raw compression function: callers supply padded message words, chaining values,
-/// counters, lengths and flags. It does not perform message hashing or bind inputs or outputs
-/// to AIR public values.
+/// This is the raw compression function: callers supply padded message words, chaining values, counters, lengths and flags.
+/// It does not perform message hashing or bind inputs or outputs to AIR public values.
 ///
 /// # Panics
 ///
