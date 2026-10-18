@@ -26,7 +26,7 @@ use super::prover::HidingWhirProver;
 use super::verifier::ZkVerifierError;
 use crate::WhirConfigError;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption};
-use crate::pcs::proof::QueryOpenings;
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::transcript::zk::observe_claims;
 
 type F = BabyBear;
@@ -536,6 +536,74 @@ fn zk_whir_rejects_missing_query_opening() {
             actual: 16,
         },
     );
+}
+
+#[test]
+fn zk_whir_rejects_wrong_leaf_width_before_folding() {
+    let mut proven = Setup::new(150).prove();
+    assert!(matches!(
+        proven.proof.rounds[0].openings,
+        QueryOpenings::Base(_)
+    ));
+    assert!(matches!(
+        proven.proof.base_case.source_openings,
+        QueryOpenings::Extension(_)
+    ));
+    let proof = proven.proof.clone();
+    for final_round in [false, true] {
+        proven.proof = proof.clone();
+        let openings = if final_round {
+            &mut proven.proof.base_case.source_openings
+        } else {
+            &mut proven.proof.rounds[0].openings
+        };
+        // A non-power-of-two row must be rejected before Poly::new can panic.
+        match openings {
+            QueryOpenings::Base(opening) => {
+                opening.rows[0].pop();
+            }
+            QueryOpenings::Extension(opening) => {
+                opening.rows[0].pop();
+            }
+        }
+        let expected = if final_round {
+            ZkVerifierError::BaseCase(BaseCaseZkError::SourceOpeningsRejected)
+        } else {
+            ZkVerifierError::MerkleVerificationFailed { round: 0 }
+        };
+        assert_eq!(proven.verify().unwrap_err(), expected);
+    }
+}
+
+#[test]
+fn zk_whir_rejects_wrong_leaf_field_before_checking_rows() {
+    let mut proven = Setup::new(151).prove();
+    let proof = proven.proof.clone();
+    for final_round in [false, true] {
+        proven.proof = proof.clone();
+        let openings = if final_round {
+            &mut proven.proof.base_case.source_openings
+        } else {
+            &mut proven.proof.rounds[0].openings
+        };
+        // Empty rows also have the wrong count, but the variant error takes precedence.
+        *openings = match openings {
+            QueryOpenings::Base(opening) => QueryOpenings::Extension(SharedProofOpening {
+                rows: vec![],
+                proof: opening.proof.clone(),
+            }),
+            QueryOpenings::Extension(opening) => QueryOpenings::Base(SharedProofOpening {
+                rows: vec![],
+                proof: opening.proof.clone(),
+            }),
+        };
+        let expected = if final_round {
+            ZkVerifierError::BaseCase(BaseCaseZkError::SourceOpeningsRejected)
+        } else {
+            ZkVerifierError::MerkleVerificationFailed { round: 0 }
+        };
+        assert_eq!(proven.verify().unwrap_err(), expected);
+    }
 }
 
 #[test]

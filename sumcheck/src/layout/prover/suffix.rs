@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{Algebra, ExtensionField, Field};
+use p3_field::{Algebra, ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -391,7 +391,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
     ///
     /// # Returns
     ///
-    /// - Residual sumcheck prover over the unpacked product polynomial.
+    /// - Residual sumcheck prover, packed above one SIMD vector.
     /// - Folding challenges sampled during preprocessing.
     ///
     /// # Algorithm
@@ -430,7 +430,16 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         // Factor 2 of the product: the batched equality-weight poly.
         let weights = self.combine_weights(&reversed, alpha);
         // Pair them; the product polynomial drives the remaining rounds.
-        let poly = ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights);
+        let poly = if F::Packing::WIDTH > 1 && compressed.num_evals() > F::Packing::WIDTH {
+            // Release each scalar source before allocating the next packed table.
+            let packed_evals = compressed.pack::<F, EF>();
+            drop(compressed);
+            let packed_weights = weights.pack::<F, EF>();
+            drop(weights);
+            ProductPolynomial::new_packed(VariableOrder::Suffix, packed_evals, packed_weights)
+        } else {
+            ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights)
+        };
         // Cross-check: the dot product of the two factors must equal the
         // running sum accumulated across the preprocessing rounds.
         debug_assert_eq!(poly.dot_product(), sum);

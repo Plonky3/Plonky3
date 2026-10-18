@@ -59,6 +59,10 @@ name = "ring_switch"
 harness = false
 
 [[bench]]
+name = "bit_claims"
+harness = false
+
+[[bench]]
 name = "univariate_skip"
 harness = false
 
