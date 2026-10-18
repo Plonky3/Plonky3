@@ -61,9 +61,8 @@ pub struct ReferencePcsConfig {
 impl ReferencePcsConfig {
     /// Select the message length and number of independent queries.
     ///
-    /// Zero sizes, overflow, and geometries exceeding this reference encoder's
-    /// allocation/work limits are rejected. The query count is not a certified
-    /// security level; see the interactive bound in this module's documentation.
+    /// Zero sizes, overflow, and geometries exceeding this reference encoder's allocation/work limits are rejected.
+    /// The query count is not a certified security level; see the interactive bound in this module's documentation.
     pub fn new(message_len: usize, num_queries: usize) -> Result<Self, ZkError> {
         if message_len == 0 || num_queries == 0 || num_queries > MAX_QUERIES {
             return Err(ZkError::InvalidConfig("message/query count out of range"));
@@ -137,7 +136,8 @@ pub struct ZkCommitment {
     pub num_queries: usize,
 }
 
-/// Private single-use state. Deliberately neither Clone nor serializable.
+/// Private single-use state.
+/// Deliberately neither Clone nor serializable.
 pub struct ZkProverData {
     config: ReferencePcsConfig,
     commitment: ZkCommitment,
@@ -160,7 +160,8 @@ pub struct ZkQueryOpening {
     pub u: ZkRowOpening,
 }
 
-/// Polynomial-size proof. No h coefficients or private masks are disclosed.
+/// Polynomial-size proof.
+/// No h coefficients or private masks are disclosed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZkOpeningProof {
     pub claimed_values: Vec<Val>,
@@ -172,7 +173,8 @@ pub struct ZkOpeningProof {
     pub queries: Vec<ZkQueryOpening>,
 }
 
-/// Fixed-field, fixed-hash reference PCS. Configuration is reusable; state is not.
+/// Fixed-field, fixed-hash reference PCS.
+/// Configuration is reusable; state is not.
 #[derive(Debug, Clone)]
 pub struct ReferenceZkPcs {
     config: ReferencePcsConfig,
@@ -187,9 +189,8 @@ impl ReferenceZkPcs {
     }
 
     /// Commit columns of M monomial coefficients with independent random tails.
-    /// Shape validation precedes every private random draw. The caller's RNG
-    /// must be fresh across proofs; cloning, reseeding, resetting or VM rollback
-    /// can replay masks even though prover state is single-use.
+    /// Shape validation precedes every private random draw.
+    /// The caller's RNG must be fresh across proofs; cloning, reseeding, resetting or VM rollback can replay masks even though prover state is single-use.
     pub fn commit<R: CryptoRng>(
         &self,
         messages: RowMajorMatrix<Val>,
@@ -238,8 +239,8 @@ impl ReferenceZkPcs {
     }
 
     /// Consume state and open the low-coefficient polynomial at one common point.
-    /// The private RNG must remain fresh across proofs. Replaying h and u under
-    /// distinct public blend challenges reveals the complete low message.
+    /// The private RNG must remain fresh across proofs.
+    /// Replaying h and u under distinct public blend challenges reveals the complete low message.
     #[allow(
         clippy::needless_pass_by_value,
         reason = "single-use prover state must be consumed"

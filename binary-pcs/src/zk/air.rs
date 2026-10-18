@@ -1,14 +1,12 @@
 //! Private current-row AIR over a Cantor subspace, with monomial arithmetic.
 //!
-//! Interpolate each trace column as T0 and draw an independent scalar r for
-//! T=T0+rW. Commit T and each unsplit Q=C(T,p)/W together, using independent
-//! PCS tails. All commitments precede one common challenge z outside H.
+//! Interpolate each trace column as T0 and draw an independent scalar r for T=T0+rW.
+//! Commit T and each unsplit Q=C(T,p)/W together, using independent PCS tails.
+//! All commitments precede one common challenge z outside H.
 //! T(z) is jointly uniform and Q(z) is determined by those values and p.
 //!
-//! Checked interactive and classical-ROM policies, and the complete derived
-//! security argument, are documented in [`super::security`]. This canonical
-//! AIR protocol proves the existence of rows satisfying the same current-row
-//! constraints; rows can repeat and there is no implicit execution progression.
+//! Checked interactive and classical-ROM policies, and the complete derived security argument, are documented in [`super::security`].
+//! This canonical AIR protocol proves the existence of rows satisfying the same current-row constraints; rows can repeat and there is no implicit execution progression.
 
 use alloc::sync::Arc;
 use alloc::vec;
@@ -40,8 +38,8 @@ pub struct ZkAirConfig {
 
 impl ZkAirConfig {
     /// Request only the interactive algebra/query target, from 1 through 120.
-    /// This does not budget Fiat–Shamir grinding or commitment privacy. All
-    /// shape-dependent degree and resource checks still apply at compilation.
+    /// This does not budget Fiat–Shamir grinding or commitment privacy.
+    /// All shape-dependent degree and resource checks still apply at compilation.
     pub fn interactive(log_trace_height: usize, interactive_bits: usize) -> Result<Self, ZkError> {
         Self::check_height(log_trace_height)?;
         if !(1..=120).contains(&interactive_bits) {
@@ -53,9 +51,9 @@ impl ZkAirConfig {
         })
     }
 
-    /// Request the separate bounded-query classical-ROM guarantees documented
-    /// in [`super::security`]. Deployment-wide budgets are external assumptions,
-    /// not runtime counters. Compilation validates them against the AIR shape.
+    /// Request the separate bounded-query classical-ROM guarantees documented in [`super::security`].
+    /// Deployment-wide budgets are external assumptions, not runtime counters.
+    /// Compilation validates them against the AIR shape.
     pub fn classical_rom(
         log_trace_height: usize,
         budget: super::ClassicalRomBudget,
@@ -84,10 +82,9 @@ pub struct ZkAirProof {
 
 /// Compiled, verifier-owned static shape, symbolic constraints and PCS geometry.
 ///
-/// Only current-row static AIR is supported: override the default
-/// `main_next_row_columns` declaration with an empty vector. Rows can repeat.
-/// See [`super::security`] for the exact relation, canonical byte grammar,
-/// separate ideal-ROM probability bounds and external RO/RNG assumptions.
+/// Only current-row static AIR is supported: override the default `main_next_row_columns` declaration with an empty vector.
+/// Rows can repeat.
+/// See [`super::security`] for the exact relation, canonical byte grammar, separate ideal-ROM probability bounds and external RO/RNG assumptions.
 #[derive(Debug, Clone)]
 pub struct ReferenceZkAir {
     config: ZkAirConfig,
@@ -103,11 +100,10 @@ pub struct ReferenceZkAir {
 
 impl ReferenceZkAir {
     /// Compile current Main(offset=0), Public and Constant expressions only.
-    /// Unsupported metadata and actual leaves are rejected. Leading Boolean
-    /// columns receive explicit x*(x+1) constraints before sizing or binding.
+    /// Unsupported metadata and actual leaves are rejected.
+    /// Leading Boolean columns receive explicit x*(x+1) constraints before sizing or binding.
     ///
-    /// Permutation AIRs are rejected by the builder's capabilities, even when
-    /// an empty permutation loop would emit no symbolic constraints:
+    /// Permutation AIRs are rejected by the builder's capabilities, even when an empty permutation loop would emit no symbolic constraints:
     ///
     /// ```compile_fail,E0277
     /// use p3_air::{Air, BaseAir, PermutationAirBuilder};
@@ -247,10 +243,10 @@ impl ReferenceZkAir {
         self.security
     }
 
-    /// Prove a fixed-shape trace, using fresh private randomness for every mask
-    /// and PCS commitment. Invalid shapes/public lengths fail before RNG draws.
-    /// The supplied private RNG must be fresh across proofs. Never clone,
-    /// reseed, reset or replay its state (including after a VM rollback).
+    /// Prove a fixed-shape trace, using fresh private randomness for every mask and PCS commitment.
+    /// Invalid shapes/public lengths fail before RNG draws.
+    /// The supplied private RNG must be fresh across proofs.
+    /// Never clone, reseed, reset or replay its state (including after a VM rollback).
     /// Single-use commitment state cannot enforce freshness of caller randomness.
     pub fn prove<R: CryptoRng>(
         &self,
