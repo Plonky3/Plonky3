@@ -505,7 +505,7 @@ fn dot_product<const N: usize>(
                 x86_64::_mm512_mul_epu32(movehdup_epi32(lhs), movehdup_epi32(rhs)),
             );
             unreduced += 1;
-            if unreduced == 4 {
+            if unreduced == 4 && i + 1 < N {
                 unreduced = 0;
                 acc_evn = fold_u64(acc_evn);
                 acc_odd = fold_u64(acc_odd);
@@ -552,7 +552,7 @@ fn mixed_dot_product<const N: usize>(
                 x86_64::_mm512_mul_epu32(movehdup_epi32(lhs), rhs),
             );
             unreduced += 1;
-            if unreduced == 4 {
+            if unreduced == 4 && i + 1 < N {
                 unreduced = 0;
                 acc_evn = fold_u64(acc_evn);
                 acc_odd = fold_u64(acc_odd);

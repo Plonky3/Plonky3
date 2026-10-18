@@ -207,15 +207,12 @@ pub(crate) const fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     debug_assert!(const_lt(lhs, BN254_PRIME));
 
     // Additive coarsely integrated operand scanning (CIOS), with B = 2^64:
-    //   x = acc + lhs * rhs[i]
-    //   q = -x[0] / P (mod B)
-    //   acc = (x + q * P) / B
-    // The low limb cancels exactly. If acc < lhs + P before a round, then
-    // acc' <= (acc + (lhs + P) * (B - 1)) / B < lhs + P.
-    // Starting at zero, every round therefore leaves acc < lhs + P < 2P.
-    // Since 2P < 2^256, no sixth input limb or fifth output limb is needed,
-    // even when rhs is an arbitrary 256-bit integer. Only the final result
-    // needs a conditional subtraction of P.
+    // - Each round computes x = acc + lhs * rhs[i], q = -x[0] / P (mod B), and acc' = (x + q * P) / B.
+    //   The low limb cancels exactly.
+    // - If acc < lhs + P, then acc' <= (acc + (lhs + P) * (B - 1)) / B < lhs + P.
+    // - Starting at zero, every round therefore leaves acc < lhs + P < 2P.
+    // - Since 2P < 2^256, no sixth input limb or fifth output limb is needed, even for an arbitrary 256-bit rhs.
+    // Only the final result needs a conditional subtraction of P.
     let mut acc = [0; 4];
     let mut i = 0;
     while i < 4 {
@@ -610,6 +607,13 @@ mod tests {
             let digits = reduced.to_u64_digits();
             lhs[..digits.len()].copy_from_slice(&digits);
             check(lhs, rng.random::<[u64; 4]>());
+        }
+        // Bias toward the accumulator ceiling with lhs near P and a maximal top rhs limb.
+        for _ in 0..10_000 {
+            let lhs = wrapping_sub(pm1, [u64::from(rng.random::<u16>()), 0, 0, 0]).0;
+            let mut rhs = rng.random::<[u64; 4]>();
+            rhs[3] = u64::MAX;
+            check(lhs, rhs);
         }
     }
 }

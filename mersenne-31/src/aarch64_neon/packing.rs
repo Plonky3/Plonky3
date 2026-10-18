@@ -237,7 +237,7 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
         // so a product is at most `P^2 < 2^62`. For any u64, a fold is at most
         // `5 * P + 3`. Folding every four products is safe because
         // `4 * P^2 + 5 * P + 3 < 2^64`, including the redundant representation P of zero.
-        // `N == 4` needs no intermediate fold because all four products fit directly.
+        // The final batch needs no intermediate fold because the epilogue folds it twice.
         unsafe {
             // Safety: If this code got compiled then NEON intrinsics are available.
             let zero = aarch64::vdupq_n_u64(0);
@@ -250,9 +250,7 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
                 lo = aarch64::vmlal_u32(lo, aarch64::vget_low_u32(a), aarch64::vget_low_u32(b));
                 hi = aarch64::vmlal_high_u32(hi, a, b);
                 unreduced += 1;
-                // `N == 4` is the only size here whose products all fit without an
-                // intermediate fold, so skip it; larger `N` fold every four.
-                if unreduced == 4 && N != 4 {
+                if unreduced == 4 && i + 1 < N {
                     unreduced = 0;
                     lo = partial_reduce_u64(lo);
                     hi = partial_reduce_u64(hi);
@@ -327,7 +325,7 @@ fn mixed_dot_product<const N: usize>(
             lo = aarch64::vmlal_u32(lo, aarch64::vget_low_u32(a), aarch64::vget_low_u32(b));
             hi = aarch64::vmlal_high_u32(hi, a, b);
             unreduced += 1;
-            if unreduced == 4 && N != 4 {
+            if unreduced == 4 && i + 1 < N {
                 unreduced = 0;
                 lo = partial_reduce_u64(lo);
                 hi = partial_reduce_u64(hi);
@@ -494,6 +492,14 @@ unsafe impl PackedField for PackedMersenne31Neon {
             let mut hi = [zero; 8];
             let mut unreduced = 0;
             for (coeffs, base) in pairs {
+                // Fold only when another product follows the previous batch of four.
+                if unreduced == 4 {
+                    unreduced = 0;
+                    for k in 0..d {
+                        lo[k] = partial_reduce_u64(lo[k]);
+                        hi[k] = partial_reduce_u64(hi[k]);
+                    }
+                }
                 let b = base.to_vector();
                 for (k, coeff) in coeffs.iter().take(d).enumerate() {
                     let c = coeff.to_vector();
@@ -505,13 +511,6 @@ unsafe impl PackedField for PackedMersenne31Neon {
                     hi[k] = aarch64::vmlal_high_u32(hi[k], c, b);
                 }
                 unreduced += 1;
-                if unreduced == 4 {
-                    unreduced = 0;
-                    for k in 0..d {
-                        lo[k] = partial_reduce_u64(lo[k]);
-                        hi[k] = partial_reduce_u64(hi[k]);
-                    }
-                }
             }
             core::array::from_fn(|k| {
                 if k < d {
