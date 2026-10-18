@@ -84,6 +84,7 @@
 mod air;
 mod error;
 mod image;
+mod witness;
 
 #[cfg(test)]
 mod tests;
@@ -99,6 +100,7 @@ pub use image::{PrivateRegion, PublicImage};
 use num_bigint::BigUint;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 use p3_security::SecurityTerm;
+pub use witness::{ClockGapDigits, ClockRangeWitness};
 
 use crate::{
     BusActivation, BusDirection, BusInteractionBuilder, BusName, BusPlan, ReadOnlyMemoryBus,
@@ -222,16 +224,7 @@ impl<C: Field, F: ExtensionField<C>> TimestampedMemory<C, F> {
     /// Returns `None` for a gap outside `1..=2^32`.
     #[must_use]
     pub fn gap_factors(gap: u64) -> Option<(F, F)> {
-        if gap == 0 || gap > 1 << CLOCK_GAP_BITS {
-            return None;
-        }
-
-        // Write `d = (j + 1) + 2^16 * m` with both digits below `2^16`.
-        let low_digit = (gap - 1) & ((1 << CLOCK_RANGE_BITS) - 1);
-        let high_digit = (gap - 1) >> CLOCK_RANGE_BITS;
-        let low = C::GENERATOR.exp_u64(low_digit + 1);
-        let high = high_step::<C>().exp_u64(high_digit);
-        Some((F::from(low), F::from(high)))
+        Some(ClockGapDigits::new(gap)?.factors::<C, F>())
     }
 
     /// Checks this memory against the channels a plan defines.
