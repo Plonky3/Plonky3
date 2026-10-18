@@ -298,6 +298,10 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
                     .map(|at| at.v_n(self.log_n) - shift_v_n)
                     .collect_vec()
             });
+        // Standard coset points are (2i + 1)h with h = gen(m + 1), where m = coset.log_n.
+        // v_n takes the x-coordinate after n - 1 doublings, so it depends on (2i + 1)
+        // modulo 4B up to sign, with n = self.log_n and B = |coset| / |self|.
+        // t and 2B - 1 - t give opposite residues, hence min(t, mask - t).
         let reflected_index = |i: usize, distinct: usize| {
             let mask = 2 * distinct - 1;
             let t = i & mask;

@@ -800,10 +800,12 @@ where
         .enumerate()
         .for_each_init(
             || GroupBuffers::<Pack<SC, A, Strat>, Challenge<SC, A, Strat>> {
-                main: Vec::with_capacity(2 * width),
-                preprocessed: Vec::with_capacity(
-                    2 * preprocessed_on_quotient_domain.map_or(0, |p| p.width()),
-                ),
+                // Folders retain two-row windows; unused next rows stay zero for this worker.
+                main: vec![Pack::<SC, A, Strat>::broadcast(Val::<SC>::ZERO); 2 * width],
+                preprocessed: vec![
+                    Pack::<SC, A, Strat>::broadcast(Val::<SC>::ZERO);
+                    2 * preprocessed_on_quotient_domain.map_or(0, |p| p.width())
+                ],
                 base_constraints: Vec::with_capacity(constraint_layout.base_indices.len()),
                 ext_constraints: Vec::with_capacity(constraint_layout.ext_indices.len()),
                 base_coefficients: Vec::with_capacity(base_alpha_powers.len()),
@@ -820,41 +822,41 @@ where
                     *Pack::<SC, A, Strat>::from_slice(&sels.is_transition[i_range.clone()]);
                 let inv_vanishing = *Pack::<SC, A, Strat>::from_slice(&sels.inv_vanishing[i_range]);
 
-                bufs.main.clear();
-                bufs.main.extend(
+                for (dst, value) in bufs.main[..width].iter_mut().zip(
                     trace_on_quotient_domain.vertically_packed_row::<Pack<SC, A, Strat>>(i_start),
-                );
+                ) {
+                    *dst = value;
+                }
                 if main_next {
-                    bufs.main.extend(
+                    for (dst, value) in bufs.main[width..].iter_mut().zip(
                         trace_on_quotient_domain
                             .vertically_packed_row::<Pack<SC, A, Strat>>(i_start + next_step),
-                    );
-                } else {
-                    // Folders retain a full two-row window even when the next row is unused.
-                    bufs.main
-                        .resize(2 * width, Pack::<SC, A, Strat>::broadcast(Val::<SC>::ZERO));
+                    ) {
+                        *dst = value;
+                    }
                 }
                 let main = RowMajorMatrixView::new(&bufs.main, width);
 
                 let preprocessed_view = match preprocessed_on_quotient_domain {
                     Some(preprocessed) => {
-                        bufs.preprocessed.clear();
-                        bufs.preprocessed.extend(
-                            preprocessed.vertically_packed_row::<Pack<SC, A, Strat>>(i_start),
-                        );
-                        if preprocessed_next {
-                            bufs.preprocessed.extend(
-                                preprocessed.vertically_packed_row::<Pack<SC, A, Strat>>(
-                                    i_start + next_step,
-                                ),
-                            );
-                        } else {
-                            bufs.preprocessed.resize(
-                                2 * preprocessed.width(),
-                                Pack::<SC, A, Strat>::broadcast(Val::<SC>::ZERO),
-                            );
+                        let preprocessed_width = preprocessed.width();
+                        for (dst, value) in bufs.preprocessed[..preprocessed_width]
+                            .iter_mut()
+                            .zip(preprocessed.vertically_packed_row::<Pack<SC, A, Strat>>(i_start))
+                        {
+                            *dst = value;
                         }
-                        RowMajorMatrixView::new(&bufs.preprocessed, preprocessed.width())
+                        if preprocessed_next {
+                            for (dst, value) in bufs.preprocessed[preprocessed_width..]
+                                .iter_mut()
+                                .zip(preprocessed.vertically_packed_row::<Pack<SC, A, Strat>>(
+                                    i_start + next_step,
+                                ))
+                            {
+                                *dst = value;
+                            }
+                        }
+                        RowMajorMatrixView::new(&bufs.preprocessed, preprocessed_width)
                     }
                     None => RowMajorMatrixView::new(&[], 0),
                 };
