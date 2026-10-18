@@ -560,8 +560,7 @@ unsafe fn transpose_recursive<const WORDS: bool, T: Copy>(
 
 /// Parallel transpose over disjoint output bands.
 ///
-/// With enough source columns, output rows are cut into contiguous bands of
-/// whole source columns.
+/// By default, output rows are cut into contiguous bands of whole source columns.
 /// Band `k` holds the transpose of source columns starting at `k * cols_per_task`.
 /// Bands never overlap, so each task gets an exclusive slice — no shared pointers.
 ///
@@ -572,8 +571,8 @@ unsafe fn transpose_recursive<const WORDS: bool, T: Copy>(
 ///     ...
 /// ```
 ///
-/// If source columns cannot fill the worker pool, each output row is split again
-/// into source-row bands. The band for column `x` and source rows `[a, b)` owns
+/// For widths up to two that cannot fill the worker pool, each output row is
+/// split again into source-row bands. The band for column `x` and source rows `[a, b)` owns
 /// exactly `output[x * height + a .. x * height + b]`, obtained through safe
 /// slice splitting. Distinct rows and distinct bands within a row never overlap.
 ///
@@ -592,13 +591,14 @@ unsafe fn transpose_parallel<const WORDS: bool, T: Copy + Send + Sync>(
 
     let num_threads = current_num_threads();
 
-    if width < num_threads {
+    // Keep wider matrices on the tiled path: column gathers amplify input traffic.
+    if width <= 2 && width < num_threads {
         // Whole-column bands would expose only `width` tasks. Split each output
         // row (one source column) into contiguous source-row bands as well.
         let bands_per_col = num_threads.div_ceil(width);
-        // Multiples of 64 elements preserve tile alignment and cache-line
-        // offsets for every element size; only the final band can be shorter.
-        // An unaligned output base can still share one line at a boundary.
+        // Rounding to 64 elements keeps band boundaries at the same offset in a
+        // 64-byte cache line within each output row; only the final band can be shorter.
+        // Rows whose start is not line-aligned share one line between adjacent bands.
         let rows_per_task = height.div_ceil(bands_per_col).next_multiple_of(64);
         output
             .par_chunks_mut(height)
@@ -608,17 +608,21 @@ unsafe fn transpose_parallel<const WORDS: bool, T: Copy + Send + Sync>(
                     .enumerate()
                     .for_each(|(task, band)| {
                         let row_start = task * rows_per_task;
-                        for (offset, dst) in band.iter_mut().enumerate() {
-                            // `band` exclusively owns this contiguous output run.
-                            // Its final source row is < height, and x < width.
-                            *dst = input[(row_start + offset) * width + x];
+                        // `band` exclusively owns this contiguous output run.
+                        if width == 1 {
+                            band.copy_from_slice(&input[row_start..row_start + band.len()]);
+                        } else {
+                            let src = input[row_start * width + x..].iter().step_by(width);
+                            for (dst, &value) in band.iter_mut().zip(src) {
+                                *dst = value;
+                            }
                         }
                     });
             });
         return;
     }
 
-    // One whole-column band per worker for wide matrices; only the last is short.
+    // Whole-column bands use at most one worker each; only the last can be short.
     let cols_per_task = width.div_ceil(num_threads);
 
     // Each band is `cols_per_task` output rows of `height` columns.
@@ -815,13 +819,13 @@ mod tests {
     #[cfg(feature = "parallel")]
     #[test]
     fn portable_parallel_band_boundaries() {
-        for threads in [1, 4, 16, 32] {
+        for threads in [1, 2, 4, 16, 32] {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .unwrap()
                 .install(|| {
-                    for width in [1, 2, 4, 8, 16, 32, 256] {
+                    for width in [1, 2, 3, 4, 8, 16, 31, 32, 256] {
                         for height in [1, 15, 16, 17, 63, 64, 65, 127, 128, 129, 257] {
                             for (w, h) in [(width, height), (height, width)] {
                                 check_parallel(w, h, 0u32, |i| i as u32);
@@ -845,13 +849,13 @@ mod tests {
             pointer: &'a u64,
         }
         let values = [11u64, 23, 47];
-        for threads in [1, 4, 16, 32] {
+        for threads in [1, 2, 4, 16, 32] {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .unwrap()
                 .install(|| {
-                    for (w, h) in [(1, 129), (2, 257), (8, 129), (17, 65), (65, 17)] {
+                    for (w, h) in [(1, 129), (2, 257), (3, 257), (8, 129), (17, 65), (65, 17)] {
                         check_parallel(w, h, [0u8; 3], |i| {
                             [i as u8, (i >> 8) as u8, (i >> 16) as u8]
                         });

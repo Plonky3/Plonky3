@@ -54,8 +54,8 @@ fn bench_transpose_goldilocks(c: &mut Criterion) {
     group.finish();
 }
 
-// Byte arrays have alignment 1, forcing the portable fallback on every target,
-// including the 4/8-byte cases on ARM. Buffers are allocated outside b.iter.
+// Drive the portable engine through the typed public entry point. Byte arrays
+// also cover non-word element sizes. Buffers are allocated outside b.iter.
 fn bench_transpose_portable<const BYTES: usize>(c: &mut Criterion) {
     let mut group = c.benchmark_group("transpose_portable");
     for width in [1, 2, 4, 8, 16, 32, 256, 4096] {
@@ -80,6 +80,7 @@ criterion_group!(
     benches,
     bench_transpose_babybear,
     bench_transpose_goldilocks,
+    bench_transpose_portable::<3>,
     bench_transpose_portable::<4>,
     bench_transpose_portable::<8>,
     bench_transpose_portable::<16>,
