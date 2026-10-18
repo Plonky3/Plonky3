@@ -12,7 +12,7 @@ use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 
-fn check_padded<F, D>(dft: D)
+fn check_padded<F, D>(dft: &D)
 where
     F: TwoAdicField,
     D: TwoAdicSubgroupDft<F>,
@@ -40,9 +40,9 @@ where
 
 #[test]
 fn padded_dit_matches_full_dft_across_fields_and_layer_boundaries() {
-    check_padded(Radix2DitParallel::<BabyBear>::default());
-    check_padded(Radix2DitParallel::<Goldilocks>::default());
-    check_padded(Radix2DitParallel::<BinomialExtensionField<BabyBear, 4>>::default());
+    check_padded(&Radix2DitParallel::<BabyBear>::default());
+    check_padded(&Radix2DitParallel::<Goldilocks>::default());
+    check_padded(&Radix2DitParallel::<BinomialExtensionField<BabyBear, 4>>::default());
 }
 
 proptest! {
@@ -71,7 +71,7 @@ proptest! {
 
 #[test]
 fn padded_default_preserves_backend_layout() {
-    check_padded::<BabyBear, _>(Radix2Bowers);
+    check_padded::<BabyBear, _>(&Radix2Bowers);
 }
 
 // A downstream backend may use the inverse primitive root as its forward root.
@@ -95,7 +95,7 @@ impl TwoAdicSubgroupDft<BabyBear> for InverseRootDft {
 
 #[test]
 fn padded_default_preserves_custom_root_convention() {
-    check_padded::<BabyBear, _>(InverseRootDft);
+    check_padded::<BabyBear, _>(&InverseRootDft);
 }
 
 #[test]
@@ -103,6 +103,15 @@ fn padded_default_preserves_custom_root_convention() {
 fn padded_dit_rejects_excess_padding() {
     let mat = RowMajorMatrix::new_col(vec![BabyBear::ONE; 4]);
     let _ = Radix2DitParallel::default().dft_batch_padded(mat, 3);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "padded tail must be zero")]
+fn padded_dit_rejects_nonzero_tail() {
+    let mut mat = RowMajorMatrix::new(vec![BabyBear::ZERO; 16 * 3], 3);
+    mat.values[4 * 3 + 1] = BabyBear::ONE;
+    let _ = Radix2DitParallel::default().dft_batch_padded(mat, 2);
 }
 
 #[test]

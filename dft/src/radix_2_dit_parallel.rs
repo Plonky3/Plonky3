@@ -141,8 +141,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             log_h <= F::TWO_ADICITY,
             "transform height exceeds field two-adicity"
         );
-        // Skipping only the twiddle-free first layer does not repay moving
-        // and replicating nonconstant coefficients.
+        // Skipping only the twiddle-free first layer does not repay moving and replicating nonconstant coefficients.
         if log_inv_rate == 1 && log_h > 1 {
             return self.dft_batch(mat);
         }
@@ -150,48 +149,33 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         let width = mat.width;
         let live_rows = mat.height() >> log_inv_rate;
         let live_len = live_rows * width;
+        debug_assert!(
+            mat.values[live_len..].iter().all(|x| x.is_zero()),
+            "padded tail must be zero"
+        );
         let block_len = mat.values.len() / live_rows;
         reverse_matrix_index_bits(&mut RowMajorMatrixViewMut::new(
             &mut mat.values[..live_len],
             width,
         ));
-        // After full-height bit reversal, each live coefficient starts a block
-        // of 2^log_inv_rate rows followed by zeros. The first log_inv_rate DIT
-        // layers simply replicate it throughout that block (all high inputs
-        // are zero). Move live rows backwards first so no unread row is lost.
+        // After full-height bit reversal, each live coefficient starts a block of 2^log_inv_rate rows followed by zeros.
+        //
+        // The first log_inv_rate DIT layers simply replicate it throughout that block because all high inputs are zero.
+        //
+        // Row j moves to j * 2^log_inv_rate >= j, so moving backwards only overwrites rows already moved.
         for row in (1..live_rows).rev() {
             mat.values
                 .copy_within(row * width..(row + 1) * width, row * block_len);
         }
-        let replicate = |block: &mut [F]| {
-            let mut initialized = width;
-            while initialized < block.len() {
-                block.copy_within(..initialized, initialized);
-                initialized *= 2;
-            }
-        };
-        // Serial replication avoids measured dispatch overhead for small batches
-        // with few live rows.
-        if live_rows <= 256 && core::mem::size_of_val(mat.values.as_slice()) <= 64 * 1024 {
-            mat.values.chunks_exact_mut(block_len).for_each(replicate);
-        } else {
-            let replication_bytes = (block_len - width)
-                .saturating_mul(core::mem::size_of::<F>())
-                .saturating_mul(2);
-            mat.values
-                .par_chunks_exact_mut(block_len)
-                .for_each_min_task_bytes(replication_bytes, replicate);
-        }
 
-        // Constant polynomials are already fully evaluated, without twiddles.
+        // Constant polynomials only need replication, without twiddles.
         if log_inv_rate == log_h {
+            first_half(&mut mat, log_inv_rate, log_h, &[]);
             return mat.bit_reverse_rows();
         }
         let twiddles = self.get_or_compute_twiddles(log_h);
         let mid = log_h.div_ceil(2).max(log_inv_rate);
-        if log_inv_rate < mid {
-            first_half(&mut mat, log_inv_rate, mid, &twiddles.twiddles);
-        }
+        first_half(&mut mat, log_inv_rate, mid, &twiddles.twiddles);
         reverse_matrix_index_bits(&mut mat);
         second_half(&mut mat, mid, &twiddles.bitrev_twiddles, None);
         mat.bit_reverse_rows()
@@ -429,14 +413,15 @@ fn coset_dft_oop<F: Field>(
     second_half_general(dst, mid, twiddles, row_base, consume);
 }
 
-/// This can be used as the first half of a DIT butterfly network, starting at
-/// `start_layer` when earlier layers have already been applied.
+/// Apply the first half of a DIT butterfly network, starting at `start_layer`.
 ///
-/// For layer 0, all twiddle factors are 1 (root^0 = 1), so we use `TwiddleFreeButterfly`
-/// to avoid a Montgomery multiply by 1 across the entire matrix.
+/// When `start_layer > 0`, each aligned block of `2^start_layer` rows starts with one coefficient row to replicate.
 ///
-/// For layers 1 to mid-1 included, the first twiddle in each block is also always 1 (`twiddles[0] = 1`),
-/// so we special-case the first row-pair of each block to use `TwiddleFreeButterfly` as well.
+/// Replicate that row within each chunk before applying the remaining layers while the data is still hot.
+///
+/// For layer 0, all twiddle factors are 1 (root^0 = 1), so we use `TwiddleFreeButterfly` to avoid a Montgomery multiply by 1 across the entire matrix.
+///
+/// For layers 1 to mid-1 included, the first twiddle in each block is also always 1 (`twiddles[0] = 1`), so we special-case the first row-pair of each block to use `TwiddleFreeButterfly` as well.
 #[instrument(level = "debug", skip_all)]
 fn first_half<F: Field>(
     mat: &mut RowMajorMatrix<F>,
@@ -449,6 +434,16 @@ fn first_half<F: Field>(
     // max block size: 2^mid
     mat.par_row_chunks_exact_mut(1 << mid)
         .for_each(|mut submat| {
+            if start_layer > 0 {
+                let width = submat.width;
+                for block in submat.values.chunks_exact_mut(width << start_layer) {
+                    let mut initialized = width;
+                    while initialized < block.len() {
+                        block.copy_within(..initialized, initialized);
+                        initialized *= 2;
+                    }
+                }
+            }
             let mut backwards = false;
             for layer in start_layer..mid {
                 if layer == 0 {
