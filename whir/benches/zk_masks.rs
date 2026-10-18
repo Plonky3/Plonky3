@@ -54,8 +54,9 @@ where
         ProtocolParameters {
             security_level,
             pow_bits: 0,
-            // The old octic rate 4 fixture rejects at n=18: randomness
-            // exceeds the next oracle's slack. Rate 8 fits the derived budget.
+            // The old octic rate 4 fixture rejects at n=18: randomness exceeds the next oracle's slack.
+            //
+            // Rate 8 fits the derived budget.
             round_log_inv_rates: vec![8],
             folding_factor: FoldingFactor::ConstantFromSecondRound(8, 6),
             soundness_type: SecurityAssumption::JohnsonBound,
@@ -88,7 +89,7 @@ where
             || (witness.clone(), challenger()),
             |(witness, mut ch)| pcs.commit(witness, &mut ch).unwrap(),
             BatchSize::PerIteration,
-        )
+        );
     });
     group.bench_function("open", |b| {
         b.iter_batched(
@@ -99,17 +100,17 @@ where
             },
             |(mut ch, data)| pcs.open(data, points.clone(), &mut ch).unwrap(),
             BatchSize::PerIteration,
-        )
+        );
     });
     group.bench_function("verify", |b| {
         b.iter_batched(
             challenger,
             |mut ch| {
                 pcs.verify(&commitment, &proof, &mut ch, points.clone())
-                    .unwrap()
+                    .unwrap();
             },
             BatchSize::PerIteration,
-        )
+        );
     });
     group.bench_function("round_trip", |b| {
         b.iter_batched(
@@ -121,7 +122,7 @@ where
                     .unwrap();
             },
             BatchSize::PerIteration,
-        )
+        );
     });
     group.finish();
 }
@@ -163,7 +164,7 @@ fn bench_mask_verify(c: &mut Criterion) {
                     let _ = black_box(horner(point, black_box(&coefficients)));
                 }
             }
-        })
+        });
     });
     group.bench_function("base_points", |b| {
         b.iter(|| {
@@ -173,7 +174,7 @@ fn bench_mask_verify(c: &mut Criterion) {
                     let _ = black_box(horner(point, black_box(&coefficients)));
                 }
             }
-        })
+        });
     });
     group.finish();
 }

@@ -13,9 +13,9 @@ use crate::{LinearZkEncoding, ZkEncoding, ZkEncodingWithRandomness};
 
 /// An extension-field DFT that reuses a base-field DFT when its domain agrees.
 ///
-/// Cloning the supplied DFT preserves its usual cache-sharing behavior. Domains
-/// above the base field's two-adicity, or with a different canonical generator,
-/// retain the extension-field radix-2 transform and its evaluation order.
+/// Cloning the supplied DFT preserves its usual cache-sharing behavior.
+///
+/// Domains above the base field's two-adicity, or with a different canonical generator, retain the extension-field radix-2 transform and its evaluation order.
 #[derive(Clone, Debug, Default)]
 pub struct BaseFieldDft<F, EF, Dft> {
     dft: Dft,

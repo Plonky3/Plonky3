@@ -69,6 +69,7 @@ fn octic_no_pow_protocol_params() -> ProtocolParameters {
     ProtocolParameters {
         security_level: 128,
         pow_bits: 0,
+        // Rate 8 replaces rate 4, which rejects at n=18 because randomness exceeds the next oracle's slack.
         round_log_inv_rates: vec![8],
         folding_factor: FoldingFactor::ConstantFromSecondRound(8, 6),
         soundness_type: SecurityAssumption::JohnsonBound,

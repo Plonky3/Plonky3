@@ -194,8 +194,9 @@ mod tests {
         let randomness: Vec<EF> = (0..92).map(|_| rng.random()).collect();
         let base_gen = KoalaBear::two_adic_generator(10);
         let extension_only = EF::two_adic_generator(KoalaBear::TWO_ADICITY + 1);
-        // Include a different base-field primitive root: extraction must use
-        // the actual extension generator, not substitute F's canonical root.
+        // Include a different base-field primitive root.
+        //
+        // Extraction must use the actual extension generator, not substitute F's canonical root.
         for generator in [
             EF::from(base_gen),
             EF::from(base_gen.inverse()),
@@ -205,10 +206,10 @@ mod tests {
             for position in [0, 1, 17, 1023] {
                 let point = generator.exp_u64(position);
                 let expected = padded_ood_t1(point, &msg, &randomness);
-                let actual = match extracted {
-                    Some(base) => padded_ood_t1(base.exp_u64(position), &msg, &randomness),
-                    None => padded_ood_t1(point, &msg, &randomness),
-                };
+                let actual = extracted.map_or_else(
+                    || padded_ood_t1(point, &msg, &randomness),
+                    |base| padded_ood_t1(base.exp_u64(position), &msg, &randomness),
+                );
                 assert_eq!(actual, expected);
             }
         }

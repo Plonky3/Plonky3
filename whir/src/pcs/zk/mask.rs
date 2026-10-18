@@ -55,7 +55,7 @@ impl MaskCodeShape {
 
     /// Instantiates the encoding over the extension field.
     ///
-    /// Uses the extension field's canonical generator for its evaluation domain.
+    /// Reference path using the extension field's canonical generator for its evaluation domain.
     #[must_use]
     pub fn encoding<EF>(&self) -> ReedSolomonZkEncoding<EF, Radix2Dit<EF>>
     where
