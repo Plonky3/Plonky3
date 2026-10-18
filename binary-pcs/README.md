@@ -60,4 +60,229 @@ is unsupported because its assumption is refuted for this domain.
 
 This adapter is binding, not hiding.
 
+## Private current-row AIR reference protocol
+
+The always-available `p3_binary_pcs::zk` module exposes an independent
+reference protocol over `BinaryField128`, including with `--no-default-features`.
+It does not change `BinaryPcs`, the WHIR adapter, or existing multilinear AIR
+paths into zero-knowledge protocols.
+
+Run the native example with:
+
+```sh
+cargo run -p p3-binary-pcs --example zk_air --release
+```
+
+It proves that two private columns have the same public product at every row,
+using `StdRng` freshly seeded from operating-system entropy for all private
+randomness. It serializes the actual proof, deserializes it, and verifies the
+round-trip. Output contains only proof byte length and public dimensions, plus the checked
+classical-ROM security report. The
+native `zk_air` integration tests also verify distinct witnesses for one public
+product; the statement does not reveal a unique factorization.
+
+### Supported statements and lifecycle
+
+`ReferenceZkAir::compile` accepts `Air<CurrentRowAirBuilder>`. Ordinary generic
+`impl<AB: AirBuilder<F = Val>> Air<AB>` implementations work; implementations
+specific to `SymbolicAirBuilder` must adapt to this restricted builder. It has
+no permutation, interaction/bus, or runtime-context capabilities. Compilation
+admits only current-row main variables, public values, constants and arithmetic.
+Set `BaseAir::main_next_row_columns()` explicitly to an empty vector: its default
+allows successor columns. Compilation rejects successor access, preprocessing,
+periodic columns, row selectors, public boundary declarations, extension
+constraints, and unsupported or out-of-range symbolic leaves. Leading Boolean
+column declarations add explicit `x*(x+1)` constraints; inconsistent Boolean
+metadata rejects. Lookup and bus arguments are unsupported.
+
+Shape and constraints are public and fixed by the verifier's compiled AIR. The
+version, canonical symbolic constraints, dimensions, public values and PCS
+geometry are transcript-bound. Trace logarithms are 1 through 8, widths at most
+16, augmented constraint counts at most 32, constraint degrees at most 4, and
+public-value counts at most 1024. Expressions and PCS allocations/work also have
+limits; a requested geometry can reject even within these individual limits.
+The explicit `ZkAirConfig::interactive(log_height, bits)` target is 1 through
+120 bits, subject to the degree bound below. `ZkAirConfig::classical_rom` instead
+takes a validated `ClassicalRomBudget` and checks the shape-dependent derived
+interactive target and separate classical-ROM components. Unsupported AIR metadata and leaves reject during compilation,
+before private randomness or transcript mutation.
+
+The lower-level `ReferenceZkPcs` takes columns of **monomial coefficients**, not
+multilinear tables or novel-basis coefficients. `commit` returns a public
+commitment and private `ZkProverData`. This state is neither `Clone` nor
+serializable and is consumed by `open`: each commitment permits one common-point
+opening only. Configuration objects are reusable. Use fresh private CSPRNG
+randomness for every proof, column mask and commitment; never seed it from the
+public challenger. Never clone, reseed, reset, or replay the supplied `CryptoRng`,
+including through VM rollback. Single-use commitment state cannot enforce RNG
+freshness. Reusing the same `h` and `u` under distinct public `gamma` exposes
+`h=(g1+g2)/(gamma1+gamma2)`, including every low message coefficient.
+AIR proving manages single-use state internally; callers still own RNG freshness.
+This reference protocol does not certify production security. Its modeled
+assumptions and exact implementation security contract are in
+[`zk::security`](src/zk/security.rs).
+
+### Reference protocol
+
+Let `H` be the unshifted Cantor subspace of size `N`, and
+`W(X) = product_{a in H}(X-a)`. For each trace column, interpolate `T0` over `H`
+and choose an independent uniform field scalar `r` to form `T = T0 + r*W`.
+For each constraint `C_i`, compute the separate, unsplit quotient
+`Q_i = C_i(T,p)/W`, rejecting a nonzero remainder. Commit all `T` and `Q_i`
+together before deriving one point `z` uniformly outside `H` in the interactive
+model. For any fixed such point, the trace openings `t_j = T_j(z)` are jointly
+uniform; quotient openings are determined by them and the public statement as
+`q_i = C_i(t,p)/W(z)`. Verification checks every quotient identity and the PCS
+opening.
+
+For PCS message length `M` and `q` queries, put `kappa=q+1`, `L=M+kappa`, and
+`n=next_power_of_two(4L)`. Each message `f` gets an independent uniform
+`kappa`-coefficient tail `R`: `h=f+X^M*R`. Change a scratch copy from monomial
+to Cantor novel-basis coefficients, then use the additive NTT to evaluate on the
+shifted Cantor domain `S_log2(n) + s_log2(n)`, which excludes zero. Here `S_k`
+is the span of the first `k` Cantor basis vectors and `s_k` is the next basis
+vector. Commit the rows with Keccak256 `MerkleTreeHidingMmcs`, using two
+independent full-field salts per leaf. No monomial coefficients are passed to
+the novel-basis `AdditiveRsEncoder`.
+
+For a claimed message evaluation `v=f(z)`, define
+`lambda(a_low)=sum_{j=0}^{M-1} a_j*z^j`. After binding the configuration,
+commitment, point and claims, independently sample a uniform `L`-coefficient
+polynomial `u`, commit it with fresh leaf salts, and disclose
+`sigma=lambda(u_low)`. Bind these before sampling a uniform nonzero `gamma`.
+Disclose all coefficients of `g=gamma*h+u` and check
+`lambda(g_low)=gamma*v+sigma`. Absorb the complete `g` before sampling `q`
+uniform indices with replacement. Authenticate both committed rows and check
+`g(x)=gamma*h(x)+u(x)` at every index, for every column. Columns share `gamma`
+and indices, with independent masks. Duplicate indices retain transcript order
+and repeat the same authenticated row, adding no privacy rank. The `q+1` tail
+coefficients account for the joint observations, including conditioning on the
+full blend and `sigma`; the salts protect unopened Merkle leaves.
+
+### Protocol v2 framing and public coins
+
+Leaf, node and Fiat–Shamir hashes respectively prepend the disjoint ASCII tags
+`p3-binary-zk-v2/leaf`, `p3-binary-zk-v2/node` and
+`p3-binary-zk-v2/fiat-shamir`, each followed by a NUL byte, on every scalar or
+batched hash. A leaf has two independent field salts (256 bits total); roots and
+path hashes remain 32 bytes. Canonical transport uses `P3ZKAIR2`, two salts per
+row and fixed little-endian fields; the v1 wire protocol is rejected.
+
+The protocol-owned challenger retains every public observation and draw output.
+Records have distinct one-byte tags: field `1 || repr128LE`; root cap
+`2 || count64LE || roots`; bytes `3 || length64LE || bytes`; size
+`4 || value64LE`; draw
+`5 || label_length64LE || label || output_length64LE || raw_output`.
+All lengths, sizes and ordinals are checked fixed-width u64 values.
+
+Each expansion block hashes the Fiat–Shamir tag followed by
+`label_length64LE || label || transcript_length64LE || complete_transcript ||
+draw_ordinal64LE || output_length64LE || block_counter32LE`. Counters start at
+zero; concatenate 32-byte blocks and truncate to the requested length. All blocks
+use the same prefix; the draw record is appended and ordinal incremented only
+after the complete output is produced.
+
+The `air-point` and `blend-scalar` draws each produce 256 bytes: sixteen
+field candidates in tower representation. Select the first outside H or nonzero,
+respectively, and return `ZkError::ChallengeExhausted` if all sixteen fail.
+Unused public candidates add no prover messages or verifier rounds. All q indices
+come from one `8*q`-byte draw whose label is `query-indices || q64LE || logn64LE`;
+each little-endian u64 contributes its low logn bits. Generic trait sampling uses
+separate `generic-field` and `generic-bits || bits64LE` labels for transcript
+continuation, rather than these internal protocol rounds.
+
+### Interactive bound and reference costs
+
+Put `e=floor((n-L)/4)`. In the interactive oracle model the PCS error is at most
+
+```text
+1/(2^128-1) + (1-(e+1)/n)^q.
+```
+
+Outside at most one exceptional `gamma`, a false low-coefficient claim leaves
+more than `e` inconsistent rows. Treating the columns as a vector-valued RS code
+gives minimum row distance `n-L+1`, so the exceptional-challenge term does not
+need a union bound over columns. Since `n>=4L`, choosing `q=4*(s+2)` makes the
+query contribution less than `2^-(s+2)`.
+
+The AIR adds at most `D/(2^128-N)`, where
+`D=max(delta*(M-1), N+M-1)` and `delta` is the maximum augmented constraint
+degree. This uses the committed message degree bound `M-1`, including malicious
+messages, rather than the smaller honest degrees. Compilation chooses
+`M=max(N+1, (delta-1)*N+1)` (with saturating subtraction for `delta=0`) and checks
+`D*2^(s+2)<=2^128-N`. The target budgets these interactive algebra/query terms.
+This explicit interactive mode excludes hash binding/hiding, salt guessing
+and Fiat–Shamir losses. For classical mode, the protocol-specific RBR, direct
+graph and joint privacy proofs and exact canonical AIR grammar are maintained
+in [`zk::security`](src/zk/security.rs). These are derived classical-ROM lemmas,
+not published certification or a standard-model claim about Keccak.
+
+The native example selects `ClassicalRomBudget::new(80, 32, 49)`: target 80,
+at most `2^32` adversarial primitive RO calls across all domains, and a **GLOBAL
+cumulative** cap of `2^49` honest salted leaf slots sharing the v2 leaf domain.
+That history includes h and u trees across all configurations, sessions,
+standalone commitments and aborted/failed attempts after salted leaf creation.
+These are external assumptions, not runtime counters or per-proof allowances.
+The lifetime claim ceases to apply if later leaf creation exceeds the cap.
+
+Compilation includes final-verifier calls: `T=2^b+V_max`, with
+`V_max=2*q*(log2(n)+1)+16+ceil(q/4)`. A monotone integer fixed point chooses
+`c=ceil(log2(T))`, `s=target+c`, `q=4*(s+2)` and checked PCS geometry. The example
+yields c=33, s=113, q=460. A 96-bit target at b=32 rejects at the field-degree
+check. Degree, graph, privacy and combined resource checks never silently
+downgrade a target; `security_report()` exposes their budgets and exponents.
+
+Acceptance with failed theoretical extraction is bounded by
+`T*max(D/(2^128-N),1/(2^128-1),(1-(e+1)/n)^q)+8*(T+1)^2/2^256`.
+The extractor is a theoretical polynomial-time graph-completion/unique-decoding
+algorithm, not a production verifier or practical performance promise. Separate
+privacy advantage is bounded by
+`Delta_rng+C(N_leaf,2)/2^256+N_leaf*Q_leaf/(2^256-N_leaf-Q_leaf)`.
+The constructor checks only the ideal privacy component. A real target-bit
+privacy claim requires bounding the complete CSPRNG lifecycle's `Delta_rng`
+within the remaining margin. These are separate bounded-query probability
+guarantees, not an unqualified target-bit work-security claim.
+
+The relation asserts existence of N rows satisfying the same `C_i(row,p)=0`;
+rows may repeat. It adds no execution progression, distinctness or public-record
+binding unless explicitly constrained within rows. One common opening point,
+fresh private randomness and atomic proving are load-bearing. Private-state
+exposure, side channels, rollback, QROM and simulation extractability are outside
+the contract. Generic external PCS challenger contexts are outside the AIR
+compiler theorem. Review the assumptions, byte contract and pinned raw-draw,
+AST, full-proof and canonical-wire tests together when changing the protocol.
+
+This implementation sends one full `L`-coefficient blend per committed
+polynomial, plus sampled authenticated rows: proof size is polynomial, not
+succinct. Encoding uses sparse monic basis conversion and an `O(n*log(n))`
+additive NTT per polynomial. Verification evaluates the public blend with the
+same encoder when `q*L > n*log2(n)` and otherwise uses Horner at queried points.
+The transform path allocates an additional `n*batch_width` field elements
+(at most 16 MiB under the unchanged resource caps). The original conservative
+`n*L*batch_width` work cap remains in force. Interpolation and quotient arithmetic
+remain reference implementations.
+Counter-mode Fiat–Shamir expansion reuses an unfinalized Keccak prefix state
+between blocks. Each block still hashes the same complete framed input and
+counter, so transcript bytes and logical random-oracle call counts are unchanged.
+An optimized hiding BaseFold replacement remains future work; this protocol
+does not reuse the existing clear BaseFold reductions as a privacy argument.
+
+### Finite native profiling
+
+Build once, then measure the binary directly so compiler RSS is excluded:
+
+```sh
+cargo build -p p3-binary-pcs --example zk_profile --release
+/usr/bin/time -l target/release/examples/zk_profile product-4 3
+```
+
+Accepted cases are `product-4`, `product-64`, `product-256` (two columns), and
+`four-products-64` (eight columns). Each uses the 80/32/49 classical profile and
+fresh OS-seeded randomness per sample, with private factors varying by row and
+pair. The generic AIR explicitly declares no next-row access. Iterations are
+limited to 1 through 10. Output reports public geometry, actual canonical wire
+bytes, compile/prove/encode/decode-plus-verify timings. Process peak RSS from
+`time -l` is not live heap. Compare portable and `-C target-cpu=native` builds
+using the same cases; results depend on CPU, flags and thread count.
+
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.

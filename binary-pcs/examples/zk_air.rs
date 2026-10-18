@@ -1,0 +1,86 @@
+//! Native end-to-end private current-row AIR reference example.
+//!
+//! Run with `cargo run -p p3-binary-pcs --example zk_air --release`.
+//! This uses the polynomial-size full-blend protocol, not BaseFold. The target
+//! below declares a classical-ROM adversary-call and global lifetime leaf
+//! budget. See the checked report and security contract for its assumptions.
+
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_binary_field::TowerLevel;
+use p3_binary_pcs::zk::{ClassicalRomBudget, ReferenceZkAir, Val, ZkAirConfig};
+use p3_field::{Field, PrimeCharacteristicRing};
+use p3_matrix::dense::RowMajorMatrix;
+use rand::rngs::{StdRng, SysRng};
+use rand::{RngExt, SeedableRng};
+
+const LOG_TRACE_HEIGHT: usize = 2;
+const TARGET_BITS: usize = 80;
+
+struct PrivateProduct;
+
+impl BaseAir<Val> for PrivateProduct {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn num_public_values(&self) -> usize {
+        1
+    }
+
+    // BaseAir defaults to allowing successor access; this protocol requires
+    // an explicit declaration that every constraint uses only the current row.
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        vec![]
+    }
+}
+
+impl<AB: AirBuilder<F = Val>> Air<AB> for PrivateProduct {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let row = main.current_slice();
+        let product: AB::Expr = builder.public_values()[0].into();
+        builder.assert_zero(row[0] * row[1] - product);
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Fresh OS entropy seeds the private CSPRNG. The public Keccak transcript
+    // is separate and never supplies witness randomness or hiding masks.
+    let mut rng = StdRng::try_from_rng(&mut SysRng)?;
+    let public_product = Val::from_repr(7);
+    let height = 1 << LOG_TRACE_HEIGHT;
+    let mut values = Vec::with_capacity(2 * height);
+    for _ in 0..height {
+        let factor = loop {
+            let candidate: Val = rng.random();
+            if candidate != Val::ZERO {
+                break candidate;
+            }
+        };
+        values.extend([factor, public_product * factor.inverse()]);
+    }
+    let trace = RowMajorMatrix::new(values, 2);
+    let air = ReferenceZkAir::compile(
+        &PrivateProduct,
+        ZkAirConfig::classical_rom(
+            LOG_TRACE_HEIGHT,
+            ClassicalRomBudget::new(TARGET_BITS, 32, 49)?,
+        )?,
+    )?;
+    let proof = air.prove(trace, &[public_product], &mut rng)?;
+    let bytes = air.encode_proof(&proof)?;
+    air.verify_bytes(&bytes, &[public_product])?;
+
+    // Report only public dimensions and serialized size, never private inputs,
+    // seeds, trace values, or unblinded polynomial coefficients.
+    println!(
+        "Verified serialized proof: {} bytes; {height} rows, 2 private columns, 1 public value; \
+         {TARGET_BITS}-bit classical-ROM target; Q_adv<=2^32 primitive calls, GLOBAL N_leaf<=2^49; see zk::security assumptions",
+        bytes.len()
+    );
+    println!(
+        "Checked public security report: {:?}",
+        air.security_report()
+    );
+    Ok(())
+}
