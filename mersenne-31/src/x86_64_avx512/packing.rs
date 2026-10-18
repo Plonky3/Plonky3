@@ -484,8 +484,8 @@ fn fold_u64(val: __m512i) -> __m512i {
 /// Each product fits in 62 bits, so the raw `32x32 -> 64`-bit products are accumulated in
 /// 64-bit lanes (even and odd 32-bit indices kept apart, since `vpmuludq` reads only the
 /// low half of each 64-bit lane). Inputs are in `0..=P`, so a product is at most `P^2`;
-/// folding the accumulators below `2^33` every 3 iterations keeps `2^33 + 3 * P^2 < 2^64`,
-/// so the lanes never overflow.
+/// a fold of any u64 is at most `5 * P + 3`. Folding every four products keeps
+/// `4 * P^2 + 5 * P + 3 < 2^64`, so the lanes never overflow, including for redundant zero.
 #[inline]
 fn dot_product<const N: usize>(
     u: &[PackedMersenne31AVX512; N],
@@ -505,15 +505,14 @@ fn dot_product<const N: usize>(
                 x86_64::_mm512_mul_epu32(movehdup_epi32(lhs), movehdup_epi32(rhs)),
             );
             unreduced += 1;
-            if unreduced == 3 {
+            if unreduced == 4 && i + 1 < N {
                 unreduced = 0;
                 acc_evn = fold_u64(acc_evn);
                 acc_odd = fold_u64(acc_odd);
             }
         }
 
-        // At most 2 unreduced products sit on top of a folded value: the lanes are below
-        // `2^33 + 2 * P^2 < 2^64`, so two folds bring them to `0..=2 P` in the low 32 bits.
+        // Two folds of any u64 give at most P + 4 <= 2 P, fitting in the low 32 bits.
         let evn = fold_u64(fold_u64(acc_evn));
         let odd = fold_u64(fold_u64(acc_odd));
 
@@ -553,7 +552,7 @@ fn mixed_dot_product<const N: usize>(
                 x86_64::_mm512_mul_epu32(movehdup_epi32(lhs), rhs),
             );
             unreduced += 1;
-            if unreduced == 3 {
+            if unreduced == 4 && i + 1 < N {
                 unreduced = 0;
                 acc_evn = fold_u64(acc_evn);
                 acc_odd = fold_u64(acc_odd);
@@ -595,17 +594,54 @@ mod tests {
     use super::{Mersenne31, PackedMersenne31AVX512};
 
     /// Zero has a redundant representation, so let's test both.
-    const ZEROS: PackedMersenne31AVX512 = PackedMersenne31AVX512(Mersenne31::new_array([
-        0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
-        0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
-        0x00000000, 0x7fffffff,
-    ]));
+    const ZEROS: PackedMersenne31AVX512 = PackedMersenne31AVX512([
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+    ]);
 
-    const SPECIAL_VALS: PackedMersenne31AVX512 = PackedMersenne31AVX512(Mersenne31::new_array([
-        0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
-        0x3fffffff, 0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd,
-        0x40000000, 0x3fffffff,
-    ]));
+    const SPECIAL_VALS: PackedMersenne31AVX512 = PackedMersenne31AVX512([
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000001),
+        Mersenne31::new_reduced(0x7ffffffe),
+        Mersenne31::new_reduced(0x00000002),
+        Mersenne31::new_reduced(0x7ffffffd),
+        Mersenne31::new_reduced(0x40000000),
+        Mersenne31::new_reduced(0x3fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000001),
+        Mersenne31::new_reduced(0x7ffffffe),
+        Mersenne31::new_reduced(0x00000002),
+        Mersenne31::new_reduced(0x7ffffffd),
+        Mersenne31::new_reduced(0x40000000),
+        Mersenne31::new_reduced(0x3fffffff),
+    ]);
+
+    #[test]
+    fn redundant_zero_fixture_preserves_raw_limbs() {
+        use p3_field::PrimeCharacteristicRing;
+
+        for (i, lane) in ZEROS.0.iter().enumerate() {
+            let expected = if i % 2 == 0 { 0 } else { 0x7fff_ffff };
+            assert_eq!(lane.value, expected);
+            assert_eq!(*lane, Mersenne31::ZERO);
+        }
+    }
 
     test_packed_field!(
         crate::PackedMersenne31AVX512,

@@ -1,10 +1,17 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_circle::Point;
-use p3_field::{PrimeCharacteristicRing, batch_multiplicative_inverse};
+use p3_field::{
+    ExtensionField, PackedFieldExtension, PrimeCharacteristicRing, batch_multiplicative_inverse,
+};
+use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use p3_mersenne_31::{Mersenne31, QM31};
+use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 type F = Mersenne31;
 type EF = QM31;
@@ -142,12 +149,53 @@ fn bench_deep_quotient(c: &mut Criterion) {
     group.finish();
 }
 
+/// Include the production matrix traversal in the DEEP quotient measurement.
+/// The geometry-only cases above receive already reduced rows and miss the packed dots.
+fn bench_deep_quotient_matrix(c: &mut Criterion) {
+    const LOG_ROWS: usize = 14;
+    let points = domain_points(LOG_ROWS);
+    let mut rng = SmallRng::seed_from_u64(1);
+    let zeta = Point::<EF>::from_projective_line(rng.random());
+    let im_over_twice_re = factored_geometry(&points, zeta);
+    let alpha = rng.random::<EF>();
+    let mut group = c.benchmark_group("circle/deep_quotient/matrix/log_n=14");
+    for width in [16, 64, 256] {
+        let matrix = RowMajorMatrix::<F>::rand_nonzero(&mut rng, 1 << LOG_ROWS, width);
+        let powers =
+            <EF as ExtensionField<F>>::ExtensionPacking::packed_ext_powers_capped(alpha, width)
+                .collect::<Vec<_>>();
+        let alpha_pow_width = alpha.exp_u64(width as u64);
+        group.bench_with_input(
+            BenchmarkId::new("alpha_reduce_and_accumulate", width),
+            &matrix,
+            |b, matrix| {
+                b.iter(|| {
+                    let reduced_rows = black_box(matrix)
+                        .rowwise_packed_dot_product::<EF>(black_box(&powers))
+                        .collect::<Vec<_>>();
+                    let mut ro = EF::zero_vec(reduced_rows.len());
+                    factored_accumulate(
+                        &mut ro,
+                        alpha,
+                        alpha_pow_width,
+                        &reduced_rows,
+                        &im_over_twice_re,
+                        EF::from_u8(13),
+                    );
+                    black_box(ro)
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = deep_quotient;
     config = Criterion::default()
         .sample_size(10)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(2));
-    targets = bench_deep_quotient
+    targets = bench_deep_quotient, bench_deep_quotient_matrix
 }
 criterion_main!(deep_quotient);
