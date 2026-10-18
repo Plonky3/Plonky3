@@ -303,7 +303,24 @@ macro_rules! binary_tower_level {
             }
         }
 
-        impl Packable for $name {}
+        impl Packable for $name {
+            #[inline]
+            fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
+                // SAFETY: Self is repr(transparent) over its initialized backing integer.
+                unsafe { p3_util::transpose::transpose_words(input, output, width, height) };
+            }
+
+            #[inline]
+            fn transpose_rows<'a>(
+                rows: usize,
+                cols: usize,
+                row: impl Fn(usize) -> &'a [Self],
+                dst: &mut [Self],
+            ) {
+                // SAFETY: Self is repr(transparent) over its initialized backing integer.
+                unsafe { p3_util::transpose::transpose_rows_words(rows, cols, row, dst) };
+            }
+        }
 
         impl Display for $name {
             fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

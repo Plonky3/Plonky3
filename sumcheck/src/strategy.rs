@@ -13,7 +13,10 @@ use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
+use p3_field::{
+    Algebra, BasedVectorSpace, ExtensionField, Field, PackedValue, PrimeCharacteristicRing,
+    dot_product,
+};
 use p3_maybe_rayon::PARALLEL_ENABLED;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
@@ -982,6 +985,196 @@ where
     (evals_out, weights_out, RoundMessage { c_a, c_inf })
 }
 
+/// One face of the adjacent scalar pairs in two consecutive extension packings.
+///
+/// Parity and width must remain compile-time constants even if a packing's
+/// coefficient constructor is outlined; captured runtime values block SIMD shuffles.
+#[inline(always)]
+fn packed_suffix_face<F: Field, EF: ExtensionField<F>, const PARITY: usize>(
+    a: EF::ExtensionPacking,
+    b: EF::ExtensionPacking,
+) -> EF::ExtensionPacking {
+    EF::ExtensionPacking::from_basis_coefficients_fn(|d| {
+        let a = a.as_basis_coefficients_slice()[d].as_slice();
+        let b = b.as_basis_coefficients_slice()[d].as_slice();
+        F::Packing::from_fn(|lane| {
+            let index = 2 * lane + PARITY;
+            if index < F::Packing::WIDTH {
+                a[index]
+            } else {
+                b[index - F::Packing::WIDTH]
+            }
+        })
+    })
+}
+
+/// Splits adjacent lanes into naturally ordered even and odd faces.
+#[inline(always)]
+fn packed_suffix_faces<F: Field, EF: ExtensionField<F>>(
+    a: EF::ExtensionPacking,
+    b: EF::ExtensionPacking,
+) -> (EF::ExtensionPacking, EF::ExtensionPacking) {
+    if F::Packing::WIDTH == 1 {
+        return (a, b);
+    }
+    (
+        packed_suffix_face::<F, EF, 0>(a, b),
+        packed_suffix_face::<F, EF, 1>(a, b),
+    )
+}
+
+/// Measures the true suffix variable, including the variable inside SIMD lanes.
+pub fn sumcheck_coefficients_suffix_packed<F: Field, EF: ExtensionField<F>>(
+    evals: &[EF::ExtensionPacking],
+    weights: &[EF::ExtensionPacking],
+) -> RoundMessage<EF::ExtensionPacking> {
+    assert_eq!(evals.len(), weights.len());
+    assert!(evals.len().is_multiple_of(2));
+    let block = |evals: &[EF::ExtensionPacking], weights: &[EF::ExtensionPacking]| {
+        evals
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(weights.as_chunks::<2>().0.iter())
+            .fold(
+                (EF::ExtensionPacking::ZERO, EF::ExtensionPacking::ZERO),
+                |acc, (e, w)| {
+                    let (e0, e1) = packed_suffix_faces::<F, EF>(e[0], e[1]);
+                    let (w0, w1) = packed_suffix_faces::<F, EF>(w[0], w[1]);
+                    round_step(acc, e0, e1, w0, w1)
+                },
+            )
+    };
+    let (c_a, c_inf) = if PARALLEL_ENABLED && evals.len() * F::Packing::WIDTH > PAR_THRESHOLD {
+        evals
+            .par_chunks(2 * K)
+            .zip(weights.par_chunks(2 * K))
+            .map(|(e, w)| block(e, w))
+            .par_fold_reduce(
+                || (EF::ExtensionPacking::ZERO, EF::ExtensionPacking::ZERO),
+                round_reduce,
+                round_reduce,
+            )
+    } else {
+        block(evals, weights)
+    };
+    RoundMessage { c_a, c_inf }
+}
+
+/// Keeps the challenge multiplication in the caller, so its scalar preparation
+/// can be shared by all pairs in a fused tile.
+#[inline(always)]
+fn bind_suffix_packed_pair<F: Field, EF: ExtensionField<F>>(
+    a: EF::ExtensionPacking,
+    b: EF::ExtensionPacking,
+    r: EF,
+) -> EF::ExtensionPacking {
+    let (lo, hi) = packed_suffix_faces::<F, EF>(a, b);
+    lo + (hi - lo) * r
+}
+
+/// Binds adjacent lanes and compacts into the lower half of a packed table.
+pub(crate) fn fold_suffix_packed<F: Field, EF: ExtensionField<F>>(
+    poly: &mut Poly<EF::ExtensionPacking>,
+    r: EF,
+) {
+    if PARALLEL_ENABLED && poly.num_evals() * F::Packing::WIDTH > PAR_THRESHOLD {
+        *poly = Poly::new(
+            poly.as_slice()
+                .par_chunks(2)
+                .map_collect_min_task_bytes(3 * size_of::<EF::ExtensionPacking>(), |pair| {
+                    bind_suffix_packed_pair::<F, EF>(pair[0], pair[1], r)
+                }),
+        );
+    } else {
+        let table = poly.as_mut_slice();
+        for i in 0..table.len() / 2 {
+            table[i] = bind_suffix_packed_pair::<F, EF>(table[2 * i], table[2 * i + 1], r);
+        }
+        poly.truncate_to_half();
+    }
+}
+
+/// Fuses cross-lane suffix binding with measuring the next suffix variable.
+///
+/// Four input packings produce two output packings. The outputs feed the next
+/// cross-lane split while still in registers, before their only store.
+/// A forward sweep safely compacts in place. Parallel blocks use fresh halves.
+pub fn fold_and_round_coefficients_suffix_packed<F: Field, EF: ExtensionField<F>>(
+    evals: &mut Poly<EF::ExtensionPacking>,
+    weights: &mut Poly<EF::ExtensionPacking>,
+    r: EF,
+) -> RoundMessage<EF::ExtensionPacking> {
+    assert_suffix_pair_shape(evals.as_slice(), weights.as_slice());
+    let step = |e: &[EF::ExtensionPacking], w: &[EF::ExtensionPacking]| {
+        let bind = |a, b| bind_suffix_packed_pair::<F, EF>(a, b, r);
+        let e = [bind(e[0], e[1]), bind(e[2], e[3])];
+        let w = [bind(w[0], w[1]), bind(w[2], w[3])];
+        let (e0, e1) = packed_suffix_faces::<F, EF>(e[0], e[1]);
+        let (w0, w1) = packed_suffix_faces::<F, EF>(w[0], w[1]);
+        (
+            e,
+            w,
+            round_step(
+                (EF::ExtensionPacking::ZERO, EF::ExtensionPacking::ZERO),
+                e0,
+                e1,
+                w0,
+                w1,
+            ),
+        )
+    };
+    let len = evals.num_evals();
+    let (c_a, c_inf) = if PARALLEL_ENABLED && len * F::Packing::WIDTH > PAR_THRESHOLD {
+        let mut e_out = EF::ExtensionPacking::zero_vec(len / 2);
+        let mut w_out = EF::ExtensionPacking::zero_vec(len / 2);
+        let result = e_out
+            .par_chunks_mut(2 * K)
+            .zip(w_out.par_chunks_mut(2 * K))
+            .zip(evals.as_slice().par_chunks(4 * K))
+            .zip(weights.as_slice().par_chunks(4 * K))
+            .map(|(((eo, wo), ei), wi)| {
+                eo.as_chunks_mut::<2>()
+                    .0
+                    .iter_mut()
+                    .zip(wo.as_chunks_mut::<2>().0.iter_mut())
+                    .zip(ei.as_chunks::<4>().0.iter())
+                    .zip(wi.as_chunks::<4>().0.iter())
+                    .fold(
+                        (EF::ExtensionPacking::ZERO, EF::ExtensionPacking::ZERO),
+                        |acc, (((eo, wo), e), w)| {
+                            let (ev, wt, msg) = step(e, w);
+                            eo.copy_from_slice(&ev);
+                            wo.copy_from_slice(&wt);
+                            round_reduce(acc, msg)
+                        },
+                    )
+            })
+            .par_fold_reduce(
+                || (EF::ExtensionPacking::ZERO, EF::ExtensionPacking::ZERO),
+                round_reduce,
+                round_reduce,
+            );
+        *evals = Poly::new(e_out);
+        *weights = Poly::new(w_out);
+        result
+    } else {
+        let e = evals.as_mut_slice();
+        let w = weights.as_mut_slice();
+        let mut acc = (EF::ExtensionPacking::ZERO, EF::ExtensionPacking::ZERO);
+        for i in 0..len / 4 {
+            let (ev, wt, msg) = step(&e[4 * i..4 * i + 4], &w[4 * i..4 * i + 4]);
+            e[2 * i..2 * i + 2].copy_from_slice(&ev);
+            w[2 * i..2 * i + 2].copy_from_slice(&wt);
+            acc = round_reduce(acc, msg);
+        }
+        evals.truncate_to_half();
+        weights.truncate_to_half();
+        acc
+    };
+    RoundMessage { c_a, c_inf }
+}
+
 /// Computes the round message for a suffix-binding sumcheck round.
 ///
 /// # Inputs
@@ -1483,6 +1676,18 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         // So the tables have to be the length the caller sized it against.
         self.settle();
         self.poly.accumulate_weights(weights_delta);
+        self.sum += sum_delta;
+        debug_assert_eq!(self.sum, self.poly.dot_product());
+    }
+
+    /// Adds a weight increment in its existing representation and updates its claim.
+    pub fn accumulate_claim_view(
+        &mut self,
+        weights_delta: PolyMaybePackedView<'_, F, EF>,
+        sum_delta: EF,
+    ) {
+        self.settle();
+        self.poly.accumulate_weights_view(weights_delta);
         self.sum += sum_delta;
         debug_assert_eq!(self.sum, self.poly.dot_product());
     }

@@ -124,9 +124,16 @@ where
 ///
 /// This evaluates the [`Air`] constraints at the out-of-domain point and checks
 /// that constraints(zeta) / Z_H(zeta) = quotient(zeta).
+///
+/// `preprocessed_width` must come from the verifier key (when supplied), or the AIR,
+/// rather than from the opened rows. Both preprocessed rows must have that width;
+/// callers whose AIR does not read the next row supply a zero-filled next row.
+/// Returns a shape error for mismatched rows and [`VerificationError::OodPointInDomain`]
+/// when `zeta` is on `trace_domain`.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_constraints<SC, A, PcsErr>(
     air: &A,
+    preprocessed_width: usize,
     trace_local: &[SC::Challenge],
     trace_next: &[SC::Challenge],
     preprocessed_local: Option<&[SC::Challenge]>,
@@ -178,6 +185,9 @@ where
         return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch.into());
     }
 
+    if trace_domain.vanishing_poly_at_point(zeta).is_zero() {
+        return Err(VerificationError::OodPointInDomain);
+    }
     let sels = trace_domain.selectors_at_point(zeta);
 
     let main = VerticalPair::new(
@@ -185,22 +195,14 @@ where
         RowMajorMatrixView::new_row(trace_next),
     );
 
-    // The constraint window stacks two preprocessed rows, so both must have the same width.
-    //
-    //     current = [p_0, ..., p_{w-1}]   next = [p'_0, ..., p'_{w-1}]   accepted
-    //     current = [p_0, ..., p_{w-1}]   next = absent                  rejected
-    //     current = absent                next = absent                  accepted, width 0
-    //
-    // Why: stacking rows of different widths has no meaning.
-    // Treating a missing row as width zero would leave the constraints a matrix with no columns.
-    //
-    // Recursive verifiers reach this public entry point directly, so the rows are checked here.
+    // The width comes from trusted metadata, so two equally short rows cannot
+    // pass validation and then panic when the AIR indexes preprocessed columns.
     let preprocessed_local_len = preprocessed_local.map_or(0, <[_]>::len);
     let preprocessed_next_len = preprocessed_next.map_or(0, <[_]>::len);
-    if preprocessed_local_len != preprocessed_next_len {
+    if preprocessed_local_len != preprocessed_width || preprocessed_next_len != preprocessed_width {
         return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
-            expected_local: preprocessed_local_len,
-            expected_next: preprocessed_local_len,
+            expected_local: preprocessed_width,
+            expected_next: preprocessed_width,
             got_local: preprocessed_local_len,
             got_next: preprocessed_next_len,
         }
@@ -766,6 +768,7 @@ where
     };
     verify_constraints::<SC, A, PcsError<SC>>(
         air,
+        preprocessed_width,
         &opened_values.trace_local,
         trace_next_slice,
         opened_values.preprocessed_local(),
