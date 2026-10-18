@@ -32,24 +32,24 @@ pub struct KeccakCols<T> {
 
     pub a: [[[T; U64_LIMBS]; 5]; 5],
 
-    /// ```ignore
+    /// ```text
     /// C[x] = xor(A[x, 0], A[x, 1], A[x, 2], A[x, 3], A[x, 4])
     /// ```
     pub c: [[T; 64]; 5],
 
-    /// ```ignore
+    /// ```text
     /// C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1])
     /// ```
     pub c_prime: [[T; 64]; 5],
 
     // Note: D is inlined, not stored in the witness.
-    /// ```ignore
+    /// ```text
     /// A'[x, y] = xor(A[x, y], D[x])
     ///          = xor(A[x, y], C[x - 1], ROT(C[x + 1], 1))
     /// ```
     pub a_prime: [[[T; 64]; 5]; 5],
 
-    /// ```ignore
+    /// ```text
     /// A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
     /// ```
     pub a_prime_prime: [[[T; U64_LIMBS]; 5]; 5],
@@ -57,7 +57,7 @@ pub struct KeccakCols<T> {
     /// The bits of `A''[0, 0]`.
     pub a_prime_prime_0_0_bits: [T; 64],
 
-    /// ```ignore
+    /// ```text
     /// A'''[0, 0, z] = A''[0, 0, z] ^ RC[k, z]
     /// ```
     pub a_prime_prime_prime_0_0_limbs: [T; U64_LIMBS],

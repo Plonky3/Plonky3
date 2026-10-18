@@ -1,3 +1,5 @@
+//! Utilities for multilinear polynomials over the Boolean hypercube.
+
 #![no_std]
 
 extern crate alloc;

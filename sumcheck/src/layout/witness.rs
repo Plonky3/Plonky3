@@ -985,7 +985,7 @@ impl<F: Field> Witness<F> {
     /// - Selector bit-width equals the stacked arity minus the table arity.
     /// - Total stacked size is rounded up to the next power of two.
     ///
-    /// The stacked polynomial is written on demand by [`Self::write_stacked_slots`], straight
+    /// The stacked polynomial is written on demand by `Self::write_stacked_slots`, straight
     /// into whatever buffer consumes it.
     ///
     /// # Panics

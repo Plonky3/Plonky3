@@ -108,7 +108,7 @@ impl<R: PrimeCharacteristicRing> MdsPermutation<R, 4> for MDSMat4 {}
 ///
 /// # Panics
 /// This will panic if `WIDTH` is not supported. Currently, the
-/// supported `WIDTH` values are 2, 3, 4, 8, 12, 16, 20, 24, 32.`
+/// supported `WIDTH` values are 2, 3, 4, 8, 12, 16, 20, 24, 32.
 #[inline(always)]
 pub fn mds_light_permutation<
     R: PrimeCharacteristicRing,
