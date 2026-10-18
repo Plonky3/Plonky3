@@ -263,8 +263,10 @@ mod tests {
                 &profile
                     .config::<EF, EF, MyChallenger, _>(NUM_VARIABLES, &domain)
                     .unwrap(),
+                &crate::test_util::mmcs(),
                 1,
             )
+            .unwrap()
         };
         let unique = shape(BinaryWhirProfile::unique_decoding(
             SECURITY_LEVEL,

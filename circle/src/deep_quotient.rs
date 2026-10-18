@@ -41,6 +41,7 @@ use crate::point::Point;
 ///
 /// # Returns
 /// The numerator and denominator for the vanishing part.
+#[cfg(test)]
 pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionField<F>>(
     x: Point<F>,
     zeta: Point<EF>,
@@ -87,7 +88,8 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
 ///
 /// - `Some(value)`: the DEEP quotient value for this row.
 /// - `None`: the opening point coincides with this query point, so the denominator vanishes.
-pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<F>>(
+#[cfg(test)]
+pub(crate) fn deep_quotient_reduce_row_reference<F: ComplexExtendable, EF: ExtensionField<F>>(
     alpha_pow_width: EF,
     alpha_powers: &[EF],
     x: Point<F>,
@@ -111,6 +113,39 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
 
     // Combine vanishing part and constraint part
     Some(vp_num * vp_denom_inv * constraint_part)
+}
+
+/// Normalize the query/opening-point geometry shared by all matrices of one height.
+///
+/// Each pair is `(re(v_p(zeta)), im(v_p(zeta)))`. Check every denominator before
+/// batch inversion, since a query coinciding with an opening point must be rejected.
+pub(crate) fn batch_query_vanishing_parts<EF: Field>(parts: &[(EF, EF)]) -> Option<Vec<EF>> {
+    let denominators = parts.iter().map(|&(re, _)| re.double()).collect_vec();
+    if denominators.iter().any(Field::is_zero) {
+        return None;
+    }
+    Some(
+        parts
+            .iter()
+            .zip(batch_multiplicative_inverse(&denominators))
+            .map(|(&(_, im), inverse)| im * inverse)
+            .collect(),
+    )
+}
+
+/// Reduce a row using the precomputed `im(v_p(zeta)) / (2 * re(v_p(zeta)))`.
+pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<F>>(
+    alpha_pow_width: EF,
+    alpha_powers: &[EF],
+    im_over_twice_re: EF,
+    ps_at_x: &[F],
+    ps_at_zeta: &[EF],
+) -> EF {
+    let constraint_part = dot_product::<EF, _, _>(
+        alpha_powers.iter().copied(),
+        izip!(ps_at_x, ps_at_zeta).map(|(&p_at_x, &p_at_zeta)| -p_at_zeta + p_at_x),
+    );
+    (EF::ONE.halve() - alpha_pow_width * im_over_twice_re) * constraint_part
 }
 
 /// The point-dependent part of the DEEP quotient on a fixed domain.
@@ -272,6 +307,8 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
@@ -333,6 +370,71 @@ mod tests {
     }
 
     #[test]
+    fn query_vanishing_parts_match_scalar_quotients() {
+        let mut rng = SmallRng::seed_from_u64(17);
+        let alpha: EF = rng.random();
+        let zetas = [
+            Point::from_projective_line(EF::from_u8(9)),
+            Point::from_projective_line(EF::from_u8(13)),
+            Point::from_projective_line(EF::from_u8(9)),
+        ];
+        let mut cases = Vec::new();
+        // Mixed heights and repeated queries/opening points exercise the geometry ordering.
+        for log_height in [5, 3, 5, 4] {
+            let domain = CircleDomain::<F>::standard(log_height);
+            for index in [0, 3, 0, (1 << log_height) - 1] {
+                for zeta in zetas {
+                    cases.push((domain.nth_point(index), zeta));
+                }
+            }
+        }
+        let parts = cases.iter().map(|&(x, zeta)| x.v_p(zeta)).collect_vec();
+        let batched = batch_query_vanishing_parts(&parts).unwrap();
+        for ((x, zeta), im_over_twice_re) in cases.into_iter().zip(batched) {
+            for width in [1, 4, 11] {
+                let ps_at_x = (0..width).map(|_| rng.random()).collect_vec();
+                let ps_at_zeta = (0..width).map(|_| rng.random()).collect_vec();
+                let alpha_powers = alpha.powers().collect_n(width);
+                let alpha_pow_width = alpha.exp_u64(width as u64);
+                let expected = deep_quotient_reduce_row_reference(
+                    alpha_pow_width,
+                    &alpha_powers,
+                    x,
+                    zeta,
+                    &ps_at_x,
+                    &ps_at_zeta,
+                )
+                .unwrap();
+                let actual = deep_quotient_reduce_row(
+                    alpha_pow_width,
+                    &alpha_powers,
+                    im_over_twice_re,
+                    &ps_at_x,
+                    &ps_at_zeta,
+                );
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn query_vanishing_parts_reject_any_collision() {
+        let x = CircleDomain::<F>::standard(4).nth_point(3);
+        let zeta = Point::<EF>::new(x.x.into(), x.y.into());
+        let off_domain = Point::from_projective_line(EF::from_u8(9));
+        let valid = x.v_p(off_domain);
+        let collision = x.v_p(zeta);
+        for parts in [
+            vec![collision],
+            vec![valid, collision],
+            vec![collision, valid],
+        ] {
+            assert!(batch_query_vanishing_parts(&parts).is_none());
+        }
+        assert_eq!(batch_query_vanishing_parts::<EF>(&[]), Some(vec![]));
+    }
+
+    #[test]
     fn vanishing_parts_store_im_over_twice_re() {
         let domain = CircleDomain::<F>::standard(4);
         let points = cfft_permute_slice(&domain.points().collect_vec());
@@ -367,7 +469,7 @@ mod tests {
             .rows()
             .zip(domain.points())
             .map(|(ps_at_x, x)| {
-                deep_quotient_reduce_row(
+                deep_quotient_reduce_row_reference(
                     alpha_pow_width,
                     &alpha_powers,
                     x,
@@ -528,7 +630,7 @@ mod tests {
         // The opening point is now the same point, so `x - zeta` is the group identity.
         let zeta_on_x: Point<EF> = Point::new(EF::from(x.x), EF::from(x.y));
         assert!(
-            deep_quotient_reduce_row(
+            deep_quotient_reduce_row_reference(
                 alpha_pow_width,
                 &alpha_powers,
                 x,
@@ -542,7 +644,7 @@ mod tests {
         // A distinct opening point keeps the denominator nonzero and reduces normally.
         let zeta_off: Point<EF> = Point::from_projective_line(EF::from_u8(9));
         assert!(
-            deep_quotient_reduce_row(
+            deep_quotient_reduce_row_reference(
                 alpha_pow_width,
                 &alpha_powers,
                 x,

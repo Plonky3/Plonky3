@@ -60,7 +60,8 @@ pub enum ZkConfigError {
 ///   `mask_log_inv_rate`.
 /// - This budgets the mask query-miss branch only. It does not certify the
 ///   randomized source geometry or the shared-challenge MCA/list terms; inspect
-///   [`ZkWhirConfig::hiding_base_case_security_report`] for those diagnostics.
+///   [`ZkWhirConfig::hiding_intermediate_source_security_reports`] and
+///   [`ZkWhirConfig::hiding_base_case_security_report`] for diagnostics.
 #[derive(Debug, Clone)]
 pub struct ZkParameters {
     /// Mask code message length `ell_zk` for the HVZK sumcheck (at least 3).
@@ -110,6 +111,9 @@ where
     /// `final_sumcheck_rounds` still determines the terminal message length.
     /// `inner.terminal` sizes the plain message code. The base case runs
     /// against a randomized code instead, sized by `randomized_terminal`.
+    /// Intermediate query/PoW budgets still use the plain code's rate;
+    /// `hiding_intermediate_source_security_reports` exposes the resulting
+    /// randomized-source coordinates without changing that schedule.
     pub(crate) inner: WhirConfig<EF, F, Challenger>,
     /// ZK extension parameters.
     pub(crate) zk: ZkParameters,
