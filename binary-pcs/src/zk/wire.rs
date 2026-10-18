@@ -14,7 +14,8 @@ use super::{
 // This transport version is independent of the protocol transcript version.
 const MAGIC: &[u8; 8] = b"P3ZKAIR2";
 
-/// Compile-time checked transport dimensions. No wire value controls allocation.
+/// Compile-time checked transport dimensions.
+/// No wire value controls allocation.
 #[derive(Debug, Clone)]
 pub(super) struct WireGeometry {
     header: [u64; 3],
@@ -64,8 +65,8 @@ impl ReferenceZkAir {
         self.wire.encoded_len
     }
 
-    /// Encode a shape-correct proof with fixed-width little-endian geometry and
-    /// tower-field representations. This validates shapes, not proof validity.
+    /// Encode a shape-correct proof with fixed-width little-endian geometry and tower-field representations.
+    /// This validates shapes, not proof validity.
     pub fn encode_proof(&self, proof: &ZkAirProof) -> Result<Vec<u8>, ZkError> {
         self.pcs.validate_commitment(&proof.commitment)?;
         if proof.commitment.num_polynomials != self.wire.width {
@@ -98,12 +99,12 @@ impl ReferenceZkAir {
         Ok(bytes)
     }
 
-    /// Decode bounded canonical v2 transport. Exact size, magic, and geometry
-    /// are checked before allocating any proof vectors; all allocation counts
-    /// come from this compiled AIR. Decoding alone does not verify a proof.
+    /// Decode bounded canonical v2 transport.
+    /// Exact size, magic, and geometry are checked before allocating any proof vectors; all allocation counts come from this compiled AIR.
+    /// Decoding alone does not verify a proof.
     ///
-    /// Use this codec for untrusted network input. Generic serde/postcard
-    /// decoding remains available, but does not provide these transport bounds.
+    /// Use this codec for untrusted network input.
+    /// Generic serde/postcard decoding remains available, but does not provide these transport bounds.
     pub fn decode_proof(&self, bytes: &[u8]) -> Result<ZkAirProof, ZkError> {
         if bytes.len() != self.encoded_proof_len() {
             return Err(ZkError::InvalidShape("proof wire length mismatch"));

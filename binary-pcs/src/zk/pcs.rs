@@ -217,7 +217,8 @@ impl ReferenceZkPcs {
             .collect();
         // Release the consumed input before allocating the larger codeword.
         drop(messages);
-        // A private seed forks the salt generator. Never seed from the transcript.
+        // A private seed forks the salt generator.
+        // Never seed from the transcript.
         let salted = mmcs(StdRng::from_rng(rng));
         let (root, tree) = salted.commit_matrix(self.encode(&coefficients));
         let commitment = ZkCommitment {
@@ -341,14 +342,15 @@ impl ReferenceZkPcs {
         }
         observe_blend(&proof.blended_coefficients, challenger);
         let indices = self.sample_indices(challenger);
-        // Verification does not use the MMCS RNG. The fixed seed is not used for commitment.
+        // Verification does not use the MMCS RNG.
+        // The fixed seed is not used for commitment.
         let salted = mmcs(StdRng::from_seed([0; 32]));
         let dimensions = [Dimensions {
             width: commitment.num_polynomials,
             height: self.config.codeword_len,
         }];
-        // Only public geometry chooses the evaluation method. Retain Horner for
-        // small query counts; a complete codeword is cheaper for larger batches.
+        // Only public geometry chooses the evaluation method.
+        // Retain Horner for small query counts; a complete codeword is cheaper for larger batches.
         let codeword = (self.config.num_queries * self.config.coefficient_len
             > self.config.codeword_len * self.config.codeword_len.ilog2() as usize)
             .then(|| self.encode(&proof.blended_coefficients));

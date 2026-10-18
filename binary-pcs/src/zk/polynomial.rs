@@ -23,8 +23,8 @@ pub(super) fn monomial_to_novel<F: TowerLevel>(values: &mut [F], width: usize) {
     for log_block in (1..=rows.ilog2() as usize).rev() {
         let half = 1 << (log_block - 1);
         let j = log_block - 1;
-        // W_j = sum_{r subset-of j} X^(2^r). Its leading term is X^half;
-        // all remaining coefficients are one, so monic division uses additions.
+        // W_j = sum_{r subset-of j} X^(2^r).
+        // Its leading term is X^half; all remaining coefficients are one, so monic division uses additions.
         let support: Vec<_> = (0..j).filter(|&r| r & j == r).map(|r| 1 << r).collect();
         for block in values.chunks_exact_mut(2 * half * width) {
             for row in (half..2 * half).rev() {
@@ -36,8 +36,8 @@ pub(super) fn monomial_to_novel<F: TowerLevel>(values: &mut [F], width: usize) {
                 }
             }
         }
-        // Each block now stores remainder followed by quotient. Descending
-        // division corrected the quotient in place; retain it for the next level.
+        // Each block now stores remainder followed by quotient.
+        // Descending division corrected the quotient in place; retain it for the next level.
     }
 }
 
@@ -120,8 +120,8 @@ pub(super) fn vanishing<F: TowerLevel>(log_n: usize) -> Vec<F> {
 pub(super) fn interpolate<F: TowerLevel>(values: &[F], log_n: usize) -> Vec<F> {
     let w = vanishing::<F>(log_n);
     let mut result = vec![];
-    // W'=1 for the unnormalised Cantor subspace polynomial. Therefore the
-    // Lagrange basis at x_i is exactly W(X)/(X+x_i).
+    // W'=1 for the unnormalised Cantor subspace polynomial.
+    // Therefore the Lagrange basis at x_i is exactly W(X)/(X+x_i).
     for (i, &y) in values.iter().enumerate() {
         let basis = exact_divide(w.clone(), &[domain_point::<F>(i, log_n), F::ONE])
             .expect("Cantor subspace point is a root of its vanishing polynomial");

@@ -213,8 +213,7 @@ where
     PW::Value: Eq + Clone,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
-    // The hiding wrapper can borrow its authentication path without constructing
-    // the owned proof object required by the Mmcs trait.
+    // The hiding wrapper can borrow its authentication path without constructing the owned proof object required by the Mmcs trait.
     pub(crate) fn verify_batch_borrowed(
         &self,
         commit: &MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>,

@@ -1,10 +1,8 @@
 //! Protocol v2 hash domains and complete-prefix counter-mode public coins.
 //!
-//! Transcript records: field = 1 || repr128LE; cap = 2 || count64LE || roots;
-//! bytes = 3 || length64LE || bytes; usize = 4 || value64LE; draw =
-//! 5 || label_length64LE || label || output_length64LE || complete_raw_output.
-//! All lengths and ordinals are checked u64; block counters are u32LE. A draw
-//! hashes the unchanged complete prefix for every block, then records its output.
+//! Transcript records: field = 1 || repr128LE; cap = 2 || count64LE || roots; bytes = 3 || length64LE || bytes; usize = 4 || value64LE; draw = 5 || label_length64LE || label || output_length64LE || complete_raw_output.
+//! All lengths and ordinals are checked u64; block counters are u32LE.
+//! A draw hashes the unchanged complete prefix for every block, then records its output.
 
 use alloc::vec::Vec;
 
@@ -35,8 +33,8 @@ role_hasher!(LeafHash, b"p3-binary-zk-v2/leaf\0");
 role_hasher!(NodeHash, b"p3-binary-zk-v2/node\0");
 role_hasher!(FiatShamirHash, b"p3-binary-zk-v2/fiat-shamir\0");
 
-/// Protocol-owned complete public transcript. Cloning replays public coins only;
-/// private proving randomness must never be derived from this state.
+/// Protocol-owned complete public transcript.
+/// Cloning replays public coins only; private proving randomness must never be derived from this state.
 #[derive(Clone, Debug)]
 pub struct Challenger {
     transcript: Vec<u8>,
@@ -94,8 +92,8 @@ impl Challenger {
         let mut output = Vec::with_capacity(output_len);
         for block in 0..output_len.div_ceil(32) {
             let counter = u32::try_from(block).expect("protocol draw exceeds u32 blocks");
-            // Clone the complete unfinalized prefix, including its partial rate
-            // block. Each counter still hashes the same full canonical input.
+            // Clone the complete unfinalized prefix, including its partial rate block.
+            // Each counter still hashes the same full canonical input.
             let mut hash = prefix.clone();
             hash.update(&counter.to_le_bytes());
             let mut digest = [0; 32];

@@ -293,7 +293,7 @@ where
 {
     /// Verify rows, salts and an authentication path borrowed separately.
     ///
-    /// This performs the same checks as [`Mmcs::verify_batch`] without requiring callers to assemble an owned `(salts, siblings)` proof tuple.
+    /// Performs the same checks as the trait verification, without an owned `(salts, siblings)` proof tuple.
     pub fn verify_batch_borrowed<S: AsRef<[P::Value]>>(
         &self,
         commit: &MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>,

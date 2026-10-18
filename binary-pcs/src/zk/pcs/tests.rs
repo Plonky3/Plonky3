@@ -2,7 +2,6 @@ use alloc::vec;
 
 use p3_binary_field::TowerLevel;
 use p3_challenger::CanSample;
-use p3_commit::BatchOpeningRef;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::SeedableRng;
@@ -740,7 +739,7 @@ fn committed_query_rows_hide_the_known_low_polynomials() {
 }
 
 #[test]
-fn borrowed_row_authentication_matches_mmcs_for_every_position_and_corruption() {
+fn borrowed_row_authentication_accepts_honest_rows_and_rejects_corruption() {
     let pcs = ReferenceZkPcs::new(ReferencePcsConfig::new(3, 4).unwrap());
     let mut rng = StdRng::seed_from_u64(0x424f_5252_4f57);
     let (root, data) = pcs
@@ -765,24 +764,11 @@ fn borrowed_row_authentication_matches_mmcs_for_every_position_and_corruption() 
                 3 => candidate.salts[1] += Val::ONE,
                 _ => candidate.authentication_path[edit - 4][0] ^= 1,
             }
-            let proof = (
-                vec![candidate.salts.to_vec()],
-                candidate.authentication_path.clone(),
-            );
-            let expected = salted
-                .verify_batch(
-                    &root.root,
-                    &dimensions,
-                    index,
-                    BatchOpeningRef::new(core::slice::from_ref(&candidate.values), &proof),
-                )
-                .is_ok();
             assert_eq!(
                 verify_row(&salted, &root.root, &dimensions, index, &candidate).is_ok(),
-                expected,
+                edit == 0,
                 "index={index} edit={edit}"
             );
-            assert_eq!(expected, edit == 0);
         }
     }
 }

@@ -12,14 +12,12 @@ use super::Val;
 
 /// Symbolic builder accepted by [`super::ReferenceZkAir::compile`].
 ///
-/// Ordinary [`AirBuilder`] methods record expressions for validation by the
-/// compiler. [`ExtensionBuilder`] records explicit extension constraints so
-/// compilation can reject them, including constraints equal to zero.
+/// Ordinary [`AirBuilder`] methods record expressions for validation by the compiler.
+/// [`ExtensionBuilder`] records explicit extension constraints so compilation can reject them, including constraints equal to zero.
 ///
-/// This type deliberately does not implement permutation, runtime context or
-/// interaction builder traits. Its symbolic implementation is private, with
-/// no dereference or inner-builder escape. Generic current-row AIRs bounded
-/// only by `AirBuilder<F = Val>` remain usable.
+/// This type deliberately does not implement permutation, runtime context or interaction builder traits.
+/// Its symbolic implementation is private, with no dereference or inner-builder escape.
+/// Generic current-row AIRs bounded only by `AirBuilder<F = Val>` remain usable.
 #[derive(Debug)]
 pub struct CurrentRowAirBuilder {
     inner: SymbolicAirBuilder<Val>,
