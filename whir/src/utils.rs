@@ -244,8 +244,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PrimeCharacteristicRing, TwoAdicField};
     use p3_koala_bear::KoalaBear;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
@@ -255,6 +255,34 @@ mod tests {
 
     type F = BabyBear;
     type EF = BinomialExtensionField<KoalaBear, 4>;
+
+    #[test]
+    fn mask_domain_base_points_match_extension_horner() {
+        let mut rng = SmallRng::seed_from_u64(0xdecaf);
+        let msg: Vec<EF> = (0..3).map(|_| rng.random()).collect();
+        let randomness: Vec<EF> = (0..92).map(|_| rng.random()).collect();
+        let base_gen = KoalaBear::two_adic_generator(10);
+        let extension_only = EF::two_adic_generator(KoalaBear::TWO_ADICITY + 1);
+        // Include a different base-field primitive root.
+        //
+        // Extraction must use the actual extension generator, not substitute F's canonical root.
+        for generator in [
+            EF::from(base_gen),
+            EF::from(base_gen.inverse()),
+            extension_only,
+        ] {
+            let extracted = <EF as ExtensionField<KoalaBear>>::as_base(&generator);
+            for position in [0, 1, 17, 1023] {
+                let point = generator.exp_u64(position);
+                let expected = padded_ood_t1(point, &msg, &randomness);
+                let actual = extracted.map_or_else(
+                    || padded_ood_t1(point, &msg, &randomness),
+                    |base| padded_ood_t1(base.exp_u64(position), &msg, &randomness),
+                );
+                assert_eq!(actual, expected);
+            }
+        }
+    }
 
     #[test]
     fn packed_power_runs_and_ood_match_scalar_reference() {

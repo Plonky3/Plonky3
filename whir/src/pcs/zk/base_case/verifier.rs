@@ -7,14 +7,14 @@ use core::iter::repeat_n;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_field::{ExtensionField, TwoAdicField, dot_product};
+use p3_field::{ExtensionField, Field, TwoAdicField, dot_product};
 use p3_matrix::Dimensions;
 use p3_util::log2_strict_usize;
 
 use super::config::BaseCaseZkConfig;
 use super::error::BaseCaseZkError;
 use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
-use crate::pcs::zk::proof::BaseCaseZkProof;
+use crate::pcs::zk::proof::{BaseCaseZkProof, BlindedMask};
 use crate::transcript::zk::{ZkBaseCaseShape, ZkBaseCaseVerifierTranscript};
 use crate::utils::padded_ood_t1;
 
@@ -314,24 +314,34 @@ where
             )?;
             // Evaluation domain of the mask code over the extension field.
             let mask_gen = EF::two_adic_generator(log2_strict_usize(group.shape.domain_size));
+            // Extract the actual extension-domain generator once.
+            //
+            // Even when it lies in F, it need not equal F's chosen canonical generator.
             let blinded = &proof.blinded_masks[mask_offset..mask_offset + group.width];
-            for ((&position, carried_row), fresh_row) in
-                positions.iter().zip(carried_rows).zip(fresh_rows)
-            {
-                // The field point behind position y.
-                let point = mask_gen.exp_u64(position as u64);
-                for ((blinded, &carried), &fresh) in blinded.iter().zip(carried_row).zip(fresh_row)
-                {
-                    // Enc(xi*_i, r*_i)(y): re-encode member i's reveal.
-                    let blinded_value = padded_ood_t1(point, &blinded.message, &blinded.randomness);
-                    if blinded_value != fresh + gamma * carried {
-                        return Err(BaseCaseZkError::MaskSpotCheckFailed {
-                            group: group_index,
-                            position,
-                        });
-                    }
-                }
-            }
+            mask_gen.as_base().map_or_else(
+                || {
+                    spot_check_masks(
+                        mask_gen,
+                        &positions,
+                        blinded,
+                        carried_rows,
+                        fresh_rows,
+                        gamma,
+                        group_index,
+                    )
+                },
+                |base_gen| {
+                    spot_check_masks(
+                        base_gen,
+                        &positions,
+                        blinded,
+                        carried_rows,
+                        fresh_rows,
+                        gamma,
+                        group_index,
+                    )
+                },
+            )?;
             mask_offset += group.width;
         }
 
@@ -367,4 +377,36 @@ where
             .map_err(|_| BaseCaseZkError::MerkleVerificationFailed { kind })?;
         Ok(&opening.rows)
     }
+}
+
+/// Checks every mask member using the group's actual domain generator.
+fn spot_check_masks<P, EF>(
+    generator: P,
+    positions: &[usize],
+    blinded: &[BlindedMask<EF>],
+    carried_rows: &[Vec<EF>],
+    fresh_rows: &[Vec<EF>],
+    gamma: EF,
+    group_index: usize,
+) -> Result<(), BaseCaseZkError>
+where
+    P: Field,
+    EF: ExtensionField<P>,
+{
+    for ((&position, carried_row), fresh_row) in positions.iter().zip(carried_rows).zip(fresh_rows)
+    {
+        // The field point behind position y.
+        let point = generator.exp_u64(position as u64);
+        for ((blinded, &carried), &fresh) in blinded.iter().zip(carried_row).zip(fresh_row) {
+            // Enc(xi*_i, r*_i)(y): re-encode member i's reveal.
+            let blinded_value = padded_ood_t1(point, &blinded.message, &blinded.randomness);
+            if blinded_value != fresh + gamma * carried {
+                return Err(BaseCaseZkError::MaskSpotCheckFailed {
+                    group: group_index,
+                    position,
+                });
+            }
+        }
+    }
+    Ok(())
 }

@@ -3,9 +3,9 @@
 //! Code shapes and committed mask groups, shared by the configuration, the
 //! verifier replay, and the base case.
 
-use p3_dft::Radix2Dit;
-use p3_field::TwoAdicField;
-use p3_zk_codes::ReedSolomonZkEncoding;
+use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+use p3_field::{ExtensionField, TwoAdicField};
+use p3_zk_codes::{BaseFieldDft, ReedSolomonZkEncoding};
 use rand::distr::{Distribution, StandardUniform};
 
 /// Shape of one small mask code: a Reed-Solomon ZK encoding over `EF`.
@@ -31,9 +31,31 @@ impl MaskCodeShape {
         }
     }
 
+    /// Instantiates the same encoding using the supplied base-field DFT where possible.
+    ///
+    /// The extension-field transform remains the fallback for incompatible domains.
+    #[must_use]
+    pub fn encoding_with_base_dft<F, EF, Dft>(
+        &self,
+        dft: &Dft,
+    ) -> ReedSolomonZkEncoding<EF, BaseFieldDft<F, EF, Dft>>
+    where
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
+        Dft: TwoAdicSubgroupDft<F>,
+        StandardUniform: Distribution<EF>,
+    {
+        ReedSolomonZkEncoding::new(
+            self.randomness_len,
+            self.message_len,
+            self.domain_size,
+            BaseFieldDft::new(dft.clone()),
+        )
+    }
+
     /// Instantiates the encoding over the extension field.
     ///
-    /// Mask codewords are tiny, so a fresh radix-2 DIT per call is free.
+    /// Reference path using the extension field's canonical generator for its evaluation domain.
     #[must_use]
     pub fn encoding<EF>(&self) -> ReedSolomonZkEncoding<EF, Radix2Dit<EF>>
     where

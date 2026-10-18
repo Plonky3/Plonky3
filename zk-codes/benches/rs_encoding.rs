@@ -1,15 +1,29 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
-use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+use p3_dft::{Radix2DFTSmallBatch, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{PrimeCharacteristicRing, TwoAdicField};
 use p3_koala_bear::KoalaBear;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_zk_codes::{ReedSolomonZkEncoding, ZkEncoding, ZkEncodingWithRandomness, stack_codewords};
+use p3_zk_codes::{
+    BaseFieldDft, ReedSolomonZkEncoding, ZkEncoding, ZkEncodingWithRandomness, stack_codewords,
+};
 use rand::distr::{Distribution, StandardUniform};
 use rand::{RngExt, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
+
+// Preserve the full-transform control even when the encoder supplies a zero-tail hint.
+#[derive(Clone, Default)]
+struct FullDft<Dft>(Dft);
+
+impl<F: TwoAdicField, Dft: TwoAdicSubgroupDft<F>> TwoAdicSubgroupDft<F> for FullDft<Dft> {
+    type Evaluations = Dft::Evaluations;
+
+    fn dft_batch(&self, mat: RowMajorMatrix<F>) -> Self::Evaluations {
+        self.0.dft_batch(mat)
+    }
+}
 
 fn bench_rs_encoding(c: &mut Criterion) {
     let mut group = c.benchmark_group("rs_encoding");
@@ -55,12 +69,32 @@ fn bench_whir_octic_mask_encoding(c: &mut Criterion) {
     type EF = BinomialExtensionField<KoalaBear, 8>;
 
     let mut group = c.benchmark_group("rs_batch_encoding/koala_bear_ext8_whir_masks");
-    let dft = Radix2Dit::<EF>::default();
+    let dft = FullDft(Radix2Dit::<EF>::default());
     let log_m = 10;
     let msg_len = 3;
     let t = 92;
     let m = 1 << log_m;
     let encoding = ReedSolomonZkEncoding::<EF, _>::new(t, msg_len, m, dft);
+
+    let base_encoding = ReedSolomonZkEncoding::<EF, _>::new(
+        t,
+        msg_len,
+        m,
+        BaseFieldDft::<KoalaBear, EF, _>::new(Radix2DFTSmallBatch::<KoalaBear>::default()),
+    );
+
+    let full_dit_encoding = ReedSolomonZkEncoding::<EF, _>::new(
+        t,
+        msg_len,
+        m,
+        BaseFieldDft::<KoalaBear, EF, _>::new(FullDft(Radix2DitParallel::<KoalaBear>::default())),
+    );
+    let padded_dit_encoding = ReedSolomonZkEncoding::<EF, _>::new(
+        t,
+        msg_len,
+        m,
+        BaseFieldDft::<KoalaBear, EF, _>::new(Radix2DitParallel::<KoalaBear>::default()),
+    );
 
     // Widths 8 and 6 model successive folding rounds. Width 1 guards the
     // code-switching case against regressions from taking the batch API.
@@ -89,6 +123,27 @@ fn bench_whir_octic_mask_encoding(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("batch", &id), &id, |b, _| {
             b.iter(|| encoding.encode_batch_with_randomness(&messages, &randomness));
+        });
+        assert_eq!(
+            base_encoding.encode_batch_with_randomness(&messages, &randomness),
+            encoding.encode_batch_with_randomness(&messages, &randomness),
+        );
+        group.bench_with_input(BenchmarkId::new("base_dft", &id), &id, |b, _| {
+            b.iter(|| base_encoding.encode_batch_with_randomness(&messages, &randomness));
+        });
+        assert_eq!(
+            padded_dit_encoding.encode_batch_with_randomness(&messages, &randomness),
+            full_dit_encoding.encode_batch_with_randomness(&messages, &randomness)
+        );
+        assert_eq!(
+            padded_dit_encoding.encode_batch_with_randomness(&messages, &randomness),
+            base_encoding.encode_batch_with_randomness(&messages, &randomness)
+        );
+        group.bench_with_input(BenchmarkId::new("base_dit_full", &id), &id, |b, _| {
+            b.iter(|| full_dit_encoding.encode_batch_with_randomness(&messages, &randomness));
+        });
+        group.bench_with_input(BenchmarkId::new("base_dit_padded", &id), &id, |b, _| {
+            b.iter(|| padded_dit_encoding.encode_batch_with_randomness(&messages, &randomness));
         });
     }
     group.finish();

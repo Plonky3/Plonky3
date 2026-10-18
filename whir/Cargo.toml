@@ -68,6 +68,10 @@ name = "zk_overhead"
 harness = false
 
 [[bench]]
+name = "zk_masks"
+harness = false
+
+[[bench]]
 name = "encoding"
 harness = false
 
