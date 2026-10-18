@@ -89,7 +89,8 @@ pub struct MonolithAir<
     /// The Concrete layer computes `state = mds_matrix * state`.
     pub(crate) mds_matrix: [[F; WIDTH]; WIDTH],
 
-    /// Validated once at construction; arbitrary dense matrices retain the dense path.
+    /// Validated once at construction.
+    /// Arbitrary dense matrices retain the dense path.
     pub(crate) mds_strategy: MdsStrategy<F, WIDTH>,
 
     /// Bit widths of each limb in the Bar decomposition.

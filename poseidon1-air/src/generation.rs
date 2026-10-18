@@ -22,7 +22,7 @@
 //! - S-box intermediates and post-states for full rounds.
 //! - S-box outputs for partial rounds (sparse matrix decomposition).
 use alloc::vec::Vec;
-use core::mem::MaybeUninit;
+use core::mem::{MaybeUninit, size_of};
 
 use p3_field::{Algebra, PackedValue, PrimeCharacteristicRing, PrimeField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
@@ -232,24 +232,46 @@ fn generate_perms<
     // Keep small batches that do not fill all lanes on the scalar path.
     let compatible = packing_width > 1
         && inputs.len().is_multiple_of(packing_width)
-        // Keep unusually large custom column layouts on the scalar path rather
-        // than growing each worker's temporary packed trace without a bound.
+        // Keep unusually large custom column layouts on the scalar path rather than growing each worker's temporary packed trace without a bound.
         && core::mem::size_of::<Poseidon1Cols<
             F::Packing, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS,
-        >>() <= 64 * 1024
-        && (0..WIDTH).all(|i| {
-            (0..WIDTH).all(|j| full_constants.dense_mds[i][j] == circ_col[(WIDTH + i - j) % WIDTH])
-        });
+        >>() <= 64 * 1024;
     if compatible {
-        let ncols =
-            num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>();
+        let ncols = const {
+            let ncols =
+                num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>();
+            assert!(
+                size_of::<
+                    Poseidon1Cols<
+                        F::Packing,
+                        WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                    >,
+                >() == ncols * size_of::<F::Packing>()
+            );
+            assert!(
+                size_of::<
+                    Poseidon1Cols<
+                        F,
+                        WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                    >,
+                >() == ncols * size_of::<F>()
+            );
+            ncols
+        };
         perms
             .par_chunks_mut(packing_width)
             .zip(inputs.par_chunks(packing_width))
             .for_each(|(perms, inputs)| {
-                // Every field is MaybeUninit<Packing>, so the uninitialized column
-                // struct is valid. The validated round counts ensure every column is
-                // written by generate_perm before the packed cells are read below.
+                // Every field is MaybeUninit<Packing>, so the uninitialized column struct is valid.
+                // The validated round counts ensure every column is written by generate_perm before the packed cells are read below.
                 let mut packed = MaybeUninit::<
                     Poseidon1Cols<
                         MaybeUninit<F::Packing>,
@@ -276,8 +298,8 @@ fn generate_perms<
                     partial_constants,
                     &circ_col,
                 );
-                // Poseidon1Cols is repr(C), consists only of packed cells, and has
-                // no padding. All cells have been initialized by generate_perm.
+                // Poseidon1Cols is repr(C), consists only of packed cells, and has no padding.
+                // All cells have been initialized by generate_perm.
                 let packed = unsafe {
                     core::slice::from_raw_parts(
                         core::ptr::from_ref(packed).cast::<F::Packing>(),

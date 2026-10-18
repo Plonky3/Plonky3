@@ -12,17 +12,43 @@ use p3_monolith::mds::goldilocks::MonolithMdsMatrixGoldilocks;
 use p3_monolith::mds::mersenne31::MonolithMdsMatrixMersenne31;
 use p3_symmetric::Permutation;
 
+/// Native witness convolution for a recognized reference matrix.
+/// Variants other than `None` require a full circulant check and an exact match of the reference first column.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum NativeMds {
+    /// No matching native convolution is available.
     None,
+    /// The standard Mersenne31 width-16 matrix.
     Mersenne31,
+    /// The standard Goldilocks width-8 or width-12 matrix.
     Goldilocks,
 }
 
+/// Validated matrix strategy shared by scalar witnesses and generic AIR expressions.
 #[derive(Debug, Clone)]
 pub(crate) enum MdsStrategy<F, const WIDTH: usize> {
+    /// Multiply by the original dense matrix.
     Dense,
+    /// Store the first column of a checked circulant matrix and its native witness strategy.
     Circulant([F; WIDTH], NativeMds),
+}
+
+/// Apply the standard Goldilocks matrix at one of its supported widths.
+#[inline]
+fn native_goldilocks<const WIDTH: usize>(input: [Goldilocks; WIDTH]) -> [Goldilocks; WIDTH] {
+    match WIDTH {
+        8 => {
+            let output: [Goldilocks; 8] =
+                MonolithMdsMatrixGoldilocks.permute(core::array::from_fn(|i| input[i]));
+            core::array::from_fn(|i| output[i])
+        }
+        12 => {
+            let output: [Goldilocks; 12] =
+                MonolithMdsMatrixGoldilocks.permute(core::array::from_fn(|i| input[i]));
+            core::array::from_fn(|i| output[i])
+        }
+        _ => unreachable!("only standard Goldilocks widths are selected"),
+    }
 }
 
 impl<F: PrimeCharacteristicRing, const WIDTH: usize> MdsStrategy<F, WIDTH> {
@@ -36,50 +62,38 @@ impl<F: PrimeCharacteristicRing, const WIDTH: usize> MdsStrategy<F, WIDTH> {
                 .all(|i| (0..WIDTH).all(|j| matrix[i][j] == matrix[(WIDTH + i - j) % WIDTH][0]))
         {
             let column: [F; WIDTH] = core::array::from_fn(|i| matrix[i][0]);
-            // The native integer convolution is valid only for the standard matrix,
-            // not every circulant with this field and width. Compare its first column
-            // after the complete circulant check above, once per AIR construction.
-            let native =
-                if WIDTH == 16 && F::ORDER_U64 == Mersenne31::ORDER_U64 {
-                    let mut basis = [Mersenne31::ZERO; 16];
-                    basis[0] = Mersenne31::ONE;
-                    // At width 16 the paper's matrix is independent of the round count.
-                    let expected = MonolithMdsMatrixMersenne31::<16, 5>::new().permute(basis);
-                    if column
-                        .iter()
-                        .zip(expected)
-                        .all(|(x, y)| x.as_canonical_u64() == y.as_canonical_u64())
-                    {
-                        NativeMds::Mersenne31
-                    } else {
-                        NativeMds::None
-                    }
-                } else if F::ORDER_U64 == Goldilocks::ORDER_U64 && matches!(WIDTH, 8 | 12) {
-                    let expected: [Goldilocks; WIDTH] = match WIDTH {
-                        8 => {
-                            let mut basis = [Goldilocks::ZERO; 8];
-                            basis[0] = Goldilocks::ONE;
-                            let col = MonolithMdsMatrixGoldilocks.permute(basis);
-                            core::array::from_fn(|i| col[i])
-                        }
-                        12 => {
-                            let mut basis = [Goldilocks::ZERO; 12];
-                            basis[0] = Goldilocks::ONE;
-                            let col = MonolithMdsMatrixGoldilocks.permute(basis);
-                            core::array::from_fn(|i| col[i])
-                        }
-                        _ => unreachable!(),
-                    };
-                    if column.iter().zip(expected).all(|(x, y): (&F, Goldilocks)| {
-                        x.as_canonical_u64() == y.as_canonical_u64()
-                    }) {
-                        NativeMds::Goldilocks
-                    } else {
-                        NativeMds::None
-                    }
+            // The native integer convolution is valid only for the standard matrix, not every circulant with this field and width.
+            // Compare its first column after the complete circulant check above, once per AIR construction.
+            let native = if WIDTH == 16 && F::ORDER_U64 == Mersenne31::ORDER_U64 {
+                let mut basis = [Mersenne31::ZERO; 16];
+                basis[0] = Mersenne31::ONE;
+                // At width 16 the paper's matrix is independent of the round count.
+                let expected = MonolithMdsMatrixMersenne31::<16, 5>::new().permute(basis);
+                if column
+                    .iter()
+                    .zip(expected)
+                    .all(|(x, y)| x.as_canonical_u64() == y.as_canonical_u64())
+                {
+                    NativeMds::Mersenne31
                 } else {
                     NativeMds::None
-                };
+                }
+            } else if F::ORDER_U64 == Goldilocks::ORDER_U64 && matches!(WIDTH, 8 | 12) {
+                let mut basis = [Goldilocks::ZERO; WIDTH];
+                basis[0] = Goldilocks::ONE;
+                let expected = native_goldilocks(basis);
+                if column
+                    .iter()
+                    .zip(expected)
+                    .all(|(x, y)| x.as_canonical_u64() == y.as_canonical_u64())
+                {
+                    NativeMds::Goldilocks
+                } else {
+                    NativeMds::None
+                }
+            } else {
+                NativeMds::None
+            };
             Self::Circulant(column, native)
         } else {
             Self::Dense
@@ -102,25 +116,13 @@ impl<F: PrimeCharacteristicRing, const WIDTH: usize> MdsStrategy<F, WIDTH> {
                     *s = F::from_u64(x.as_canonical_u64());
                 }
             }
-            Self::Circulant(_, NativeMds::Goldilocks) => match WIDTH {
-                8 => {
-                    let input =
-                        core::array::from_fn(|i| Goldilocks::from_u64(state[i].as_canonical_u64()));
-                    let output: [Goldilocks; 8] = MonolithMdsMatrixGoldilocks.permute(input);
-                    for (s, x) in state.iter_mut().zip(output) {
-                        *s = F::from_u64(x.as_canonical_u64());
-                    }
+            Self::Circulant(_, NativeMds::Goldilocks) => {
+                let input: [Goldilocks; WIDTH] =
+                    core::array::from_fn(|i| Goldilocks::from_u64(state[i].as_canonical_u64()));
+                for (s, x) in state.iter_mut().zip(native_goldilocks(input)) {
+                    *s = F::from_u64(x.as_canonical_u64());
                 }
-                12 => {
-                    let input =
-                        core::array::from_fn(|i| Goldilocks::from_u64(state[i].as_canonical_u64()));
-                    let output: [Goldilocks; 12] = MonolithMdsMatrixGoldilocks.permute(input);
-                    for (s, x) in state.iter_mut().zip(output) {
-                        *s = F::from_u64(x.as_canonical_u64());
-                    }
-                }
-                _ => unreachable!(),
-            },
+            }
             _ => self.apply(state, matrix),
         }
     }

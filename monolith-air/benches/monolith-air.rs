@@ -382,8 +382,7 @@ fn bench_prove_verify_goldilocks(c: &mut Criterion) {
     group.finish();
 }
 
-/// Production quotient evaluation on arbitrary coset values, excluding trace generation,
-/// LDE, and commitments so constraint-expression changes can be measured independently.
+/// Production quotient evaluation on arbitrary coset values, excluding trace generation, LDE, and commitments so constraint-expression changes can be measured independently.
 fn bench_quotient_for<SC, A>(c: &mut Criterion, name: &str, config: &SC, air: &A)
 where
     SC: p3_uni_stark::StarkGenericConfig,

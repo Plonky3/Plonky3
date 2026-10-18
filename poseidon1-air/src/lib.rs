@@ -617,7 +617,7 @@ mod tests {
         compare_scalar_and_packed::<11, 2>();
     }
 
-    fn compare_packed_width<const W: usize>() {
+    fn compare_packed_width<const W: usize>(non_circulant: bool) {
         use p3_field::PrimeCharacteristicRing;
         let raw = Poseidon1Constants::<F, W> {
             rounds_f: 2,
@@ -628,7 +628,10 @@ mod tests {
                 .map(|r| core::array::from_fn(|j| F::from_usize(r * W + j)))
                 .collect(),
         };
-        let (full, partial) = raw.to_optimized();
+        let (mut full, partial) = raw.to_optimized();
+        if non_circulant {
+            full.dense_mds[1][2] += F::ONE;
+        }
         let inputs: alloc::vec::Vec<[F; W]> = (0..32)
             .map(|i| core::array::from_fn(|j| F::from_usize(i * W + j)))
             .collect();
@@ -644,7 +647,8 @@ mod tests {
 
     #[test]
     fn packed_witness_covers_karatsuba_24_and_dense_fallback() {
-        compare_packed_width::<24>();
-        compare_packed_width::<8>();
+        compare_packed_width::<24>(false);
+        compare_packed_width::<8>(false);
+        compare_packed_width::<8>(true);
     }
 }
