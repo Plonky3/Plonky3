@@ -189,7 +189,7 @@ where
             .expect("AIR with preprocessed columns must return a preprocessed trace");
 
         preprocessed_log_heights.push(log2_strict_usize(trace.height()));
-        tables.push(Table::new(trace.transpose()));
+        tables.push(Table::new(trace.transpose_packable()));
     }
 
     if tables.is_empty() {

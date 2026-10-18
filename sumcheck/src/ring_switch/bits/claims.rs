@@ -81,7 +81,6 @@ use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
-use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
@@ -340,13 +339,13 @@ where
         let mut table = Poly::<R>::zero(rounds);
         for ((batch, (_, offset, equality)), &weight) in batches.iter().zip(&supports).zip(&weights)
         {
-            let claim_weights = batch.weights_over::<R>(equality);
             let start = offset - slot_offset;
             let weight = <R as From<EF>>::from(weight);
-            table.as_mut_slice()[start..start + claim_weights.num_evals()]
-                .par_iter_mut()
-                .zip(claim_weights.as_slice().par_iter())
-                .for_each(|(entry, &value)| *entry += weight * value);
+            batch.add_scaled_weights_over(
+                equality,
+                weight,
+                &mut table.as_mut_slice()[start..start + equality.num_evals()],
+            );
         }
         let initial_sum = Self::batched_sum(&batches, &claims, &weights);
 
@@ -891,7 +890,7 @@ mod tests {
         let batches = setup.batches(&draws);
         let weights = claim_weights(draws.lambda, claims.len());
 
-        // The combined weight table, exactly as the honest prover builds it.
+        // Independent reference: materialize each unscaled table, then scale every entry.
         let (prefix, address) = setup.common_prefix();
         let rounds = setup.num_variables() - prefix;
         let slot = 1usize << rounds;
@@ -928,6 +927,32 @@ mod tests {
             sumcheck,
             final_eval,
         }
+    }
+
+    #[test]
+    fn scaled_weights_preserve_the_unscaled_reference_proof() {
+        let witness = bits(0x5CA1E0, 128);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0x5CA1E1);
+        let claims = [
+            (vec![true, false, true], None),
+            (vec![true, true], Some(5)),
+            (vec![true], Some(8)),
+            (vec![true, false], Some(2)),
+        ]
+        .map(|(prefix, successor)| Claim {
+            point: point_with_prefix(&mut rng, &prefix, 10),
+            successor,
+        });
+        let setup = batch(&claims);
+        let reference = forge(&setup, &packing, |_| {});
+        let actual = round_trip(&witness, &claims);
+        assert_eq!(actual.claims, reference.claims);
+        assert_eq!(
+            actual.sumcheck.polynomial_evaluations,
+            reference.sumcheck.polynomial_evaluations
+        );
+        assert_eq!(actual.final_eval, reference.final_eval);
     }
 
     /// The readings a proof's elements imply, so no column check can object to them.

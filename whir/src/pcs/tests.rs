@@ -962,7 +962,7 @@ mod error_variant_tests {
         EF, F, MyChallenger, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, challenger,
     };
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
-    use crate::pcs::proof::{PcsProof, QueryOpenings};
+    use crate::pcs::proof::{PcsProof, QueryOpenings, SharedProofOpening};
     use crate::pcs::verifier::errors::VerifierError;
 
     /// Suffix-mode prover used for every shape-mismatch scenario.
@@ -1355,6 +1355,75 @@ mod error_variant_tests {
                 assert_eq!(a, expected - 1);
             }
             other => panic!("expected StirQueryCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_leaf_width_before_folding_base_and_extension_rows() {
+        let (pcs, commitment, proof, protocol) = commit_and_open();
+        for final_round in [false, true] {
+            let mut malformed = proof.clone();
+            let openings = if final_round {
+                &mut malformed.whir.final_openings
+            } else {
+                &mut malformed.whir.rounds[0].openings
+            };
+            // A non-power-of-two row must be rejected before Poly::new can panic.
+            match openings {
+                QueryOpenings::Base(opening) => {
+                    opening.rows[0].pop();
+                }
+                QueryOpenings::Extension(opening) => {
+                    opening.rows[0].pop();
+                }
+            }
+            let expected_reason = if final_round {
+                "Extension field Merkle multiproof verification failed"
+            } else {
+                "Base field Merkle multiproof verification failed"
+            };
+            match verify(&pcs, &commitment, &malformed, protocol.clone()).unwrap_err() {
+                VerifierError::MerkleProofInvalid { position, reason } => {
+                    assert_eq!(position, 0);
+                    assert_eq!(reason, expected_reason);
+                }
+                other => panic!("expected MerkleProofInvalid, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_leaf_field_before_checking_rows() {
+        let (pcs, commitment, proof, protocol) = commit_and_open();
+        for final_round in [false, true] {
+            let mut malformed = proof.clone();
+            let round_index = if final_round { pcs.n_rounds() } else { 0 };
+            let openings = if final_round {
+                &mut malformed.whir.final_openings
+            } else {
+                &mut malformed.whir.rounds[0].openings
+            };
+            // Empty rows also have the wrong count, but the variant error takes precedence.
+            *openings = match openings {
+                QueryOpenings::Base(opening) => QueryOpenings::Extension(SharedProofOpening {
+                    rows: vec![],
+                    proof: opening.proof.clone(),
+                }),
+                QueryOpenings::Extension(opening) => QueryOpenings::Base(SharedProofOpening {
+                    rows: vec![],
+                    proof: opening.proof.clone(),
+                }),
+            };
+            match verify(&pcs, &commitment, &malformed, protocol.clone()).unwrap_err() {
+                VerifierError::MerkleProofInvalid { position, reason } => {
+                    assert_eq!(position, 0);
+                    assert_eq!(
+                        reason,
+                        alloc::format!("Query openings field does not match round {round_index}")
+                    );
+                }
+                other => panic!("expected MerkleProofInvalid, got {other:?}"),
+            }
         }
     }
 

@@ -47,6 +47,40 @@ use crate::{
     FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox, generate_trace_rows,
 };
 
+/// Check the lengths that determine which trace columns are written.
+/// The sparse AIR always includes a final partial round without a scalar constant.
+pub(crate) const fn validate_round_constants<
+    F,
+    const WIDTH: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+>(
+    full_constants: &FullRoundConstants<F, WIDTH>,
+    partial_constants: &PartialRoundConstants<F, WIDTH>,
+) {
+    assert!(PARTIAL_ROUNDS > 0, "PARTIAL_ROUNDS must be positive");
+    assert!(
+        full_constants.initial.len() == HALF_FULL_ROUNDS,
+        "initial length must equal HALF_FULL_ROUNDS"
+    );
+    assert!(
+        full_constants.terminal.len() == HALF_FULL_ROUNDS,
+        "terminal length must equal HALF_FULL_ROUNDS"
+    );
+    assert!(
+        partial_constants.sparse_first_row.len() == PARTIAL_ROUNDS,
+        "sparse_first_row length must equal PARTIAL_ROUNDS"
+    );
+    assert!(
+        partial_constants.v.len() == PARTIAL_ROUNDS,
+        "v length must equal PARTIAL_ROUNDS"
+    );
+    assert!(
+        partial_constants.round_constants.len() == PARTIAL_ROUNDS - 1,
+        "round_constants length must equal PARTIAL_ROUNDS - 1"
+    );
+}
+
 /// The Poseidon1 AIR.
 ///
 /// Constrains one Poseidon1 permutation per trace row. The AIR evaluates
@@ -120,10 +154,19 @@ impl<
     ///
     /// Use [`p3_poseidon1::Poseidon1Constants::to_optimized`] to produce the two constant
     /// structs from raw Poseidon1 parameters.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `PARTIAL_ROUNDS` is zero or any round-constant vector used by the AIR has a length
+    /// inconsistent with `HALF_FULL_ROUNDS` or `PARTIAL_ROUNDS`.
     pub const fn new(
         full_constants: FullRoundConstants<F, WIDTH>,
         partial_constants: PartialRoundConstants<F, WIDTH>,
     ) -> Self {
+        validate_round_constants::<_, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+            &full_constants,
+            &partial_constants,
+        );
         Self {
             full_constants,
             partial_constants,

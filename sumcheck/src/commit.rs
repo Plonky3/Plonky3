@@ -45,7 +45,7 @@ pub fn write_stacked_message<F: Field>(
         VariableOrder::Prefix => info_span!("transpose").in_scope(|| {
             let view = RowMajorMatrixView::new(values, values.len() / width);
             let mut prefix = RowMajorMatrixViewMut::new(message, width);
-            view.transpose_into(&mut prefix);
+            view.transpose_packable_into(&mut prefix);
         }),
         VariableOrder::Suffix => message
             .par_chunks_mut(COPY_CHUNK)

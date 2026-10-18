@@ -149,8 +149,10 @@ const PARALLEL_THRESHOLD: usize = 4 * 1024 * 1024;
 
 /// Transpose a matrix from row-major `input` to row-major `output`.
 ///
-/// Given an input matrix with `height` rows and `width` columns, produces
-/// an output matrix with `width` rows and `height` columns.
+/// Given an input matrix with `height` rows and `width` columns, produces an output matrix with `width` rows and `height` columns.
+///
+/// Typed copies support arbitrary `Copy` representations.
+/// Audited integer representations can use [`transpose_words`] for register kernels.
 ///
 /// # Memory Layout
 ///
@@ -171,14 +173,6 @@ const PARALLEL_THRESHOLD: usize = 4 * 1024 * 1024;
 /// - Initial element at `input[row * width + col]`,
 /// - Transposed position is `output[col * height + row]`.
 ///
-/// On AVX2 and NEON targets, a 4-byte, 4-byte-aligned element is copied as a `u32` vector lane.
-///
-/// On NEON targets, an 8-byte, 8-byte-aligned element is copied as a `u64` vector lane.
-///
-/// Such an element must have no padding and no uninitialized bytes, which every field element and integer satisfies.
-///
-/// A type like `#[repr(C, align(4))] struct P(u8)`, or `MaybeUninit<u32>`, is undefined behavior on those targets.
-///
 /// # Arguments
 ///
 /// * `input` - Source matrix in row-major order
@@ -189,6 +183,7 @@ const PARALLEL_THRESHOLD: usize = 4 * 1024 * 1024;
 /// # Panics
 ///
 /// Panics if:
+/// - `width * height` overflows `usize`
 /// - `input.len() != width * height`
 /// - `output.len() != width * height`
 #[inline]
@@ -198,23 +193,33 @@ pub fn transpose<T: Copy + Send + Sync>(
     width: usize,
     height: usize,
 ) {
-    // Input validation
-    assert_eq!(
-        input.len(),
-        width * height,
-        "Input length {} doesn't match width*height = {}",
-        input.len(),
-        width * height
-    );
-    assert_eq!(
-        output.len(),
-        width * height,
-        "Output length {} doesn't match width*height = {}",
-        output.len(),
-        width * height
-    );
+    super::portable::transpose(input, output, width, height);
+}
 
-    // Handle empty matrices
+/// Transpose elements whose representation can be copied through integer words.
+///
+/// This enables architecture-specific register kernels.
+/// Other sizes and alignments use the typed-copy fallback.
+/// Shape validation is always checked.
+///
+/// # Safety
+///
+/// If `T` has size and alignment 4 or 8, every byte of every input and output element must be initialized, with no padding or pointer provenance.
+/// Copying an entire element through a `u32` or `u64` must preserve its validity and value.
+/// Integer wrappers with `#[repr(transparent)]` satisfy this contract; `Copy` alone does not.
+/// The kernels only move whole elements, without changing bits.
+#[inline]
+pub unsafe fn transpose_words<T: Copy + Send + Sync>(
+    input: &[T],
+    output: &mut [T],
+    width: usize,
+    height: usize,
+) {
+    let len = width
+        .checked_mul(height)
+        .expect("transpose dimensions overflow");
+    assert_eq!(input.len(), len, "transpose input has the wrong length");
+    assert_eq!(output.len(), len, "transpose output has the wrong length");
     if width == 0 || height == 0 {
         return;
     }
@@ -233,7 +238,7 @@ pub fn transpose<T: Copy + Send + Sync>(
             // SAFETY:
             // - input/output lengths verified above
             // - T is 4 bytes and 4-byte aligned, matching u32 size and alignment
-            // - The documented contract rules out padding and uninitialized bytes in T
+            // - The caller guarantees integer-word copies preserve the elements
             // - Pointers derived from valid slices
             unsafe {
                 transpose_neon_4b(
@@ -255,7 +260,7 @@ pub fn transpose<T: Copy + Send + Sync>(
             // SAFETY:
             // - input/output lengths verified above
             // - T is 8 bytes and 8-byte aligned, matching u64 size and alignment
-            // - The documented contract rules out padding and uninitialized bytes in T
+            // - The caller guarantees integer-word copies preserve the elements
             // - Pointers derived from valid slices
             unsafe {
                 transpose_neon_8b(
@@ -270,7 +275,8 @@ pub fn transpose<T: Copy + Send + Sync>(
     }
 
     // Fallback for non-ARM64 or unsupported element sizes.
-    super::portable::transpose(input, output, width, height);
+    // SAFETY: the caller supplies the integer-word representation guarantee.
+    unsafe { super::portable::transpose_words(input, output, width, height) };
 }
 
 /// Top-level NEON transpose dispatcher for 4-byte elements.
@@ -1905,11 +1911,74 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{Packable, PrimeCharacteristicRing};
     use p3_goldilocks::Goldilocks;
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "transpose dimensions overflow")]
+    fn rejects_overflowing_word_dimensions_before_access() {
+        // The unchecked product would wrap to the slice length of 2.
+        // SAFETY: u32 has an initialized, padding-free, pointer-free representation.
+        unsafe { transpose_words::<u32>(&[0; 2], &mut [0; 2], usize::MAX / 2 + 2, 2) };
+    }
+
+    #[test]
+    #[should_panic(expected = "transpose dimensions overflow")]
+    fn rejects_overflowing_dimensions_before_access() {
+        // The unchecked product would wrap to the slice length of 2.
+        transpose::<u32>(&[0; 2], &mut [0; 2], usize::MAX / 2 + 2, 2);
+    }
+
+    #[test]
+    fn arbitrary_copy_representations_use_typed_copies() {
+        #[derive(Clone, Copy, Default, Debug, Eq, PartialEq)]
+        #[repr(C, align(4))]
+        struct Padded(u8);
+        // Implementors without a representation override must also stay typed.
+        impl Packable for Padded {}
+
+        let input: Vec<_> = (0..16 * 17).map(|i| Padded(i as u8)).collect();
+        let expected = transpose_reference(&input, 17, 16);
+        let mut output = vec![Padded::default(); input.len()];
+        transpose(&input, &mut output, 17, 16);
+        assert_eq!(output, expected);
+        Padded::transpose(&input, &mut output, 17, 16);
+        assert_eq!(output, expected);
+
+        // The 8-byte dispatch must likewise accept padding safely.
+        #[derive(Clone, Copy, Default, Debug, Eq, PartialEq)]
+        #[repr(C, align(8))]
+        struct Padded8(u8);
+        let input: Vec<_> = (0..16 * 17).map(|i| Padded8(i as u8)).collect();
+        let mut output = vec![Padded8::default(); input.len()];
+        transpose(&input, &mut output, 17, 16);
+        assert_eq!(output, transpose_reference(&input, 17, 16));
+    }
+
+    #[test]
+    fn maybe_uninit_and_references_keep_typed_representations() {
+        use core::mem::MaybeUninit;
+
+        let mut input = [MaybeUninit::<u32>::uninit(); 16 * 17];
+        input[17 + 2].write(73);
+        let mut output = [MaybeUninit::uninit(); 16 * 17];
+        transpose(&input, &mut output, 17, 16);
+        // SAFETY: output column 2, row 1 was copied from initialized input[19].
+        assert_eq!(unsafe { output[2 * 16 + 1].assume_init() }, 73);
+
+        let values = [3u64, 9];
+        let input: Vec<_> = (0..16 * 17).map(|i| &values[i % 2]).collect();
+        let mut output = vec![&values[0]; input.len()];
+        transpose(&input, &mut output, 17, 16);
+        for r in 0..16 {
+            for c in 0..17 {
+                assert!(core::ptr::eq(output[c * 16 + r], input[r * 17 + c]));
+            }
+        }
+    }
 
     /// A type with the same size/alignment mismatch as `Complex<Mersenne31>`:
     /// 8 bytes, but only 4-byte aligned. Must not be routed through the 8-byte
@@ -2007,7 +2076,7 @@ mod tests {
                 // Just verify it doesn't panic.
                 let input: [BabyBear; 0] = [];
                 let mut output: [BabyBear; 0] = [];
-                transpose(&input, &mut output, width, height);
+                BabyBear::transpose(&input, &mut output, width, height);
                 return Ok(());
             }
 
@@ -2020,7 +2089,7 @@ mod tests {
             let mut output = BabyBear::zero_vec(width * height);
 
             // Run optimized transpose.
-            transpose(&input, &mut output, width, height);
+            BabyBear::transpose(&input, &mut output, width, height);
 
             // Run reference transpose.
             let expected = transpose_reference(&input, width, height);
@@ -2049,7 +2118,7 @@ mod tests {
             let mut output = vec![0u64; width * height];
 
             // Run transpose.
-            transpose(&input, &mut output, width, height);
+            u64::transpose(&input, &mut output, width, height);
 
             // Verify against reference.
             let expected = transpose_reference(&input, width, height);
@@ -2106,7 +2175,7 @@ mod tests {
             if width == 0 || height == 0 {
                 let input: [Goldilocks; 0] = [];
                 let mut output: [Goldilocks; 0] = [];
-                transpose(&input, &mut output, width, height);
+                Goldilocks::transpose(&input, &mut output, width, height);
                 return Ok(());
             }
 
@@ -2119,7 +2188,7 @@ mod tests {
             let mut output = Goldilocks::zero_vec(width * height);
 
             // Run optimized transpose.
-            transpose(&input, &mut output, width, height);
+            Goldilocks::transpose(&input, &mut output, width, height);
 
             // Run reference transpose.
             let expected = transpose_reference(&input, width, height);
@@ -2156,7 +2225,7 @@ mod tests {
             // 4-byte path.
             let input: Vec<u32> = (0..size as u32).collect();
             let mut output = vec![0u32; size];
-            transpose(&input, &mut output, width, height);
+            u32::transpose(&input, &mut output, width, height);
             assert_eq!(
                 output,
                 transpose_reference(&input, width, height),
@@ -2166,7 +2235,7 @@ mod tests {
             // 8-byte path.
             let input: Vec<u64> = (0..size as u64).collect();
             let mut output = vec![0u64; size];
-            transpose(&input, &mut output, width, height);
+            u64::transpose(&input, &mut output, width, height);
             assert_eq!(
                 output,
                 transpose_reference(&input, width, height),

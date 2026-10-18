@@ -230,6 +230,21 @@ where
     // One pass yields the constraints and the interactions together.
     let layout = AirLayout::from_air::<F>(air);
     let builder = SymbolicAirBuilder::<F, EF>::from_air(air, layout);
+    get_air_profile_from_builder(air, &builder)
+}
+
+/// Score constraints and lookup links from an AIR's existing symbolic evaluation.
+///
+/// Applies the same validation and degree hints as [`get_air_profile`].
+pub(crate) fn get_air_profile_from_builder<F, EF, A>(
+    air: &A,
+    builder: &SymbolicAirBuilder<F, EF>,
+) -> AirProfile
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: BaseAir<F>,
+{
     assert!(
         builder.exclusive_interactions().is_empty(),
         "multi-STARK zerocheck does not support exclusive lookup interactions"
@@ -237,7 +252,7 @@ where
 
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
-    validate_successor_columns(air, &builder, &base_constraints, &extension_constraints);
+    validate_successor_columns(air, builder, &base_constraints, &extension_constraints);
     let has_own_constraints = !base_constraints.is_empty() || !extension_constraints.is_empty();
     let pins = boundary_io_pins(air.public_boundary_io());
     let has_constraints = has_own_constraints || pins.count > 0;
