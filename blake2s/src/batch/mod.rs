@@ -14,6 +14,10 @@ pub(crate) use self::lanes::LANES;
 use self::lanes::{GROUPS, Vector, Word, load_block, store_digests};
 use crate::DIGEST_BYTES;
 
+/// Neoverse V3 measurements favor scalar hashing over one 16-lane NEON batch for tails of up to six messages.
+#[cfg(target_arch = "aarch64")]
+const NEON_SCALAR_TAIL_MAX: usize = 6;
+
 /// Hash `out.len()` equal-length messages laid end to end in `input`.
 ///
 /// # Panics
@@ -43,10 +47,10 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; DIGEST_BYTES]]) {
         hash_group(initial_state(PARAM_BLOCK_0), &lanes, len, digests);
     }
 
-    // Very short NEON tails cost less on scalar registers than advancing four groups
-    // of vectors mostly filled with duplicate messages. Keep full batches on SIMD.
+    // Very short NEON tails avoid advancing four vector groups mostly filled with duplicate messages.
+    // Keep full batches on SIMD.
     #[cfg(target_arch = "aarch64")]
-    if rest.len() <= 6 {
+    if rest.len() <= NEON_SCALAR_TAIL_MAX {
         let first = groups.len() * LANES;
         for (lane, digest) in rest.iter_mut().enumerate() {
             *digest = crate::Blake2s256::hash(&input[(first + lane) * len..][..len]);

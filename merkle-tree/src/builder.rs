@@ -765,7 +765,7 @@ where
         let default = [PW::Value::default(); DIGEST_ELEMS];
         let (groups, _) = kids[..out.len() * N].as_chunks::<N>();
 
-        // Row hashing also uses `scratch`, so take this buffer until every chunk is finished.
+        // Row hashing borrows all staging buffers, so this one is moved out for the loop and restored after it.
         let mut injected = mem::take(&mut scratch.injected);
         for (k, (groups, out)) in groups
             .chunks(INJECT_CHUNK_NODES)
