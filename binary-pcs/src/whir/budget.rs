@@ -12,6 +12,8 @@ pub struct BinaryWhirBudget {
     pub max_stir_queries: usize,
 
     /// Most bytes a serialized proof may occupy.
+    ///
+    /// The separately transmitted initial commitment is excluded and must be budgeted by the caller.
     pub max_proof_bytes: usize,
 
     /// Hardest grinding a prover will accept.
@@ -34,7 +36,8 @@ impl BinaryWhirBudget {
 
     /// Grade a schedule against the ceiling, before anything is committed.
     ///
-    /// The shape bounds payload bytes. Callers must reserve serializer framing separately.
+    /// The shape bounds proof payload bytes.
+    /// Callers must budget the separately transmitted initial commitment and serializer framing separately.
     ///
     /// # Errors
     ///

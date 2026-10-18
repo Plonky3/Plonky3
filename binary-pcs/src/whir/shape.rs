@@ -63,8 +63,9 @@ impl ProofShape {
     ///
     /// The claim count fixes how many opened values travel beside the transcript.
     ///
-    /// This bounds a single committed polynomial. Wider stacked layouts need their own bounds.
-    /// Serializer framing is excluded.
+    /// This bounds a single committed polynomial.
+    /// Wider stacked layouts need their own bounds.
+    /// The separately transmitted initial commitment and serializer framing are excluded.
     ///
     /// # Errors
     ///
@@ -213,7 +214,8 @@ impl ProofShape {
     ///
     /// A serializer that pads a value beyond its own width invalidates the figure.
     ///
-    /// Framing the serializer adds around a list is the caller's to allow for.
+    /// The separately transmitted initial commitment is the caller's to budget.
+    /// Framing the serializer adds around a list is also the caller's to allow for.
     ///
     /// # Errors
     ///

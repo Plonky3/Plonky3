@@ -45,10 +45,10 @@ where
             return None;
         }
         let cap_height = self.cap_height.min(log_height);
-        Some(MmcsProofGeometry {
-            commitment_digests: 1usize.checked_shl(cap_height as u32)?,
-            opening_digests: log_height - cap_height,
-        })
+        Some(MmcsProofGeometry::new(
+            1usize.checked_shl(cap_height as u32)?,
+            log_height - cap_height,
+        ))
     }
 
     fn commit<M: Matrix<P::Value>>(

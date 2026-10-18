@@ -3,7 +3,7 @@
 use p3_binary_field::{BinaryChallenger, Poly64, Poly192};
 use p3_binary_pcs::whir::{BinaryWhirDomain, recommended_cap_height};
 use p3_challenger::HashChallenger;
-use p3_commit::MultilinearPcs;
+use p3_commit::{Mmcs as _, MultilinearPcs};
 use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;
 use p3_merkle_tree::MerkleTreeMmcs;
@@ -60,8 +60,15 @@ fn maximal_caps_are_included_in_the_proof_budget() {
         ProofShape::of(&config, &mmcs(0), usize::MAX),
         Err(ProofShapeError::SizeOverflow)
     );
-    // A wrapper without size metadata must not inherit a one-root assumption.
-    let unknown = p3_commit::ExtensionMmcs::<Poly64, Poly64, _>::new(mmcs(0));
+    // Salted openings carry additional payload that digest-only geometry cannot bound.
+    let hiding =
+        p3_merkle_tree::MerkleTreeHidingMmcs::<Poly64, u8, Hash, Compress, _, 2, 32, 4>::new(
+            Hash::new(Keccak256Hash),
+            Compress::new(Keccak256Hash),
+            0,
+            rand::rngs::StdRng::seed_from_u64(0x5A17),
+        );
+    let unknown = p3_commit::ExtensionMmcs::<Poly64, Poly64, _>::new(hiding);
     assert_eq!(
         ProofShape::of(&config, &unknown, 1),
         Err(ProofShapeError::UnsupportedGeometry)
@@ -78,6 +85,12 @@ fn maximal_caps_are_included_in_the_proof_budget() {
     for cap_height in [0, recommended_cap_height(&config), usize::MAX] {
         let backend = mmcs(cap_height);
         let shape = ProofShape::of(&config, &backend, 1).unwrap();
+        let extension = p3_commit::ExtensionMmcs::<Poly64, Poly64, _>::new(backend.clone());
+        assert_eq!(ProofShape::of(&config, &extension, 1), Ok(shape));
+        // The initial matrix groups 2^3 domain elements per row.
+        let initial_geometry = backend
+            .proof_geometry(config.round_parameters()[0].log_folded_domain_size)
+            .unwrap();
         let referenced = &backend;
         let referenced_shape = ProofShape::of(&config, &referenced, 1).unwrap();
         assert_eq!(referenced_shape, shape);
@@ -101,6 +114,7 @@ fn maximal_caps_are_included_in_the_proof_budget() {
         )]);
         let mut transcript = challenger();
         let (commitment, data) = pcs.commit(witness, &mut transcript).unwrap();
+        assert_eq!(commitment.num_roots(), initial_geometry.commitment_digests);
         let proof = pcs.open(data, protocol.clone(), &mut transcript).unwrap();
         pcs.verify(&commitment, &proof, &mut challenger(), protocol)
             .unwrap();
@@ -120,7 +134,11 @@ fn maximal_caps_are_included_in_the_proof_budget() {
         );
         assert_shape_bounds_payload(&shape, &proof);
         if cap_height == usize::MAX {
+            assert_eq!(commitment.num_roots(), 16_384);
             assert_eq!(cap_digests, 14_336);
+            // The proof budget prices folded caps; the caller separately budgets the initial cap.
+            assert_eq!(shape.max_bytes(0, 0, 32), Ok(cap_digests * 32));
+            assert_eq!(initial_geometry.commitment_digests * 32, 524_288);
             assert!(cap_digests * 32 > BinaryWhirBudget::PRODUCTION.max_proof_bytes);
             assert!(matches!(
                 BinaryWhirBudget::PRODUCTION.check_shape(&shape, 10, 30, 32),

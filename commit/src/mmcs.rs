@@ -10,14 +10,25 @@ use serde::{Deserialize, Serialize};
 /// Digest payload bounds for a commitment to one power-of-two-height matrix.
 ///
 /// The commitment carries only digests; openings carry only matrix elements and digests.
-/// Serializer framing is excluded. A multi-opening must carry at most the sum of the
-/// individual openings' digest bounds, even when queried positions repeat.
+/// Serializer framing is excluded.
+/// A multi-opening must carry at most the sum of the individual openings' digest bounds, even when queried positions repeat.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MmcsProofGeometry {
     /// Digests in the commitment.
     pub commitment_digests: usize,
     /// Most authentication digests in one row opening.
     pub opening_digests: usize,
+}
+
+impl MmcsProofGeometry {
+    /// Bounds a commitment's digest count and one row opening's authentication digest count.
+    pub const fn new(commitment_digests: usize, opening_digests: usize) -> Self {
+        Self {
+            commitment_digests,
+            opening_digests,
+        }
+    }
 }
 
 /// A "Mixed Matrix Commitment Scheme" (MMCS) is a generalization of a vector commitment scheme.

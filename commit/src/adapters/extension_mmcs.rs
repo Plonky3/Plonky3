@@ -6,7 +6,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::extension::FlatMatrixView;
 use p3_matrix::{Dimensions, Matrix};
 
-use crate::{BatchOpening, BatchOpeningRef, Mmcs};
+use crate::{BatchOpening, BatchOpeningRef, Mmcs, MmcsProofGeometry};
 
 /// A wrapper to lift an MMCS from a base field `F` to an extension field `EF`.
 ///
@@ -41,6 +41,10 @@ where
     type Proof = InnerMmcs::Proof;
     type MultiProof = InnerMmcs::MultiProof;
     type Error = InnerMmcs::Error;
+
+    fn proof_geometry(&self, log_height: usize) -> Option<MmcsProofGeometry> {
+        self.inner.proof_geometry(log_height)
+    }
 
     fn commit<M: Matrix<EF>>(&self, inputs: Vec<M>) -> (Self::Commitment, Self::ProverData<M>) {
         self.inner
