@@ -306,6 +306,7 @@ fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
     eq1_packed: &[EF::ExtensionPacking],
     chunk: &[F],
     w0: EF,
+    inner_stride: usize,
 ) where
     F: Field,
     EF: ExtensionField<F>,
@@ -313,6 +314,7 @@ fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
     let n_packed = eq1_packed.len();
     let packed_inner = out.len();
     let w = F::Packing::WIDTH;
+    let packed_stride = inner_stride / w;
 
     // CHUNK divides W: every batch of CHUNK lanes stays inside one w_idx.
     //
@@ -329,10 +331,13 @@ fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
 
     // View the base-field row as packed rows, indexed by (w_idx, lane).
     //
-    //     chunk_packed[(w_idx * W + lane) * packed_inner + i_pkt]
-    //         packs   chunk[(w_idx * W + lane) * packed_inner * W + i_pkt * W..]
+    //     chunk_packed[(w_idx * W + lane) * packed_stride + i_pkt]
+    //         packs   chunk[(w_idx * W + lane) * inner_stride + i_pkt * W..]
+    // The output may be a tile narrower than the original source rows.
     let chunk_packed = F::Packing::pack_slice(chunk);
-    debug_assert_eq!(chunk_packed.len(), n_packed * w * packed_inner);
+    debug_assert!(
+        chunk_packed.len() >= (n_packed * w).saturating_sub(1) * packed_stride + packed_inner
+    );
 
     // Phase 0: pre-multiply each eq1 slot by w0 once.
     //
@@ -386,7 +391,7 @@ fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
                 for (t, acc_t) in acc[..tile_len].iter_mut().enumerate() {
                     let i_pkt = tile_start + t;
                     let packed_vals: [F::Packing; CHUNK] = core::array::from_fn(|c| {
-                        chunk_packed[(w_idx * w + lane_start + c) * packed_inner + i_pkt]
+                        chunk_packed[(w_idx * w + lane_start + c) * packed_stride + i_pkt]
                     });
                     for (k, acc_tk) in acc_t.iter_mut().enumerate() {
                         *acc_tk +=
@@ -416,11 +421,28 @@ fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
 ///
 /// - `EF::DIMENSION` outside `1..=8`, or
 /// - `F::Packing::WIDTH % CHUNK != 0`.
-fn compress_prefix_to_packed_packed_kernel_eager<F, EF>(
+#[cfg(test)]
+fn compress_prefix_to_packed_packed_kernel_eager<F: Field, EF: ExtensionField<F>>(
     out: &mut [EF::ExtensionPacking],
     eq1_packed: &[EF::ExtensionPacking],
     chunk: &[F],
     w0: EF,
+) {
+    compress_prefix_to_packed_packed_kernel_eager_strided::<F, EF>(
+        out,
+        eq1_packed,
+        chunk,
+        w0,
+        out.len() * F::Packing::WIDTH,
+    );
+}
+
+fn compress_prefix_to_packed_packed_kernel_eager_strided<F, EF>(
+    out: &mut [EF::ExtensionPacking],
+    eq1_packed: &[EF::ExtensionPacking],
+    chunk: &[F],
+    w0: EF,
+    inner_stride: usize,
 ) where
     F: Field,
     EF: ExtensionField<F>,
@@ -435,21 +457,16 @@ fn compress_prefix_to_packed_packed_kernel_eager<F, EF>(
     }
 
     let scalar_inner = out.len() * F::Packing::WIDTH;
-    chunk
-        .chunks(scalar_inner * F::Packing::WIDTH)
-        .zip_eq(eq1_packed.iter())
-        .for_each(|(chunk, &w1)| {
-            chunk
-                .chunks(scalar_inner)
-                .zip_eq(EF::ExtensionPacking::to_ext_iter([w1 * w0]))
-                .for_each(|(chunk, w)| {
-                    let w = EF::ExtensionPacking::from(w);
-                    let chunk = F::Packing::pack_slice(chunk);
-                    out.iter_mut()
-                        .zip_eq(chunk.iter())
-                        .for_each(|(acc, &f)| *acc += w * f);
-                });
-        });
+    for (row, w) in
+        EF::ExtensionPacking::to_ext_iter(eq1_packed.iter().map(|&w| w * w0)).enumerate()
+    {
+        let start = row * inner_stride;
+        let source = F::Packing::pack_slice(&chunk[start..start + scalar_inner]);
+        let w = EF::ExtensionPacking::from(w);
+        for (acc, &f) in out.iter_mut().zip(source) {
+            *acc += w * f;
+        }
+    }
 }
 
 /// SIMD kernel for the prefix-fold accumulation into a packed output.
@@ -507,44 +524,122 @@ pub(super) fn compress_prefix_to_packed_packed<F, EF>(
     F: Field,
     EF: ExtensionField<F>,
 {
+    compress_prefix_to_packed_packed_strided::<F, EF>(
+        out,
+        eq1_packed,
+        chunk,
+        w0,
+        out.len() * F::Packing::WIDTH,
+    );
+}
+
+/// Prefix-fold kernel over an output tile.
+/// Source rows retain `inner_stride` scalar elements between starts; `chunk` already starts at the tile offset.
+/// This shares delayed reductions and the eager fallback with full-output folds.
+pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionField<F>>(
+    out: &mut [EF::ExtensionPacking],
+    eq1_packed: &[EF::ExtensionPacking],
+    chunk: &[F],
+    w0: EF,
+    inner_stride: usize,
+) {
+    if out.is_empty() || eq1_packed.is_empty() {
+        return;
+    }
+    debug_assert!(inner_stride.is_multiple_of(F::Packing::WIDTH));
+    debug_assert!(inner_stride >= out.len() * F::Packing::WIDTH);
     if F::Packing::WIDTH.is_multiple_of(CHUNK) && eq1_packed.len() <= MAX_STACK_N {
         match EF::DIMENSION {
             1 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 1>(out, eq1_packed, chunk, w0);
+                compress_prefix_to_packed_packed_kernel::<F, EF, 1>(
+                    out,
+                    eq1_packed,
+                    chunk,
+                    w0,
+                    inner_stride,
+                );
                 return;
             }
             2 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 2>(out, eq1_packed, chunk, w0);
+                compress_prefix_to_packed_packed_kernel::<F, EF, 2>(
+                    out,
+                    eq1_packed,
+                    chunk,
+                    w0,
+                    inner_stride,
+                );
                 return;
             }
             3 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 3>(out, eq1_packed, chunk, w0);
+                compress_prefix_to_packed_packed_kernel::<F, EF, 3>(
+                    out,
+                    eq1_packed,
+                    chunk,
+                    w0,
+                    inner_stride,
+                );
                 return;
             }
             4 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 4>(out, eq1_packed, chunk, w0);
+                compress_prefix_to_packed_packed_kernel::<F, EF, 4>(
+                    out,
+                    eq1_packed,
+                    chunk,
+                    w0,
+                    inner_stride,
+                );
                 return;
             }
             5 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 5>(out, eq1_packed, chunk, w0);
+                compress_prefix_to_packed_packed_kernel::<F, EF, 5>(
+                    out,
+                    eq1_packed,
+                    chunk,
+                    w0,
+                    inner_stride,
+                );
                 return;
             }
             6 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 6>(out, eq1_packed, chunk, w0);
+                compress_prefix_to_packed_packed_kernel::<F, EF, 6>(
+                    out,
+                    eq1_packed,
+                    chunk,
+                    w0,
+                    inner_stride,
+                );
                 return;
             }
             7 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 7>(out, eq1_packed, chunk, w0);
+                compress_prefix_to_packed_packed_kernel::<F, EF, 7>(
+                    out,
+                    eq1_packed,
+                    chunk,
+                    w0,
+                    inner_stride,
+                );
                 return;
             }
             8 => {
-                compress_prefix_to_packed_packed_kernel::<F, EF, 8>(out, eq1_packed, chunk, w0);
+                compress_prefix_to_packed_packed_kernel::<F, EF, 8>(
+                    out,
+                    eq1_packed,
+                    chunk,
+                    w0,
+                    inner_stride,
+                );
                 return;
             }
             _ => {}
         }
     }
-    compress_prefix_to_packed_packed_kernel_eager::<F, EF>(out, eq1_packed, chunk, w0);
+    compress_prefix_to_packed_packed_kernel_eager_strided::<F, EF>(
+        out,
+        eq1_packed,
+        chunk,
+        w0,
+        inner_stride,
+    );
 }
 
 /// Tile size in output positions for the prefix-fold packed kernel.
