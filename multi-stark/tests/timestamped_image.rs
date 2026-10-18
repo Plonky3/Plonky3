@@ -7,7 +7,6 @@
 //! The verifier evaluates it at the zerocheck point in closed form, one term per word.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 
 use p3_air::{Air, BaseAir, WindowAccess};
 use p3_binary_field::{BinaryChallenger, BinaryField64, BinaryField128};
@@ -15,12 +14,13 @@ use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsParams, BinaryPcsProverData, GroupedCodewordMmcs,
 };
 use p3_bus::{
-    BusArgumentError, BusInteractionBuilder, ClockGap, ClockRangeAir, ProductGkrError, PublicImage,
-    RangeRead, TimestampedAccess, TimestampedBoundaryAir, TimestampedMemory,
-    TimestampedMemoryInteractionBuilder, TimestampedSeed,
+    BusArgumentError, BusInteractionBuilder, ClockGap, ClockGapDigits, ClockRangeAir,
+    ClockRangeWitness, ProductGkrError, PublicImage, RangeRead, TimestampedAccess,
+    TimestampedBoundaryAir, TimestampedMemory, TimestampedMemoryInteractionBuilder,
+    TimestampedSeed,
 };
 use p3_challenger::HashChallenger;
-use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{ExtensionField, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError};
@@ -240,39 +240,7 @@ fn traces(starts: &[F], program: &[(u64, usize, Option<u128>)]) -> [Table<F>; 3]
     let tick = Memory::tick();
     let height = ClockRangeAir::<C, F>::HEIGHT;
 
-    // Consecutive rows differ by one fixed factor.
-    //
-    // Each entry is then one product, not one exponentiation.
-    //
-    //     low(row)   =  g^(row + 1)   =  low(0)  * low(0)^row
-    //     high(row)  =  step^row      =  high(0) * high(1)^row
-    let geometric = |first: F, step: F| {
-        core::iter::successors(Some(first), move |&entry| Some(entry * step))
-            .take(height)
-            .collect::<Vec<_>>()
-    };
-    let low_entries = geometric(ClockRangeAir::<C, F>::low(0), ClockRangeAir::<C, F>::low(0));
-    let high_entries = geometric(
-        ClockRangeAir::<C, F>::high(0),
-        ClockRangeAir::<C, F>::high(1),
-    );
-    let index = |entries: &[F]| {
-        entries
-            .iter()
-            .enumerate()
-            .map(|(row, &entry)| (entry, row))
-            .collect::<HashMap<_, _>>()
-    };
-    let (low_index, high_index) = (index(&low_entries), index(&high_entries));
-    let mut reads = [vec![0u64; height], vec![0u64; height]];
-
-    // The k-th read of a range entry holds count `G^k`.
-    let mut count = |side: usize, factor: F| {
-        let row = [&low_index, &high_index][side][&factor];
-        let count = F::GENERATOR.exp_u64(reads[side][row]);
-        reads[side][row] += 1;
-        [factor, count, count.inverse()]
-    };
+    let mut range = ClockRangeWitness::<C, F>::new();
 
     // Every cell starts at time `g^0` holding its starting value.
     let mut state = starts
@@ -281,7 +249,7 @@ fn traces(starts: &[F], program: &[(u64, usize, Option<u128>)]) -> [Table<F>; 3]
         .collect::<Vec<_>>();
     let mut machine = Vec::new();
     for row in 0..ROWS {
-        let (clock, address, previous, old, new, (low, high)) = match program.get(row) {
+        let (clock, address, previous, old, new, digits) = match program.get(row) {
             Some(&(clock, cell, write)) => {
                 let (last, old) = state[cell];
                 let new = write.map_or(old, value);
@@ -292,7 +260,7 @@ fn traces(starts: &[F], program: &[(u64, usize, Option<u128>)]) -> [Table<F>; 3]
                     tick.exp_u64(last),
                     old,
                     new,
-                    Memory::gap_factors(clock - last).unwrap(),
+                    ClockGapDigits::new(clock - last).unwrap(),
                 )
             }
             // Padding sits at time zero and reads the smallest range entries.
@@ -302,15 +270,14 @@ fn traces(starts: &[F], program: &[(u64, usize, Option<u128>)]) -> [Table<F>; 3]
                 F::ZERO,
                 F::ZERO,
                 F::ZERO,
-                (
-                    ClockRangeAir::<C, F>::low(0),
-                    ClockRangeAir::<C, F>::high(0),
-                ),
+                ClockGapDigits::new(1).unwrap(),
             ),
         };
         machine.extend([clock, address, previous, old, new]);
-        machine.extend(count(0, low));
-        machine.extend(count(1, high));
+        let gap = range.read(digits);
+        for read in [gap.low, gap.high] {
+            machine.extend([read.value, read.count, read.count_inverse]);
+        }
     }
 
     let boundary = state
@@ -325,22 +292,9 @@ fn traces(starts: &[F], program: &[(u64, usize, Option<u128>)]) -> [Table<F>; 3]
         })
         .collect();
 
-    let range = (0..height)
-        .flat_map(|row| {
-            [
-                low_entries[row],
-                F::GENERATOR.exp_u64(reads[0][row]),
-                high_entries[row],
-                F::GENERATOR.exp_u64(reads[1][row]),
-            ]
-        })
-        .collect();
+    let range = Table::new(RowMajorMatrix::new(range.into_columns().concat(), height));
 
-    [
-        table(machine, MACHINE_WIDTH),
-        table(boundary, 3),
-        table(range, 4),
-    ]
+    [table(machine, MACHINE_WIDTH), table(boundary, 3), range]
 }
 
 /// The three AIRs, with the boundary seeded from `image`.

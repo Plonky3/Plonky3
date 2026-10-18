@@ -26,10 +26,10 @@ pub use pcs::verifier::errors::VerifierError;
 pub use pcs::zk::{
     BaseCaseZkConfig, BaseCaseZkError, BaseCaseZkProof, BlindedMask, CodeSwitchError,
     HidingBaseCaseSecurityReport, HidingBoundClassification, HidingCodeRole,
-    HidingCodeSecurityReport, HidingErrorBound, HidingGammaRoundReport, HidingListBound,
-    HidingQueryRoundReport, HidingWhirPcs, HidingWhirProverData, MaskCodeShape, MaskGroupShape,
-    MaskOpeningPair, ZkConfigError, ZkParameters, ZkRoundProof, ZkVerifierError, ZkWhirConfig,
-    ZkWhirProof,
+    HidingCodeSecurityReport, HidingErrorBound, HidingGammaRoundReport,
+    HidingIntermediateSourceSecurityReport, HidingListBound, HidingQueryRoundReport, HidingWhirPcs,
+    HidingWhirProverData, MaskCodeShape, MaskGroupShape, MaskOpeningPair, ZkConfigError,
+    ZkParameters, ZkRoundProof, ZkVerifierError, ZkWhirConfig, ZkWhirProof,
 };
 pub use transcript::WhirShape;
 pub use transcript::zk::{ZkBaseCaseShape, ZkWhirShape};

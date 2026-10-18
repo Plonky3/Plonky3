@@ -48,7 +48,7 @@ pub(crate) fn zk_padded_matrix<A: Field>(
 
     // Message: cache-blocked transpose of high-bit chunks into the top rows.
     let folded = RowMajorMatrixView::new(message, msg_rows);
-    folded.transpose_into(&mut RowMajorMatrixViewMut::new(
+    folded.transpose_packable_into(&mut RowMajorMatrixViewMut::new(
         &mut values[..message.len()],
         width,
     ));

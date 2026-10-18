@@ -55,7 +55,7 @@ use crate::fold::BitChallengeField;
 use crate::packing::{Coordinates, PackedStack, PackedWords, hypercube_variables};
 use crate::whir::error::BooleanWhirError;
 use crate::whir::proof::BooleanWhirProof;
-use crate::whir::shape::ProofShape;
+use crate::whir::shape::{ProofShape, ProofShapeError};
 
 /// The binding mode the committed layout uses.
 ///
@@ -299,9 +299,22 @@ where
     /// The shape of every proof an opening of this many claims can produce.
     ///
     /// It covers the reductions as well as the opening, so a ceiling graded against it binds both.
-    #[must_use]
-    pub fn proof_shape(&self, num_claims: usize, successor_tensors: bool) -> ProofShape {
-        ProofShape::of_bit_readings(&self.inner, num_claims, successor_tensors)
+    /// Serializer framing is excluded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported MMCS geometry or unrepresentable counts.
+    pub fn proof_shape(
+        &self,
+        num_claims: usize,
+        successor_tensors: bool,
+    ) -> Result<ProofShape, ProofShapeError> {
+        ProofShape::of_bit_readings(
+            &self.inner,
+            self.inner.mmcs(),
+            num_claims,
+            successor_tensors,
+        )
     }
 
     /// Commit to packed elements as the one column of the one table the layout stacks.

@@ -2,9 +2,8 @@ use core::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Packable, PrimeCharacteristicRing};
 use p3_goldilocks::Goldilocks;
-use p3_util::transpose::transpose;
 
 /// Benchmark matrix sizes for BabyBear field elements (4 bytes each):
 const BENCHMARK_SIZES: &[(usize, usize, &str)] = &[
@@ -25,7 +24,7 @@ fn bench_transpose_babybear(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("transpose_util", name), &size, |b, _| {
             b.iter(|| {
-                transpose(black_box(&input), &mut output, width, height);
+                BabyBear::transpose(black_box(&input), &mut output, width, height);
                 black_box(output[0])
             });
         });
@@ -45,7 +44,7 @@ fn bench_transpose_goldilocks(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("transpose_util", name), &size, |b, _| {
             b.iter(|| {
-                transpose(black_box(&input), &mut output, width, height);
+                Goldilocks::transpose(black_box(&input), &mut output, width, height);
                 black_box(output[0])
             });
         });

@@ -29,6 +29,22 @@ pub mod stack;
 pub mod strided;
 pub mod util;
 
+/// Adds an offset to an already normalized row without overflowing `usize`.
+#[inline]
+const fn add_wrapped_row(r: usize, offset: usize, height: usize) -> usize {
+    let offset = if offset < height {
+        offset
+    } else {
+        offset % height
+    };
+    let remaining = height - r;
+    if offset < remaining {
+        r + offset
+    } else {
+        offset - remaining
+    }
+}
+
 /// A simple struct representing the shape of a matrix.
 ///
 /// The `Dimensions` type stores the number of columns (`width`) and rows (`height`)
@@ -255,12 +271,15 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     /// Collect the elements of the rows `r` through `r + c`. If anything is larger than `self.height()`
     /// simply wrap around to the beginning of the matrix.
     fn wrapping_row_slices(&self, r: usize, c: usize) -> Vec<impl Deref<Target = [T]>> {
-        unsafe {
-            // Safety: Thank to the `%`, the rows index is always less than `self.height()`.
-            (0..c)
-                .map(|i| self.row_slice_unchecked((r + i) % self.height()))
-                .collect_vec()
-        }
+        let height = self.height();
+        // Preserve the empty request even for a matrix with no rows.
+        let r = if c == 0 { 0 } else { r % height };
+        (0..c)
+            .map(|i| unsafe {
+                // Safety: modular addition yields a row less than height.
+                self.row_slice_unchecked(add_wrapped_row(r, i, height))
+            })
+            .collect_vec()
     }
 
     /// Returns an iterator over the first row of the matrix.
@@ -426,7 +445,8 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         // It's probably allowing the compiler to make some optimizations on the fly.
 
         let rows = self.wrapping_row_slices(r, P::WIDTH);
-        let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
+        let next_row = add_wrapped_row(r % self.height(), step, self.height());
+        let next_rows = self.wrapping_row_slices(next_row, P::WIDTH);
 
         (0..self.width())
             .map(|c| P::from_fn(|i| rows[i][c]))
