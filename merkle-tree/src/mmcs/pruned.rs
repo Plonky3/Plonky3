@@ -162,6 +162,68 @@ mod tests {
     }
 
     #[test]
+    fn pruned_verifier_rejects_every_tampered_boundary_word_and_opened_value() {
+        let mut rng = SmallRng::seed_from_u64(982);
+        let hash = MyHash::new(Perm::new_from_rng_128(&mut rng));
+        let compress = MyCompress4::new(PermWide::new_from_rng_128(&mut rng));
+        let scalar = MerkleTreeMmcs::<F, F, _, _, 4, 8>::new(hash.clone(), compress.clone(), 0);
+        let packed = MyMmcs4::new(hash, compress, 0);
+        // Distinct heights exercise the binary bridge and matrix injections, while 35
+        // queries exercise both packed groups and their scalar tails.
+        let mats: Vec<_> = [(128, 3), (128, 5), (64, 2), (16, 4)]
+            .into_iter()
+            .map(|(height, width)| RowMajorMatrix::<F>::rand(&mut rng, height, width))
+            .collect();
+        let dims: Vec<_> = mats.iter().map(Matrix::dimensions).collect();
+        let (commit, data) = scalar.commit(mats);
+        let indices: Vec<_> = (0..35).map(|i| (i * 3) % 128).collect();
+        let opening = scalar.open_batch_pruned(&indices, &data);
+        let verify = |opened_values: &[Vec<Vec<F>>],
+                      proof: &crate::pruning::PrunedMerklePaths<F, 8>| {
+            [
+                scalar.verify_batch_pruned(&commit, &dims, &indices, opened_values, proof),
+                packed.verify_batch_pruned(&commit, &dims, &indices, opened_values, proof),
+            ]
+        };
+        for result in verify(&opening.opened_values, &opening.pruned_proof) {
+            result.unwrap();
+        }
+        assert!(!opening.pruned_proof.sibling_hashes.is_empty());
+        for sibling in 0..opening.pruned_proof.sibling_hashes.len() {
+            for word in 0..8 {
+                let mut proof = opening.pruned_proof.clone();
+                proof.sibling_hashes[sibling][word] += F::ONE;
+                for (mode, result) in verify(&opening.opened_values, &proof)
+                    .into_iter()
+                    .enumerate()
+                {
+                    assert!(
+                        result.is_err(),
+                        "mode={mode}, sibling={sibling}, word={word}"
+                    );
+                }
+            }
+        }
+        for (query, rows) in opening.opened_values.iter().enumerate() {
+            for (matrix, row) in rows.iter().enumerate() {
+                for column in 0..row.len() {
+                    let mut opened_values = opening.opened_values.clone();
+                    opened_values[query][matrix][column] += F::ONE;
+                    for (mode, result) in verify(&opened_values, &opening.pruned_proof)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        assert!(
+                            result.is_err(),
+                            "mode={mode}, query={query}, matrix={matrix}, column={column}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn pruned_verifier_batches_fragmented_byte_rows_and_rejects_before_hashing() {
         use alloc::sync::Arc;
         use core::sync::atomic::{AtomicUsize, Ordering};

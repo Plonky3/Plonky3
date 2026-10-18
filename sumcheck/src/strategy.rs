@@ -1045,7 +1045,7 @@ pub fn sumcheck_coefficients_suffix_packed<F: Field, EF: ExtensionField<F>>(
                 },
             )
     };
-    let (c_a, c_inf) = if evals.len() * F::Packing::WIDTH > PAR_THRESHOLD {
+    let (c_a, c_inf) = if PARALLEL_ENABLED && evals.len() * F::Packing::WIDTH > PAR_THRESHOLD {
         evals
             .par_chunks(2 * K)
             .zip(weights.par_chunks(2 * K))

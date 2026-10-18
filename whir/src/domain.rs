@@ -103,6 +103,10 @@ where
         let width = message.width;
         let num_cosets = 1 << log_inv_rate;
         let len = message.height() >> log_inv_rate;
+        debug_assert!(
+            message.values[len * width..].iter().all(Field::is_zero),
+            "padded coefficient rows must be zero"
+        );
         let base_width = width * EF::DIMENSION;
         let batch_width = num_cosets * base_width;
         let generator = F::two_adic_generator(log_height);
@@ -203,6 +207,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "padded coefficient rows must be zero")]
+    fn padded_encoding_rejects_nonzero_padding() {
+        type EF = BinomialExtensionField<BabyBear, 4>;
+        let mut values = EF::zero_vec(32 * 3);
+        // The first two rows are live; this is the first padding coefficient.
+        values[2 * 3] = EF::ONE;
+        let message = RowMajorMatrix::new(values, 3);
+        Radix2DFTSmallBatch::<BabyBear>::default().encode_extension_batch_padded(message, 4);
     }
 
     #[test]
