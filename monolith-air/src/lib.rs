@@ -15,6 +15,7 @@ extern crate alloc;
 mod air;
 mod columns;
 mod generation;
+mod mds;
 
 pub use air::*;
 pub use columns::*;
@@ -631,5 +632,55 @@ mod tests {
             G_NUM_CHI_CELLS,
         > = (*local).borrow();
         assert_eq!(row.final_round.post, expected);
+    }
+    #[test]
+    fn optimized_mds_preserves_whole_m31_trace() {
+        let (air, bars) = build_monolith_air();
+        let inputs = vec![
+            [F::ZERO; WIDTH],
+            [F::NEG_ONE; WIDTH],
+            core::array::from_fn(F::from_usize),
+            [F::ONE; WIDTH],
+        ];
+        let actual = generate_trace_rows(inputs.clone(), &air, &bars, 0);
+        let mut dense = air.clone();
+        dense.mds_strategy = crate::mds::MdsStrategy::Dense;
+        let expected = generate_trace_rows(inputs, &dense, &bars, 0);
+        assert_eq!(actual.values, expected.values);
+        check_constraints(&air, &actual, &[]);
+    }
+
+    #[test]
+    fn optimized_mds_preserves_whole_goldilocks_trace() {
+        let (air, bars) = build_goldilocks_air();
+        let inputs = vec![
+            [G::ZERO; G_WIDTH],
+            [G::NEG_ONE; G_WIDTH],
+            core::array::from_fn(G::from_usize),
+            [G::ONE; G_WIDTH],
+        ];
+        let actual = generate_trace_rows(inputs.clone(), &air, &bars, 0);
+        let mut dense = air.clone();
+        dense.mds_strategy = crate::mds::MdsStrategy::Dense;
+        let expected = generate_trace_rows(inputs, &dense, &bars, 0);
+        assert_eq!(actual.values, expected.values);
+        check_constraints(&air, &actual, &[]);
+    }
+
+    #[test]
+    fn optimized_mds_preserves_whole_goldilocks_12_trace() {
+        type Air = MonolithAir<G, 12, 5, 4, 64, 16, 64>;
+        let bars = MonolithBarsGoldilocks::<8>;
+        let mds = MonolithMdsMatrixGoldilocks;
+        let matrix = Air::extract_mds_matrix(&mds);
+        let native: MonolithGoldilocks8<_, 12, 5> = MonolithGoldilocks8::new(bars, mds);
+        let air = Air::new(native.round_constants, matrix, GOLDILOCKS_8_LIMB_BITS);
+        let inputs = vec![[G::NEG_ONE; 12], core::array::from_fn(G::from_usize)];
+        let actual = generate_trace_rows(inputs.clone(), &air, &bars, 0);
+        let mut dense = air.clone();
+        dense.mds_strategy = crate::mds::MdsStrategy::Dense;
+        let expected = generate_trace_rows(inputs, &dense, &bars, 0);
+        assert_eq!(actual.values, expected.values);
+        check_constraints(&air, &actual, &[]);
     }
 }

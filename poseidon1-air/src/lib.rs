@@ -551,4 +551,104 @@ mod tests {
         // Verify: check the proof against the same AIR and config.
         verify(&config, &air, &proof, &[]).expect("Verification failed");
     }
+    fn compare_scalar_and_packed<const DEGREE: u64, const REGISTERS: usize>() {
+        use p3_field::PrimeCharacteristicRing;
+        let (full, partial) = babybear_poseidon1_constants_16().to_optimized();
+        for n in [1, 2, 4, 8, 16, 32] {
+            let inputs: alloc::vec::Vec<[F; WIDTH]> = (0..n)
+                .map(|i| {
+                    core::array::from_fn(|j| match (i + j) % 4 {
+                        0 => F::ZERO,
+                        1 => F::ONE,
+                        2 => F::NEG_ONE,
+                        _ => F::from_usize(i * WIDTH + j),
+                    })
+                })
+                .collect();
+            let expected: alloc::vec::Vec<F> = inputs
+                .iter()
+                .flat_map(|input| {
+                    generate_trace_rows::<
+                        F,
+                        WIDTH,
+                        DEGREE,
+                        REGISTERS,
+                        HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                    >(vec![*input], &full, &partial, 0)
+                    .values
+                })
+                .collect();
+            let actual = generate_trace_rows::<
+                F,
+                WIDTH,
+                DEGREE,
+                REGISTERS,
+                HALF_FULL_ROUNDS,
+                PARTIAL_ROUNDS,
+            >(inputs.clone(), &full, &partial, 1);
+            assert_eq!(
+                actual.values, expected,
+                "batch {n}, S-box {DEGREE}/{REGISTERS}"
+            );
+            if n >= 4 {
+                let vectorized = crate::generate_vectorized_trace_rows::<
+                    F,
+                    WIDTH,
+                    DEGREE,
+                    REGISTERS,
+                    HALF_FULL_ROUNDS,
+                    PARTIAL_ROUNDS,
+                    4,
+                >(inputs, &full, &partial, 0);
+                assert_eq!(vectorized.values, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn packed_witness_matches_every_scalar_column() {
+        compare_scalar_and_packed::<3, 0>();
+        compare_scalar_and_packed::<5, 0>();
+        compare_scalar_and_packed::<7, 0>();
+        compare_scalar_and_packed::<5, 1>();
+        compare_scalar_and_packed::<7, 1>();
+        compare_scalar_and_packed::<11, 1>();
+        compare_scalar_and_packed::<11, 2>();
+    }
+
+    fn compare_packed_width<const W: usize>(non_circulant: bool) {
+        use p3_field::PrimeCharacteristicRing;
+        let raw = Poseidon1Constants::<F, W> {
+            rounds_f: 2,
+            rounds_p: 3,
+            // A nonsingular circulant with invertible lower-right blocks.
+            mds_circ_col: core::array::from_fn(|i| if i == 0 { 2 } else { 1 }),
+            round_constants: (0..5)
+                .map(|r| core::array::from_fn(|j| F::from_usize(r * W + j)))
+                .collect(),
+        };
+        let (mut full, partial) = raw.to_optimized();
+        if non_circulant {
+            full.dense_mds[1][2] += F::ONE;
+        }
+        let inputs: alloc::vec::Vec<[F; W]> = (0..32)
+            .map(|i| core::array::from_fn(|j| F::from_usize(i * W + j)))
+            .collect();
+        let expected: alloc::vec::Vec<F> = inputs
+            .iter()
+            .flat_map(|input| {
+                generate_trace_rows::<F, W, 7, 1, 1, 3>(vec![*input], &full, &partial, 0).values
+            })
+            .collect();
+        let actual = generate_trace_rows::<F, W, 7, 1, 1, 3>(inputs, &full, &partial, 0);
+        assert_eq!(actual.values, expected);
+    }
+
+    #[test]
+    fn packed_witness_covers_karatsuba_24_and_dense_fallback() {
+        compare_packed_width::<24>(false);
+        compare_packed_width::<8>(false);
+        compare_packed_width::<8>(true);
+    }
 }
