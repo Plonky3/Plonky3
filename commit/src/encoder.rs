@@ -65,12 +65,14 @@ pub trait Encoder<F: Field> {
 
     /// Encodes a coefficient matrix already padded to its final height.
     ///
-    /// The original message occupies the first `height / 2^log_inv_rate` rows; the
-    /// caller must set the remaining entries to zero. Implementations may ignore
-    /// that tail and use the rate to avoid work on zero coefficients.
+    /// The original message occupies the first `height / 2^log_inv_rate` rows; the caller must set the remaining entries to zero.
+    ///
+    /// Implementations may ignore that tail and use the rate to avoid work on zero coefficients.
+    ///
     /// The default preserves the ordinary transform of the full padded matrix.
     ///
     /// # Panics
+    ///
     /// Panics if the height is not a power of two or the padding exceeds its height.
     fn encode_batch_padded(
         &self,
@@ -129,7 +131,16 @@ impl<F: TwoAdicField, D: TwoAdicSubgroupDft<F>> Encoder<F> for D {
             values[..len].copy_from_slice(&message.values);
             message.values = values;
         }
-        self.dft_batch(message).to_row_major_matrix()
+        self.encode_batch_padded(message, log_inv_rate)
+    }
+
+    fn encode_batch_padded(
+        &self,
+        message: RowMajorMatrix<F>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<F> {
+        self.dft_batch_padded(message, log_inv_rate)
+            .to_row_major_matrix()
     }
 }
 

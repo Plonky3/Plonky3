@@ -118,12 +118,66 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 
         // The first half looks like a normal DIT.
         reverse_matrix_index_bits(&mut mat);
-        first_half(&mut mat, mid, &twiddles.twiddles);
+        first_half(&mut mat, 0, mid, &twiddles.twiddles);
 
         // For the second half, we flip the DIT, working in bit-reversed order.
         reverse_matrix_index_bits(&mut mat);
         second_half(&mut mat, mid, &twiddles.bitrev_twiddles, None);
 
+        mat.bit_reverse_rows()
+    }
+
+    fn dft_batch_padded(
+        &self,
+        mut mat: RowMajorMatrix<F>,
+        log_inv_rate: usize,
+    ) -> Self::Evaluations {
+        let log_h = log2_strict_usize(mat.height());
+        assert!(log_inv_rate <= log_h, "padding exceeds matrix height");
+        if log_inv_rate == 0 {
+            return self.dft_batch(mat);
+        }
+        assert!(
+            log_h <= F::TWO_ADICITY,
+            "transform height exceeds field two-adicity"
+        );
+        // Skipping only the twiddle-free first layer does not repay moving and replicating nonconstant coefficients.
+        if log_inv_rate == 1 && log_h > 1 {
+            return self.dft_batch(mat);
+        }
+
+        let width = mat.width;
+        let live_rows = mat.height() >> log_inv_rate;
+        let live_len = live_rows * width;
+        debug_assert!(
+            mat.values[live_len..].iter().all(|x| x.is_zero()),
+            "padded tail must be zero"
+        );
+        let block_len = mat.values.len() / live_rows;
+        reverse_matrix_index_bits(&mut RowMajorMatrixViewMut::new(
+            &mut mat.values[..live_len],
+            width,
+        ));
+        // After full-height bit reversal, each live coefficient starts a block of 2^log_inv_rate rows followed by zeros.
+        //
+        // The first log_inv_rate DIT layers simply replicate it throughout that block because all high inputs are zero.
+        //
+        // Row j moves to j * 2^log_inv_rate >= j, so moving backwards only overwrites rows already moved.
+        for row in (1..live_rows).rev() {
+            mat.values
+                .copy_within(row * width..(row + 1) * width, row * block_len);
+        }
+
+        // Constant polynomials only need replication, without twiddles.
+        if log_inv_rate == log_h {
+            first_half(&mut mat, log_inv_rate, log_h, &[]);
+            return mat.bit_reverse_rows();
+        }
+        let twiddles = self.get_or_compute_twiddles(log_h);
+        let mid = log_h.div_ceil(2).max(log_inv_rate);
+        first_half(&mut mat, log_inv_rate, mid, &twiddles.twiddles);
+        reverse_matrix_index_bits(&mut mat);
+        second_half(&mut mat, mid, &twiddles.bitrev_twiddles, None);
         mat.bit_reverse_rows()
     }
 
@@ -143,7 +197,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         let inverse_twiddles = self.get_or_compute_inverse_twiddles(log_h);
 
         reverse_matrix_index_bits(&mut mat);
-        first_half(&mut mat, mid, &inverse_twiddles.twiddles);
+        first_half(&mut mat, 0, mid, &inverse_twiddles.twiddles);
         reverse_matrix_index_bits(&mut mat);
         let h_inv_subfield = F::PrimeSubfield::ONE.div_2exp_u64(log_h as u64);
         let scale = Some(F::from_prime_subfield(h_inv_subfield));
@@ -215,7 +269,7 @@ impl<F: TwoAdicField + Ord> Radix2DitParallel<F> {
 
         // The first half looks like a normal DIT.
         reverse_matrix_index_bits(&mut mat);
-        first_half(&mut mat, mid, &inverse_twiddles.twiddles);
+        first_half(&mut mat, 0, mid, &inverse_twiddles.twiddles);
 
         // For the second half, we flip the DIT, working in bit-reversed order.
         reverse_matrix_index_bits(&mut mat);
@@ -359,22 +413,39 @@ fn coset_dft_oop<F: Field>(
     second_half_general(dst, mid, twiddles, row_base, consume);
 }
 
-/// This can be used as the first half of a DIT butterfly network.
+/// Apply the first half of a DIT butterfly network, starting at `start_layer`.
 ///
-/// For layer 0, all twiddle factors are 1 (root^0 = 1), so we use `TwiddleFreeButterfly`
-/// to avoid a Montgomery multiply by 1 across the entire matrix.
+/// When `start_layer > 0`, each aligned block of `2^start_layer` rows starts with one coefficient row to replicate.
 ///
-/// For layers 1 to mid-1 included, the first twiddle in each block is also always 1 (`twiddles[0] = 1`),
-/// so we special-case the first row-pair of each block to use `TwiddleFreeButterfly` as well.
+/// Replicate that row within each chunk before applying the remaining layers while the data is still hot.
+///
+/// For layer 0, all twiddle factors are 1 (root^0 = 1), so we use `TwiddleFreeButterfly` to avoid a Montgomery multiply by 1 across the entire matrix.
+///
+/// For layers 1 to mid-1 included, the first twiddle in each block is also always 1 (`twiddles[0] = 1`), so we special-case the first row-pair of each block to use `TwiddleFreeButterfly` as well.
 #[instrument(level = "debug", skip_all)]
-fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F]) {
+fn first_half<F: Field>(
+    mat: &mut RowMajorMatrix<F>,
+    start_layer: usize,
+    mid: usize,
+    twiddles: &[F],
+) {
     let log_h = log2_strict_usize(mat.height());
 
     // max block size: 2^mid
     mat.par_row_chunks_exact_mut(1 << mid)
         .for_each(|mut submat| {
+            if start_layer > 0 {
+                let width = submat.width;
+                for block in submat.values.chunks_exact_mut(width << start_layer) {
+                    let mut initialized = width;
+                    while initialized < block.len() {
+                        block.copy_within(..initialized, initialized);
+                        initialized *= 2;
+                    }
+                }
+            }
             let mut backwards = false;
-            for layer in 0..mid {
+            for layer in start_layer..mid {
                 if layer == 0 {
                     // For layer 0, half_block_size=1 and each block clones the twiddle
                     // iterator from the start, consuming only twiddles[0] = root^0 = 1.
