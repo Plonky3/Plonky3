@@ -180,6 +180,26 @@ fn a_batch_agrees_with_hashing_one_at_a_time() {
 }
 
 #[test]
+fn every_partial_batch_matches_the_reference() {
+    // Each possible tail, alone and after a complete SIMD group. Empty messages still
+    // produce one digest per output slot; chunks() would silently skip those assertions.
+    for count in 1..=2 * LANES {
+        for len in [0, 63, 64, 65, 1024] {
+            let messages = fixture(len * count);
+            let mut digests = vec![[0u8; DIGEST_BYTES]; count];
+            Blake2s256.hash_many(&messages, &mut digests);
+            for (i, digest) in digests.iter().enumerate() {
+                assert_eq!(
+                    *digest,
+                    reference(&messages[i * len..(i + 1) * len]),
+                    "{count} messages of {len} bytes, message {i}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn an_empty_batch_reads_nothing() {
     let mut digests: [[u8; DIGEST_BYTES]; 0] = [];
     Blake2s256.hash_many(&[], &mut digests);

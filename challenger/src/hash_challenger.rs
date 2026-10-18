@@ -57,10 +57,10 @@ where
     }
 
     fn flush(&mut self) {
-        let inputs = self.input_buffer.drain(..);
-        let output = self.hasher.hash_iter(inputs);
+        let output = self.hasher.hash_slice(&self.input_buffer);
 
         // Chaining values.
+        self.input_buffer.clear();
         self.input_buffer.extend_from_slice(&output);
         self.output_buffer.clear();
         self.output_buffer.extend(output);
@@ -402,6 +402,35 @@ mod tests {
             }
             source.observe(observation);
             let _: F = source.sample();
+        }
+    }
+
+    #[test]
+    fn contiguous_flush_preserves_the_legacy_keccak_transcript() {
+        // Independent iterator model, including empty observations, discarded output,
+        // and enough samples to chain multiple digest blocks between observations.
+        for initial_len in [0, 1, 63, 64, 65, 136, 1024] {
+            let initial: Vec<u8> = (0..initial_len).map(|i| i as u8).collect();
+            let mut challenger = HashChallenger::<_, _, 32>::new(initial.clone(), Keccak256Hash);
+            let mut input = initial;
+            let mut output = Vec::new();
+            for round in 0..9 {
+                let observations: Vec<u8> =
+                    (0..round % 4).map(|i| (round * 19 + i) as u8).collect();
+                challenger.observe_slice(&observations);
+                if !observations.is_empty() {
+                    output.clear();
+                    input.extend_from_slice(&observations);
+                }
+                for _ in 0..round * 13 + 1 {
+                    if output.is_empty() {
+                        let digest = Keccak256Hash.hash_iter(input);
+                        input = digest.to_vec();
+                        output.extend(digest);
+                    }
+                    assert_eq!(challenger.sample(), output.pop().unwrap());
+                }
+            }
         }
     }
 

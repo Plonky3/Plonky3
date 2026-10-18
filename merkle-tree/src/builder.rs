@@ -455,7 +455,7 @@ where
 
         // One set of staging buffers per worker, reused by every block it runs.
         let fill =
-            |scratch: &mut Scratch<P::Value, PW::Value>,
+            |scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
              (j, mut block): (usize, Vec<&mut [[PW::Value; DIGEST_ELEMS]]>)| {
                 for (offset, l) in (lo..=hi).enumerate() {
                     let layer = &self.layers[l];
@@ -517,7 +517,7 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let (hash_lanes, compress_lanes) = (Self::HASH_LANES, Self::COMPRESS_LANES);
 
@@ -555,7 +555,7 @@ where
         matrices: &[&M],
         first: usize,
         out: &mut [[PW::Value; DIGEST_ELEMS]],
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         // Bound the row range once, since the copy loop below skips per-row bounds checks.
         assert!(
@@ -602,7 +602,7 @@ where
         matrices: &[&M],
         first: usize,
         out: &mut [[PW::Value; DIGEST_ELEMS]],
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let lanes = P::WIDTH;
         let (groups, tail) = out.split_at_mut(Self::vector_nodes(out.len()));
@@ -639,7 +639,7 @@ where
         &self,
         matrices: &[&M],
         first: usize,
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) -> [PW; DIGEST_ELEMS] {
         let lanes = P::WIDTH;
         let width: usize = matrices.iter().map(|m| m.width()).sum();
@@ -655,15 +655,24 @@ where
         for m in matrices {
             let cols = m.width();
 
-            // Hold the lane rows while the transpose reads them.
-            //
-            // SAFETY: the caller guarantees rows first .. first + lanes exist.
-            let rows: Vec<_> = (0..lanes)
-                .map(|lane| unsafe { m.row_slice_unchecked(first + lane) })
-                .collect();
-
             let block = &mut staged[start * lanes..(start + cols) * lanes];
-            P::Value::transpose_rows(lanes, cols, |lane| &*rows[lane], block);
+            if let Some(rows) = m.contiguous_rows(first..first + lanes) {
+                // Keep the handle alive through the transpose: some matrices return owned rows.
+                // Dense matrices lend this whole group without allocating per-row handles.
+                P::Value::transpose_rows(
+                    lanes,
+                    cols,
+                    |lane| &rows[lane * cols..(lane + 1) * cols],
+                    block,
+                );
+            } else {
+                // Hold every fallback row handle until the transpose has finished reading it.
+                // SAFETY: the caller guarantees rows first .. first + lanes exist.
+                let rows: Vec<_> = (0..lanes)
+                    .map(|lane| unsafe { m.row_slice_unchecked(first + lane) })
+                    .collect();
+                P::Value::transpose_rows(lanes, cols, |lane| &*rows[lane], block);
+            }
             start += cols;
         }
 
@@ -681,7 +690,7 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let lanes = PW::WIDTH;
         let rows = Self::injected_height(layer);
@@ -738,9 +747,9 @@ where
     /// Each chunk of nodes goes through three passes over small buffers:
     ///
     /// ```text
-    ///     pass 1: compress N children            -> folded
+    ///     pass 1: compress N children            -> out
     ///     pass 2: hash one row per output node    -> injected
-    ///     pass 3: compress [folded, injected]    -> out
+    ///     pass 3: compress [out, injected]       -> out
     /// ```
     ///
     /// Nodes past the injected height mix in the default digest in place of a row digest.
@@ -750,12 +759,14 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
-        scratch: &mut Scratch<P::Value, PW::Value>,
+        scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let rows = Self::injected_height(layer);
         let default = [PW::Value::default(); DIGEST_ELEMS];
         let (groups, _) = kids[..out.len() * N].as_chunks::<N>();
 
+        // Row hashing borrows all staging buffers, so this one is moved out for the loop and restored after it.
+        let mut injected = mem::take(&mut scratch.injected);
         for (k, (groups, out)) in groups
             .chunks(INJECT_CHUNK_NODES)
             .zip(out.chunks_mut(INJECT_CHUNK_NODES))
@@ -765,26 +776,26 @@ where
             let count = out.len();
 
             // Pass 1: fold the children of every node in this chunk.
-            let mut folded = vec![default; count];
-            self.c.compress_many(groups, &mut folded);
+            self.c.compress_many(groups, out);
 
             // Pass 2: hash one row per node, for as many nodes as the matrices are tall.
             let injected_count = count.min(rows.saturating_sub(base));
-            let mut injected = vec![default; injected_count];
+            injected.resize(injected_count, default);
             self.hash_rows_batched(&layer.matrices, base, &mut injected, scratch);
 
-            // Pass 3: pair each folded digest with its row digest, padding the group to `N`.
-            let pairs: Vec<[_; N]> = (0..count)
-                .map(|node| {
-                    array::from_fn(|slot| match slot {
-                        0 => folded[node],
-                        1 if node < injected_count => injected[node],
-                        _ => default,
-                    })
-                })
-                .collect();
-            self.c.compress_many(&pairs, out);
+            // Pass 3: copy every folded digest into scratch before overwriting the output.
+            let pairs = &mut scratch.pairs;
+            pairs.resize(count, [default; N]);
+            for (node, pair) in pairs.iter_mut().enumerate() {
+                *pair = array::from_fn(|slot| match slot {
+                    0 => out[node],
+                    1 if node < injected_count => injected[node],
+                    _ => default,
+                });
+            }
+            self.c.compress_many(pairs, out);
         }
+        scratch.injected = injected;
     }
 
     /// Leading nodes of a run that go through whole vector groups; the rest take the scalar path.
@@ -862,12 +873,18 @@ where
 
 /// Buffers one task reuses across the layers it builds.
 #[derive(Debug, Default)]
-struct Scratch<F, W> {
+struct Scratch<F, W, const N: usize, const DIGEST_ELEMS: usize> {
     /// Staged row messages, row-major for batched hashing or column-major for packed hashing.
     rows: Vec<F>,
 
     /// Staged children, column-major for packed compression.
     digests: Vec<W>,
+
+    /// Row digests for batched injection, temporarily taken while row hashing uses this scratch.
+    injected: Vec<[W; DIGEST_ELEMS]>,
+
+    /// Folded children paired with injected row digests for batched compression.
+    pairs: Vec<[[W; DIGEST_ELEMS]; N]>,
 }
 
 /// Pack the children of `P::WIDTH` consecutive nodes into one vector per child word.
@@ -1173,6 +1190,67 @@ mod tests {
         }
     }
 
+    /// Exercises both owned contiguous handles and owned per-row fallback handles.
+    struct OwnedRows {
+        matrix: RowMajorMatrix<F>,
+        contiguous: bool,
+    }
+
+    impl Matrix<F> for OwnedRows {
+        fn width(&self) -> usize {
+            self.matrix.width()
+        }
+
+        fn height(&self) -> usize {
+            self.matrix.height()
+        }
+
+        unsafe fn row_unchecked(&self, row: usize) -> impl Iterator<Item = F> + Send + Sync {
+            self.matrix.row_slice(row).unwrap().to_vec().into_iter()
+        }
+
+        fn contiguous_rows(
+            &self,
+            rows: Range<usize>,
+        ) -> Option<impl core::ops::Deref<Target = [F]>> {
+            (self.contiguous && rows.start <= rows.end && rows.end <= self.height()).then(|| {
+                self.matrix.values[rows.start * self.width()..rows.end * self.width()].to_vec()
+            })
+        }
+    }
+
+    #[test]
+    fn packed_rows_match_for_borrowed_owned_and_fallback_storage() {
+        let mut rng = SmallRng::seed_from_u64(10);
+        let perm = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm.clone());
+        let c = TruncatedPermutation::<_, 2, 8, 16>::new(perm);
+        for (heights, width) in [(&[67, 67, 34, 17][..], 3), (&[129, 65][..], 135)] {
+            let leaves = matrices(heights, width);
+            let expected =
+                MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &c, leaves.clone())
+                    .digest_layers;
+            for contiguous in [false, true] {
+                let owned = leaves
+                    .iter()
+                    .cloned()
+                    .map(|matrix| OwnedRows { matrix, contiguous })
+                    .collect();
+                let got = MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &c, owned);
+                assert_eq!(
+                    got.digest_layers, expected,
+                    "width {width}, contiguous {contiguous}"
+                );
+            }
+            let strided = leaves
+                .iter()
+                .map(|m| m.as_view().vertically_strided(1, 0))
+                .collect();
+            let got = MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &c, strided);
+            assert_eq!(got.digest_layers, expected, "width {width}, strided");
+        }
+    }
+
     #[test]
     fn packed_poseidon2_matches_reference() {
         // Packed arm: one tree node per vector lane, sixteen lanes under AVX-512.
@@ -1244,6 +1322,19 @@ mod tests {
             let input = input.map(|d| d.map(F::from_u64));
             self.0.compress(input).map(|x| x.as_canonical_u64())
         }
+    }
+
+    #[test]
+    fn batched_blake2s_matches_reference() {
+        let h = SerializingHasher::new(p3_blake2s::Blake2s256);
+        assert_bytes_match_reference::<_, _, 2>(
+            &h,
+            &CompressionFunctionFromHasher::<_, 2, 32>::new(p3_blake2s::Blake2s256),
+        );
+        assert_bytes_match_reference::<_, _, 4>(
+            &h,
+            &CompressionFunctionFromHasher::<_, 4, 32>::new(p3_blake2s::Blake2s256),
+        );
     }
 
     #[test]
