@@ -898,7 +898,9 @@ impl<'a, A> AirZerocheck<'a, A> {
             // All stages share the same global sumcheck point.
             // eq_prefix covers folded rounds; eq_suffix covers the tail still inside each state.
             let mut eq_prefix = EF::ONE;
-            let mut eq_suffix = Poly::new_from_point(&tau.as_slice()[1..], EF::ONE);
+            // Lookup block selectors can add dormant rounds before any AIR activates.
+            // The suffix is needed only once the tallest AIR begins its row rounds.
+            let mut eq_suffix = None;
 
             // Barycentric interpolators, indexed by internal degree, built once.
             // A lower-degree stage is extrapolated up to the batch's max degree.
@@ -924,6 +926,9 @@ impl<'a, A> AirZerocheck<'a, A> {
                     EF::ZERO
                 };
                 pending_claim -= activating_claim;
+                if activates_stage && eq_suffix.is_none() {
+                    eq_suffix = Some(Poly::new_from_point(&tau.as_slice()[round + 1..], EF::ONE));
+                }
 
                 // Not-yet-active lookup stages remain represented by one dormant constant.
                 let mut round_poly_acc = vec![pending_claim; max_degree];
@@ -932,7 +937,12 @@ impl<'a, A> AirZerocheck<'a, A> {
                 // Existing stages already live over the extension field.
                 // Extend each stage's internal round polynomial to the global degree and accumulate it.
                 for (state, &claim) in states.iter_mut().zip(claims.iter()) {
-                    let round_poly = B::round(state, &eq_suffix);
+                    let round_poly = B::round(
+                        state,
+                        eq_suffix
+                            .as_ref()
+                            .expect("active AIR has an equality suffix"),
+                    );
                     let q1 = (claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
                     let round_poly = interpolators[round_poly.len()].extend_evals(
@@ -957,7 +967,12 @@ impl<'a, A> AirZerocheck<'a, A> {
                         .collect::<Vec<_>>();
                     let mut state =
                         RoundStateBase::new(stage, alpha, eta, betas, tau, sliced_rounds);
-                    let round_poly = B::round0(&mut state, &eq_suffix);
+                    let round_poly = B::round0(
+                        &mut state,
+                        eq_suffix
+                            .as_ref()
+                            .expect("activating AIR has an equality suffix"),
+                    );
                     let q1 =
                         (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
@@ -1049,7 +1064,9 @@ impl<'a, A> AirZerocheck<'a, A> {
                 // Advance the shared equality factors to the next round.
                 // The prefix absorbs r; the suffix drops the variable just bound.
                 eq_prefix *= Point::eval_eq(&[tau_round], &[r]);
-                if round + 1 < log_height {
+                if round + 1 < log_height
+                    && let Some(eq_suffix) = &mut eq_suffix
+                {
                     eq_suffix.sum_prefix_var_mut();
                 }
             }

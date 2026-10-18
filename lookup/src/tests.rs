@@ -133,6 +133,63 @@ fn compute_combined_sum_terms_matches_definition() {
 }
 
 #[test]
+fn combined_sum_recurrence_matches_exclusion_products_with_zero_factors() {
+    let gadget = LogUpGadget::new();
+    let alpha = EF::from_u32(17);
+    let beta = EF::from_u32(3);
+    for count in [0, 1, 2, 4, 16, 64] {
+        for zero_factors in 0..=2 {
+            let elements = (0..count)
+                .map(|i| {
+                    // Include empty and width-two tuples, as well as exact-zero denominators.
+                    if i < zero_factors {
+                        vec![alpha]
+                    } else if i % 3 == 0 {
+                        vec![]
+                    } else {
+                        vec![EF::from_u32(i as u32 + 1), EF::from_u32(2)]
+                    }
+                })
+                .collect::<Vec<_>>();
+            let multiplicities = (0..count)
+                .map(|i| EF::from_u32((i % 5) as u32))
+                .collect::<Vec<_>>();
+            let terms = elements
+                .iter()
+                .map(|tuple| {
+                    alpha
+                        - tuple
+                            .iter()
+                            .fold(EF::ZERO, |acc, &value| value + acc * beta)
+                })
+                .collect::<Vec<_>>();
+            let denominator = terms.iter().copied().product::<EF>();
+            let numerator = (0..count)
+                .map(|i| {
+                    multiplicities[i]
+                        * terms
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(j, &term)| (i != j).then_some(term))
+                            .product::<EF>()
+                })
+                .sum::<EF>();
+            let actual = gadget.compute_combined_sum_terms::<MockAirBuilder, EF, EF>(
+                &elements,
+                &multiplicities,
+                &alpha,
+                &beta,
+            );
+            assert_eq!(
+                actual,
+                (numerator, denominator),
+                "count={count}, zeros={zero_factors}"
+            );
+        }
+    }
+}
+
+#[test]
 fn compute_combined_sum_terms_empty_returns_zero_over_one() {
     let gadget = LogUpGadget::new();
     let (num, den) =
