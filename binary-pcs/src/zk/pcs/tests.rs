@@ -586,3 +586,154 @@ fn replaying_private_h_and_u_recovers_every_low_message_coefficient() {
         .collect();
     assert_ne!(guessed, message);
 }
+
+// Build the blend and authenticated queries AFTER selecting a dishonest claim.
+// Unlike post-hoc tampering, this keeps every queried blend equation valid.
+fn forged_claim_opening(
+    repair_sigma_after_gamma: bool,
+) -> (ReferenceZkPcs, ZkCommitment, ZkOpeningProof) {
+    let pcs = ReferenceZkPcs::new(ReferencePcsConfig::new(2, 8).unwrap());
+    let point = Val::from_repr(5);
+    let mut rng = StdRng::seed_from_u64(0x464f_5247_4552);
+    let (commitment, data) = pcs
+        .commit(
+            RowMajorMatrix::new_col(vec![Val::ONE, Val::from_repr(7)]),
+            &mut rng,
+        )
+        .unwrap();
+    let mut claimed_values = vec![evaluate(&data.coefficients[0][..2], point)];
+    if !repair_sigma_after_gamma {
+        claimed_values[0] += Val::ONE;
+    }
+    let masks: Vec<Vec<Val>> = vec![
+        (0..pcs.config.coefficient_len)
+            .map(|_| rng.random())
+            .collect(),
+    ];
+    let mut sigma = vec![evaluate(&masks[0][..2], point)];
+    let salted = mmcs(StdRng::from_rng(&mut rng));
+    let (mask_root, mask_tree) = salted.commit_matrix(pcs.encode(&masks));
+    let mut prover = challenger();
+    pcs.bind_opening(
+        &commitment,
+        point,
+        &claimed_values,
+        &mask_root,
+        &sigma,
+        &mut prover,
+    );
+    let gamma = prover.sample_nonzero().unwrap();
+    let blended_coefficients: Vec<Vec<_>> = data
+        .coefficients
+        .iter()
+        .zip(&masks)
+        .map(|(h, u)| h.iter().zip(u).map(|(&h, &u)| gamma * h + u).collect())
+        .collect();
+    if repair_sigma_after_gamma {
+        claimed_values[0] += Val::ONE;
+        sigma[0] += gamma;
+        // This repairs the equation for the PROVER's old gamma, but changes the
+        // verifier's earlier prefix and therefore its gamma.
+        assert_eq!(
+            evaluate(&blended_coefficients[0][..2], point),
+            gamma * claimed_values[0] + sigma[0]
+        );
+        let mut replay = challenger();
+        pcs.bind_opening(
+            &commitment,
+            point,
+            &claimed_values,
+            &mask_root,
+            &sigma,
+            &mut replay,
+        );
+        assert_ne!(replay.sample_nonzero().unwrap(), gamma);
+    }
+    observe_blend(&blended_coefficients, &mut prover);
+    let indices = pcs.sample_indices(&mut prover);
+    let queries = indices
+        .iter()
+        .map(|&index| {
+            let h = open_row(&salted, &data.tree, index);
+            let u = open_row(&salted, &mask_tree, index);
+            assert_eq!(
+                evaluate(&blended_coefficients[0], pcs.domain_point(index)),
+                gamma * h.values[0] + u.values[0]
+            );
+            ZkQueryOpening { h, u }
+        })
+        .collect();
+    (
+        pcs,
+        commitment,
+        ZkOpeningProof {
+            claimed_values,
+            mask_root,
+            sigma,
+            blended_coefficients,
+            queries,
+        },
+    )
+}
+
+#[test]
+fn rejects_transcript_consistent_forged_claim_at_low_functional_identity() {
+    let (pcs, commitment, proof) = forged_claim_opening(false);
+    assert_eq!(
+        pcs.verify(&commitment, Val::from_repr(5), &proof, &mut challenger()),
+        Err(ZkError::InvalidOpening("low-coefficient blend identity"))
+    );
+}
+
+#[test]
+fn changing_sigma_after_gamma_cannot_repair_a_forged_claim() {
+    let (pcs, commitment, proof) = forged_claim_opening(true);
+    assert_eq!(
+        pcs.verify(&commitment, Val::from_repr(5), &proof, &mut challenger()),
+        Err(ZkError::InvalidOpening("low-coefficient blend identity"))
+    );
+}
+
+#[test]
+fn committed_query_rows_hide_the_known_low_polynomials() {
+    let pcs = ReferenceZkPcs::new(ReferencePcsConfig::new(3, 4).unwrap());
+    let messages = RowMajorMatrix::new((1..=6).map(Val::from_repr).collect(), 2);
+    for seed in 0..4 {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let (commitment, data) = pcs.commit(messages.clone(), &mut rng).unwrap();
+        let proof = pcs
+            .open(data, Val::from_repr(5), &mut challenger(), &mut rng)
+            .unwrap();
+        pcs.verify(&commitment, Val::from_repr(5), &proof, &mut challenger())
+            .unwrap();
+        let mut replay = challenger();
+        pcs.bind_opening(
+            &commitment,
+            Val::from_repr(5),
+            &proof.claimed_values,
+            &proof.mask_root,
+            &proof.sigma,
+            &mut replay,
+        );
+        let _ = replay.sample_nonzero().unwrap();
+        observe_blend(&proof.blended_coefficients, &mut replay);
+        for (index, query) in pcs
+            .sample_indices(&mut replay)
+            .into_iter()
+            .zip(&proof.queries)
+        {
+            for column in 0..2 {
+                let low: Vec<_> = (0..3)
+                    .map(|row| messages.values[row * 2 + column])
+                    .collect();
+                // These are actual authenticated committed rows, not a model
+                // of the masking algebra or a pinned serialization digest.
+                assert_ne!(
+                    query.h.values[column],
+                    evaluate(&low, pcs.domain_point(index)),
+                    "seed={seed} index={index} column={column}"
+                );
+            }
+        }
+    }
+}

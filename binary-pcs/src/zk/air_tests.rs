@@ -302,3 +302,59 @@ fn canonical_air_stage_prefixes_pin_records_duplicate_root_and_candidate_binding
         assert!(canonical(&corrupted, true).is_none());
     }
 }
+
+#[test]
+fn rejects_pcs_valid_opening_of_a_trace_with_a_false_quotient() {
+    let air = ReferenceZkAir::compile(&Product, ZkAirConfig::interactive(1, 1).unwrap()).unwrap();
+    let public = [Val::ZERO];
+    let mut rng = StdRng::seed_from_u64(0x464f_5247_4544);
+    // Every row has product one, contradicting the public product zero.
+    let trace = RowMajorMatrix::new(vec![Val::ONE; 4], 2);
+    assert!(matches!(
+        air.prove(trace.clone(), &public, &mut rng),
+        Err(ZkError::InvalidWitness(_))
+    ));
+    let mut polynomials: Vec<_> = (0..air.width)
+        .map(|column| {
+            let values: Vec<_> = (0..2).map(|row| trace.values[row * 2 + column]).collect();
+            add(
+                &interpolate(&values, 1),
+                &scale(&air.vanishing, rng.random()),
+            )
+        })
+        .collect();
+    // Bypass exact division: the zero quotient cannot certify this trace.
+    polynomials.push(vec![]);
+    let width = polynomials.len();
+    let mut messages = vec![Val::ZERO; air.pcs.config().message_len() * width];
+    for (column, polynomial) in polynomials.iter().enumerate() {
+        for (row, &coefficient) in polynomial.iter().enumerate() {
+            messages[row * width + column] = coefficient;
+        }
+    }
+    let (commitment, data) = air
+        .pcs
+        .commit(RowMajorMatrix::new(messages, width), &mut rng)
+        .unwrap();
+    let mut prover = air.transcript(&public);
+    air.pcs.observe_commitment(&commitment, &mut prover);
+    let z = air.sample_point(&mut prover).unwrap();
+    let opening = air.pcs.open(data, z, &mut prover, &mut rng).unwrap();
+    // Authenticate the complete PCS proof first: only the AIR equation rejects it.
+    let mut verifier = air.transcript(&public);
+    air.pcs.observe_commitment(&commitment, &mut verifier);
+    assert_eq!(air.sample_point(&mut verifier).unwrap(), z);
+    air.pcs
+        .verify(&commitment, z, &opening, &mut verifier)
+        .unwrap();
+    assert_eq!(
+        air.verify(
+            &ZkAirProof {
+                commitment,
+                opening
+            },
+            &public
+        ),
+        Err(ZkError::InvalidOpening("AIR quotient identity"))
+    );
+}
