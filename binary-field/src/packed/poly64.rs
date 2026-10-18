@@ -207,6 +207,7 @@ impl_sum_prod_base_field!(PackedPoly64, Poly64);
 
 impl Algebra<Poly64> for PackedPoly64 {
     /// Defer reduction across the whole sum for packings of at least four lanes.
+    /// Two-lane packings measured faster with an eager reduction per term.
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], weights: &[Poly64; N]) -> Self {
         if WIDTH_64 >= 4 {
@@ -394,8 +395,11 @@ mod tests {
             check_mixed_dot_product::<0>(&mut rng);
             check_mixed_dot_product::<1>(&mut rng);
             check_mixed_dot_product::<2>(&mut rng);
+            check_mixed_dot_product::<3>(&mut rng);
             check_mixed_dot_product::<4>(&mut rng);
+            check_mixed_dot_product::<5>(&mut rng);
             check_mixed_dot_product::<8>(&mut rng);
+            check_mixed_dot_product::<17>(&mut rng);
         }
         let value = specials();
         let weight = Poly64::new(u64::MAX);

@@ -965,8 +965,8 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
     /// ```
     ///
     /// In characteristic two each factor is `1 + a ⊗ 1 + 1 ⊗ b`.
-    /// Starting from the identity, each variable therefore uses one row scaling and one
-    /// scaled column addition through [`BitTensor::mul_equality_factor`].
+    ///
+    /// Each variable is one row scaling plus one scaled column addition, starting from the identity.
     /// The alternative sums the element over the hypercube, exponentially.
     fn equality_element(&self, r_prime: &Point<EF>) -> BitTensor<EF, EF> {
         // Boolean leading coordinates select a committed slot directly.

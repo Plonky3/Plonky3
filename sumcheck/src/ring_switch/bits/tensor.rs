@@ -222,7 +222,7 @@ impl<EF: BitCoordinates, R: BitCoordinates> BitTensor<EF, R> {
     /// Multiplies by `1 + a ⊗ 1 + 1 ⊗ b`, the equality polynomial lifted into the algebra.
     ///
     /// In characteristic two `eq(X, Y) = XY + (1 + X)(1 + Y) = 1 + X + Y`.
-    /// `X` lands on the first leg and `Y` on the second, so one factor is two scalings.
+    /// Factored as a row scaling by `1 + b`, plus the original with its columns scaled by `a`.
     pub fn mul_equality_factor(&mut self, a: EF, b: R) {
         let original = self.clone();
         self.scale_rows(R::ONE + b);
