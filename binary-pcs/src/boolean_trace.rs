@@ -40,8 +40,7 @@
 //!
 //! A block may run past the table only where no table follows, so a lone table is one block.
 //!
-//! Complete current views can also be batched beside ordinary sparse claims when the
-//! aligned blocks plus separate successor claims cost less than per-column reductions.
+//! Complete current views can also be batched beside ordinary sparse claims when the aligned blocks plus separate successor claims cost less than per-column reductions.
 //!
 //! If one element holds `2^d_log` bits, a column folds `2^max(a - d_log, 0)` elements.
 //!
@@ -542,8 +541,7 @@ where
         let runs = route.runs();
         if !runs.is_empty() {
             // Every combined claim of a batch reads one column point, so each is charged.
-            // Residual ordinary claims draw no column point: their tensors, successor
-            // elements and claim batching are already charged by readings_security.
+            // Residual ordinary claims draw no column point: their tensors, successor elements and claim batching are already charged by the inner reduction.
             //
             // A table split into several blocks raises one combined claim per block and view.
             //
@@ -610,36 +608,46 @@ where
         };
 
         let BooleanTraceCommitmentData { inner, tables } = prover_data;
-        let mut values = Vec::with_capacity(
+        let mut values = EF::zero_vec(
             value_count(protocol).ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?,
         );
+        let mut selected = vec![false; points.len()];
+        for run in &runs {
+            selected[run.opening..run.opening + run.shape.num_batches].fill(true);
+        }
         let mut openings = Vec::new();
         let mut expected = Vec::new();
-        // Materialize in the public protocol's value order, including ordinary residual
-        // batches. Every selected batch binds both views before drawing its column point.
+        // Only selected batches bind their values before a column draw.
+        // Fully residual batches take their values from the bit readings below.
+        let mut offset = 0;
         for (batch_index, (table, request)) in protocol.iter_openings().enumerate() {
-            if let Some(known) = &known[batch_index] {
-                // Supplied runs remain untrusted: block combinations and ordinary
-                // residual readings are checked against the committed witness below.
-                values.extend_from_slice(known.current());
-                values.extend_from_slice(known.next());
-            } else {
-                let (current, successor) = tracing::info_span!(
-                    "evaluate boolean columns",
-                    width = request.current().len(),
-                    next = request.next().len()
-                )
-                .in_scope(|| {
-                    Self::evaluate_requested(
-                        &tables[table],
-                        &points[batch_index],
-                        request.current(),
-                        request.next(),
+            let end = offset + request.current().len() + request.next().len();
+            if selected[batch_index] {
+                let (current, successor) =
+                    values[offset..end].split_at_mut(request.current().len());
+                if let Some(known) = &known[batch_index] {
+                    // Supplied values remain untrusted until the committed readings are checked.
+                    current.copy_from_slice(known.current());
+                    successor.copy_from_slice(known.next());
+                } else {
+                    let (evaluated_current, evaluated_successor) = tracing::info_span!(
+                        "evaluate boolean columns",
+                        width = request.current().len(),
+                        next = request.next().len()
                     )
-                });
-                values.extend(current);
-                values.extend(successor);
+                    .in_scope(|| {
+                        Self::evaluate_requested(
+                            &tables[table],
+                            &points[batch_index],
+                            request.current(),
+                            request.next(),
+                        )
+                    });
+                    current.copy_from_slice(&evaluated_current);
+                    successor.copy_from_slice(&evaluated_successor);
+                }
             }
+            offset = end;
         }
         for run in &runs {
             let run_len = run
@@ -676,20 +684,32 @@ where
             transcript.finish();
         }
         openings.extend(Self::bit_openings(protocol, &residual, points, &placements));
-        expected.extend(residual.iter().map(|claim| BitReadings {
-            current: claim.current_at.map(|at| values[at]),
-            next: claim.next_at.map(|at| values[at]),
-        }));
-
         let (readings, opening) = self
             .inner
             .open_readings(inner, &openings, challenger)
             .map_err(BooleanTraceCommitmentError::Boolean)?;
-        if readings.len() != expected.len() {
+        if readings.len() != expected.len() + residual.len() {
             return Err(BooleanTraceCommitmentError::ColumnBatchValueMismatch {
-                batch: expected.len(),
+                batch: expected.len() + residual.len(),
             });
         }
+        for (claim, reading) in residual.iter().zip(&readings[expected.len()..]) {
+            if selected[claim.opening] {
+                continue;
+            }
+            if let Some(at) = claim.current_at {
+                values[at] = reading
+                    .current
+                    .expect("a current claim carries its reading");
+            }
+            if let Some(at) = claim.next_at {
+                values[at] = reading.next.expect("a successor claim carries its reading");
+            }
+        }
+        expected.extend(residual.iter().map(|claim| BitReadings {
+            current: claim.current_at.map(|at| values[at]),
+            next: claim.next_at.map(|at| values[at]),
+        }));
         for (batch, (actual, expected)) in readings.iter().zip(&expected).enumerate() {
             if actual != expected {
                 return Err(BooleanTraceCommitmentError::ColumnBatchValueMismatch { batch });

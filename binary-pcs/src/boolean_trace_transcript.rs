@@ -23,11 +23,9 @@ type Alphabet<F> = FieldUnit<F>;
 
 /// Public shape of one optimized column-batched opening run.
 ///
-/// Every batch claims the table's whole width at its own row point, and, when `next`
-/// holds, the same width one row ahead. Both value runs are bound before the batch
-/// draws the column point that combines them. Sparse successor runs are bound in
-/// the same position, with their column indices in the domain separator, and are
-/// discharged by ordinary claims rather than by the column combination.
+/// Every batch claims the table's whole width at its own row point, and, when requested, the same width one row ahead.
+/// Both value runs are bound before the batch draws the column point that combines them.
+/// Sparse successor runs are bound in the same position, with their column indices in the domain separator, and are discharged by ordinary claims rather than by the column combination.
 #[derive(Clone, Debug)]
 pub(crate) struct ColumnBatchShape {
     pub(crate) table_variables: usize,
@@ -369,6 +367,7 @@ mod tests {
             ("wider successor", seed_of(&wider_shape(true))),
         ]);
     }
+
     #[test]
     fn sparse_successor_runs_bind_columns_and_values_before_the_draw() {
         let mut sparse = wider_shape(false);

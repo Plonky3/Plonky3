@@ -354,8 +354,8 @@ impl<EF: ExtensionField<F>, B, F: Field + Coordinates> MixedTraceCommitment<EF, 
 
 /// Expand at most 64 source rows, one coordinate word per output column.
 ///
-/// Dense 64-by-64 tiles use the field's bit transpose. Sparse tiles retain set-bit
-/// iteration, avoiding fixed transpose work for zeros and small integer values.
+/// Dense 64-by-64 tiles use the field's bit transpose.
+/// Sparse tiles retain set-bit iteration, avoiding fixed transpose work for zeros and small integer values.
 fn expand_coordinate_block<A: Coordinates>(values: &[A], out: &mut [u64]) {
     debug_assert!(values.len() <= WORD_BITS);
     debug_assert_eq!(out.len(), A::COORDINATES);
@@ -398,7 +398,7 @@ fn expand_coordinate_block<A: Coordinates>(values: &[A], out: &mut [u64]) {
         }
         let mut rows = [PackedGf2x64::new(0); WORD_BITS];
         let mut set_bits = 0;
-        for (lane, row) in rows.iter_mut().take(values.len()).enumerate() {
+        for (lane, row) in rows.iter_mut().enumerate() {
             let mut word = [0; 8];
             word[..byte_count].copy_from_slice(
                 &bytes[lane * stride + byte_start..lane * stride + byte_start + byte_count],
@@ -407,15 +407,15 @@ fn expand_coordinate_block<A: Coordinates>(values: &[A], out: &mut [u64]) {
             set_bits += word.count_ones();
             *row = PackedGf2x64::new(word);
         }
-        // A transpose performs six fixed word passes. Below four set coordinates
-        // per source word, enumerating the set bits avoids that fixed work.
-        if values.len() == WORD_BITS && output.len() == WORD_BITS && set_bits > 256 {
+        // A transpose performs six fixed word passes.
+        // Below four set coordinates per source word, enumerating the set bits avoids that fixed work.
+        if set_bits > 256 {
             PackedGf2x64::transpose(&mut rows);
             for (output, row) in output.iter_mut().zip(rows) {
                 *output = row.to_bits();
             }
         } else {
-            for (lane, row) in rows.iter().take(values.len()).enumerate() {
+            for (lane, row) in rows.iter().enumerate() {
                 let mut word = row.to_bits();
                 while word != 0 {
                     output[word.trailing_zeros() as usize] |= 1 << lane;

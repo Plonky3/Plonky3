@@ -15,8 +15,8 @@ use super::{BooleanTraceCommitment, BooleanTraceCommitmentError};
 use crate::boolean::{BitOpening, BitReadings, BooleanBackend};
 use crate::boolean_trace_transcript::ColumnBatchShape;
 
-/// Validate cell arithmetic and the padded witness before the shared infallible
-/// planner allocates selectors. With this bound every planner offset is <= cells.
+/// Validate cell arithmetic and the padded witness before the shared infallible planner allocates selectors.
+/// With this bound every planner offset is no larger than the cell count.
 fn checked_layout_arity(shapes: &[TableShape]) -> Option<usize> {
     let cells = shapes.iter().try_fold(0usize, |total, shape| {
         let rows = 1usize.checked_shl(shape.num_variables().try_into().ok()?)?;
@@ -224,8 +224,9 @@ pub(super) enum OpeningRoute {
 pub(super) struct TableRun {
     /// Table every batch of the run opens.
     pub(super) table: usize,
-    /// First batch and first value of this run in protocol order.
+    /// First batch of this run in protocol order.
     pub(super) opening: usize,
+    /// First value of this run in protocol order.
     pub(super) value_offset: usize,
     /// Shape the run's transcript binds.
     pub(super) shape: ColumnBatchShape,
@@ -296,8 +297,7 @@ impl OpeningRoute {
         }
     }
 
-    /// Every block/view combination that draws a column point, checked separately
-    /// from the ordinary residual claims the backend charges.
+    /// Every block/view combination that draws a column point, checked separately from the ordinary residual claims the backend charges.
     pub(super) fn column_claim_count(&self) -> Option<usize> {
         self.runs().iter().try_fold(0usize, |total, run| {
             let claims = run
@@ -387,8 +387,7 @@ fn batched_runs(protocol: &OpeningProtocol) -> Option<Vec<TableRun>> {
     Some(runs)
 }
 
-/// Batch a complete current view only when its blocks plus sparse successor claims
-/// cost less than the original shared current/successor per-column reductions.
+/// Batch a complete current view only when its blocks plus sparse successor claims cost less than the original shared current/successor per-column reductions.
 fn hybrid_route(protocol: &OpeningProtocol) -> Option<OpeningRoute> {
     let shapes = protocol.table_shapes();
     let (arity, placements) = checked_stacked_layout(&shapes)?;
@@ -435,8 +434,8 @@ fn hybrid_route(protocol: &OpeningProtocol) -> Option<OpeningRoute> {
     if runs.is_empty() {
         return None;
     }
-    // Complete current vectors are consumed by the selected runs. Their sparse
-    // successor positions remain ordinary claims; all other batches stay intact.
+    // Complete current vectors are consumed by the selected runs.
+    // Their sparse successor positions remain ordinary claims; all other batches stay intact.
     let residual = column_claims(protocol)?
         .into_iter()
         .filter_map(|mut claim| match selected[claim.opening] {

@@ -2673,3 +2673,161 @@ fn overflowing_shapes_have_no_opening_route() {
         assert!(OpeningRoute::new(&protocol).is_none());
     }
 }
+
+#[test]
+fn hybrid_fully_residual_batches_ignore_supplied_values() {
+    let shape = TableShape::new(3, 64);
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        shape,
+        vec![
+            OpeningBatch::new(vec![3, 1], vec![2]),
+            OpeningBatch::new((0..64).collect(), vec![5, 0]),
+            OpeningBatch::new(vec![4, 2], vec![4]),
+        ],
+    )]);
+    let scheme = pcs(&[shape]);
+    let mut rng = SmallRng::seed_from_u64(0xBA90);
+    let points: Vec<_> = (0..3).map(|_| Point::<EF>::rand(&mut rng, 3)).collect();
+    let mut prover = challenger();
+    let (_, data) = scheme
+        .commit(vec![table_with_width(0xBA91, 3, 64)], &mut prover)
+        .unwrap();
+    let mut evaluated_chal = prover.clone();
+    let evaluated = scheme
+        .open_at(data.clone(), &protocol, &points, &mut evaluated_chal)
+        .unwrap();
+    let mut supplied_chal = prover.clone();
+    let supplied = scheme
+        .open_at_known(
+            data,
+            &protocol,
+            &points,
+            &[
+                Some(OpeningEvals::new(
+                    vec![EF::GENERATOR; 2],
+                    vec![EF::GENERATOR],
+                )),
+                None,
+                Some(OpeningEvals::new(
+                    vec![EF::GENERATOR; 2],
+                    vec![EF::GENERATOR],
+                )),
+            ],
+            &mut supplied_chal,
+        )
+        .unwrap();
+    assert_eq!(
+        postcard::to_allocvec(&supplied).unwrap(),
+        postcard::to_allocvec(&evaluated).unwrap()
+    );
+    assert_eq!(
+        p3_challenger::CanSample::<EF>::sample(&mut supplied_chal),
+        p3_challenger::CanSample::<EF>::sample(&mut evaluated_chal),
+    );
+}
+
+#[test]
+fn hybrid_complete_successors_remove_both_views_from_residual_claims() {
+    let shape = TableShape::new(3, 64);
+    for (batches, reductions) in [
+        (
+            vec![
+                OpeningBatch::new((0..64).collect(), (0..64).collect()),
+                OpeningBatch::new(vec![3, 1], vec![2]),
+            ],
+            4,
+        ),
+        (
+            vec![
+                OpeningBatch::new((0..64).collect(), (0..64).collect()),
+                OpeningBatch::new((0..64).collect(), Vec::new()),
+                OpeningBatch::new((0..64).collect(), vec![5, 0]),
+            ],
+            5,
+        ),
+    ] {
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(shape, batches)]);
+        let route = OpeningRoute::new(&protocol).unwrap();
+        assert!(matches!(route, OpeningRoute::Hybrid { .. }));
+        assert_eq!(route.num_reductions(), Some(reductions));
+        let scheme = pcs(&[shape]);
+        let source = table_with_width(0xBA92, 3, 64);
+        let mut rng = SmallRng::seed_from_u64(0xBA93);
+        let points: Vec<_> = protocol
+            .iter_openings()
+            .map(|_| Point::<EF>::rand(&mut rng, 3))
+            .collect();
+        let mut prover = challenger();
+        let (root, data) = scheme.commit(vec![source.clone()], &mut prover).unwrap();
+        let proof = scheme
+            .open_at(data, &protocol, &points, &mut prover)
+            .unwrap();
+        assert_eq!(proof.opening.reduction.claims.len(), reductions);
+        let mut verifier = challenger();
+        scheme.observe_commitment(&root, &mut verifier);
+        let evals = scheme
+            .verify_at(&root, &proof, &protocol, &points, &mut verifier)
+            .unwrap();
+        for (((_, request), point), actual) in protocol.iter_openings().zip(&points).zip(&evals) {
+            let (current, successor) =
+                BooleanTracePcs::<EF, MyMmcs, MyMmcs>::evaluate_views(&source, point, true);
+            assert_eq!(
+                actual.current(),
+                request
+                    .current()
+                    .iter()
+                    .map(|&c| current[c])
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                actual.next(),
+                request
+                    .next()
+                    .iter()
+                    .map(|&c| successor[c])
+                    .collect::<Vec<_>>()
+            );
+        }
+        for at in 0..proof.values.len() {
+            let mut forged = proof.clone();
+            forged.values[at] += EF::ONE;
+            let mut verifier = challenger();
+            scheme.observe_commitment(&root, &mut verifier);
+            assert!(
+                scheme
+                    .verify_at(&root, &forged, &protocol, &points, &mut verifier)
+                    .is_err(),
+                "value {at}"
+            );
+        }
+    }
+}
+
+#[test]
+fn requested_packed_views_preserve_dense_subset_and_reordered_column_order() {
+    for (rows, width) in [(3, 64), (7, 64), (3, 128), (7, 128), (7, 256)] {
+        let dense = table_with_width(0xBA94, rows, width);
+        let packed = packed_table(&dense);
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xBA95), rows);
+        let (current, successor) =
+            BooleanTracePcs::<EF, MyMmcs, MyMmcs>::evaluate_views(&dense, &point, true);
+        for columns in [
+            vec![3, 1],
+            (0..width / 2).rev().collect(),
+            (1..width).collect(),
+            (0..width).rev().collect(),
+        ] {
+            let actual = BooleanTracePcs::<EF, MyMmcs, MyMmcs>::evaluate_requested(
+                &packed, &point, &columns, &columns,
+            );
+            assert_eq!(
+                actual.0,
+                columns.iter().map(|&c| current[c]).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                actual.1,
+                columns.iter().map(|&c| successor[c]).collect::<Vec<_>>()
+            );
+        }
+    }
+}

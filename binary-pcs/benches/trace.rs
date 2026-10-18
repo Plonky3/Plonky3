@@ -291,5 +291,68 @@ fn bench_trace_openings(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_mixed, bench_trace_openings);
+fn bench_hybrid_sparse_batches(c: &mut Criterion) {
+    let shapes = [TableShape::new(14, 64), TableShape::new(3, 5)];
+    let pcs = scheme(&shapes);
+    let mut rng = SmallRng::seed_from_u64(0xBA96);
+    let tables = shapes
+        .iter()
+        .map(|shape| {
+            let words = (0..shape.width() * (1usize << shape.num_variables()).div_ceil(64))
+                .map(|_| {
+                    let word = rng.random::<u64>();
+                    if shape.num_variables() < 6 {
+                        word & 0xff
+                    } else {
+                        word
+                    }
+                })
+                .collect();
+            Table::from_packed_bits(
+                RowMajorMatrix::new(words, shape.width()),
+                shape.num_variables(),
+            )
+        })
+        .collect();
+    let protocol = OpeningProtocol::new(vec![
+        TableSpec::new(
+            shapes[0],
+            vec![
+                OpeningBatch::new((0..64).collect(), vec![63, 0]),
+                OpeningBatch::new((1..64).collect(), vec![2, 62]),
+                OpeningBatch::new((0..64).collect(), Vec::new()),
+            ],
+        ),
+        TableSpec::new(
+            shapes[1],
+            vec![
+                OpeningBatch::new((0..5).collect(), vec![4]),
+                OpeningBatch::new(vec![4, 1], vec![0, 4]),
+            ],
+        ),
+    ]);
+    let points: Vec<_> = protocol
+        .iter_openings()
+        .map(|(table, _)| Point::<F>::rand(&mut rng, shapes[table].num_variables()))
+        .collect();
+    let mut after_commit = challenger();
+    let (_, data) = pcs.commit(tables, &mut after_commit).unwrap();
+    let mut group = c.benchmark_group("boolean_trace_hybrid_sparse");
+    group.sample_size(10);
+    group.bench_function("packed_h14_current_1_to_64", |b| {
+        b.iter_batched(
+            || (data.clone(), after_commit.clone()),
+            |(data, mut chal)| pcs.open_at(data, &protocol, &points, &mut chal).unwrap(),
+            BatchSize::PerIteration,
+        );
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_mixed,
+    bench_trace_openings,
+    bench_hybrid_sparse_batches
+);
 criterion_main!(benches);
