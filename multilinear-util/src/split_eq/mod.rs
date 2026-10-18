@@ -79,12 +79,17 @@ const TENSOR_MAX_TABLE_BYTES: usize = 64 << 10;
 /// From 8 rows it breaks even or wins for BabyBear/EF4, Goldilocks/EF2 and GHASH.
 const TENSOR_MIN_ROWS: usize = 8;
 
-// Keep an output tile small enough to stay hot while it visits every prefix row.
-// The conservative shape gate leaves small outputs and long contractions on the
-// existing whole-output / per-prefix-accumulator paths. Tune separately from correctness.
+/// A 16 KiB tile leaves room in a 32 KiB L1 data cache for source rows and weights.
 const PREFIX_TILE_BYTES: usize = 16 << 10;
+
+/// Minimum output size for tiling, providing at least four target-sized tiles to distribute.
 const PREFIX_TILE_MIN_OUTPUT_BYTES: usize = 64 << 10;
+
+/// Limit each tile to 256 source-row visits so long contractions retain whole-output locality.
 const PREFIX_TILE_MAX_VARIABLES: usize = 8;
+
+/// EPYC 9R45 measurements favor whole-output folds from 32 MiB for a single compressed variable.
+const PREFIX_TILE_X86_MAX_SINGLE_VAR_OUTPUT_BYTES: usize = 32 << 20;
 
 /// Extension widths one base-by-extension multiply-accumulate is charged as, per lane.
 ///
@@ -470,8 +475,8 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             return self.compress_prefix_to_packed(poly).unpack::<F, EF>();
         }
 
-        if let Some(tile_len) = self.prefix_tile_len::<EF>(1 << k_inner) {
-            return self.compress_prefix_tiled(poly, k_inner, tile_len);
+        if let Some((tile_len, item_bytes)) = self.prefix_tile_len::<EF>(1 << k_inner) {
+            return self.compress_prefix_tiled(poly, k_inner, tile_len, item_bytes);
         }
 
         // One item folds one prefix block of base evals into a whole inner accumulator.
@@ -486,18 +491,20 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         }
     }
 
-    /// Choose output ownership only for a short contraction with enough output work
-    /// to split. A one-worker pool and the serial backend keep the existing path.
-    fn prefix_tile_len<ACC>(&self, output_len: usize) -> Option<usize> {
+    /// Choose output ownership only for a short contraction with enough output work to split.
+    /// Return the tile length and its item charge so the gate and iterator use the same cost.
+    /// A one-worker pool and the serial backend keep the existing path.
+    fn prefix_tile_len<ACC>(&self, output_len: usize) -> Option<(usize, usize)> {
         let output_bytes = output_len.saturating_mul(size_of::<ACC>());
         if self.num_variables() > PREFIX_TILE_MAX_VARIABLES
             || output_bytes < PREFIX_TILE_MIN_OUTPUT_BYTES
         {
             return None;
         }
-        // Native x86-64 measurements favor whole-output folding from 32 MiB
-        // for a single compressed variable; smaller folds still use output tiles.
-        if cfg!(target_arch = "x86_64") && self.num_variables() == 1 && output_bytes >= 32 << 20 {
+        if cfg!(target_arch = "x86_64")
+            && self.num_variables() == 1
+            && output_bytes >= PREFIX_TILE_X86_MAX_SINGLE_VAR_OUTPUT_BYTES
+        {
             return None;
         }
         let tile_len = (PREFIX_TILE_BYTES / size_of::<ACC>()).max(1);
@@ -506,16 +513,17 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             rows * tile_len * size_of::<ACC>() / size_of::<EF>(),
             Self::FOLD_LANES,
         );
-        should_split(output_len.div_ceil(tile_len), item_bytes).then_some(tile_len)
+        should_split(output_len.div_ceil(tile_len), item_bytes).then_some((tile_len, item_bytes))
     }
 
-    /// Each task owns a disjoint output tile and visits every prefix row. There
-    /// are no full-output task accumulators and no element-wise reduction pass.
+    /// Each task owns a disjoint output tile and visits every prefix row.
+    /// There are no full-output task accumulators and no element-wise reduction pass.
     fn compress_prefix_tiled(
         &self,
         poly: PolyView<'_, F>,
         k_inner: usize,
         tile_len: usize,
+        item_bytes: usize,
     ) -> Poly<EF> {
         let mut out = Poly::<EF>::zero(k_inner);
         let inner_stride = out.num_evals();
@@ -523,10 +531,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         out.as_mut_slice()
             .par_chunks_mut(tile_len)
             .enumerate()
-            .with_min_task_bytes(base_mul_acc_bytes::<EF>(
-                (1 << self.num_variables()) * tile_len,
-                Self::FOLD_LANES,
-            ))
+            .with_min_task_bytes(item_bytes)
             .for_each(|(tile, out)| {
                 let offset = tile * tile_len;
                 for (chunk, &w0) in poly.as_slice().chunks(size_outer).zip(self.eq0.iter()) {
@@ -605,8 +610,10 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         let k_inner = poly.num_variables() - self.num_variables() - k_pack;
         let size_outer = poly.num_evals() / self.eq0.num_evals();
 
-        if let Some(tile_len) = self.prefix_tile_len::<EF::ExtensionPacking>(1 << k_inner) {
-            return self.compress_prefix_to_packed_tiled(poly, k_inner, tile_len);
+        if let Some((tile_len, item_bytes)) =
+            self.prefix_tile_len::<EF::ExtensionPacking>(1 << k_inner)
+        {
+            return self.compress_prefix_to_packed_tiled(poly, k_inner, tile_len, item_bytes);
         }
 
         // One item folds one prefix block of base evals into a whole inner accumulator.
@@ -630,6 +637,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         poly: PolyView<'_, F>,
         k_inner: usize,
         tile_len: usize,
+        item_bytes: usize,
     ) -> Poly<EF::ExtensionPacking> {
         let mut out = Poly::<EF::ExtensionPacking>::zero(k_inner);
         let inner_stride = out.num_evals() * F::Packing::WIDTH;
@@ -637,10 +645,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         out.as_mut_slice()
             .par_chunks_mut(tile_len)
             .enumerate()
-            .with_min_task_bytes(base_mul_acc_bytes::<EF>(
-                (1 << self.num_variables()) * tile_len * F::Packing::WIDTH,
-                Self::FOLD_LANES,
-            ))
+            .with_min_task_bytes(item_bytes)
             .for_each(|(tile, out)| {
                 let offset = tile * tile_len * F::Packing::WIDTH;
                 for (chunk, &w0) in poly.as_slice().chunks(size_outer).zip(self.eq0.iter()) {
@@ -1084,14 +1089,20 @@ mod tests {
                         for tile_len in [1, 3, 17] {
                             assert_eq!(
                                 expected,
-                                eq.compress_prefix_tiled(poly.as_view(), inner_vars, tile_len)
+                                eq.compress_prefix_tiled(
+                                    poly.as_view(),
+                                    inner_vars,
+                                    tile_len,
+                                    SPLIT_EVERY_ITEM,
+                                )
                             );
                             assert_eq!(
                                 expected,
                                 eq.compress_prefix_to_packed_tiled(
                                     poly.as_view(),
                                     inner_vars - k_pack,
-                                    tile_len
+                                    tile_len,
+                                    SPLIT_EVERY_ITEM,
                                 )
                                 .unpack::<F, EF>()
                             );
@@ -1116,8 +1127,9 @@ mod tests {
     #[test]
     fn tiled_prefix_dispatch_matches_whole() {
         let mut rng = SmallRng::seed_from_u64(0x7469_6c65);
-        // Includes large tiled outputs and the long-prefix fallback, on both
-        // scalar and packed equality storage. Rerun with 1 and 8 Rayon workers.
+        // Large outputs may tile depending on the pool; long prefixes use the fallback.
+        // The direct kernel test above forces tiles independently of the pool.
+        // Cover both scalar and packed equality storage.
         for m in [1, 2, 4, 8, 10] {
             let inner_vars = 13;
             let poly = Poly::<F>::rand(&mut rng, inner_vars + m);

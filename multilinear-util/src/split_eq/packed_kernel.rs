@@ -533,8 +533,8 @@ pub(super) fn compress_prefix_to_packed_packed<F, EF>(
     );
 }
 
-/// Prefix-fold kernel over an output tile. Source rows retain `inner_stride`
-/// scalar elements between starts; `chunk` already starts at the tile offset.
+/// Prefix-fold kernel over an output tile.
+/// Source rows retain `inner_stride` scalar elements between starts; `chunk` already starts at the tile offset.
 /// This shares delayed reductions and the eager fallback with full-output folds.
 pub(super) fn compress_prefix_to_packed_packed_strided<F: Field, EF: ExtensionField<F>>(
     out: &mut [EF::ExtensionPacking],
