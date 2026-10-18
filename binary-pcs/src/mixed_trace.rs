@@ -27,8 +27,11 @@
 //!     v(r)  =  sum_k c_k(r) * e_k
 //! ```
 //!
-//! Dense cells and basis elements lie in the source field `F`; row points and coordinate
-//! evaluations lie in its extension `EF`. Recombination embeds each basis element into `EF`.
+//! Dense cells and basis elements lie in the source field `F`.
+//!
+//! Row points and coordinate evaluations lie in its extension `EF`.
+//!
+//! Recombination embeds each basis element into `EF`.
 //!
 //! A claim on a dense column is answered by the claims on its coordinate columns.
 //!
@@ -137,9 +140,17 @@ const fn committed_columns<EF: Coordinates>(bits: usize, column: usize) -> Range
 ///
 /// Table `t` holds bits in its first `boolean_columns[t]` columns, field elements after.
 ///
-/// Source cells and packed elements use `F`; opening points and evaluations use its extension `EF`.
+/// Source cells and packed elements use `F`.
+///
+/// Opening points and evaluations use its extension `EF`.
+///
 /// Dense columns split into the coordinates of `F`, and recombine by its embedding into `EF`.
-/// The default `F = EF` preserves the square case.
+///
+/// `F` must be the backend's `B::Val`.
+///
+/// The default `F = EF` preserves the square case where `B::Val = EF`.
+///
+/// Specify `F` explicitly when the backend's `Val` differs from `EF`.
 ///
 /// The split is part of the statement, so prover and verifier build it from the same tables.
 pub struct MixedTraceCommitment<EF, B, F = EF> {

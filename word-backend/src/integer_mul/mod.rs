@@ -66,8 +66,7 @@
 //!
 //! The prover performs `O(2^m * w^2)` field operations, dominated by the factor tree leaves.
 //!
-//! It also holds `O(2^m * w^2)` field elements, roughly 260 KB per padded 64-bit product
-//! with a 128-bit field, plus the proof and transcript.
+//! It also holds `O(2^m * w^2)` field elements, roughly 260 KB per padded 64-bit product with a 128-bit field, plus the proof and transcript.
 //!
 //! ```text
 //!     factor leaves     w^2 per row, 4096 at w = 64
@@ -504,7 +503,8 @@ where
     C: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
     let mut proofs = Vec::with_capacity(layers.len() - 1);
-    // The root is already evaluated; each lower layer is needed only until it is split.
+    // The root is already evaluated.
+    // Each lower layer is needed only until it is split.
     for below in layers.into_iter().skip(1) {
         // The new variable is the least significant, so halves are even and odd entries.
         let (even, odd): (Vec<EF>, Vec<EF>) = below
