@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn contiguous_flush_preserves_the_legacy_keccak_transcript() {
-        // Independent drain/iterator model, including empty observations, discarded output,
+        // Independent iterator model, including empty observations, discarded output,
         // and enough samples to chain multiple digest blocks between observations.
         for initial_len in [0, 1, 63, 64, 65, 136, 1024] {
             let initial: Vec<u8> = (0..initial_len).map(|i| i as u8).collect();
@@ -424,8 +424,8 @@ mod tests {
                 }
                 for _ in 0..round * 13 + 1 {
                     if output.is_empty() {
-                        let digest = Keccak256Hash.hash_iter(input.drain(..));
-                        input.extend_from_slice(&digest);
+                        let digest = Keccak256Hash.hash_iter(input);
+                        input = digest.to_vec();
                         output.extend(digest);
                     }
                     assert_eq!(challenger.sample(), output.pop().unwrap());
