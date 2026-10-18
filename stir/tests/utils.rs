@@ -643,3 +643,54 @@ fn test_mixed_vanishing_matches_extension_root_expansion() {
         }
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn test_mixed_arithmetic_matches_extension_arithmetic_on_random_nodes(
+        q in 0usize..40,
+        s in 0usize..5,
+        seed: u64,
+    ) {
+        use p3_stir::utils::{
+            check_ans_interpolates_mixed, interpolate_poly_mixed,
+            vanishing_poly_from_roots, vanishing_poly_from_roots_mixed,
+        };
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut queries: Vec<F> = (0..q).map(|_| rng.random()).collect();
+        queries.sort_unstable();
+        queries.dedup();
+        let mut ood = Vec::with_capacity(s);
+        while ood.len() < s {
+            let point: EF = rng.random();
+            if !ood.contains(&point) && !queries.iter().any(|&y| point == EF::from(y)) {
+                ood.push(point);
+            }
+        }
+        let points: Vec<EF> = ood.iter().copied()
+            .chain(queries.iter().copied().map(EF::from))
+            .collect();
+        let values: Vec<EF> = points.iter().map(|_| rng.random()).collect();
+        let ans = interpolate_poly(&points, &values);
+        prop_assert_eq!(&interpolate_poly_mixed(&ood, &queries, &values), &ans);
+        prop_assert_eq!(
+            vanishing_poly_from_roots_mixed(&ood, &queries),
+            vanishing_poly_from_roots(&points),
+        );
+        let rho: EF = rng.random();
+        let mut incorrect_ans = ans.clone();
+        if incorrect_ans.is_empty() {
+            incorrect_ans.push(EF::ONE);
+        } else {
+            incorrect_ans[0] += EF::ONE;
+        }
+        for candidate in [&ans[..], &incorrect_ans[..]] {
+            prop_assert_eq!(
+                check_ans_interpolates_mixed(candidate, &ood, &queries, &values, rho),
+                check_ans_interpolates(candidate, &points, &values, rho),
+            );
+        }
+    }
+}

@@ -465,15 +465,16 @@ where
             drop(combined_denoms);
 
             let stride = 1usize << (next_log_domain - log_sub_coset);
-            // The MMCS owns the same values arranged into fiber rows. Natural index i
-            // is matrix entry (i % height, i / height), so retain only the degree-sized
-            // sample rather than a second full natural-order codeword through the round.
+            // The MMCS owns the fiber layout from commit_as_fiber_matrix: natural
+            // index i is matrix entry (i % height, i / height). Retain only the
+            // degree-sized sample rather than a second full natural-order codeword.
             let matrices = self
                 .config
                 .mmcs
                 .get_matrices(self.new_data.as_ref().expect("committed"));
             let matrix = matrices[0];
             let height = matrix.height();
+            debug_assert_eq!(matrix.width() * height, 1 << next_log_domain);
             let mut next_oracle_evals: Vec<EF> = (0..sub_coset_len)
                 .into_par_iter()
                 .map(|m| {

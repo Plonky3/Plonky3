@@ -486,8 +486,10 @@ fn interpolate_poly_at_base<F: Field, EF: ExtensionField<F>>(
 /// Interpolate extension-field values on OOD nodes followed by base-field query nodes.
 ///
 /// Query differences, Newton basis coefficients, and the query vanishing polynomial stay
-/// in the base field. The OOD constraints are added as `A_query + Z_query * H`. The output
-/// uses the same canonical coefficients and duplicate-node checks as [`interpolate_poly`].
+/// in the base field.
+/// The OOD constraints are added as `A_query + Z_query * H`.
+/// The output uses the same canonical coefficients and duplicate-node rejection as the
+/// extension-only interpolator.
 ///
 /// # Panics
 ///
@@ -500,7 +502,8 @@ pub fn interpolate_poly_mixed<F: Field, EF: ExtensionField<F>>(
     interpolate_poly_mixed_with_vanishing(ood_points, query_points, values).0
 }
 
-/// Also return the vanishing polynomial, sharing the base-field query-root expansion.
+/// Return the interpolant and the vanishing polynomial `prod (X - node)` over all nodes.
+/// Share the base-field query-root expansion and multiply in the OOD factors last.
 pub(crate) fn interpolate_poly_mixed_with_vanishing<F: Field, EF: ExtensionField<F>>(
     ood_points: &[EF],
     query_points: &[F],
@@ -509,7 +512,7 @@ pub(crate) fn interpolate_poly_mixed_with_vanishing<F: Field, EF: ExtensionField
     assert_eq!(
         ood_points.len() + query_points.len(),
         values.len(),
-        "interpolate_poly: points and values must have the same length"
+        "interpolate_poly_mixed_with_vanishing: points and values must have the same length"
     );
     for (i, &z) in ood_points.iter().enumerate() {
         assert!(
@@ -622,9 +625,11 @@ pub fn check_ans_interpolates<F: Field>(ans: &[F], points: &[F], values: &[F], r
 
 /// Check an answer polynomial with extension-field OOD nodes followed by base-field queries.
 ///
-/// Has the same rejection rules as [`check_ans_interpolates`]. Values are in OOD-then-query
-/// order. Query-query factors of the barycentric weights are computed in the base field;
-/// the final weight and distance denominators still share one extension-field batch inverse.
+/// Uses the same length, empty-set, evaluation-node, and duplicate-node rejection rules as
+/// the extension-only answer check.
+/// Values are in OOD-then-query order.
+/// Query-query factors of the barycentric weights are computed in the base field.
+/// The final weight and distance denominators still share one extension-field batch inverse.
 #[must_use]
 pub fn check_ans_interpolates_mixed<F: Field, EF: ExtensionField<F>>(
     ans: &[EF],
