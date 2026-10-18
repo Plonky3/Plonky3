@@ -74,9 +74,6 @@ harness = false
 name = "zerocheck"
 harness = false
 
-[lints]
-workspace = true
-
 [[bench]]
 name = "lookup_materialization"
 harness = false
@@ -84,3 +81,6 @@ harness = false
 [[bench]]
 name = "lookup_proof"
 harness = false
+
+[lints]
+workspace = true
