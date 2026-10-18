@@ -18,7 +18,7 @@ use p3_word::{
 use proptest::prelude::*;
 
 use super::{WordProof, WordProofError, WordProofKey};
-use crate::{IntegerMulError, PackedWitness, PackedWord};
+use crate::{IntegerMulError, PackedWitness, PackedWord, ShiftReductionError};
 
 type EF = BinaryField128;
 type MyHash = SerializingHasher<Keccak256Hash>;
@@ -298,6 +298,28 @@ fn every_relation_family_subset_keeps_terminal_slots_and_rejects_false_witnesses
             if mask & 4 == 0 {
                 assert_eq!(proof.operands[4..], [EF::ZERO; 4]);
             }
+            for (family, slots) in [(1, 0..1), (2, 1..4), (4, 4..8)] {
+                if mask & family == 0 {
+                    for slot in slots {
+                        let mut tampered = proof.clone();
+                        tampered.operands[slot] += EF::ONE;
+                        let rejection = fixture.check(&commitment, &tampered);
+                        // Either absent AND input still multiplies a zero, so only the shift claim changes.
+                        let rejected = if matches!(slot, 1 | 2) {
+                            matches!(
+                                &rejection,
+                                Err(WordProofError::Shift(ShiftReductionError::EnteringClaim))
+                            )
+                        } else {
+                            matches!(&rejection, Err(WordProofError::RelationClaim))
+                        };
+                        assert!(
+                            rejected,
+                            "mask {mask}, seed {seed:#x}, absent operand {slot} must be rejected, got {rejection:?}"
+                        );
+                    }
+                }
+            }
 
             let position = if mask & 1 != 0 {
                 14
@@ -306,13 +328,11 @@ fn every_relation_family_subset_keeps_terminal_slots_and_rejects_false_witnesses
             } else {
                 2
             };
-            if mask != 0 {
-                words[position] = Word64::new(words[position].get() ^ 1);
-                assert!(system.verify(&public, &words).is_err());
-                let broken = Fixture::new(system, public, &words);
-                let (commitment, proof) = broken.prove();
-                assert!(broken.check(&commitment, &proof).is_err());
-            }
+            words[position] = Word64::new(words[position].get() ^ 1);
+            assert!(system.verify(&public, &words).is_err());
+            let broken = Fixture::new(system, public, &words);
+            let (commitment, proof) = broken.prove();
+            assert!(broken.check(&commitment, &proof).is_err());
         }
     }
 }

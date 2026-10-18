@@ -95,8 +95,8 @@ fn shift_transpose<W: Word, F: Field>(shift: Shift<W>, output: &[F]) -> Vec<F> {
     }
 
     // Column `j` records where input basis bit `j` reaches after this shift.
-    // A shift has at most two word widths of set bits across all basis images,
-    // including sign extension, so walking only set bits takes linear work.
+    // Every basis image of one shift has at most one bit, except that sign extension fans the top bit out.
+    // The set bits across all images therefore total at most two word widths, so walking only set bits is linear.
     (0..W::BITS as usize)
         .map(|input| {
             let basis = W::from_low_bits(1_u64 << input);
