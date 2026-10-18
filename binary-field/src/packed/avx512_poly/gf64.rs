@@ -85,6 +85,15 @@ pub(crate) unsafe fn scatter_3(to: *mut u64, coordinates: [Reg; 3]) {
     }
 }
 
+#[cfg(miri)]
+#[inline(always)]
+fn map_words(r: Reg, f: impl Fn(u64) -> u64) -> Reg {
+    // SAFETY: a register and an eight-word array share size and every bit pattern is valid.
+    unsafe {
+        core::mem::transmute::<[u64; 8], Reg>(core::mem::transmute::<Reg, [u64; 8]>(r).map(f))
+    }
+}
+
 // SAFETY: the module is gated on every target feature these register operations require.
 impl Lanes64 for Reg {
     #[inline(always)]
@@ -95,17 +104,10 @@ impl Lanes64 for Reg {
     fn xor(self, b: Self) -> Self {
         unsafe { _mm512_xor_si512(self, b) }
     }
+    #[cfg(not(miri))]
     #[inline(always)]
     fn xor3(self, b: Self, c: Self) -> Self {
-        // Truth table 0x96 is a ^ b ^ c; Miri has no ternary-logic shim.
-        #[cfg(miri)]
-        unsafe {
-            _mm512_xor_si512(_mm512_xor_si512(self, b), c)
-        }
-        #[cfg(not(miri))]
-        unsafe {
-            _mm512_ternarylogic_epi64::<0x96>(self, b, c)
-        }
+        unsafe { _mm512_ternarylogic_epi64::<0x96>(self, b, c) }
     }
     #[inline(always)]
     fn clmul<const IMM: i32>(self, b: Self) -> Self {
@@ -121,16 +123,11 @@ impl Lanes64 for Reg {
     }
     #[inline(always)]
     fn shl<const N: i32>(self) -> Self {
-        // Miri has no shim for the 512-bit shifts. Preserve their word-wise semantics,
-        // including zero for a count outside 0..64, while interpreting the real algebra.
+        // Miri has no shim for the 512-bit shifts.
+        // Preserve their word-wise semantics, including zero for a count outside 0..64, while interpreting the real algebra.
         #[cfg(miri)]
         {
-            // SAFETY: a register contains exactly eight arbitrary u64 words.
-            let words: [u64; 8] = unsafe { core::mem::transmute(self) };
-            // SAFETY: the mapped array has the same representation as the register.
-            unsafe {
-                core::mem::transmute(words.map(|word| word.checked_shl(N as u32).unwrap_or(0)))
-            }
+            map_words(self, |word| word.checked_shl(N as u32).unwrap_or(0))
         }
         #[cfg(not(miri))]
         unsafe {
@@ -142,12 +139,7 @@ impl Lanes64 for Reg {
         // The right-shift counterpart of the Miri shim above.
         #[cfg(miri)]
         {
-            // SAFETY: a register contains exactly eight arbitrary u64 words.
-            let words: [u64; 8] = unsafe { core::mem::transmute(self) };
-            // SAFETY: the mapped array has the same representation as the register.
-            unsafe {
-                core::mem::transmute(words.map(|word| word.checked_shr(N as u32).unwrap_or(0)))
-            }
+            map_words(self, |word| word.checked_shr(N as u32).unwrap_or(0))
         }
         #[cfg(not(miri))]
         unsafe {
@@ -169,8 +161,7 @@ mod tests {
 
     #[test]
     fn unaligned_coordinate_moves_preserve_every_word_and_the_boundaries() {
-        // Each word has a different value, including lanes separated by five positions
-        // which coincide in the arithmetic corner fixtures.
+        // Every word is distinct, so any misplaced word fails the comparison.
         #[repr(align(64))]
         struct Buffer([u64; 26]);
         let input = Buffer(core::array::from_fn(|i| (i as u64 + 1) << (i % 32)));

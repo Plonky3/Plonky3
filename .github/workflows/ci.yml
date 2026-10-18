@@ -459,11 +459,12 @@ jobs:
           RUSTFLAGS: -C debuginfo=0 -C target-feature=+avx512f,+avx512bw,+vpclmulqdq
         run: cargo +stable clippy --target x86_64-unknown-linux-gnu --all-targets --package p3-binary-field --features wide-poly -- -D warnings
 
-      # Interpret the optional eight-lane packing too: the arithmetic oracle, coordinate
-      # transposes and interleaves reach its memory operations without requiring AVX-512 hardware.
+      # Interpret the optional eight-lane packing too: the arithmetic oracle, coordinate transposes and interleaves reach its memory operations without requiring AVX-512 hardware.
       - name: Interpret optional eight-lane polynomial packing
         if: >-
           needs.plan.outputs.rust == 'true' &&
+          matrix.miri_clmul &&
+          needs.plan.outputs.gfni == 'true' &&
           needs.plan.outputs.binary_field == 'true' &&
           matrix.features == '+avx512f,+vpclmulqdq'
         env:

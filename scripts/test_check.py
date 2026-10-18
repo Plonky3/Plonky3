@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import stat
@@ -501,6 +502,22 @@ class CiPlanTests(unittest.TestCase):
             plan = check.ci_plan(self.metadata(temp), ["alpha/src/lib.rs"])
         self.assertEqual(plan["packages"], ["p3-alpha", "p3-beta", "p3-runner"])
         self.assertFalse(plan["full"])
+
+    def test_workflow_output_references_are_planner_keys(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            keys = check.ci_plan(self.metadata(temp), [], force_full=True).keys()
+        workflows = sorted((REPO / ".github/workflows").glob("*.yml"))
+        self.assertTrue(workflows, "no workflows found")
+        reference = re.compile(r"\b(steps\.impact|needs\.plan)\.outputs\.([\w-]+)")
+        contexts = set()
+        for workflow in workflows:
+            for context, name in reference.findall(workflow.read_text(encoding="utf-8")):
+                contexts.add(context)
+                with self.subTest(workflow=workflow.name, output=name):
+                    self.assertIn(name, keys)
+        self.assertEqual(contexts, {"steps.impact", "needs.plan"})
 
     def test_heavy_suites_follow_upstream_dependencies(self):
         import check  # noqa: PLC0415
