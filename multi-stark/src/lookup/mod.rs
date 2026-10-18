@@ -540,8 +540,8 @@ impl<EF: Field> AirLinkClaim<EF> {
             );
             let eq_suffix = SplitEq::<F, EF>::new_packed(&suffix, EF::ONE);
             let block_len = 1 << stage_num_variables;
-            // A short block may occupy only part of a packed denominator. Reuse one
-            // sub-lane scalar buffer for its claims without unpacking the tall prefix.
+            // A short block may occupy only part of a packed denominator.
+            // One sub-lane scalar buffer is reused for its claims, so the tall prefix is never unpacked.
             let mut scalar_denominators = if block_len < F::Packing::WIDTH {
                 EF::zero_vec(block_len)
             } else {

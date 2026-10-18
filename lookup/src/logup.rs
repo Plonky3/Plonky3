@@ -170,6 +170,7 @@ impl LogUpGadget {
         })
     }
 
+    /// Folds `(t_i, m_i)` into `(N, D)` with `N / D = sum_i m_i / t_i`.
     fn fold_rational_terms<T: PrimeCharacteristicRing>(
         terms: impl IntoIterator<Item = (T, T)>,
     ) -> (T, T) {
@@ -186,6 +187,29 @@ impl LogUpGadget {
         (numerator, common_denominator)
     }
 
+    /// Numerator and denominator of a mutually-exclusive column's single fraction.
+    ///
+    /// At most one branch fires per row.
+    /// The column then carries the one selected fraction.
+    ///
+    /// ```text
+    ///     N = sum_k flag_k * mult_k
+    ///     D = sum_k flag_k * (alpha - combine_k) + (1 - sum_k flag_k)
+    /// ```
+    ///
+    /// - When branch `j` fires, `flag_j = 1` and the rest are `0`.
+    /// - The fraction is then `mult_j / (alpha - combine_j)`.
+    /// - When no branch fires, `N = 0` and `D = 1`.
+    /// - The fraction is then `0`.
+    /// - The denominator degree is the per-branch maximum, not the sum.
+    /// - That is the whole point of an exclusive column over additive folding.
+    ///
+    /// # Soundness
+    ///
+    /// - Correct only when the flags are boolean.
+    /// - Correct only when the flags sum to at most one per row.
+    /// - The AIR must enforce that.
+    /// - The gadget assumes it.
     fn fold_exclusive_terms<T: PrimeCharacteristicRing>(
         terms: impl IntoIterator<Item = (T, T, T)>,
     ) -> (T, T) {
@@ -197,6 +221,7 @@ impl LogUpGadget {
             numerator += flag.clone() * mult;
             flag_sum += flag;
         }
+        // An all-inactive row has denominator 1, so its fraction is zero.
         denominator += T::ONE - flag_sum;
         (numerator, denominator)
     }
@@ -224,36 +249,9 @@ impl LogUpGadget {
             alpha.clone(),
             beta.clone(),
         );
-        Self::fold_rational_terms(
-            terms
-                .enumerate()
-                .map(|(i, term)| (term, multiplicities[i].clone().into())),
-        )
+        Self::fold_rational_terms(terms.zip_eq(multiplicities.iter().cloned().map(Into::into)))
     }
 
-    /// Numerator and denominator of a mutually-exclusive column's single fraction.
-    ///
-    /// At most one branch fires per row.
-    /// The column then carries the one selected fraction.
-    ///
-    /// ```text
-    ///     N = sum_k flag_k * mult_k
-    ///     D = sum_k flag_k * (alpha - combine_k) + (1 - sum_k flag_k)
-    /// ```
-    ///
-    /// - When branch `j` fires, `flag_j = 1` and the rest are `0`.
-    /// - The fraction is then `mult_j / (alpha - combine_j)`.
-    /// - When no branch fires, `N = 0` and `D = 1`.
-    /// - The fraction is then `0`.
-    /// - The denominator degree is the per-branch maximum, not the sum.
-    /// - That is the whole point of an exclusive column over additive folding.
-    ///
-    /// # Soundness
-    ///
-    /// - Correct only when the flags are boolean.
-    /// - Correct only when the flags sum to at most one per row.
-    /// - The AIR must enforce that.
-    /// - The gadget assumes it.
     #[cfg(test)]
     pub(crate) fn compute_exclusive_terms<AB>(
         &self,
@@ -275,9 +273,8 @@ impl LogUpGadget {
             flags
                 .iter()
                 .cloned()
-                .zip_eq(terms)
-                .zip_eq(multiplicities.iter().cloned())
-                .map(|((flag, term), mult)| (flag, term, mult)),
+                .zip_eq(terms.zip_eq(multiplicities.iter().cloned()))
+                .map(|(flag, (term, mult))| (flag, term, mult)),
         )
     }
 }

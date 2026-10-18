@@ -121,7 +121,7 @@ impl<'a, F: Field> LookupSources<'a, F> {
                             assert!(offset < 2, "expressions cannot span more than two rows");
                             2 + offset
                         }
-                        _ => return,
+                        BaseEntry::Periodic | BaseEntry::Public => return,
                     };
                     read[source].push(variable.index);
                 }
@@ -132,7 +132,7 @@ impl<'a, F: Field> LookupSources<'a, F> {
                     visit(y, read);
                 }
                 SymbolicExpr::Neg { x, .. } => visit(x, read),
-                _ => {}
+                SymbolicExpr::Leaf(_) => {}
             }
         }
         let mut read: [Vec<usize>; 4] = core::array::from_fn(|_| Vec::new());
