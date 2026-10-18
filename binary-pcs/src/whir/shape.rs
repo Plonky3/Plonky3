@@ -2,10 +2,32 @@
 
 use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
+use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_sumcheck::ring_switch::bits::BitTensor;
 use p3_whir::WhirConfig;
 use p3_whir::transcript::query_draws;
+use thiserror::Error;
+
+/// Why a proof payload cannot be bounded.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum ProofShapeError {
+    /// The commitment backend does not describe its payload geometry.
+    #[error("the MMCS does not support proof payload bounds for this geometry")]
+    UnsupportedGeometry,
+    /// A dimension or payload count cannot be represented.
+    #[error("the proof payload bound overflows usize")]
+    SizeOverflow,
+}
+
+fn checked(value: Option<usize>) -> Result<usize, ProofShapeError> {
+    value.ok_or(ProofShapeError::SizeOverflow)
+}
+
+fn power_of_two(log: usize) -> Result<usize, ProofShapeError> {
+    let shift = u32::try_from(log).map_err(|_| ProofShapeError::SizeOverflow)?;
+    checked(1usize.checked_shl(shift))
+}
 
 /// Everything a schedule fixes about the size of its proofs and the work of checking one.
 ///
@@ -21,7 +43,7 @@ pub struct ProofShape {
     /// Challenge-field elements opened from the folded codewords.
     pub opened_extension_elements: usize,
 
-    /// Digests the proof carries, which are the folded codewords' roots and their opened paths.
+    /// Digests the proof carries, including folded codewords' commitments and opened paths.
     ///
     /// No prefix a path shares with another is discounted.
     pub merkle_digests: usize,
@@ -40,30 +62,48 @@ impl ProofShape {
     /// Read the shape of every proximity opening a schedule can produce.
     ///
     /// The claim count fixes how many opened values travel beside the transcript.
-    #[must_use]
-    pub fn of<EF, F, Challenger>(
+    ///
+    /// This bounds a single committed polynomial.
+    /// Wider stacked layouts need their own bounds.
+    /// The separately transmitted initial commitment and serializer framing are excluded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported MMCS geometry or unrepresentable counts.
+    pub fn of<EF, F, Challenger, MT>(
         config: &WhirConfig<EF, F, Challenger>,
+        mmcs: &MT,
         opened_values: usize,
-    ) -> Self
+    ) -> Result<Self, ProofShapeError>
     where
         F: Field,
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+        MT: Mmcs<F>,
     {
         let num_rounds = config.round_parameters().len();
+        let final_poly_elements = power_of_two(config.final_sumcheck_rounds())?;
         let mut shape = Self {
             stir_queries: 0,
             opened_base_elements: 0,
             opened_extension_elements: 0,
-            // One root per folded codeword, before any authentication node is counted.
-            merkle_digests: num_rounds,
+            merkle_digests: 0,
             // One witness per folding round, one per folded codeword, and one closing the run.
-            sent_base_elements: config.num_variables() + num_rounds + 1,
+            sent_base_elements: checked(
+                config
+                    .num_variables()
+                    .checked_add(num_rounds)
+                    .and_then(|n| n.checked_add(1)),
+            )?,
             // Two coefficients bound one degree-two round, and one value closes the run.
-            sent_extension_elements: 2 * config.num_variables()
-                + (1 << config.final_sumcheck_rounds())
-                + config.commitment_ood_samples()
-                + opened_values,
+            sent_extension_elements: checked(
+                config
+                    .num_variables()
+                    .checked_mul(2)
+                    .and_then(|n| n.checked_add(final_poly_elements))
+                    .and_then(|n| n.checked_add(config.commitment_ood_samples()))
+                    .and_then(|n| n.checked_add(opened_values)),
+            )?,
             grinding_bits: config.max_pow_bits(),
         };
 
@@ -89,25 +129,42 @@ impl ProofShape {
             }));
 
         for (index, (log_folded, folding, queries, ood)) in rounds.enumerate() {
+            let domain_size = power_of_two(log_folded)?;
+            let geometry = mmcs
+                .proof_geometry(log_folded)
+                .ok_or(ProofShapeError::UnsupportedGeometry)?;
             // A round drawing nothing opens the whole folded domain instead.
-            let positions = if query_draws(1usize << log_folded, queries) == 0 {
-                1usize << log_folded
+            let positions = if query_draws(domain_size, queries) == 0 {
+                domain_size
             } else {
                 queries
             };
-            let elements = positions << folding;
+            let elements = checked(positions.checked_mul(power_of_two(folding)?))?;
 
-            shape.stir_queries += positions;
+            shape.stir_queries = checked(shape.stir_queries.checked_add(positions))?;
             if index == 0 {
-                shape.opened_base_elements += elements;
+                shape.opened_base_elements =
+                    checked(shape.opened_base_elements.checked_add(elements))?;
             } else {
-                shape.opened_extension_elements += elements;
+                shape.opened_extension_elements =
+                    checked(shape.opened_extension_elements.checked_add(elements))?;
+                // The initial commitment travels separately; every folded cap is in the proof.
+                shape.merkle_digests = checked(
+                    shape
+                        .merkle_digests
+                        .checked_add(geometry.commitment_digests),
+                )?;
             }
-            shape.merkle_digests += positions * log_folded;
-            shape.sent_extension_elements += ood;
+            shape.merkle_digests = checked(
+                shape
+                    .merkle_digests
+                    .checked_add(checked(positions.checked_mul(geometry.opening_digests))?),
+            )?;
+            shape.sent_extension_elements =
+                checked(shape.sent_extension_elements.checked_add(ood))?;
         }
 
-        shape
+        Ok(shape)
     }
 
     /// Read the shape of every bit-witness opening a schedule can produce for this many claims.
@@ -116,51 +173,80 @@ impl ProofShape {
     ///
     /// Each claim sends its elements by rows, one packing-level element per row.
     /// The batch sends one run of degree-two rounds and the value it survives with.
-    #[must_use]
-    pub fn of_bit_readings<F, EF, Challenger>(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported MMCS geometry or unrepresentable counts.
+    pub fn of_bit_readings<F, EF, Challenger, MT>(
         config: &WhirConfig<EF, F, Challenger>,
+        mmcs: &MT,
         num_claims: usize,
         successor_tensors: bool,
-    ) -> Self
+    ) -> Result<Self, ProofShapeError>
     where
         F: TowerLevel,
         EF: BitCoordinates + ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+        MT: Mmcs<F>,
     {
         // The batch leaves one surviving claim, however many claims it folds.
         let surviving = num_claims.min(1);
-        let mut shape = Self::of(config, surviving);
+        let mut shape = Self::of(config, mmcs, surviving)?;
         // The element alone, or the element with carry and last.
-        let num_tensors = if successor_tensors { 3 } else { 1 };
-        let rows = num_tensors * BitTensor::<EF, F>::DIMENSION;
-        shape.sent_base_elements += num_claims * rows;
+        let num_tensors: usize = if successor_tensors { 3 } else { 1 };
+        let rows = checked(num_tensors.checked_mul(BitTensor::<EF, F>::DIMENSION))?;
+        shape.sent_base_elements = checked(
+            shape
+                .sent_base_elements
+                .checked_add(checked(num_claims.checked_mul(rows))?),
+        )?;
         // A Boolean prefix only removes rounds, so the packing's arity bounds them.
-        shape.sent_extension_elements += surviving * (2 * config.num_variables() + 1);
-        shape
+        let rounds = checked(checked(config.num_variables().checked_mul(2))?.checked_add(1))?;
+        shape.sent_extension_elements = checked(
+            shape
+                .sent_extension_elements
+                .checked_add(checked(surviving.checked_mul(rounds))?),
+        )?;
+        Ok(shape)
     }
 
     /// Bytes a proof of this shape cannot exceed, given the width of each thing it carries.
     ///
     /// A serializer that pads a value beyond its own width invalidates the figure.
     ///
-    /// Framing the serializer adds around a list is the caller's to allow for.
-    #[must_use]
-    pub const fn max_bytes(
+    /// The separately transmitted initial commitment is the caller's to budget.
+    /// Framing the serializer adds around a list is also the caller's to allow for.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the byte count cannot be represented.
+    pub fn max_bytes(
         &self,
         base_element_bytes: usize,
         extension_element_bytes: usize,
         digest_bytes: usize,
-    ) -> usize {
-        (self.opened_base_elements + self.sent_base_elements) * base_element_bytes
-            + (self.opened_extension_elements + self.sent_extension_elements)
-                * extension_element_bytes
-            + self.merkle_digests * digest_bytes
+    ) -> Result<usize, ProofShapeError> {
+        let base = checked(
+            self.opened_base_elements
+                .checked_add(self.sent_base_elements)
+                .and_then(|n| n.checked_mul(base_element_bytes)),
+        )?;
+        let extension = checked(
+            self.opened_extension_elements
+                .checked_add(self.sent_extension_elements)
+                .and_then(|n| n.checked_mul(extension_element_bytes)),
+        )?;
+        let digests = checked(self.merkle_digests.checked_mul(digest_bytes))?;
+        checked(
+            base.checked_add(extension)
+                .and_then(|n| n.checked_add(digests)),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ProofShape;
+    use super::{ProofShape, ProofShapeError, power_of_two};
 
     // A hand-built shape whose byte total is computable without the implementation.
     const SHAPE: ProofShape = ProofShape {
@@ -176,15 +262,29 @@ mod tests {
     #[test]
     fn the_estimate_prices_each_part_at_its_own_width() {
         // (100 + 10)*4 + (200 + 50)*16 + 300*32 = 440 + 4000 + 9600.
-        assert_eq!(SHAPE.max_bytes(4, 16, 32), 14_040);
+        assert_eq!(SHAPE.max_bytes(4, 16, 32), Ok(14_040));
     }
 
     #[test]
     fn a_wider_alphabet_raises_the_estimate_by_exactly_the_alphabet_run() {
         // Only the first codeword and the grinding witnesses use the alphabet's width.
         assert_eq!(
-            SHAPE.max_bytes(16, 16, 32) - SHAPE.max_bytes(4, 16, 32),
+            SHAPE.max_bytes(16, 16, 32).unwrap() - SHAPE.max_bytes(4, 16, 32).unwrap(),
             110 * (16 - 4)
         );
+    }
+
+    #[test]
+    fn dimensions_must_fit_without_masking_the_shift() {
+        assert_eq!(power_of_two(0), Ok(1));
+        assert_eq!(
+            power_of_two(usize::BITS as usize - 1),
+            Ok(1usize << (usize::BITS - 1))
+        );
+        assert_eq!(
+            power_of_two(usize::BITS as usize),
+            Err(ProofShapeError::SizeOverflow)
+        );
+        assert_eq!(power_of_two(usize::MAX), Err(ProofShapeError::SizeOverflow));
     }
 }

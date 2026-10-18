@@ -151,9 +151,9 @@ impl<AB: AirBuilder> Air<AB> for WideCurrentRowAir {
         // The unused next windows must retain the AIR's full width.
         assert_eq!(main.next_slice().len(), 33);
         assert_eq!(builder.preprocessed().next_slice().len(), 35);
-        for col in 0..33 {
+        for (col, &preprocessed) in preprocessed.iter().take(33).enumerate() {
             let x = main.current(col).unwrap();
-            builder.assert_eq(x * x, preprocessed[col]);
+            builder.assert_eq(x * x, preprocessed);
         }
     }
 }

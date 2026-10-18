@@ -19,7 +19,9 @@ fn transpose_benchmark(c: &mut Criterion) {
             g.throughput(Throughput::Bytes(
                 (nrows * ncols * core::mem::size_of::<u32>()) as u64,
             ));
-            g.bench_function(&name, |b| b.iter(|| matrix1.transpose_into(&mut matrix2)));
+            g.bench_function(&name, |b| {
+                b.iter(|| matrix1.transpose_packable_into(&mut matrix2));
+            });
 
             if nrows != ncols {
                 let matrix2 = RowMajorMatrix::rand(&mut rng, ncols, nrows);
@@ -27,7 +29,9 @@ fn transpose_benchmark(c: &mut Criterion) {
                 g.throughput(Throughput::Bytes(
                     (nrows * ncols * core::mem::size_of::<u32>()) as u64,
                 ));
-                g.bench_function(&name, |b| b.iter(|| matrix2.transpose_into(&mut matrix1)));
+                g.bench_function(&name, |b| {
+                    b.iter(|| matrix2.transpose_packable_into(&mut matrix1));
+                });
             }
         }
     };

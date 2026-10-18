@@ -124,13 +124,14 @@ struct FrontierNode {
 /// - the current level, indexing the arity schedule,
 /// - the slot whose buffer owns this group,
 /// - the lead node's position within the group,
-/// - the boundary child's position within the group.
+/// - the boundary child's position within the group,
+/// - the boundary child's absolute index in the current layer.
 ///
 /// Pruning and restoration share this walk, so they agree on wire order.
-fn walk_frontier(
+pub(crate) fn walk_frontier(
     sorted_unique: &[usize],
     arity_schedule: &[usize],
-    mut visit: impl FnMut(usize, usize, usize, usize),
+    mut visit: impl FnMut(usize, usize, usize, usize, usize),
 ) {
     if sorted_unique.is_empty() {
         return;
@@ -163,7 +164,7 @@ fn walk_frontier(
                 if member < nodes.len() && nodes[member].index == group_start + k {
                     member += 1;
                 } else {
-                    visit(level, lead, lead_pos, k);
+                    visit(level, lead, lead_pos, k, group_start + k);
                 }
             }
 
@@ -191,6 +192,7 @@ const fn sibling_offset(k: usize, lead_pos: usize) -> usize {
 /// - Reads each boundary digest from a group member's full path.
 ///
 /// The output order matches what restoration consumes.
+#[cfg(test)]
 pub(crate) fn prune_paths<D, const DIGEST_ELEMS: usize>(
     arity_schedule: &[usize],
     paths: &[MerkleAuthPath<D, DIGEST_ELEMS>],
@@ -222,7 +224,7 @@ where
     walk_frontier(
         &sorted_unique,
         arity_schedule,
-        |level, lead, lead_pos, k| {
+        |level, lead, lead_pos, k, _| {
             let src = &paths[order[lead] as usize].siblings;
             sibling_hashes.push(src[chunk_base[level] + sibling_offset(k, lead_pos)].clone());
         },
@@ -292,14 +294,19 @@ where
     // Running out of supplied digests part-way means the proof is malformed.
     let mut cursor = 0;
     let mut overrun = false;
-    walk_frontier(sorted_unique, arity_schedule, |level, lead, lead_pos, k| {
-        if let Some(d) = supplied.get(cursor) {
-            restored[lead].siblings[chunk_base[level] + sibling_offset(k, lead_pos)] = d.clone();
-        } else {
-            overrun = true;
-        }
-        cursor += 1;
-    });
+    walk_frontier(
+        sorted_unique,
+        arity_schedule,
+        |level, lead, lead_pos, k, _| {
+            if let Some(d) = supplied.get(cursor) {
+                restored[lead].siblings[chunk_base[level] + sibling_offset(k, lead_pos)] =
+                    d.clone();
+            } else {
+                overrun = true;
+            }
+            cursor += 1;
+        },
+    );
 
     // `cursor` is the exact count the frontier requires.
     // Reject a proof that supplied a different number of digests.
@@ -496,7 +503,7 @@ mod tests {
     /// Pruned digest count for a query set (sorted-unique, arity schedule).
     fn pruned_count(arity_schedule: &[usize], sorted_unique: &[usize]) -> usize {
         let mut c = 0;
-        walk_frontier(sorted_unique, arity_schedule, |_, _, _, _| c += 1);
+        walk_frontier(sorted_unique, arity_schedule, |_, _, _, _, _| c += 1);
         c
     }
 

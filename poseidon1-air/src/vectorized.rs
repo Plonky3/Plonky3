@@ -206,6 +206,11 @@ impl<
     >
 {
     /// Construct a vectorized AIR from pre-computed round constants.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `PARTIAL_ROUNDS` is zero or any round-constant vector used by the AIR has a length
+    /// inconsistent with `HALF_FULL_ROUNDS` or `PARTIAL_ROUNDS`.
     pub const fn new(
         full_constants: FullRoundConstants<F, WIDTH>,
         partial_constants: PartialRoundConstants<F, WIDTH>,

@@ -3,7 +3,7 @@
 use p3_binary_field::{BinaryChallenger, Poly64, Poly192};
 use p3_binary_pcs::whir::{BinaryWhirDomain, recommended_cap_height};
 use p3_challenger::HashChallenger;
-use p3_commit::MultilinearPcs;
+use p3_commit::{Mmcs as _, MultilinearPcs};
 use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;
 use p3_merkle_tree::MerkleTreeMmcs;
@@ -36,6 +36,177 @@ const fn mmcs(cap_height: usize) -> Mmcs {
         Compress::new(Keccak256Hash),
         cap_height,
     )
+}
+
+#[test]
+fn maximal_caps_are_included_in_the_proof_budget() {
+    use p3_binary_pcs::whir::{BinaryWhirBudget, BudgetError, ProofShape, ProofShapeError};
+
+    const NUM_VARIABLES: usize = 16;
+    let config = WhirConfig::new_with_domain(
+        NUM_VARIABLES,
+        ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(3),
+            soundness_type: SecurityAssumption::JohnsonBound,
+            starting_log_inv_rate: 1,
+        },
+        &Domain::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        ProofShape::of(&config, &mmcs(0), usize::MAX),
+        Err(ProofShapeError::SizeOverflow)
+    );
+    // Salted openings carry additional payload that digest-only geometry cannot bound.
+    let hiding =
+        p3_merkle_tree::MerkleTreeHidingMmcs::<Poly64, u8, Hash, Compress, _, 2, 32, 4>::new(
+            Hash::new(Keccak256Hash),
+            Compress::new(Keccak256Hash),
+            0,
+            rand::rngs::StdRng::seed_from_u64(0x5A17),
+        );
+    let unknown = p3_commit::ExtensionMmcs::<Poly64, Poly64, _>::new(hiding);
+    assert_eq!(
+        ProofShape::of(&config, &unknown, 1),
+        Err(ProofShapeError::UnsupportedGeometry)
+    );
+    let quaternary = MerkleTreeMmcs::<Poly64, u8, _, _, 4, 32>::new(
+        Hash::new(Keccak256Hash),
+        CompressionFunctionFromHasher::<_, 4, 32>::new(Keccak256Hash),
+        0,
+    );
+    assert_eq!(
+        ProofShape::of(&config, &quaternary, 1),
+        Err(ProofShapeError::UnsupportedGeometry)
+    );
+    for cap_height in [0, recommended_cap_height(&config), usize::MAX] {
+        let backend = mmcs(cap_height);
+        let shape = ProofShape::of(&config, &backend, 1).unwrap();
+        let extension = p3_commit::ExtensionMmcs::<Poly64, Poly64, _>::new(backend.clone());
+        assert_eq!(ProofShape::of(&config, &extension, 1), Ok(shape));
+        // The initial matrix groups 2^3 domain elements per row.
+        let initial_geometry = backend
+            .proof_geometry(config.round_parameters()[0].log_folded_domain_size)
+            .unwrap();
+        let referenced = &backend;
+        let referenced_shape = ProofShape::of(&config, &referenced, 1).unwrap();
+        assert_eq!(referenced_shape, shape);
+        assert_eq!(
+            referenced_shape.max_bytes(10, 30, 32),
+            shape.max_bytes(10, 30, 32)
+        );
+        assert_eq!(
+            BinaryWhirBudget::PRODUCTION.check_shape(&referenced_shape, 10, 30, 32),
+            BinaryWhirBudget::PRODUCTION.check_shape(&shape, 10, 30, 32)
+        );
+        let pcs = SuffixPcs::new(config.clone(), Domain::default(), backend);
+        let mut rng = SmallRng::seed_from_u64(0xCA95);
+        let witness = SuffixProver::<Poly64, Poly192>::new_witness(
+            vec![Table::rand(&mut rng, 1, NUM_VARIABLES)],
+            3,
+        );
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 1),
+            vec![OpeningBatch::new(vec![0], vec![])],
+        )]);
+        let mut transcript = challenger();
+        let (commitment, data) = pcs.commit(witness, &mut transcript).unwrap();
+        assert_eq!(commitment.num_roots(), initial_geometry.commitment_digests);
+        let proof = pcs.open(data, protocol.clone(), &mut transcript).unwrap();
+        pcs.verify(&commitment, &proof, &mut challenger(), protocol)
+            .unwrap();
+        assert!(proof.whir.rounds.len() > 1);
+
+        let cap_digests: usize = proof
+            .whir
+            .rounds
+            .iter()
+            .filter_map(|round| round.commitment.as_ref())
+            .map(|cap| cap.num_roots())
+            .sum();
+        let estimate = shape.max_bytes(10, 30, 32).unwrap();
+        assert!(
+            cap_digests * 32 <= estimate,
+            "{cap_digests} cap digests alone exceed the {estimate}-byte estimate"
+        );
+        assert_shape_bounds_payload(&shape, &proof);
+        if cap_height == usize::MAX {
+            assert_eq!(commitment.num_roots(), 16_384);
+            assert_eq!(cap_digests, 14_336);
+            // The proof budget prices folded caps; the caller separately budgets the initial cap.
+            assert_eq!(shape.max_bytes(0, 0, 32), Ok(cap_digests * 32));
+            assert_eq!(initial_geometry.commitment_digests * 32, 524_288);
+            assert!(cap_digests * 32 > BinaryWhirBudget::PRODUCTION.max_proof_bytes);
+            assert!(matches!(
+                BinaryWhirBudget::PRODUCTION.check_shape(&shape, 10, 30, 32),
+                Err(BudgetError::Bytes { .. })
+            ));
+        }
+    }
+}
+
+/// Count the real payload independently of the schedule estimator.
+fn assert_shape_bounds_payload(
+    bound: &p3_binary_pcs::whir::ProofShape,
+    proof: &p3_whir::PcsProof<Poly64, Poly192, Mmcs>,
+) {
+    let whir = &proof.whir;
+    let sumchecks = core::iter::once(&whir.initial_sumcheck)
+        .chain(whir.rounds.iter().map(|round| &round.sumcheck))
+        .chain(whir.final_sumcheck.iter());
+    let mut base = 1 + whir.rounds.len(); // Final PoW and per-round PoW witnesses.
+    let mut extension = whir.initial_ood_answers.len()
+        + whir.final_poly.as_ref().unwrap().num_evals()
+        + proof.evals.iter().map(OpeningBatch::len).sum::<usize>();
+    for sumcheck in sumchecks {
+        base += sumcheck.pow_witnesses.len();
+        extension += 2 * sumcheck.polynomial_evaluations.len();
+    }
+    let mut digests: usize = whir
+        .rounds
+        .iter()
+        .filter_map(|round| round.commitment.as_ref())
+        .map(|cap| cap.num_roots())
+        .sum();
+    extension += whir
+        .rounds
+        .iter()
+        .map(|round| round.ood_answers.len())
+        .sum::<usize>();
+    let mut opened_base = 0;
+    let mut opened_extension = 0;
+    let mut positions = 0;
+    for opening in whir
+        .rounds
+        .iter()
+        .map(|round| &round.openings)
+        .chain(core::iter::once(&whir.final_openings))
+    {
+        match opening {
+            p3_whir::QueryOpenings::Base(opening) => {
+                opened_base += opening.rows.iter().map(Vec::len).sum::<usize>();
+                positions += opening.rows.len();
+                digests += opening.proof.sibling_hashes.len();
+            }
+            p3_whir::QueryOpenings::Extension(opening) => {
+                opened_extension += opening.rows.iter().map(Vec::len).sum::<usize>();
+                positions += opening.rows.len();
+                digests += opening.proof.sibling_hashes.len();
+            }
+        }
+    }
+    assert!(base <= bound.sent_base_elements);
+    assert!(extension <= bound.sent_extension_elements);
+    assert!(opened_base <= bound.opened_base_elements);
+    assert!(opened_extension <= bound.opened_extension_elements);
+    assert!(positions <= bound.stir_queries);
+    assert!(digests <= bound.merkle_digests);
+    let payload_bytes =
+        (base + opened_base) * 8 + (extension + opened_extension) * 24 + digests * 32;
+    assert!(payload_bytes <= bound.max_bytes(8, 24, 32).unwrap());
 }
 
 #[test]
@@ -263,23 +434,27 @@ mod small_field {
         let config = profile
             .config::<EF, F, NarrowChallenger, _>(NUM_VARIABLES, &domain)
             .unwrap();
-        let shape = ProofShape::of(&config, 1);
-
-        // The first codeword is opened at the alphabet's own width, not the challenge field's.
-        let narrow = shape.max_bytes(ALPHABET_BYTES, CHALLENGE_BYTES, DIGEST_BYTES);
-        let widened = shape.max_bytes(CHALLENGE_BYTES, CHALLENGE_BYTES, DIGEST_BYTES);
-        assert!(narrow < widened);
-
-        BinaryWhirBudget::PRODUCTION
-            .check_shape(&shape, ALPHABET_BYTES, CHALLENGE_BYTES, DIGEST_BYTES)
-            .unwrap();
-
         let cap_height = p3_binary_pcs::whir::recommended_cap_height(&config);
         let mmcs = NarrowMmcs::new(
             Hash::new(Keccak256Hash),
             Compress::new(Keccak256Hash),
             cap_height,
         );
+        let shape = ProofShape::of(&config, &mmcs, 1).unwrap();
+
+        // The first codeword is opened at the alphabet's own width, not the challenge field's.
+        let narrow = shape
+            .max_bytes(ALPHABET_BYTES, CHALLENGE_BYTES, DIGEST_BYTES)
+            .unwrap();
+        let widened = shape
+            .max_bytes(CHALLENGE_BYTES, CHALLENGE_BYTES, DIGEST_BYTES)
+            .unwrap();
+        assert!(narrow < widened);
+
+        BinaryWhirBudget::PRODUCTION
+            .check_shape(&shape, ALPHABET_BYTES, CHALLENGE_BYTES, DIGEST_BYTES)
+            .unwrap();
+
         let pcs = NarrowPcs::new(config, domain, mmcs);
 
         let mut prover_challenger = NarrowChallenger::from_hasher(Vec::new(), Keccak256Hash);

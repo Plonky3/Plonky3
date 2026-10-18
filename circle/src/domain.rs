@@ -329,16 +329,16 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             });
 
         // Batch inverses (already internally parallel).
-        let inv_vanishing = match standard_z {
-            Some(values) => {
+        let inv_vanishing = standard_z.map_or_else(
+            || batch_multiplicative_inverse(&z_vals),
+            |values| {
                 let inverses = batch_multiplicative_inverse(&values);
                 (0..n)
                     .into_par_iter()
                     .map(|i| inverses[reflected_index(i, inverses.len())])
                     .collect()
-            }
-            None => batch_multiplicative_inverse(&z_vals),
-        };
+            },
+        );
         let inv_den_shift = batch_multiplicative_inverse(&den_shift);
         let inv_den_negshift_k = batch_multiplicative_inverse(&den_negshift_k);
 

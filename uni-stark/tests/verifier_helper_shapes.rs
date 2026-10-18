@@ -75,6 +75,7 @@ fn check(
 ) -> Result<(), VerificationError<()>> {
     verify_constraints::<MyConfig, Fib, ()>(
         &Fib,
+        0,
         trace_local,
         trace_next,
         None,
@@ -239,5 +240,117 @@ fn recomposition_matches_direct_products_including_chunk_points() {
     assert_eq!(
         recompose_quotient_from_chunks::<MyConfig>(&[], &[], Challenge::ZERO).unwrap(),
         Challenge::ZERO
+    );
+}
+
+/// The expected width must come from trusted AIR/key metadata, not the supplied rows.
+struct PreprocessedAir;
+
+impl<F> BaseAir<F> for PreprocessedAir {
+    fn width(&self) -> usize {
+        0
+    }
+    fn preprocessed_width(&self) -> usize {
+        2
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for PreprocessedAir {
+    fn eval(&self, _builder: &mut AB) {}
+}
+
+#[test]
+fn equally_wrong_preprocessed_widths_are_rejected() {
+    for width in [0, 1, 3] {
+        let row = vec![Challenge::ONE; width];
+        let result = verify_constraints::<MyConfig, PreprocessedAir, ()>(
+            &PreprocessedAir,
+            2,
+            &[],
+            &[],
+            Some(&row),
+            Some(&row),
+            &[],
+            &[],
+            trace_domain(),
+            Challenge::from(Val::from_u64(11)),
+            Challenge::ONE,
+            Challenge::ZERO,
+        );
+        assert!(matches!(shape_error(result),
+            InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+                expected_local: 2, expected_next: 2, got_local, got_next,
+            } if got_local == width && got_next == width
+        ));
+    }
+}
+
+#[test]
+fn missing_preprocessed_rows_are_rejected() {
+    let result = verify_constraints::<MyConfig, PreprocessedAir, ()>(
+        &PreprocessedAir,
+        2,
+        &[],
+        &[],
+        None,
+        None,
+        &[],
+        &[],
+        trace_domain(),
+        Challenge::from(Val::from_u64(11)),
+        Challenge::ONE,
+        Challenge::ZERO,
+    );
+    assert!(matches!(
+        shape_error(result),
+        InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+            expected_local: 2,
+            expected_next: 2,
+            got_local: 0,
+            got_next: 0,
+        }
+    ));
+}
+
+#[test]
+fn a_constraint_point_on_the_trace_domain_is_rejected() {
+    let row = [Challenge::ONE; 2];
+    let result = verify_constraints::<MyConfig, Fib, ()>(
+        &Fib,
+        0,
+        &row,
+        &row,
+        None,
+        None,
+        &[],
+        &PIS,
+        trace_domain(),
+        Challenge::ONE,
+        Challenge::ONE,
+        Challenge::ZERO,
+    );
+    assert!(matches!(result, Err(VerificationError::OodPointInDomain)));
+}
+
+#[test]
+fn preprocessed_width_can_come_from_a_verifier_key() {
+    // The helper uses the explicit trusted width even if it differs from the AIR's default.
+    let row = [Challenge::ONE; 3];
+    assert!(
+        verify_constraints::<MyConfig, PreprocessedAir, ()>(
+            &PreprocessedAir,
+            3,
+            &[],
+            &[],
+            Some(&row),
+            Some(&row),
+            &[],
+            &[],
+            trace_domain(),
+            Challenge::from(Val::from_u64(11)),
+            Challenge::ONE,
+            Challenge::ZERO,
+        )
+        .is_ok()
     );
 }

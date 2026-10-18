@@ -48,9 +48,10 @@ use p3_binary_pcs::{
 };
 use p3_bus::{
     BusActivation, BusDebugInstance, BusDebugReport, BusDirection, BusInteractionBuilder, BusName,
-    BusSymbolicBuilder, ClockGap, ClockRangeAir, PublicImage, RangeRead, ReadOnlyMemoryBus,
-    ReadOnlyMemoryInteractionBuilder, TimestampedAccess, TimestampedBoundaryAir, TimestampedMemory,
-    TimestampedMemoryInteractionBuilder, TimestampedSeed,
+    BusSymbolicBuilder, ClockGap, ClockGapDigits, ClockRangeAir, ClockRangeWitness, PublicImage,
+    RangeRead, ReadOnlyMemoryBus, ReadOnlyMemoryInteractionBuilder, TimestampedAccess,
+    TimestampedBoundaryAir, TimestampedMemory, TimestampedMemoryInteractionBuilder,
+    TimestampedSeed,
 };
 use p3_challenger::HashChallenger;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
@@ -1276,23 +1277,15 @@ fn cell_of(address: u64) -> usize {
 /// Read counts of the program lookup and the two range tables.
 struct Counts {
     program: Vec<u64>,
-    range: [Vec<u64>; 2],
-    /// Row of each range factor, low then high.
-    index: [std::collections::HashMap<F, usize>; 2],
+    range: ClockRangeWitness<C, F>,
 }
 
 impl Counts {
     /// No reads yet.
     fn new() -> Self {
-        let height = ClockRangeAir::<C, F>::HEIGHT;
-        let index = |factor: fn(usize) -> F| (0..height).map(|row| (factor(row), row)).collect();
         Self {
             program: vec![0; 1 << LOG_PROGRAM],
-            range: [vec![0; height], vec![0; height]],
-            index: [
-                index(ClockRangeAir::<C, F>::low),
-                index(ClockRangeAir::<C, F>::high),
-            ],
+            range: ClockRangeWitness::new(),
         }
     }
 
@@ -1310,24 +1303,20 @@ impl Counts {
 
     /// The seven access columns proving the gap from `prev` to `now`, or padding at time zero.
     fn access(&mut self, gap: Option<(u64, u64)>) -> [F; ACCESS_WIDTH] {
-        let (prev, (low, high)) = match gap {
-            Some((prev, now)) => (time(prev), Memory::gap_factors(now - prev).unwrap()),
-            None => (
-                F::ZERO,
-                (
-                    ClockRangeAir::<C, F>::low(0),
-                    ClockRangeAir::<C, F>::high(0),
-                ),
-            ),
+        let (prev, digits) = match gap {
+            Some((prev, now)) => (time(prev), ClockGapDigits::new(now - prev).unwrap()),
+            None => (F::ZERO, ClockGapDigits::new(1).unwrap()),
         };
-        let mut read = |side: usize, factor: F| {
-            let row = self.index[side][&factor];
-            let [count, inverse] = Self::next(&mut self.range[side][row]);
-            [factor, count, inverse]
-        };
-        let [l0, l1, l2] = read(0, low);
-        let [h0, h1, h2] = read(1, high);
-        [prev, l0, l1, l2, h0, h1, h2]
+        let ClockGap { low, high } = self.range.read(digits);
+        [
+            prev,
+            low.value,
+            low.count,
+            low.count_inverse,
+            high.value,
+            high.count,
+            high.count_inverse,
+        ]
     }
 }
 
@@ -1493,15 +1482,9 @@ fn witness(program: &[Instr], forgery: Forgery) -> Witness {
     }
 
     // Range: each factor closes at the count its reads reached.
+    let columns = counts.range.into_columns();
     let range = (0..ClockRangeAir::<C, F>::HEIGHT)
-        .flat_map(|row| {
-            [
-                ClockRangeAir::<C, F>::low(row),
-                F::GENERATOR.exp_u64(counts.range[0][row]),
-                ClockRangeAir::<C, F>::high(row),
-                F::GENERATOR.exp_u64(counts.range[1][row]),
-            ]
-        })
+        .flat_map(|row| columns.each_ref().map(|column| column[row]))
         .collect();
     traces.push(RowMajorMatrix::new(range, 4));
 
