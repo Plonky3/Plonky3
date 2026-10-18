@@ -1,3 +1,5 @@
+//! A generic prime field `F_p` where `2^30 < p < 2^31`, using Montgomery arithmetic.
+
 #![no_std]
 
 extern crate alloc;

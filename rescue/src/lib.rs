@@ -1,3 +1,5 @@
+//! The Rescue permutation and its Rescue-Prime Optimized (RPO) variant.
+
 #![no_std]
 
 extern crate alloc;

@@ -1,3 +1,5 @@
+//! The prime field known as KoalaBear, defined as `F_p` where `p = 2^31 - 2^24 + 1`.
+
 #![no_std]
 
 #[cfg(test)]

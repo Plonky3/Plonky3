@@ -75,7 +75,7 @@ struct KernelSums<'a, R> {
     sums: &'a mut [PreparedSums; SLICED_CELLS],
 }
 
-/// AIR folder over [`SLICED_CELLS`] evaluations of sixty-four rows, each constraint reduced to one
+/// AIR folder over `SLICED_CELLS` evaluations of sixty-four rows, each constraint reduced to one
 /// bit per lane.
 ///
 /// In each evaluation every asserted constraint contributes its quadratic part, or its whole
@@ -115,7 +115,7 @@ pub struct SlicedQuadraticFolder<'a, F, R> {
 }
 
 impl<'a, F: Field, R: Field> SlicedQuadraticFolder<'a, F, R> {
-    /// Build a folder for [`SLICED_CELLS`] evaluations over sixty-four rows each.
+    /// Build a folder for `SLICED_CELLS` evaluations over sixty-four rows each.
     ///
     /// # Arguments
     ///

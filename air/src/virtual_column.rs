@@ -8,57 +8,6 @@
 //! - combining fixed columns and witness columns into one gadget input,
 //! - defining lookup/table values as packed or shifted views over existing columns,
 //! - reusing the same gadget wiring across multiple traces that share a column layout.
-//!
-//! # Example: combine fixed and witness columns
-//!
-//! ```
-//! use p3_air::{PairCol, VirtualPairCol};
-//! use p3_baby_bear::BabyBear;
-//! use p3_field::PrimeCharacteristicRing;
-//!
-//! type F = BabyBear;
-//!
-//! let gadget_input = VirtualPairCol::new(
-//!     vec![
-//!         (PairCol::Main(0), F::ONE),
-//!         (PairCol::Main(1), F::from_u8(2)),
-//!         (PairCol::Preprocessed(0), F::ONE),
-//!     ],
-//!     F::from_u8(7),
-//! );
-//!
-//! let preprocessed = [F::from_u8(5)];
-//! let main = [F::from_u8(11), F::from_u8(13)];
-//!
-//! assert_eq!(gadget_input.apply::<F, F>(&preprocessed, &main), F::from_u8(49));
-//! ```
-//!
-//! # Example: reuse one logical lookup key across traces
-//!
-//! ```
-//! use p3_air::{PairCol, VirtualPairCol};
-//! use p3_baby_bear::BabyBear;
-//! use p3_field::PrimeCharacteristicRing;
-//!
-//! type F = BabyBear;
-//!
-//! // Pack two witness limbs, and include a fixed table offset.
-//! let lookup_key = VirtualPairCol::new(
-//!     vec![
-//!         (PairCol::Main(0), F::ONE),
-//!         (PairCol::Main(1), F::from_u8(16)),
-//!         (PairCol::Preprocessed(0), F::from_u8(64)),
-//!     ],
-//!     F::ZERO,
-//! );
-//!
-//! let table_layout = [F::from_u8(1)];
-//! let trace_a = [F::from_u8(3), F::from_u8(2)];
-//! let trace_b = [F::from_u8(5), F::from_u8(1)];
-//!
-//! assert_eq!(lookup_key.apply::<F, F>(&table_layout, &trace_a), F::from_u8(99));
-//! assert_eq!(lookup_key.apply::<F, F>(&table_layout, &trace_b), F::from_u8(85));
-//! ```
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -77,6 +26,57 @@ use p3_field::{Field, PrimeCharacteristicRing};
 /// logical value from the existing preprocessed and main rows, which makes it convenient for
 /// reusable gadget inputs, packed lookup values, and cross-trace layouts that share the same
 /// column wiring.
+///
+/// # Example: combine fixed and witness columns
+///
+/// ```
+/// use p3_air::{PairCol, VirtualPairCol};
+/// use p3_baby_bear::BabyBear;
+/// use p3_field::PrimeCharacteristicRing;
+///
+/// type F = BabyBear;
+///
+/// let gadget_input = VirtualPairCol::new(
+///     vec![
+///         (PairCol::Main(0), F::ONE),
+///         (PairCol::Main(1), F::from_u8(2)),
+///         (PairCol::Preprocessed(0), F::ONE),
+///     ],
+///     F::from_u8(7),
+/// );
+///
+/// let preprocessed = [F::from_u8(5)];
+/// let main = [F::from_u8(11), F::from_u8(13)];
+///
+/// assert_eq!(gadget_input.apply::<F, F>(&preprocessed, &main), F::from_u8(49));
+/// ```
+///
+/// # Example: reuse one logical lookup key across traces
+///
+/// ```
+/// use p3_air::{PairCol, VirtualPairCol};
+/// use p3_baby_bear::BabyBear;
+/// use p3_field::PrimeCharacteristicRing;
+///
+/// type F = BabyBear;
+///
+/// // Pack two witness limbs, and include a fixed table offset.
+/// let lookup_key = VirtualPairCol::new(
+///     vec![
+///         (PairCol::Main(0), F::ONE),
+///         (PairCol::Main(1), F::from_u8(16)),
+///         (PairCol::Preprocessed(0), F::from_u8(64)),
+///     ],
+///     F::ZERO,
+/// );
+///
+/// let table_layout = [F::from_u8(1)];
+/// let trace_a = [F::from_u8(3), F::from_u8(2)];
+/// let trace_b = [F::from_u8(5), F::from_u8(1)];
+///
+/// assert_eq!(lookup_key.apply::<F, F>(&table_layout, &trace_a), F::from_u8(99));
+/// assert_eq!(lookup_key.apply::<F, F>(&table_layout, &trace_b), F::from_u8(85));
+/// ```
 #[derive(Clone, Debug)]
 pub struct VirtualPairCol<F: Field> {
     /// Linear combination coefficients: pairs of (column, weight).

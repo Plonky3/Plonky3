@@ -72,7 +72,7 @@ fn collect_opening_row<T>(row: impl IntoIterator<Item = T>, width: usize) -> Vec
 /// matrices by arranging their rows into a unified binary tree. The tallest matrix defines
 /// the maximum height, and smaller matrices are integrated at appropriate depths.
 ///
-/// The commitment is a [`MerkleCap`](crate::MerkleCap), which is the `cap_height`-th layer from the root.
+/// The commitment is a [`MerkleCap`], which is the `cap_height`-th layer from the root.
 /// A `cap_height` of 0 means the commitment is just the root (a single hash).
 /// A `cap_height` of h means the commitment contains `2^h` hashes and proofs are `h` elements shorter.
 ///
@@ -167,7 +167,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     /// - the position of the queried child within its group, `pos_in_group`, in
     ///   the range `0..step`.
     ///
-    /// This helper mirrors the arity logic used in [`Mmcs::verify_batch`](p3_commit::Mmcs::verify_batch) but
+    /// This helper mirrors the arity logic used in [`Mmcs::verify_batch`] but
     /// omits all hashing.
     pub fn replay_arity_and_positions(
         &self,
@@ -451,7 +451,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     ///
     /// Paths that share a parent at some level reuse a single compression instead of
     /// recomputing it once per query. Mirrors the per-path
-    /// [`Mmcs::verify_batch`](p3_commit::Mmcs::verify_batch) algorithm but fans out into
+    /// [`Mmcs::verify_batch`] algorithm but fans out into
     /// level-by-level groups.
     ///
     /// Every shape and consistency check the pruned-proof soundness argument relies on lives
@@ -795,7 +795,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     /// Verifies a pruned batch opening against the commitment.
     ///
     /// Walks the tree once for all queries together via
-    /// [`walk_pruned_frontier`](Self::walk_pruned_frontier): paths that share a parent at
+    /// `walk_pruned_frontier`: paths that share a parent at
     /// some level reuse a single compression instead of recomputing it once per query.
     ///
     /// # Index binding
@@ -857,7 +857,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     /// each amortized group against the commitment; it never needs a usable per-query path,
     /// so it never records one. Some callers do need that — e.g. an in-circuit verifier built
     /// around a single-path-per-query gadget, with no notion of a shared/amortized proof.
-    /// This runs [`walk_pruned_frontier`](Self::walk_pruned_frontier) — literally the same
+    /// This runs `walk_pruned_frontier` — literally the same
     /// walk verification uses, so it costs no more hashing — with recording enabled, which
     /// additionally scatters each level's "other children" into *every* query's own path,
     /// not just the group lead's, including query pairs that only merge partway up the tree,
