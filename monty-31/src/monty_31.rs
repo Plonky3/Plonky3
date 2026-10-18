@@ -195,7 +195,24 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     }
 }
 
-impl<MP: MontyParameters> Packable for MontyField31<MP> {}
+impl<MP: MontyParameters> Packable for MontyField31<MP> {
+    #[inline]
+    fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
+        // SAFETY: Self is repr(transparent) over an initialized u32 and PhantomData.
+        unsafe { p3_util::transpose::transpose_words(input, output, width, height) };
+    }
+
+    #[inline]
+    fn transpose_rows<'a>(
+        rows: usize,
+        cols: usize,
+        row: impl Fn(usize) -> &'a [Self],
+        dst: &mut [Self],
+    ) {
+        // SAFETY: Self is repr(transparent) over an initialized u32 and PhantomData.
+        unsafe { p3_util::transpose::transpose_rows_words(rows, cols, row, dst) };
+    }
+}
 
 // Provide a blanket implementation for Monty31 fields here, which forwards the
 // implementation of the variables to the generic argument `<Field>Parameter`,

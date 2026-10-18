@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::cmp::Reverse;
 
 use itertools::Itertools;
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MmcsProofGeometry};
 use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
@@ -38,6 +38,18 @@ where
     type Proof = Vec<[PW::Value; DIGEST_ELEMS]>;
     type MultiProof = PrunedMerklePaths<PW::Value, DIGEST_ELEMS>;
     type Error = MerkleTreeError;
+
+    fn proof_geometry(&self, log_height: usize) -> Option<MmcsProofGeometry> {
+        // Other arities have mixed binary/N-ary layers and cap geometry.
+        if N != 2 || log_height >= usize::BITS as usize {
+            return None;
+        }
+        let cap_height = self.cap_height.min(log_height);
+        Some(MmcsProofGeometry::new(
+            1usize.checked_shl(cap_height as u32)?,
+            log_height - cap_height,
+        ))
+    }
 
     fn commit<M: Matrix<P::Value>>(
         &self,
@@ -841,6 +853,10 @@ mod tests {
 
             // Cap should have 2^cap_height elements
             assert_eq!(commit.num_roots(), 1 << cap_height);
+
+            let geometry = mmcs.proof_geometry(5).unwrap();
+            assert_eq!(geometry.commitment_digests, commit.num_roots());
+            assert_eq!(geometry.opening_digests, 5 - cap_height);
 
             // Proof should have (log2(32) - cap_height) = 5 - cap_height elements
             let opening = mmcs.open_batch(17, &data);

@@ -169,6 +169,28 @@ impl<C: Field, F: ExtensionField<C>> BaseAir<F> for TimestampedBoundaryAir<C, F>
         }
     }
 
+    fn periodic_values(&self, row_index: usize) -> Vec<F> {
+        let TimestampedSeed::Public(image) = &self.seed else {
+            return Vec::new();
+        };
+
+        // Diagnostics visit every row.
+        // Read one sparse word instead of rebuilding every image column for each visit, retaining the periodic wrapping.
+        let cell = row_index % (1 << image.log_cells());
+        let runs = image.runs();
+        let end = runs.partition_point(|(start, _)| *start <= cell);
+        if let Some(index) = end.checked_sub(1) {
+            let (start, words) = &runs[index];
+            let offset = cell - start;
+            let width = image.value_width();
+            if offset < words.len() / width {
+                let first = offset * width;
+                return words[first..first + width].to_vec();
+            }
+        }
+        F::zero_vec(image.value_width())
+    }
+
     fn periodic_periods(&self) -> Vec<usize> {
         match &self.seed {
             TimestampedSeed::Public(image) => vec![1 << image.log_cells(); image.value_width()],
