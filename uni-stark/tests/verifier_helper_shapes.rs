@@ -8,11 +8,11 @@ use core::marker::PhantomData;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
-use p3_commit::Pcs;
 use p3_commit::testing::TrivialPcs;
+use p3_commit::{Pcs, PolynomialSpace};
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_uni_stark::{
     Domain, InvalidProofShapeError, StarkConfig, VerificationError, recompose_quotient_from_chunks,
     verify_constraints,
@@ -75,6 +75,7 @@ fn check(
 ) -> Result<(), VerificationError<()>> {
     verify_constraints::<MyConfig, Fib, ()>(
         &Fib,
+        0,
         trace_local,
         trace_next,
         None,
@@ -181,4 +182,175 @@ fn recompose_accepts_one_chunk_per_domain() {
         recompose_quotient_from_chunks::<MyConfig>(&[domain], &[coefficients], Challenge::ONE),
         Ok(value) if value == Challenge::ONE
     ));
+}
+
+#[test]
+fn recomposition_matches_direct_products_including_chunk_points() {
+    let domain = trace_domain().create_disjoint_domain(64);
+    for count in [1, 2, 4, 8] {
+        let domains = domain.split_domains(count);
+        let chunks: Vec<Vec<Challenge>> = (0..count)
+            .map(|i| {
+                (0..<Challenge as BasedVectorSpace<Val>>::DIMENSION)
+                    .map(|j| Challenge::from_u64((i * 7 + j + 1) as u64))
+                    .collect()
+            })
+            .collect();
+        let points = [Challenge::ZERO, Challenge::from_u64(11)]
+            .into_iter()
+            .chain(domains.iter().map(|d| Challenge::from(d.first_point())));
+        for zeta in points {
+            let expected = domains
+                .iter()
+                .enumerate()
+                .map(|(i, domain)| {
+                    let weight: Challenge = domains
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != i)
+                        .map(|(_, other)| {
+                            other.vanishing_poly_at_point(zeta)
+                                * other
+                                    .vanishing_poly_at_point(domain.first_point())
+                                    .inverse()
+                        })
+                        .product();
+                    weight
+                        * <Challenge as ExtensionField<Val>>::from_ext_basis_coefficients(
+                            &chunks[i],
+                        )
+                        .unwrap()
+                })
+                .sum::<Challenge>();
+            assert_eq!(
+                recompose_quotient_from_chunks::<MyConfig>(&domains, &chunks, zeta).unwrap(),
+                expected,
+                "{count} chunks at {zeta:?}"
+            );
+        }
+        for i in 0..count {
+            let mut malformed = chunks.clone();
+            malformed[i].pop();
+            assert!(matches!(
+                recompose_quotient_from_chunks::<MyConfig>(&domains, &malformed, Challenge::ZERO),
+                Err(InvalidProofShapeError::OpenedValuesDimensionMismatch),
+            ));
+        }
+    }
+    assert_eq!(
+        recompose_quotient_from_chunks::<MyConfig>(&[], &[], Challenge::ZERO).unwrap(),
+        Challenge::ZERO
+    );
+}
+
+/// The expected width must come from trusted AIR/key metadata, not the supplied rows.
+struct PreprocessedAir;
+
+impl<F> BaseAir<F> for PreprocessedAir {
+    fn width(&self) -> usize {
+        0
+    }
+    fn preprocessed_width(&self) -> usize {
+        2
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for PreprocessedAir {
+    fn eval(&self, _builder: &mut AB) {}
+}
+
+#[test]
+fn equally_wrong_preprocessed_widths_are_rejected() {
+    for width in [0, 1, 3] {
+        let row = vec![Challenge::ONE; width];
+        let result = verify_constraints::<MyConfig, PreprocessedAir, ()>(
+            &PreprocessedAir,
+            2,
+            &[],
+            &[],
+            Some(&row),
+            Some(&row),
+            &[],
+            &[],
+            trace_domain(),
+            Challenge::from(Val::from_u64(11)),
+            Challenge::ONE,
+            Challenge::ZERO,
+        );
+        assert!(matches!(shape_error(result),
+            InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+                expected_local: 2, expected_next: 2, got_local, got_next,
+            } if got_local == width && got_next == width
+        ));
+    }
+}
+
+#[test]
+fn missing_preprocessed_rows_are_rejected() {
+    let result = verify_constraints::<MyConfig, PreprocessedAir, ()>(
+        &PreprocessedAir,
+        2,
+        &[],
+        &[],
+        None,
+        None,
+        &[],
+        &[],
+        trace_domain(),
+        Challenge::from(Val::from_u64(11)),
+        Challenge::ONE,
+        Challenge::ZERO,
+    );
+    assert!(matches!(
+        shape_error(result),
+        InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+            expected_local: 2,
+            expected_next: 2,
+            got_local: 0,
+            got_next: 0,
+        }
+    ));
+}
+
+#[test]
+fn a_constraint_point_on_the_trace_domain_is_rejected() {
+    let row = [Challenge::ONE; 2];
+    let result = verify_constraints::<MyConfig, Fib, ()>(
+        &Fib,
+        0,
+        &row,
+        &row,
+        None,
+        None,
+        &[],
+        &PIS,
+        trace_domain(),
+        Challenge::ONE,
+        Challenge::ONE,
+        Challenge::ZERO,
+    );
+    assert!(matches!(result, Err(VerificationError::OodPointInDomain)));
+}
+
+#[test]
+fn preprocessed_width_can_come_from_a_verifier_key() {
+    // The helper uses the explicit trusted width even if it differs from the AIR's default.
+    let row = [Challenge::ONE; 3];
+    assert!(
+        verify_constraints::<MyConfig, PreprocessedAir, ()>(
+            &PreprocessedAir,
+            3,
+            &[],
+            &[],
+            Some(&row),
+            Some(&row),
+            &[],
+            &[],
+            trace_domain(),
+            Challenge::from(Val::from_u64(11)),
+            Challenge::ONE,
+            Challenge::ZERO,
+        )
+        .is_ok()
+    );
 }

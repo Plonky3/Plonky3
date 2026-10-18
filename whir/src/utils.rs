@@ -4,8 +4,11 @@
 //! - <https://eprint.iacr.org/2026/391> (HVZK-WHIR),
 //! - <https://eprint.iacr.org/2024/1586> (base WHIR).
 
-use p3_field::{ExtensionField, Field, HornerIter};
+use p3_field::{
+    ExtensionField, Field, HornerIter, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+};
 use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::poly::{PolyMaybePacked, PolyMaybePackedView};
 
 /// Action of `ze*_n(ρ) := (1, ρ, …, ρ^{n-1})` on a coefficient vector,
 /// computed by Horner's method (Definition 6.1 of eprint 2026/391).
@@ -83,6 +86,44 @@ where
         .sum()
 }
 
+/// Evaluates coefficient storage directly, without unpacking a packed message.
+///
+/// Lane `j` holds coefficients `c_{iW+j}`. Horner at `ρ^W` evaluates each
+/// residue class, and the final `Σ_j ρ^j lane_j` restores the scalar ordering.
+pub(crate) fn par_eval_ze_star_n_view<F, EF>(
+    point: EF,
+    coeffs: PolyMaybePackedView<'_, F, EF>,
+    chunk_len: usize,
+) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    assert_ne!(chunk_len, 0, "chunk length must be positive");
+    match coeffs {
+        PolyMaybePacked::Scalar(poly) => par_eval_ze_star_n(point, poly.as_slice(), chunk_len),
+        PolyMaybePacked::Packed(poly) => {
+            let packed_chunk_len = chunk_len.div_ceil(F::Packing::WIDTH);
+            let stride = point.exp_u64(F::Packing::WIDTH as u64);
+            let lanes: EF::ExtensionPacking = poly
+                .as_slice()
+                .par_chunks(packed_chunk_len)
+                .enumerate()
+                .map(|(chunk_idx, chunk)| {
+                    chunk
+                        .iter()
+                        .copied()
+                        .horner_acc(EF::ExtensionPacking::ZERO, stride)
+                        * stride.exp_u64((chunk_idx * packed_chunk_len) as u64)
+                })
+                .sum();
+            (0..F::Packing::WIDTH)
+                .map(|lane| lanes.extract(lane))
+                .horner_acc(EF::ZERO, point)
+        }
+    }
+}
+
 /// Adds the scaled power run `coeff · ρ^b` into slot `b` of `out`.
 ///
 /// # Math
@@ -111,6 +152,34 @@ pub(crate) fn par_add_scaled_powers<EF: Field>(
             for dst in chunk {
                 *dst += term;
                 term *= point;
+            }
+        });
+}
+
+/// Adds `coeff * point^b` directly into consecutive packed coefficient lanes.
+pub(crate) fn par_add_scaled_powers_packed<F, EF>(
+    out: &mut [EF::ExtensionPacking],
+    point: EF,
+    coeff: EF,
+    chunk_len: usize,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    assert_ne!(chunk_len, 0, "chunk length must be positive");
+    let packed_chunk_len = chunk_len.div_ceil(F::Packing::WIDTH);
+    let stride = point.exp_u64(F::Packing::WIDTH as u64);
+    let first = EF::ExtensionPacking::packed_ext_powers(point)
+        .next()
+        .expect("power iterator is infinite")
+        * coeff;
+    out.par_chunks_mut(packed_chunk_len)
+        .enumerate()
+        .for_each(|(chunk_idx, chunk)| {
+            let mut term = first * stride.exp_u64((chunk_idx * packed_chunk_len) as u64);
+            for dst in chunk {
+                *dst += term;
+                term *= stride;
             }
         });
 }
@@ -211,6 +280,57 @@ mod tests {
                     |base| padded_ood_t1(base.exp_u64(position), &msg, &randomness),
                 );
                 assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn packed_power_runs_and_ood_match_scalar_reference() {
+        use p3_field::{Field, PackedValue};
+        use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
+        use p3_util::log2_strict_usize;
+
+        type Base = KoalaBear;
+        let mut rng = SmallRng::seed_from_u64(912);
+        let k_pack = log2_strict_usize(<Base as Field>::Packing::WIDTH);
+        for extra in 0..=6 {
+            let scalar = Poly::<EF>::rand(&mut rng, k_pack + extra);
+            let packed = scalar.pack::<Base, EF>();
+            for point in [EF::ZERO, EF::ONE, rng.random()] {
+                let coeff: EF = rng.random();
+                for chunk_len in [1, 3, 16, 31, 4096] {
+                    let expected = eval_ze_star_n(point, scalar.as_slice());
+                    assert_eq!(
+                        par_eval_ze_star_n_view::<Base, EF>(
+                            point,
+                            PolyMaybePacked::Packed(packed.as_view()),
+                            chunk_len
+                        ),
+                        expected,
+                    );
+                    assert_eq!(
+                        par_eval_ze_star_n_view::<Base, EF>(
+                            point,
+                            PolyMaybePacked::Scalar(scalar.as_view()),
+                            chunk_len
+                        ),
+                        expected,
+                    );
+                    let mut updated = packed.clone();
+                    par_add_scaled_powers_packed::<Base, EF>(
+                        updated.as_mut_slice(),
+                        point,
+                        coeff,
+                        chunk_len,
+                    );
+                    let mut expected = scalar.as_slice().to_vec();
+                    let mut term = coeff;
+                    for dst in &mut expected {
+                        *dst += term;
+                        term *= point;
+                    }
+                    assert_eq!(updated.unpack::<Base, EF>().as_slice(), expected);
+                }
             }
         }
     }

@@ -29,12 +29,12 @@ use core::mem::MaybeUninit;
 use p3_field::PrimeField64;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
-use p3_mds::util::mds_multiply;
 use p3_monolith::MonolithBars;
 use tracing::instrument;
 
 use crate::MonolithAir;
 use crate::columns::{MonolithCols, MonolithRoundCols, num_cols};
+use crate::mds::MdsStrategy;
 
 /// Generate a trace for multiple Monolith permutations (one per row).
 ///
@@ -192,7 +192,7 @@ pub fn generate_trace_rows_for_perm<
         });
 
     // Step 2: Apply the initial Concrete layer (MDS multiply, no constants).
-    mds_multiply(&mut state, &air.mds_matrix);
+    air.mds_strategy.apply_field(&mut state, &air.mds_matrix);
 
     // Step 3: Full rounds (NUM_FULL_ROUNDS rounds with round constants).
     for (round_idx, round_cols) in perm.full_rounds.iter_mut().enumerate() {
@@ -200,6 +200,7 @@ pub fn generate_trace_rows_for_perm<
             &mut state,
             round_cols,
             &air.mds_matrix,
+            &air.mds_strategy,
             Some(&air.round_constants[round_idx]),
             air.limb_bits,
             &air.modulus_lsb_to_msb,
@@ -212,6 +213,7 @@ pub fn generate_trace_rows_for_perm<
         &mut state,
         &mut perm.final_round,
         &air.mds_matrix,
+        &air.mds_strategy,
         None,
         air.limb_bits,
         &air.modulus_lsb_to_msb,
@@ -226,6 +228,7 @@ pub fn generate_trace_rows_for_perm<
 /// Writes the bit decomposition of Bar inputs, the committed Bar outputs,
 /// and the post-state to the trace columns.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn generate_round<
     F: PrimeField64,
     B: MonolithBars<F, WIDTH>,
@@ -245,6 +248,7 @@ fn generate_round<
         NUM_CHI_CELLS,
     >,
     mds_matrix: &[[F; WIDTH]; WIDTH],
+    mds_strategy: &MdsStrategy<F, WIDTH>,
     round_constants: Option<&[F; WIDTH]>,
     limb_bits: &[usize],
     modulus_lsb_to_msb: &[bool; FIELD_BITS],
@@ -350,7 +354,7 @@ fn generate_round<
     }
 
     // Phase 4: Concrete (dense MDS image).
-    mds_multiply(state, mds_matrix);
+    mds_strategy.apply_field(state, mds_matrix);
 
     // Phase 5: Round constants (skipped on the final round).
     if let Some(rc) = round_constants {

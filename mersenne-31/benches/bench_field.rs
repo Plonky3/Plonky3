@@ -5,8 +5,8 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_chunked_linear_combination,
-    benchmark_dot_array, benchmark_inv, benchmark_iter_sum, benchmark_sqrt, benchmark_sub_latency,
-    benchmark_sub_throughput, benchmark_sum_array,
+    benchmark_dot_array, benchmark_inv, benchmark_iter_sum, benchmark_mixed_dot_array,
+    benchmark_sqrt, benchmark_sub_latency, benchmark_sub_throughput, benchmark_sum_array,
 };
 use p3_mersenne_31::Mersenne31;
 use rand::rngs::SmallRng;
@@ -60,6 +60,16 @@ fn bench_packedfield(c: &mut Criterion) {
     type PF = <F as Field>::Packing;
     let packed_name = type_name::<PF>().to_string();
     benchmark_chunked_linear_combination::<F, PF, 100>(c, &packed_name);
+    benchmark_dot_array::<PF, 4>(c, &packed_name);
+    benchmark_dot_array::<PF, 8>(c, &packed_name);
+    benchmark_dot_array::<PF, 12>(c, &packed_name);
+    benchmark_dot_array::<PF, 16>(c, &packed_name);
+    benchmark_dot_array::<PF, 64>(c, &packed_name);
+    benchmark_mixed_dot_array::<PF, F, 4>(c, &packed_name);
+    benchmark_mixed_dot_array::<PF, F, 8>(c, &packed_name);
+    benchmark_mixed_dot_array::<PF, F, 12>(c, &packed_name);
+    benchmark_mixed_dot_array::<PF, F, 16>(c, &packed_name);
+    benchmark_mixed_dot_array::<PF, F, 64>(c, &packed_name);
 }
 
 fn bench_packed_two_power_scaling(c: &mut Criterion) {

@@ -31,6 +31,9 @@ const BYTES_PER_WORD: usize = WORD_BITS / 8;
 /// Small enough to keep every core fed at the heights a wide trace reaches.
 pub(super) const BLOCKS_PER_TASK: usize = 16;
 
+/// Minimum selected columns that amortize the shared subset-sum tables.
+const MIN_SHARED_COLUMNS: usize = 127;
+
 impl<EF, B> BooleanTraceCommitment<EF, B>
 where
     EF: BitCoordinates + ExtensionField<B::Val>,
@@ -43,6 +46,7 @@ where
     /// serves them both: the successor weights are that table shifted up by one row.
     ///
     /// The successor vector is empty unless it is asked for.
+    #[cfg(test)]
     pub(super) fn evaluate_views(
         table: &Table<B::Val>,
         point: &Point<EF>,
@@ -68,6 +72,68 @@ where
 
         let successor = Self::weighted_columns(table, &weights);
         (current, successor)
+    }
+
+    /// Evaluate only the requested views, sharing packed-column work for dense selections and scanning sparse selections separately.
+    pub(super) fn evaluate_requested(
+        table: &Table<B::Val>,
+        point: &Point<EF>,
+        current: &[usize],
+        next: &[usize],
+    ) -> (Vec<EF>, Vec<EF>) {
+        let mut weights = SplitEq::<EF, EF>::new_packed(point, EF::ONE).materialize();
+        let current = Self::weighted_selected(table, &weights, current);
+        if next.is_empty() {
+            return (current, Vec::new());
+        }
+        let rows = weights.as_mut_slice();
+        let last = rows.len() - 1;
+        let repeated = rows[last];
+        rows.copy_within(..last, 1);
+        rows[0] = EF::ZERO;
+        rows[last] += repeated;
+        let successor = Self::weighted_selected(table, &weights, next);
+        (current, successor)
+    }
+
+    fn weighted_selected(table: &Table<B::Val>, weights: &Poly<EF>, columns: &[usize]) -> Vec<EF> {
+        if columns.iter().copied().eq(0..table.num_polys()) {
+            return Self::weighted_columns(table, weights);
+        }
+        // Shared tables amortize their setup on wide, dense packed selections of full row words.
+        // Smaller selections retain the direct scan, which is faster below this crossover.
+        if table.packed_bits().is_some()
+            && table.num_variables() >= WORD_BITS.ilog2() as usize
+            && columns.len() >= table.num_polys().div_ceil(2).max(MIN_SHARED_COLUMNS)
+        {
+            let all = Self::weighted_columns(table, weights);
+            return columns.iter().map(|&column| all[column]).collect();
+        }
+        columns
+            .par_iter()
+            .map(|&index| {
+                let column = table.column(index);
+                if column.as_dense().is_some() {
+                    return Self::weighted_column(column, weights.as_slice());
+                }
+                weights
+                    .as_slice()
+                    .chunks(WORD_BITS)
+                    .enumerate()
+                    .map(|(block, weights)| {
+                        let mut word = column
+                            .boolean_word(block)
+                            .expect("a packed column has words");
+                        let mut sum = EF::ZERO;
+                        while word != 0 {
+                            sum += weights[word.trailing_zeros() as usize];
+                            word &= word - 1;
+                        }
+                        sum
+                    })
+                    .sum::<EF>()
+            })
+            .collect()
     }
 
     /// Sum every column of a table against one weight per row.

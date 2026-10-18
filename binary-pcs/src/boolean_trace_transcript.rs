@@ -23,39 +23,62 @@ type Alphabet<F> = FieldUnit<F>;
 
 /// Public shape of one optimized column-batched opening run.
 ///
-/// Every batch claims the table's whole width at its own row point, and, when `next`
-/// holds, the same width one row ahead. Both value runs are bound before the batch
-/// draws the column point that combines them.
-#[derive(Clone, Copy, Debug)]
+/// Every batch claims the table's whole width at its own row point, and, when requested, the same width one row ahead.
+/// Both value runs are bound before the batch draws the column point that combines them.
+/// Sparse successor runs are bound in the same position, with their column indices in the domain separator, and are discharged by ordinary claims rather than by the column combination.
+#[derive(Clone, Debug)]
 pub(crate) struct ColumnBatchShape {
     pub(crate) table_variables: usize,
     pub(crate) width: usize,
     pub(crate) num_batches: usize,
     pub(crate) next: bool,
+    /// Sparse successor columns, bound with their values before the column draw.
+    pub(crate) sparse_next: Vec<usize>,
 }
 
 impl ColumnBatchShape {
-    pub(crate) const fn column_variables(self) -> usize {
+    pub(crate) const fn column_variables(&self) -> usize {
         self.width.next_power_of_two().trailing_zeros() as usize
     }
 
-    /// Views each batch reads: the current row, and the next one when it is asked for.
-    pub(crate) fn num_views(self) -> usize {
+    /// Views each column combination reads; residual sparse successors are separate.
+    pub(crate) fn num_views(&self) -> usize {
         1 + usize::from(self.next)
     }
 
-    /// Values each batch carries: the whole width once per view.
-    pub(crate) fn values_per_batch(self) -> usize {
-        self.width * self.num_views()
+    /// Values each batch binds: complete views, followed by any sparse successors.
+    pub(crate) fn values_per_batch(&self) -> Option<usize> {
+        self.width
+            .checked_mul(self.num_views())?
+            .checked_add(self.sparse_next.len())
     }
 
-    fn pattern<F, EF>(self) -> InteractionPattern
+    pub(crate) fn run_len(&self) -> Option<usize> {
+        self.values_per_batch()?.checked_mul(self.num_batches)
+    }
+
+    const fn successor_width(&self) -> usize {
+        if self.next {
+            self.width
+        } else {
+            self.sparse_next.len()
+        }
+    }
+
+    pub(crate) fn interaction_count(&self) -> Option<usize> {
+        self.num_batches
+            .checked_mul(3 + usize::from(self.successor_width() != 0))
+    }
+
+    fn pattern<F, EF>(&self) -> InteractionPattern
     where
         F: TranscriptField,
         EF: Field + AlgebraIdentity<F>,
     {
-        let per_batch = 3 + usize::from(self.next);
-        let mut steps = Vec::with_capacity(self.num_batches * per_batch);
+        let mut steps = Vec::with_capacity(
+            self.interaction_count()
+                .expect("the opening route checked the transcript count"),
+        );
         for _ in 0..self.num_batches {
             steps.push(Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
@@ -69,12 +92,12 @@ impl ColumnBatchShape {
                 VALUES,
                 Length::Fixed(self.width),
             ));
-            if self.next {
+            if self.successor_width() != 0 {
                 steps.push(Interaction::algebra::<F, EF>(
                     Hierarchy::Atomic,
                     Kind::Message,
                     NEXT_VALUES,
-                    Length::Fixed(self.width),
+                    Length::Fixed(self.successor_width()),
                 ));
             }
             steps.push(Interaction::algebra::<F, EF>(
@@ -87,7 +110,7 @@ impl ColumnBatchShape {
         InteractionPattern::new(steps).expect("flat column-batching transcript is valid")
     }
 
-    fn separator<F, EF>(self) -> DomainSeparator<Alphabet<F>>
+    fn separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
     where
         F: TranscriptField,
         EF: Field + AlgebraIdentity<F>,
@@ -100,6 +123,12 @@ impl ColumnBatchShape {
         // A run reading one row ahead carries its own label, so the two seeds part.
         if self.next {
             separator.instance(SUCCESSOR_LABEL);
+        }
+        if !self.sparse_next.is_empty() {
+            separator.instance(b"sparse-successor");
+            for &column in &self.sparse_next {
+                separator.instance(&(column as u64).to_be_bytes());
+            }
         }
         separator
     }
@@ -132,12 +161,12 @@ where
     pub(crate) fn batch(&mut self, point: &Point<EF>, values: &[EF], next: &[EF]) -> Point<EF> {
         debug_assert_eq!(point.num_variables(), self.shape.table_variables);
         debug_assert_eq!(values.len(), self.shape.width);
-        debug_assert_eq!(next.len(), self.shape.width * usize::from(self.shape.next));
+        debug_assert_eq!(next.len(), self.shape.successor_width());
         self.state
             .observe_extensions::<F, EF, FieldToFieldCodec<F>>(POINT, point.as_slice());
         self.state
             .observe_extensions::<F, EF, FieldToFieldCodec<F>>(VALUES, values);
-        if self.shape.next {
+        if self.shape.successor_width() != 0 {
             self.state
                 .observe_extensions::<F, EF, FieldToFieldCodec<F>>(NEXT_VALUES, next);
         }
@@ -192,12 +221,12 @@ where
     ) -> Result<Point<EF>, p3_challenger::fs::TranscriptError> {
         debug_assert_eq!(point.num_variables(), self.shape.table_variables);
         debug_assert_eq!(values.len(), self.shape.width);
-        debug_assert_eq!(next.len(), self.shape.width * usize::from(self.shape.next));
+        debug_assert_eq!(next.len(), self.shape.successor_width());
         self.state
             .observe_extensions::<F, EF, FieldToFieldCodec<F>>(POINT, point.as_slice())?;
         self.state
             .observe_extensions::<F, EF, FieldToFieldCodec<F>>(VALUES, values)?;
-        if self.shape.next {
+        if self.shape.successor_width() != 0 {
             self.state
                 .observe_extensions::<F, EF, FieldToFieldCodec<F>>(NEXT_VALUES, next)?;
         }
@@ -237,6 +266,7 @@ mod tests {
             width: 3,
             num_batches: 2,
             next,
+            sparse_next: Vec::new(),
         }
     }
 
@@ -247,11 +277,12 @@ mod tests {
             width: 5,
             num_batches: 1,
             next,
+            sparse_next: Vec::new(),
         }
     }
 
     /// The labels the batches of one shape play, in order.
-    fn labels(shape: ColumnBatchShape) -> Vec<&'static str> {
+    fn labels(shape: &ColumnBatchShape) -> Vec<&'static str> {
         shape
             .separator::<EF, EF>()
             .pattern()
@@ -262,7 +293,7 @@ mod tests {
     }
 
     /// The whole byte stream one shape seeds its sponge with, as a comparable digest.
-    fn seed_of(shape: ColumnBatchShape) -> SeedDigest {
+    fn seed_of(shape: &ColumnBatchShape) -> SeedDigest {
         seed_digest(&shape.separator::<EF, EF>())
     }
 
@@ -278,7 +309,7 @@ mod tests {
         }
         assert_eq!(separator.instance_label(), expected.as_slice());
         assert_eq!(
-            labels(shape(false)),
+            labels(&shape(false)),
             [POINT, VALUES, COLUMN_POINT, POINT, VALUES, COLUMN_POINT]
         );
     }
@@ -294,11 +325,11 @@ mod tests {
         // Both halves of the seed reach the digest, so a literal moves exactly when the
         // seeded bytes move. Nothing that leaves the current-row protocol alone does that.
         assert_eq!(
-            format!("{:?}", seed_of(shape(false))),
+            format!("{:?}", seed_of(&shape(false))),
             "2043da134342cdc72a65bfcdb8cd9f7eff45bbeb127fbdd4793f39c23bea23dd",
         );
         assert_eq!(
-            format!("{:?}", seed_of(wider_shape(false))),
+            format!("{:?}", seed_of(&wider_shape(false))),
             "90b5362da1b29b2acd186db9b8ad1cdea5f61298006f88e48aec7beb4ef06ce9",
         );
     }
@@ -315,7 +346,7 @@ mod tests {
             successor.pattern().pattern_hash()
         );
         assert_eq!(
-            labels(shape(true)),
+            labels(&shape(true)),
             [
                 POINT,
                 VALUES,
@@ -330,10 +361,31 @@ mod tests {
 
         // No two of the four runs share a seed, so none of them replays another's draws.
         assert_seeds_pairwise_distinct(&[
-            ("current", seed_of(shape(false))),
-            ("successor", seed_of(shape(true))),
-            ("wider current", seed_of(wider_shape(false))),
-            ("wider successor", seed_of(wider_shape(true))),
+            ("current", seed_of(&shape(false))),
+            ("successor", seed_of(&shape(true))),
+            ("wider current", seed_of(&wider_shape(false))),
+            ("wider successor", seed_of(&wider_shape(true))),
+        ]);
+    }
+
+    #[test]
+    fn sparse_successor_runs_bind_columns_and_values_before_the_draw() {
+        let mut sparse = wider_shape(false);
+        sparse.sparse_next = alloc::vec![4, 1];
+        assert_eq!(labels(&sparse), [POINT, VALUES, NEXT_VALUES, COLUMN_POINT]);
+        let mut reversed = sparse.clone();
+        reversed.sparse_next.reverse();
+        let mut other = sparse.clone();
+        other.sparse_next[0] = 3;
+        let mut fewer = sparse.clone();
+        fewer.sparse_next.pop();
+        assert_seeds_pairwise_distinct(&[
+            ("current", seed_of(&wider_shape(false))),
+            ("full next", seed_of(&wider_shape(true))),
+            ("sparse", seed_of(&sparse)),
+            ("reversed", seed_of(&reversed)),
+            ("other", seed_of(&other)),
+            ("fewer", seed_of(&fewer)),
         ]);
     }
 }

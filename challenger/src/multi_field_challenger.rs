@@ -20,8 +20,8 @@ use crate::{
 /// exactly those of `inner`. This type only adapts
 ///
 /// - **`F` → `PF`**: pending scalars are packed with [`reduce_packed`] (radix
-///   $2^{\texttt{absorb\_radix\_bits::<F>()}}$) into up to `RATE` `PF` rate slots, then
-///   [`DuplexChallenger::absorb_rate_padded_with_tag`](DuplexChallenger::absorb_rate_padded_with_tag)
+///   `2^absorb_radix_bits::<F>()`) into up to `RATE` `PF` rate slots, then
+///   `DuplexChallenger::absorb_rate_padded_with_tag`
 ///   runs (zero-padded tail, length tag = number of `F`s absorbed).
 /// - **`PF` → `F`**: after each duplex, each rate cell is split with
 ///   [`split_pf_to_field_order_limbs`] (base `|F|`, [`squeeze_field_order_num_limbs`] limbs per

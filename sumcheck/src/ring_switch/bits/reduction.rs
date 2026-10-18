@@ -84,8 +84,19 @@ const fn compact_size_floor(requested_k: usize, log_chunk: usize) -> usize {
 
 /// Add the successor weights within one nonempty column, preserving its original entries.
 fn add_successor_weights<R: Field>(entries: &mut [R], alpha: R, alpha_squared: R) {
+    add_successor_weights_with_boundary(entries, alpha, alpha_squared, None, true);
+}
+
+/// The same shift over a block that may start or end inside a column.
+fn add_successor_weights_with_boundary<R: Field>(
+    entries: &mut [R],
+    alpha: R,
+    alpha_squared: R,
+    previous: Option<R>,
+    repeat_last: bool,
+) {
     let last = entries.len() - 1;
-    let boundary = alpha_squared * entries[last];
+    let boundary = repeat_last.then(|| alpha_squared * entries[last]);
     let packed_alpha = R::Packing::broadcast(alpha);
     let width = R::Packing::WIDTH;
     let mut end = entries.len();
@@ -101,7 +112,12 @@ fn add_successor_weights<R: Field>(entries: &mut [R], alpha: R, alpha_squared: R
     for row in (1..end).rev() {
         entries[row] += alpha * entries[row - 1];
     }
-    entries[last] += boundary;
+    if let Some(previous) = previous {
+        entries[0] += alpha * previous;
+    }
+    if let Some(boundary) = boundary {
+        entries[last] += boundary;
+    }
 }
 
 /// Bind prefix variables in one task-owned buffer without invoking Rayon recursively.
@@ -964,15 +980,9 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
     ///     eq(X, Y) = prod_i ( X_i*Y_i + (1 - X_i)(1 - Y_i) )
     /// ```
     ///
-    /// Each factor lands on a different tensor leg.
-    /// From the identity, every variable adds an agree and a disagree term:
+    /// In characteristic two each factor is `1 + a ⊗ 1 + 1 ⊗ b`.
     ///
-    /// ```text
-    ///     agree     scale a copy's columns by a, its rows by b
-    ///     disagree  scale the element's columns by 1 - a, its rows by 1 - b
-    /// ```
-    ///
-    /// The two scalings commute, so either order gives the term.
+    /// Each variable is one row scaling plus one scaled column addition, starting from the identity.
     /// The alternative sums the element over the hypercube, exponentially.
     fn equality_element(&self, r_prime: &Point<EF>) -> BitTensor<EF, EF> {
         // Boolean leading coordinates select a committed slot directly.
@@ -980,13 +990,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
         let (prefix, _) = self.fixed_prefix();
         let mut element = BitTensor::one();
         for (&a, &b) in self.high()[prefix..].iter().zip(r_prime.as_slice()) {
-            let mut agree = element.clone();
-            agree.scale_columns(a);
-            agree.scale_rows(b);
-
-            element.scale_columns(EF::ONE - a);
-            element.scale_rows(EF::ONE - b);
-            element += agree;
+            element.mul_equality_factor(a, b);
         }
         element
     }
@@ -1187,6 +1191,83 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchBatch<'
                 }
             });
         table
+    }
+
+    /// Add this claim's weights under `scale` to its supported destination slice.
+    ///
+    /// Coordinate subset sums and successor shifts are linear in the batching coefficients.
+    /// Scaling those coefficients therefore costs at most `d` multiplications instead of one
+    /// per output entry. Scratch holds one equality block per task.
+    pub(super) fn add_scaled_weights_over<R>(
+        &self,
+        equality: &FactoredEquality<EF>,
+        scale: R,
+        destination: &mut [R],
+    ) where
+        EF: Send + Sync,
+        R: IntoTranscriptField<EF> + Sync,
+    {
+        assert_eq!(destination.len(), equality.num_evals());
+        if scale == R::ZERO {
+            return;
+        }
+        let batching = self.eq_batch.as_slice()[..Coefficients::<EF>::DIMENSION]
+            .iter()
+            .map(|&weight| {
+                let weight = R::from(weight);
+                if scale == R::ONE {
+                    weight
+                } else {
+                    scale * weight
+                }
+            })
+            .collect::<Vec<_>>();
+        let sums = CoordinateSums::<EF, R>::new(&batching);
+        let successor = self.alpha.map(|alpha| {
+            let kept = self
+                .reduction
+                .kept_row_variables()
+                .expect("a batch carries alpha only for a reduction sending successor elements");
+            let alpha = R::from(alpha);
+            (1usize << kept, alpha, alpha.square())
+        });
+        let block_len = equality.block_len();
+        destination
+            .par_chunks_mut(block_len)
+            .enumerate()
+            .for_each_init(
+                || (sums.clone(), R::zero_vec(block_len)),
+                |(scaled, scratch), (index, block)| {
+                    scaled_sums_into(scaled, &sums, equality.outer()[index]);
+                    scaled.apply_into(equality.inner(), scratch);
+                    if let Some((column, alpha, alpha_squared)) = successor {
+                        if column <= block_len {
+                            for entries in scratch.chunks_mut(column) {
+                                add_successor_weights(entries, alpha, alpha_squared);
+                            }
+                        } else {
+                            let start = index * block_len;
+                            let previous = (!start.is_multiple_of(column))
+                                .then(|| sums.sum(equality.before_block(index)));
+                            add_successor_weights_with_boundary(
+                                scratch,
+                                alpha,
+                                alpha_squared,
+                                previous,
+                                (start + block_len).is_multiple_of(column),
+                            );
+                        }
+                    }
+                    let (block, block_tail) = R::Packing::pack_slice_with_suffix_mut(block);
+                    let (scratch, scratch_tail) = R::Packing::pack_slice_with_suffix(scratch);
+                    for (entry, &value) in block.iter_mut().zip(scratch) {
+                        *entry += value;
+                    }
+                    for (entry, &value) in block_tail.iter_mut().zip(scratch_tail) {
+                        *entry += value;
+                    }
+                },
+            );
     }
 
     /// Build the tail weights from the compact prover's settled coordinate images.
@@ -2072,6 +2153,89 @@ mod tests {
         check::<BinaryField16>();
         check::<p3_binary_field::Poly192>();
         check::<p3_baby_bear::BabyBear>();
+    }
+
+    #[test]
+    fn scaled_weight_accumulation_matches_the_unscaled_table() {
+        // A missed scale, overwritten accumulator, or a successor carried across a column
+        // boundary must differ from scaling the original, independently built weight table.
+        fn check<F, EF, R>()
+        where
+            F: TowerLevel,
+            EF: BitCoordinates + ExtensionField<F> + Send + Sync,
+            R: IntoTranscriptField<EF> + Sync,
+            rand::distr::StandardUniform: rand::distr::Distribution<EF>,
+        {
+            let mut rng = SmallRng::seed_from_u64(0x5CA1ED);
+            let absorbed = BitRingSwitch::<F, EF>::ABSORBED;
+            for n in [0, 5] {
+                for prefix in [0, 2, n].map(|prefix| prefix.min(n)) {
+                    let point = Point::<EF>::new(
+                        (0..n + absorbed)
+                            .map(|i| {
+                                if i < prefix {
+                                    EF::from_bool(i % 2 == 0)
+                                } else {
+                                    rng.random()
+                                }
+                            })
+                            .collect(),
+                    );
+                    for rows in [None, Some(absorbed), Some(absorbed + 1), Some(absorbed + n)] {
+                        if rows.is_some_and(|rows| rows > n + absorbed) {
+                            continue;
+                        }
+                        let reduction = rows
+                            .map_or_else(
+                                || BitRingSwitch::<F, EF>::new(&point),
+                                |rows| BitRingSwitch::<F, EF>::with_successor(&point, rows),
+                            )
+                            .unwrap();
+                        let (fixed, offset, _) = reduction.support();
+                        let draw = Point::<EF>::rand(&mut rng, Coefficients::<EF>::INDEX_VARIABLES);
+                        for alpha in [EF::ZERO, EF::ONE, rng.random()] {
+                            let batch = reduction
+                                .batch_drawn(
+                                    &draw,
+                                    reduction.sends_successor_tensors().then_some(alpha),
+                                )
+                                .unwrap();
+                            for log_block in [0, 1, 2, n + 1] {
+                                let equality =
+                                    FactoredEquality::new(&reduction.high()[fixed..], log_block);
+                                let unscaled = batch.weights_over::<R>(&equality);
+                                for scale in [EF::ZERO, EF::ONE, rng.random()] {
+                                    let scale = R::from(scale);
+                                    let start = offset + 3;
+                                    let mut actual = (0..start + unscaled.num_evals() + 3)
+                                        .map(|_| R::from(rng.random::<EF>()))
+                                        .collect::<Vec<_>>();
+                                    let mut expected = actual.clone();
+                                    for (entry, &value) in
+                                        expected[start..].iter_mut().zip(unscaled.as_slice())
+                                    {
+                                        *entry += scale * value;
+                                    }
+                                    batch.add_scaled_weights_over(
+                                        &equality,
+                                        scale,
+                                        &mut actual[start..start + unscaled.num_evals()],
+                                    );
+                                    assert_eq!(
+                                        actual, expected,
+                                        "n={n}, prefix={prefix}, rows={rows:?}, block={log_block}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        check::<BinaryField16, BinaryField16, BinaryField16>();
+        check::<BinaryField128, BinaryField128, BinaryField128>();
+        check::<BinaryField128, BinaryField128, Ghash128>();
+        check::<p3_binary_field::Poly64, p3_binary_field::Poly192, p3_binary_field::Poly192>();
     }
 
     #[test]
@@ -3000,6 +3164,60 @@ mod tests {
                 "{num_variables} variables"
             );
         }
+    }
+
+    #[test]
+    fn equality_and_closing_weights_match_definitions_across_fields_and_prefixes() {
+        fn check<F: TowerLevel, E: BitCoordinates + ExtensionField<F>>()
+        where
+            rand::distr::StandardUniform: rand::distr::Distribution<E>,
+        {
+            let mut rng = SmallRng::seed_from_u64(0xE964);
+            for prefix in [0, 1, 3] {
+                for free in 0..=4 {
+                    let absorbed = BitRingSwitch::<F, E>::ABSORBED;
+                    let mut coordinates: Vec<E> = (0..prefix)
+                        .map(|i| if i % 2 == 0 { E::ZERO } else { E::ONE })
+                        .collect();
+                    coordinates.extend((0..free + absorbed).map(|_| rng.random::<E>()));
+                    let point = Point::new(coordinates);
+                    for successor in [false, true] {
+                        let reduction = if successor {
+                            BitRingSwitch::<F, E>::with_successor(&point, free + absorbed)
+                        } else {
+                            BitRingSwitch::<F, E>::new(&point)
+                        }
+                        .unwrap();
+                        let (actual_prefix, _) = reduction.fixed_prefix();
+                        let other =
+                            Point::<E>::rand(&mut rng, reduction.num_variables() - actual_prefix);
+                        let high = Poly::new_from_point(&reduction.high()[actual_prefix..], E::ONE);
+                        let other_eq = Poly::new_from_point(other.as_slice(), E::ONE);
+                        let mut expected = BitTensor::zero();
+                        for (&a, &b) in high.as_slice().iter().zip(other_eq.as_slice()) {
+                            expected.add_exterior_product(a, b);
+                        }
+                        assert_eq!(reduction.equality_element(&other), expected);
+                        let batch_point =
+                            Point::<E>::rand(&mut rng, BitRingSwitch::<F, E>::BATCHED);
+                        let batch = if reduction.sends_successor_tensors() {
+                            reduction.batch_with_successor(&batch_point, rng.random())
+                        } else {
+                            reduction.batch(&batch_point)
+                        }
+                        .unwrap();
+                        assert_eq!(
+                            batch.closing_weight(&other).unwrap(),
+                            batch.weights().eval_base(&other)
+                        );
+                    }
+                }
+            }
+        }
+        check::<BinaryField16, BinaryField16>();
+        check::<BinaryField128, BinaryField128>();
+        check::<Ghash128, Ghash128>();
+        check::<p3_binary_field::Poly64, p3_binary_field::Poly192>();
     }
 
     #[test]

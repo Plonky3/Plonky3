@@ -111,6 +111,30 @@ fn blake2s_one_message(c: &mut Criterion) {
     group.finish();
 }
 
+fn blake2s_partial_batches(c: &mut Criterion) {
+    let mut group = c.benchmark_group("blake2s partial batches");
+    for len in [0, 63, 64, 65, 1024] {
+        for count in 1..=2 * p3_blake2s::LANES {
+            let messages = fixture(len * count);
+            let mut digests = vec![[0u8; 32]; count];
+            group.throughput(Throughput::Elements(count as u64));
+            group.bench_function(format!("hash_many/{len}/{count}"), |b| {
+                b.iter(|| Blake2s256.hash_many(black_box(&messages), black_box(&mut digests)));
+            });
+            group.bench_function(format!("scalar/{len}/{count}"), |b| {
+                b.iter(|| {
+                    let messages = black_box(&messages);
+                    for (i, digest) in black_box(&mut digests).iter_mut().enumerate() {
+                        *digest = Blake2s256::hash(&messages[i * len..(i + 1) * len]);
+                    }
+                    black_box(&digests);
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
 fn blake2s_two_to_one(c: &mut Criterion) {
     // One Merkle node: two digests in, one out, as a verifier computes it along a path.
     let compress = CompressionFunctionFromHasher::<_, 2, 32>::new(Blake2s256);
@@ -127,6 +151,7 @@ criterion_group!(
     benches,
     blake2s_hash_many,
     blake2s_one_message,
-    blake2s_two_to_one
+    blake2s_two_to_one,
+    blake2s_partial_batches
 );
 criterion_main!(benches);

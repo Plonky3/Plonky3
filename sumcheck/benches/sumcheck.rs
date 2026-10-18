@@ -40,8 +40,10 @@ use p3_sumcheck::layout::{
 };
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{
-    Basis, RoundMessage, SumcheckProver, VariableOrder, sumcheck_coefficients_prefix,
+    Basis, RoundMessage, SumcheckProver, VariableOrder, fold_and_round_coefficients_suffix,
+    fold_and_round_coefficients_suffix_packed, sumcheck_coefficients_prefix,
     sumcheck_coefficients_prefix_projective, sumcheck_coefficients_suffix,
+    sumcheck_coefficients_suffix_packed,
 };
 use p3_sumcheck::transcript::{ProverTranscript, SumcheckShape};
 use p3_sumcheck::zk::ZkSumcheckData;
@@ -200,10 +202,7 @@ where
 
 /// Product polynomial with independent random evals and weights.
 ///
-/// The pair is handed to `new_packed`, but only prefix binding actually keeps
-/// packed storage: `ProductPolynomial` unpacks a suffix-bound pair up front,
-/// because the suffix variable lives inside the SIMD lanes. The suffix rows of
-/// the prover benches therefore measure the scalar kernel.
+/// Both binding orders retain packed storage above one SIMD vector.
 fn rand_product_poly<B: BenchField>(
     order: VariableOrder,
     rng: &mut SmallRng,
@@ -249,9 +248,7 @@ where
 /// - Later rounds multiply two packed extension operands.
 /// - Final rounds multiply two scalar extension operands.
 ///
-/// The two packed flavours time prefix binding only. `ProductPolynomial` serves
-/// suffix binding from scalar storage, so a suffix round never meets a packed
-/// operand; the scalar flavour is the one that carries both orders.
+/// Suffix packed operands use the cross-lane kernel; scalar operands use adjacent pairs.
 fn bench_round_coefficients<B: BenchField>(c: &mut Criterion)
 where
     StandardUniform: Distribution<B::F> + Distribution<B::EF>,
@@ -314,6 +311,18 @@ where
         );
 
         group.bench_with_input(
+            BenchmarkId::new("ext_ext_packed_suffix", &label),
+            &label,
+            |b, _| {
+                b.iter(|| {
+                    black_box(sumcheck_coefficients_suffix_packed::<B::F, B::EF>(
+                        packed_evals.as_slice(),
+                        packed_weights.as_slice(),
+                    ))
+                });
+            },
+        );
+        group.bench_with_input(
             BenchmarkId::new("ext_ext_packed_prefix_projective", &label),
             &label,
             |b, _| {
@@ -367,9 +376,8 @@ where
 /// The buffer is overwritten each call, so a clone is restored before every
 /// timed iteration.
 ///
-/// The buffer is packed, so prefix is the only order timed here: a suffix round
-/// binds a variable that lives inside the SIMD lanes, which `ProductPolynomial`
-/// serves from scalar storage instead.
+/// This benchmark measures the split-face prefix binding primitive. Cross-lane
+/// suffix binding is measured with its round message in `fused_suffix`.
 fn bench_fix_var<B: BenchField>(c: &mut Criterion)
 where
     StandardUniform: Distribution<B::F> + Distribution<B::EF>,
@@ -1030,6 +1038,50 @@ fn witness_fill(c: &mut Criterion) {
     group.finish();
 }
 
+/// Compares the fused cross-lane suffix kernel with the same scalar round.
+fn bench_fused_suffix<B: BenchField>(c: &mut Criterion)
+where
+    StandardUniform: Distribution<B::F> + Distribution<B::EF>,
+{
+    let mut group = c.benchmark_group(format!("sumcheck/{}/fused_suffix", B::NAME));
+    group.sample_size(10);
+    for &k in &[8, 12, 16, 20] {
+        let mut rng = rng_for(0x51AD, k);
+        let evals = rand_ext::<B>(&mut rng, k);
+        let weights = rand_ext::<B>(&mut rng, k);
+        let packed_evals = evals.pack::<B::F, B::EF>();
+        let packed_weights = weights.pack::<B::F, B::EF>();
+        let r: B::EF = rng.random();
+        group.throughput(Throughput::Elements(1 << k));
+        group.bench_function(BenchmarkId::new("scalar", format!("k{k}")), |b| {
+            b.iter_batched_ref(
+                || (evals.clone(), weights.clone()),
+                |(e, w)| {
+                    black_box(fold_and_round_coefficients_suffix(e, w, r));
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        group.bench_function(BenchmarkId::new("packed", format!("k{k}")), |b| {
+            b.iter_batched_ref(
+                || (packed_evals.clone(), packed_weights.clone()),
+                |(e, w)| {
+                    black_box(fold_and_round_coefficients_suffix_packed::<B::F, B::EF>(
+                        e, w, r,
+                    ));
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+fn fused_suffix(c: &mut Criterion) {
+    bench_fused_suffix::<BabyBear4>(c);
+    bench_fused_suffix::<KoalaBear4>(c);
+}
+
 fn single_round_drive(c: &mut Criterion) {
     bench_single_round_drive::<BabyBear4>(c);
     bench_single_round_drive::<KoalaBear4>(c);
@@ -1047,5 +1099,6 @@ criterion_group!(
     layout,
     witness_fill,
     bench_zk_residual,
+    fused_suffix,
 );
 criterion_main!(benches);

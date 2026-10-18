@@ -199,8 +199,56 @@ fn bench_prove_verify(c: &mut Criterion) {
     group.finish();
 }
 
+/// Production quotient evaluation on arbitrary coset values, excluding trace generation, LDE, and commitments so constraint-expression changes can be measured independently.
+fn bench_quotient_for<SC, A>(c: &mut Criterion, name: &str, config: &SC, air: &A)
+where
+    SC: p3_uni_stark::StarkGenericConfig,
+    A: p3_uni_stark::QuotientAir<SC>,
+{
+    use p3_commit::{Pcs, PolynomialSpace};
+    use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_uni_stark::{AirLayout, Val, quotient_values};
+
+    let pcs = config.pcs();
+    let trace_domain = pcs.natural_domain_for_degree(1 << 10);
+    let quotient_domain = trace_domain.create_disjoint_domain(1 << 11);
+    let width = air.width();
+    let evaluations = RowMajorMatrix::new(
+        (0..quotient_domain.size() * width)
+            .map(|i| Val::<SC>::from_usize(i.wrapping_mul(12345)))
+            .collect(),
+        width,
+    );
+    let layout = AirLayout {
+        main_width: width,
+        ..Default::default()
+    };
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            quotient_values::<SC, A, _>(
+                pcs,
+                air,
+                &[],
+                layout,
+                trace_domain,
+                quotient_domain,
+                std::hint::black_box(&evaluations),
+                None,
+                SC::Challenge::from_u64(7),
+            )
+        });
+    });
+}
+
+fn bench_quotient(c: &mut Criterion) {
+    let (config, _) = make_stark_config();
+    bench_quotient_for(c, "sha256_air_quotient/2^10", &config, &Sha256Air);
+}
+
 criterion_group!(
     benches,
+    bench_quotient,
     bench_trace_generation,
     bench_prove,
     bench_prove_verify,

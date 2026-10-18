@@ -205,7 +205,19 @@ impl_div_methods!(PackedPoly64, Poly64);
 impl_packed_field_div!(PackedPoly64);
 impl_sum_prod_base_field!(PackedPoly64, Poly64);
 
-impl Algebra<Poly64> for PackedPoly64 {}
+impl Algebra<Poly64> for PackedPoly64 {
+    /// Defer reduction across the whole sum for packings of at least four lanes.
+    /// Two-lane packings measured faster with an eager reduction per term.
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], weights: &[Poly64; N]) -> Self {
+        if WIDTH_64 >= 4 {
+            Self::dot_product(a, &weights.map(Self::broadcast))
+        } else {
+            let products: [Self; N] = core::array::from_fn(|i| a[i] * weights[i]);
+            Self::sum_array::<N>(&products)
+        }
+    }
+}
 
 impl From<Gf2> for PackedPoly64 {
     /// `GF(2)` is the prime subfield, embedded as `{ZERO, ONE}` in every lane.
@@ -244,9 +256,11 @@ unsafe impl PackedFieldPow2 for PackedPoly64 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{PackedValue, PrimeCharacteristicRing};
+    use p3_field::{Algebra, PackedValue, PrimeCharacteristicRing};
     use p3_field_testing::test_packed_binary_field;
     use proptest::prelude::*;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use crate::packed::gf64::WIDTH_64;
     use crate::{PackedPoly64, Poly64};
@@ -343,6 +357,56 @@ mod tests {
         check_dot_product::<3>();
         check_dot_product::<4>();
         check_dot_product::<5>();
+    }
+
+    fn check_mixed_dot_product<const N: usize>(rng: &mut SmallRng) {
+        let values: [PackedPoly64; N] = core::array::from_fn(|_| rng.random());
+        let weights: [Poly64; N] = core::array::from_fn(|_| rng.random());
+        let actual = PackedPoly64::mixed_dot_product(&values, &weights);
+        lanes_agree(actual, |lane| {
+            values
+                .iter()
+                .zip(weights)
+                .map(|(value, weight)| value.as_slice()[lane] * weight)
+                .sum()
+        })
+        .unwrap();
+
+        if N.is_multiple_of(2) {
+            // Cancellation must happen within one deferred dot product.
+            let paired_values = core::array::from_fn(|i| values[i / 2]);
+            let paired_weights = core::array::from_fn(|i| weights[i / 2]);
+            assert_eq!(
+                PackedPoly64::mixed_dot_product::<N>(&paired_values, &paired_weights),
+                PackedPoly64::ZERO
+            );
+        }
+        let zero_weights = [Poly64::ZERO; N];
+        assert_eq!(
+            PackedPoly64::mixed_dot_product(&values, &zero_weights),
+            PackedPoly64::ZERO
+        );
+    }
+
+    #[test]
+    fn mixed_dot_products_match_scalar_lanes() {
+        let mut rng = SmallRng::seed_from_u64(0x64D07);
+        for _ in 0..32 {
+            check_mixed_dot_product::<0>(&mut rng);
+            check_mixed_dot_product::<1>(&mut rng);
+            check_mixed_dot_product::<2>(&mut rng);
+            check_mixed_dot_product::<3>(&mut rng);
+            check_mixed_dot_product::<4>(&mut rng);
+            check_mixed_dot_product::<5>(&mut rng);
+            check_mixed_dot_product::<8>(&mut rng);
+            check_mixed_dot_product::<17>(&mut rng);
+        }
+        let value = specials();
+        let weight = Poly64::new(u64::MAX);
+        assert_eq!(
+            PackedPoly64::mixed_dot_product(&[value; 8], &[weight; 8]),
+            PackedPoly64::ZERO
+        );
     }
 
     proptest! {

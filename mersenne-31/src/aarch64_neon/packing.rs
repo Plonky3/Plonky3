@@ -234,9 +234,10 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
         // Single-accumulator form of the `coeffwise_dot_product` scheme: widen each
         // 32x32 -> 64-bit product into `lo` (lanes 0-1) and `hi` (lanes 2-3) with
         // multiply-accumulates, deferring the Mersenne reduction. Inputs are in `0..=P`,
-        // so a product is at most `P^2 < 2^62`. `N == 4` accumulates all four without an
-        // intermediate fold (`4 * P^2 < 2^64`); larger `N` fold every 3 products, keeping
-        // `2^33 + 3 * P^2 < 2^64`, so the u64 lanes never overflow.
+        // so a product is at most `P^2 < 2^62`. For any u64, a fold is at most
+        // `5 * P + 3`. Folding every four products is safe because
+        // `4 * P^2 + 5 * P + 3 < 2^64`, including the redundant representation P of zero.
+        // The final batch needs no intermediate fold because the epilogue folds it twice.
         unsafe {
             // Safety: If this code got compiled then NEON intrinsics are available.
             let zero = aarch64::vdupq_n_u64(0);
@@ -249,16 +250,14 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
                 lo = aarch64::vmlal_u32(lo, aarch64::vget_low_u32(a), aarch64::vget_low_u32(b));
                 hi = aarch64::vmlal_high_u32(hi, a, b);
                 unreduced += 1;
-                // `N == 4` is the only size here whose products all fit without an
-                // intermediate fold, so skip it; larger `N` fold every 3.
-                if unreduced == 3 && N != 4 {
+                if unreduced == 4 && i + 1 < N {
                     unreduced = 0;
                     lo = partial_reduce_u64(lo);
                     hi = partial_reduce_u64(hi);
                 }
             }
-            // At most 2 unreduced products on top of a folded value (< 2^33 + 2 * P^2 < 2^64);
-            // two folds bring each lane to <= 2 P, then `reduce_sum` canonicalizes to 0..=P.
+            // Two folds of any u64 give at most P + 4 <= 2 P, so narrowing is safe;
+            // `reduce_sum` then canonicalizes to 0..=P.
             let l = partial_reduce_u64(partial_reduce_u64(lo));
             let h = partial_reduce_u64(partial_reduce_u64(hi));
             let narrowed = aarch64::vuzp1q_u32(
@@ -326,7 +325,7 @@ fn mixed_dot_product<const N: usize>(
             lo = aarch64::vmlal_u32(lo, aarch64::vget_low_u32(a), aarch64::vget_low_u32(b));
             hi = aarch64::vmlal_high_u32(hi, a, b);
             unreduced += 1;
-            if unreduced == 3 && N != 4 {
+            if unreduced == 4 && i + 1 < N {
                 unreduced = 0;
                 lo = partial_reduce_u64(lo);
                 hi = partial_reduce_u64(hi);
@@ -483,8 +482,8 @@ unsafe impl PackedField for PackedMersenne31Neon {
         //
         // Each coefficient accumulator is a pair of u64x2 vectors: `lo` holds lanes 0-1
         // and `hi` lanes 2-3. Inputs are in `0..=P`, so a product is at most
-        // `P^2 < 2^62`; folding the accumulators below `2^33` every 3 iterations keeps
-        // `2^33 + 3 * P^2 < 2^64`, so the u64 lanes never overflow.
+        // `P^2 < 2^62`. A fold of any u64 is at most `5 * P + 3`, so folding every
+        // four products keeps `4 * P^2 + 5 * P + 3 < 2^64` and the lanes never overflow.
         debug_assert!(d <= 8, "Extension degree > 8 not supported");
         unsafe {
             // Safety: If this code got compiled then NEON intrinsics are available.
@@ -493,6 +492,14 @@ unsafe impl PackedField for PackedMersenne31Neon {
             let mut hi = [zero; 8];
             let mut unreduced = 0;
             for (coeffs, base) in pairs {
+                // Fold only when another product follows the previous batch of four.
+                if unreduced == 4 {
+                    unreduced = 0;
+                    for k in 0..d {
+                        lo[k] = partial_reduce_u64(lo[k]);
+                        hi[k] = partial_reduce_u64(hi[k]);
+                    }
+                }
                 let b = base.to_vector();
                 for (k, coeff) in coeffs.iter().take(d).enumerate() {
                     let c = coeff.to_vector();
@@ -504,19 +511,11 @@ unsafe impl PackedField for PackedMersenne31Neon {
                     hi[k] = aarch64::vmlal_high_u32(hi[k], c, b);
                 }
                 unreduced += 1;
-                if unreduced == 3 {
-                    unreduced = 0;
-                    for k in 0..d {
-                        lo[k] = partial_reduce_u64(lo[k]);
-                        hi[k] = partial_reduce_u64(hi[k]);
-                    }
-                }
             }
             core::array::from_fn(|k| {
                 if k < d {
-                    // At most 2 unreduced products on top of a folded value: the lanes
-                    // are below 2^33 + 2 * P^2 < 2^64, so two folds bring them to
-                    // P + 3 <= 2 P, and `reduce_sum` yields a canonical value in 0..=P.
+                    // Two folds of any u64 bring it to at most P + 4 <= 2 P;
+                    // `reduce_sum` then yields a canonical value in 0..=P.
                     let l = partial_reduce_u64(partial_reduce_u64(lo[k]));
                     let h = partial_reduce_u64(partial_reduce_u64(hi[k]));
                     let narrowed = aarch64::vuzp1q_u32(
@@ -733,13 +732,27 @@ mod tests {
     use super::{Mersenne31, PackedMersenne31Neon};
 
     /// Zero has a redundant representation, so let's test both.
-    const ZEROS: PackedMersenne31Neon = PackedMersenne31Neon(Mersenne31::new_array([
-        0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
-    ]));
+    const ZEROS: PackedMersenne31Neon = PackedMersenne31Neon([
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+        Mersenne31::new_reduced(0x00000000),
+        Mersenne31::new_reduced(0x7fffffff),
+    ]);
 
     const SPECIAL_VALS: PackedMersenne31Neon = PackedMersenne31Neon(Mersenne31::new_array([
         0x00000000, 0x00000001, 0x00000002, 0x7ffffffe,
     ]));
+
+    #[test]
+    fn redundant_zero_fixture_preserves_raw_limbs() {
+        use p3_field::PrimeCharacteristicRing;
+
+        for (i, lane) in ZEROS.0.iter().enumerate() {
+            let expected = if i % 2 == 0 { 0 } else { 0x7fff_ffff };
+            assert_eq!(lane.value, expected);
+            assert_eq!(*lane, Mersenne31::ZERO);
+        }
+    }
 
     test_packed_field!(
         crate::PackedMersenne31Neon,
@@ -769,16 +782,23 @@ mod tests {
             }
         };
         let packed = |i: u32| {
-            PackedMersenne31Neon(Mersenne31::new_array([
-                val(i),
-                val(i.wrapping_add(1)),
-                val(i.wrapping_add(2)),
-                val(i.wrapping_add(3)),
-            ]))
+            PackedMersenne31Neon(
+                [
+                    val(i),
+                    val(i.wrapping_add(1)),
+                    val(i.wrapping_add(2)),
+                    val(i.wrapping_add(3)),
+                ]
+                .map(Mersenne31::new_reduced),
+            )
         };
 
+        assert_eq!(packed(3).0[0].value, P);
+
         for d in 1..=8usize {
-            for len in [0usize, 1, 2, 3, 4, 6, 7, 100] {
+            for len in [
+                0usize, 1, 2, 3, 4, 5, 7, 8, 9, 11, 12, 13, 100, 255, 256, 257,
+            ] {
                 let coeffs: Vec<[PackedMersenne31Neon; 8]> = (0..len)
                     .map(|i| core::array::from_fn(|k| packed((i * 8 + k) as u32)))
                     .collect();
@@ -797,6 +817,16 @@ mod tests {
                     coeffs.iter().zip(&bases).map(|(c, &b)| (&c[..], b)),
                 );
                 assert_eq!(expected, got, "d = {d}, len = {len}");
+
+                // All operands equal P: the largest raw product is a redundant zero.
+                let max = PackedMersenne31Neon::from(Mersenne31::new_reduced(P));
+                assert!(max.0.iter().all(|lane| lane.value == P));
+                let coeffs = [max; 8];
+                let got = PackedMersenne31Neon::coeffwise_dot_product(
+                    d,
+                    (0..len).map(|_| (&coeffs[..], max)),
+                );
+                assert_eq!(got, [PackedMersenne31Neon::ZERO; 8]);
             }
         }
     }
@@ -824,14 +854,17 @@ mod tests {
             }
         };
         let packed = |i: u32| {
-            PackedMersenne31Neon(Mersenne31::new_array([
-                val(i),
-                val(i.wrapping_add(1)),
-                val(i.wrapping_add(2)),
-                val(i.wrapping_add(3)),
-            ]))
+            PackedMersenne31Neon(
+                [
+                    val(i),
+                    val(i.wrapping_add(1)),
+                    val(i.wrapping_add(2)),
+                    val(i.wrapping_add(3)),
+                ]
+                .map(Mersenne31::new_reduced),
+            )
         };
-        let scalar = |i: u32| Mersenne31::new_checked(val(i) % P).unwrap();
+        let scalar = |i: u32| Mersenne31::new_reduced(val(i));
 
         fn check<EF: ExtensionField<Mersenne31>, const N: usize>(
             packed_width: usize,

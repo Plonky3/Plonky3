@@ -336,7 +336,7 @@ where
     /// Computes the equality polynomial `eq(p, q)` for two points given as slices.
     ///
     /// The **equality polynomial** for two vectors is:
-    /// ```ignore
+    /// ```text
     /// eq(p, q) = ∏ (p_i * q_i + (1 - p_i) * (1 - q_i))
     /// ```
     ///

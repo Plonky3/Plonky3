@@ -74,9 +74,12 @@ pub use vectorized::*;
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use alloc::vec;
-    use core::borrow::Borrow;
-    use core::mem::size_of;
+    use core::borrow::{Borrow, BorrowMut};
+    use core::mem::{MaybeUninit, size_of};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_air::BaseAir;
     use p3_air::symbolic::{AirLayout, get_max_constraint_degree};
@@ -87,6 +90,7 @@ mod tests {
     };
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_fri::{FriParameters, TwoAdicFriPcs};
     use p3_keccak::{Keccak256Hash, KeccakF};
@@ -100,7 +104,10 @@ mod tests {
     use p3_uni_stark::{StarkConfig, prove, verify};
 
     use crate::columns::{Poseidon1Cols, num_cols};
-    use crate::{Poseidon1Air, generate_trace_rows};
+    use crate::{
+        FullRoundConstants, PartialRoundConstants, Poseidon1Air, VectorizedPoseidon1Air,
+        generate_trace_rows, generate_trace_rows_for_perm, generate_vectorized_trace_rows,
+    };
 
     type F = BabyBear;
 
@@ -119,6 +126,227 @@ mod tests {
             mds_circ_col: MDSBabyBearData::MATRIX_CIRC_MDS_16_COL,
             round_constants: BABYBEAR_POSEIDON1_RC_16.to_vec(),
         }
+    }
+
+    type TestAir = Poseidon1Air<F, 2, 7, 1, 1, 2>;
+    type TestVectorAir = VectorizedPoseidon1Air<F, 2, 7, 1, 1, 2, 2>;
+    type TestCols = Poseidon1Cols<MaybeUninit<F>, 2, 7, 1, 1, 2>;
+
+    fn test_constants() -> (FullRoundConstants<F, 2>, PartialRoundConstants<F, 2>) {
+        let identity = [[F::ONE, F::ZERO], [F::ZERO, F::ONE]];
+        (
+            FullRoundConstants {
+                initial: vec![[F::ZERO; 2]],
+                terminal: vec![[F::ZERO; 2]],
+                dense_mds: identity,
+            },
+            PartialRoundConstants {
+                first_round_constants: [F::ZERO; 2],
+                m_i: identity,
+                sparse_first_row: vec![[F::ONE, F::ZERO]; 2],
+                v: vec![[F::ZERO; 2]; 2],
+                round_constants: vec![F::ZERO],
+                textbook_scalar_constants: vec![F::ZERO; 2],
+                textbook_residual: [F::ZERO; 2],
+            },
+        )
+    }
+
+    fn assert_shape_panic(f: impl FnOnce(), expected: &str) {
+        let panic = catch_unwind(AssertUnwindSafe(f)).expect_err("invalid shape was accepted");
+        let message = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| {
+                panic
+                    .downcast_ref::<std::string::String>()
+                    .map(|s| s.as_str())
+            })
+            .expect("panic should describe the invalid shape");
+        assert!(message.contains(expected), "unexpected panic: {message}");
+    }
+
+    #[test]
+    fn rejects_short_and_long_constant_vectors_at_every_entrypoint() {
+        for field in [
+            "initial",
+            "terminal",
+            "sparse_first_row",
+            "v",
+            "round_constants",
+        ] {
+            for extra in [false, true] {
+                let (mut full, mut partial) = test_constants();
+                let len = if matches!(field, "sparse_first_row" | "v") {
+                    2
+                } else {
+                    1
+                };
+                let malformed_len = if extra { len + 1 } else { len - 1 };
+                match field {
+                    "initial" => full.initial.resize(malformed_len, [F::ZERO; 2]),
+                    "terminal" => full.terminal.resize(malformed_len, [F::ZERO; 2]),
+                    "sparse_first_row" => {
+                        partial.sparse_first_row.resize(malformed_len, [F::ZERO; 2]);
+                    }
+                    "v" => partial.v.resize(malformed_len, [F::ZERO; 2]),
+                    "round_constants" => partial.round_constants.resize(malformed_len, F::ZERO),
+                    _ => unreachable!(),
+                }
+
+                assert_shape_panic(
+                    || {
+                        TestAir::new(full.clone(), partial.clone());
+                    },
+                    field,
+                );
+                assert_shape_panic(
+                    || {
+                        TestVectorAir::new(full.clone(), partial.clone());
+                    },
+                    field,
+                );
+                // Empty inputs guard against reaching the uninitialized allocation path even
+                // if shape validation regresses. The shape must be checked before inputs.
+                assert_shape_panic(
+                    || {
+                        generate_trace_rows::<_, 2, 7, 1, 1, 2>(vec![], &full, &partial, 0);
+                    },
+                    field,
+                );
+                assert_shape_panic(
+                    || {
+                        generate_vectorized_trace_rows::<_, 2, 7, 1, 1, 2, 2>(
+                            vec![],
+                            &full,
+                            &partial,
+                            0,
+                        );
+                    },
+                    field,
+                );
+
+                // Fully initialize the buffer so missing writes can never cause UB.
+                let mut cells = vec![MaybeUninit::new(F::ONE); num_cols::<2, 7, 1, 1, 2>()];
+                assert_shape_panic(
+                    || {
+                        let cols: &mut TestCols = cells.as_mut_slice().borrow_mut();
+                        generate_trace_rows_for_perm(
+                            cols,
+                            [F::ZERO; 2],
+                            &full,
+                            &partial,
+                            &[F::ONE, F::ZERO],
+                        );
+                    },
+                    field,
+                );
+                assert!(
+                    cells
+                        .iter()
+                        .all(|cell| unsafe { cell.assume_init() } == F::ONE),
+                    "invalid shape must be rejected before writing any columns"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_zero_partial_rounds_at_every_entrypoint() {
+        let (full, mut partial) = test_constants();
+        partial.sparse_first_row.clear();
+        partial.v.clear();
+        partial.round_constants.clear();
+        assert_shape_panic(
+            || {
+                Poseidon1Air::<_, 2, 7, 1, 1, 0>::new(full.clone(), partial.clone());
+            },
+            "PARTIAL_ROUNDS",
+        );
+        assert_shape_panic(
+            || {
+                VectorizedPoseidon1Air::<_, 2, 7, 1, 1, 0, 2>::new(full.clone(), partial.clone());
+            },
+            "PARTIAL_ROUNDS",
+        );
+        assert_shape_panic(
+            || {
+                generate_trace_rows::<_, 2, 7, 1, 1, 0>(vec![], &full, &partial, 0);
+            },
+            "PARTIAL_ROUNDS",
+        );
+        assert_shape_panic(
+            || {
+                generate_vectorized_trace_rows::<_, 2, 7, 1, 1, 0, 2>(vec![], &full, &partial, 0);
+            },
+            "PARTIAL_ROUNDS",
+        );
+        let mut cells = vec![MaybeUninit::new(F::ONE); num_cols::<2, 7, 1, 1, 0>()];
+        assert_shape_panic(
+            || {
+                generate_trace_rows_for_perm::<_, 2, 7, 1, 1, 0>(
+                    cells.as_mut_slice().borrow_mut(),
+                    [F::ZERO; 2],
+                    &full,
+                    &partial,
+                    &[F::ONE, F::ZERO],
+                );
+            },
+            "PARTIAL_ROUNDS",
+        );
+    }
+
+    #[test]
+    fn generation_overwrites_every_initialized_column() {
+        let (full, partial) = test_constants();
+        let mut cells = vec![MaybeUninit::new(F::ONE); num_cols::<2, 7, 1, 1, 2>()];
+        let cols: &mut TestCols = cells.as_mut_slice().borrow_mut();
+        generate_trace_rows_for_perm(cols, [F::ZERO; 2], &full, &partial, &[F::ONE, F::ZERO]);
+        // Zero constants and zero inputs keep every intermediate zero. A remaining
+        // one is an unwritten cell; reading is safe because every cell started initialized.
+        assert!(
+            cells
+                .iter()
+                .all(|cell| unsafe { cell.assume_init() } == F::ZERO)
+        );
+    }
+
+    #[test]
+    fn single_partial_round_accepts_empty_scalar_constants() {
+        let (full, mut partial) = test_constants();
+        partial.sparse_first_row.truncate(1);
+        partial.v.truncate(1);
+        partial.round_constants.clear();
+        let air = Poseidon1Air::<_, 2, 7, 1, 1, 1>::new(full, partial);
+        let trace = air.generate_trace_rows_from_inputs(vec![[F::ZERO; 2]], 0);
+        assert!(trace.values.iter().all(|&cell| cell == F::ZERO));
+        p3_air::check_constraints(&air, &trace, &[]);
+    }
+
+    #[test]
+    fn canonical_vectorized_trace_matches_scalar_and_satisfies_constraints() {
+        let (full, partial) = babybear_poseidon1_constants_16().to_optimized();
+        let inputs = vec![[F::ZERO; WIDTH], [F::ONE; WIDTH]];
+        let scalar = generate_trace_rows::<
+            _,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+        >(inputs.clone(), &full, &partial, 0);
+        let air = VectorizedPoseidon1Air::<
+            _,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+            2,
+        >::new(full, partial);
+        let vectorized = air.generate_vectorized_trace_rows_from_inputs(inputs, 0);
+        assert_eq!(vectorized.values, scalar.values);
+        p3_air::check_constraints(&air, &vectorized, &[]);
     }
 
     #[test]
@@ -322,5 +550,105 @@ mod tests {
 
         // Verify: check the proof against the same AIR and config.
         verify(&config, &air, &proof, &[]).expect("Verification failed");
+    }
+    fn compare_scalar_and_packed<const DEGREE: u64, const REGISTERS: usize>() {
+        use p3_field::PrimeCharacteristicRing;
+        let (full, partial) = babybear_poseidon1_constants_16().to_optimized();
+        for n in [1, 2, 4, 8, 16, 32] {
+            let inputs: alloc::vec::Vec<[F; WIDTH]> = (0..n)
+                .map(|i| {
+                    core::array::from_fn(|j| match (i + j) % 4 {
+                        0 => F::ZERO,
+                        1 => F::ONE,
+                        2 => F::NEG_ONE,
+                        _ => F::from_usize(i * WIDTH + j),
+                    })
+                })
+                .collect();
+            let expected: alloc::vec::Vec<F> = inputs
+                .iter()
+                .flat_map(|input| {
+                    generate_trace_rows::<
+                        F,
+                        WIDTH,
+                        DEGREE,
+                        REGISTERS,
+                        HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                    >(vec![*input], &full, &partial, 0)
+                    .values
+                })
+                .collect();
+            let actual = generate_trace_rows::<
+                F,
+                WIDTH,
+                DEGREE,
+                REGISTERS,
+                HALF_FULL_ROUNDS,
+                PARTIAL_ROUNDS,
+            >(inputs.clone(), &full, &partial, 1);
+            assert_eq!(
+                actual.values, expected,
+                "batch {n}, S-box {DEGREE}/{REGISTERS}"
+            );
+            if n >= 4 {
+                let vectorized = crate::generate_vectorized_trace_rows::<
+                    F,
+                    WIDTH,
+                    DEGREE,
+                    REGISTERS,
+                    HALF_FULL_ROUNDS,
+                    PARTIAL_ROUNDS,
+                    4,
+                >(inputs, &full, &partial, 0);
+                assert_eq!(vectorized.values, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn packed_witness_matches_every_scalar_column() {
+        compare_scalar_and_packed::<3, 0>();
+        compare_scalar_and_packed::<5, 0>();
+        compare_scalar_and_packed::<7, 0>();
+        compare_scalar_and_packed::<5, 1>();
+        compare_scalar_and_packed::<7, 1>();
+        compare_scalar_and_packed::<11, 1>();
+        compare_scalar_and_packed::<11, 2>();
+    }
+
+    fn compare_packed_width<const W: usize>(non_circulant: bool) {
+        use p3_field::PrimeCharacteristicRing;
+        let raw = Poseidon1Constants::<F, W> {
+            rounds_f: 2,
+            rounds_p: 3,
+            // A nonsingular circulant with invertible lower-right blocks.
+            mds_circ_col: core::array::from_fn(|i| if i == 0 { 2 } else { 1 }),
+            round_constants: (0..5)
+                .map(|r| core::array::from_fn(|j| F::from_usize(r * W + j)))
+                .collect(),
+        };
+        let (mut full, partial) = raw.to_optimized();
+        if non_circulant {
+            full.dense_mds[1][2] += F::ONE;
+        }
+        let inputs: alloc::vec::Vec<[F; W]> = (0..32)
+            .map(|i| core::array::from_fn(|j| F::from_usize(i * W + j)))
+            .collect();
+        let expected: alloc::vec::Vec<F> = inputs
+            .iter()
+            .flat_map(|input| {
+                generate_trace_rows::<F, W, 7, 1, 1, 3>(vec![*input], &full, &partial, 0).values
+            })
+            .collect();
+        let actual = generate_trace_rows::<F, W, 7, 1, 1, 3>(inputs, &full, &partial, 0);
+        assert_eq!(actual.values, expected);
+    }
+
+    #[test]
+    fn packed_witness_covers_karatsuba_24_and_dense_fallback() {
+        compare_packed_width::<24>(false);
+        compare_packed_width::<8>(false);
+        compare_packed_width::<8>(true);
     }
 }

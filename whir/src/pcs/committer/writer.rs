@@ -62,7 +62,9 @@ where
                     // Scalar source: reuse the cache-blocked transpose directly.
                     PolyMaybePacked::Scalar(scalar) => {
                         RowMajorMatrixView::new(scalar.as_slice(), src_width)
-                            .transpose_into(&mut RowMajorMatrixViewMut::new(leading, width));
+                            .transpose_packable_into(&mut RowMajorMatrixViewMut::new(
+                                leading, width,
+                            ));
                     }
                 }
 

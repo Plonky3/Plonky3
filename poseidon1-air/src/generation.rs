@@ -22,14 +22,15 @@
 //! - S-box intermediates and post-states for full rounds.
 //! - S-box outputs for partial rounds (sparse matrix decomposition).
 use alloc::vec::Vec;
-use core::mem::MaybeUninit;
+use core::mem::{MaybeUninit, size_of};
 
-use p3_field::PrimeField;
+use p3_field::{Algebra, PackedValue, PrimeCharacteristicRing, PrimeField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
 use p3_poseidon1::external::mds_multiply;
 use tracing::instrument;
 
+use crate::air::validate_round_constants;
 use crate::columns::{Poseidon1Cols, num_cols};
 use crate::mds_dispatch::mds_dispatch;
 use crate::{FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox};
@@ -50,8 +51,9 @@ use crate::{FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, 
 ///
 /// # Panics
 ///
-/// Panics if `inputs.len()` is not a multiple of `VECTOR_LEN`, or if
-/// `inputs.len() / VECTOR_LEN` is not a power of two.
+/// - `inputs.len()` is not a multiple of `VECTOR_LEN`, or the quotient is not a power of two.
+/// - `PARTIAL_ROUNDS` is zero.
+/// - A round-constant vector used by the AIR has an inconsistent length.
 #[instrument(name = "generate vectorized Poseidon1 trace", skip_all)]
 pub fn generate_vectorized_trace_rows<
     F: PrimeField,
@@ -67,6 +69,10 @@ pub fn generate_vectorized_trace_rows<
     partial_constants: &PartialRoundConstants<F, WIDTH>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
+    validate_round_constants::<_, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+        full_constants,
+        partial_constants,
+    );
     let n = inputs.len();
     assert!(
         n.is_multiple_of(VECTOR_LEN) && (n / VECTOR_LEN).is_power_of_two(),
@@ -104,22 +110,14 @@ pub fn generate_vectorized_trace_rows<
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(perms.len(), n);
 
-    // Derive circulant column from dense MDS (first column of circulant matrix).
-    let circ_col: [F; WIDTH] = core::array::from_fn(|i| full_constants.dense_mds[i][0]);
+    generate_perms::<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+        perms,
+        inputs,
+        full_constants,
+        partial_constants,
+    );
 
-    // Compute each permutation in parallel (one Poseidon1Cols struct per permutation).
-    perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
-        generate_trace_rows_for_perm::<
-            F,
-            WIDTH,
-            SBOX_DEGREE,
-            SBOX_REGISTERS,
-            HALF_FULL_ROUNDS,
-            PARTIAL_ROUNDS,
-        >(perm, input, full_constants, partial_constants, &circ_col);
-    });
-
-    // All elements have been written; mark the Vec as initialized.
+    // The validated round counts ensure every element was written before setting the length.
     unsafe {
         vec.set_len(nrows * ncols);
     }
@@ -140,7 +138,9 @@ pub fn generate_vectorized_trace_rows<
 ///
 /// # Panics
 ///
-/// Panics if `inputs.len()` is not a power of two.
+/// - `inputs.len()` is not a power of two.
+/// - `PARTIAL_ROUNDS` is zero.
+/// - A round-constant vector used by the AIR has an inconsistent length.
 #[instrument(name = "generate Poseidon1 trace", skip_all)]
 pub fn generate_trace_rows<
     F: PrimeField,
@@ -155,6 +155,10 @@ pub fn generate_trace_rows<
     partial_constants: &PartialRoundConstants<F, WIDTH>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
+    validate_round_constants::<_, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+        full_constants,
+        partial_constants,
+    );
     let n = inputs.len();
     assert!(
         n.is_power_of_two(),
@@ -186,27 +190,147 @@ pub fn generate_trace_rows<
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(perms.len(), n);
 
-    // Derive circulant column from dense MDS (first column of circulant matrix).
-    let circ_col: [F; WIDTH] = core::array::from_fn(|i| full_constants.dense_mds[i][0]);
+    generate_perms::<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+        perms,
+        inputs,
+        full_constants,
+        partial_constants,
+    );
 
-    // Compute each permutation in parallel.
-    perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
-        generate_trace_rows_for_perm::<
-            F,
-            WIDTH,
-            SBOX_DEGREE,
-            SBOX_REGISTERS,
-            HALF_FULL_ROUNDS,
-            PARTIAL_ROUNDS,
-        >(perm, input, full_constants, partial_constants, &circ_col);
-    });
-
-    // All elements have been written; mark the Vec as initialized.
+    // The validated round counts ensure every element was written before setting the length.
     unsafe {
         vec.set_len(n * ncols);
     }
 
     RowMajorMatrix::new(vec, ncols)
+}
+
+/// Run independent permutations in SIMD lanes, then scatter to the unchanged trace layout.
+fn generate_perms<
+    F: PrimeField,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+>(
+    perms: &mut [Poseidon1Cols<
+        MaybeUninit<F>,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+    >],
+    inputs: Vec<[F; WIDTH]>,
+    full_constants: &FullRoundConstants<F, WIDTH>,
+    partial_constants: &PartialRoundConstants<F, WIDTH>,
+) {
+    let circ_col = core::array::from_fn(|i| full_constants.dense_mds[i][0]);
+    let packing_width = F::Packing::WIDTH;
+    // Public entrypoints validate constant shapes before reaching this writer.
+    // Keep small batches that do not fill all lanes on the scalar path.
+    let compatible = packing_width > 1
+        && inputs.len().is_multiple_of(packing_width)
+        // Keep unusually large custom column layouts on the scalar path rather than growing each worker's temporary packed trace without a bound.
+        && core::mem::size_of::<Poseidon1Cols<
+            F::Packing, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS,
+        >>() <= 64 * 1024;
+    if compatible {
+        let ncols = const {
+            let ncols =
+                num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>();
+            assert!(
+                size_of::<
+                    Poseidon1Cols<
+                        F::Packing,
+                        WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                    >,
+                >() == ncols * size_of::<F::Packing>()
+            );
+            assert!(
+                size_of::<
+                    Poseidon1Cols<
+                        F,
+                        WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                    >,
+                >() == ncols * size_of::<F>()
+            );
+            ncols
+        };
+        perms
+            .par_chunks_mut(packing_width)
+            .zip(inputs.par_chunks(packing_width))
+            .for_each(|(perms, inputs)| {
+                // Every field is MaybeUninit<Packing>, so the uninitialized column struct is valid.
+                // The validated round counts ensure every column is written by generate_perm before the packed cells are read below.
+                let mut packed = MaybeUninit::<
+                    Poseidon1Cols<
+                        MaybeUninit<F::Packing>,
+                        WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                    >,
+                >::uninit();
+                let packed = unsafe { packed.assume_init_mut() };
+                generate_perm::<
+                    F,
+                    F::Packing,
+                    WIDTH,
+                    SBOX_DEGREE,
+                    SBOX_REGISTERS,
+                    HALF_FULL_ROUNDS,
+                    PARTIAL_ROUNDS,
+                >(
+                    packed,
+                    F::Packing::pack_columns(inputs),
+                    full_constants,
+                    partial_constants,
+                    &circ_col,
+                );
+                // Poseidon1Cols is repr(C), consists only of packed cells, and has no padding.
+                // All cells have been initialized by generate_perm.
+                let packed = unsafe {
+                    core::slice::from_raw_parts(
+                        core::ptr::from_ref(packed).cast::<F::Packing>(),
+                        ncols,
+                    )
+                };
+                for (lane, perm) in perms.iter_mut().enumerate() {
+                    let cells = unsafe {
+                        core::slice::from_raw_parts_mut(
+                            core::ptr::from_mut(perm).cast::<MaybeUninit<F>>(),
+                            ncols,
+                        )
+                    };
+                    for (cell, value) in cells.iter_mut().zip(packed.iter()) {
+                        cell.write(value.as_slice()[lane]);
+                    }
+                }
+            });
+    } else {
+        perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
+            generate_perm::<
+                F,
+                F,
+                WIDTH,
+                SBOX_DEGREE,
+                SBOX_REGISTERS,
+                HALF_FULL_ROUNDS,
+                PARTIAL_ROUNDS,
+            >(perm, input, full_constants, partial_constants, &circ_col);
+        });
+    }
 }
 
 /// Generate the trace for a single Poseidon1 permutation.
@@ -226,6 +350,13 @@ pub fn generate_trace_rows<
 /// The `state` array tracks the live permutation state and is modified in
 /// place at each step. The committed columns (`sbox`, `post`, `post_sbox`)
 /// are written as side effects.
+///
+/// # Panics
+///
+/// Panics before writing any columns if:
+///
+/// - `PARTIAL_ROUNDS` is zero.
+/// - A round-constant vector used by the AIR has an inconsistent length.
 pub fn generate_trace_rows_for_perm<
     F: PrimeField,
     const WIDTH: usize,
@@ -242,7 +373,43 @@ pub fn generate_trace_rows_for_perm<
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
     >,
-    mut state: [F; WIDTH],
+    state: [F; WIDTH],
+    full_constants: &FullRoundConstants<F, WIDTH>,
+    partial_constants: &PartialRoundConstants<F, WIDTH>,
+    circ_col: &[F; WIDTH],
+) {
+    validate_round_constants::<_, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+        full_constants,
+        partial_constants,
+    );
+    generate_perm::<F, F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+        perm,
+        state,
+        full_constants,
+        partial_constants,
+        circ_col,
+    );
+}
+
+// The public entrypoints validate the constant shapes before calling this writer.
+fn generate_perm<
+    F: PrimeField,
+    A: Algebra<F> + Copy,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+>(
+    perm: &mut Poseidon1Cols<
+        MaybeUninit<A>,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+    >,
+    mut state: [A; WIDTH],
     full_constants: &FullRoundConstants<F, WIDTH>,
     partial_constants: &PartialRoundConstants<F, WIDTH>,
     circ_col: &[F; WIDTH],
@@ -256,15 +423,11 @@ pub fn generate_trace_rows_for_perm<
         });
 
     // Step 2: Beginning full rounds (RF/2 rounds).
-    for (full_round, rc) in perm
-        .beginning_full_rounds
-        .iter_mut()
-        .zip(&full_constants.initial)
-    {
-        generate_full_round::<_, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+    for round in 0..HALF_FULL_ROUNDS {
+        generate_full_round::<F, A, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
-            full_round,
-            rc,
+            &mut perm.beginning_full_rounds[round],
+            &full_constants.initial[round],
             circ_col,
             &full_constants.dense_mds,
         );
@@ -282,14 +445,13 @@ pub fn generate_trace_rows_for_perm<
     mds_multiply(&mut state, &partial_constants.m_i);
 
     // Partial round loop.
-    let rounds_p = partial_constants.sparse_first_row.len();
-    for round in 0..rounds_p {
-        let rc = if round < rounds_p - 1 {
+    for round in 0..PARTIAL_ROUNDS {
+        let rc = if round < PARTIAL_ROUNDS - 1 {
             Some(partial_constants.round_constants[round])
         } else {
             None
         };
-        generate_sparse_partial_round::<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        generate_sparse_partial_round::<F, A, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &mut perm.partial_rounds[round],
             rc,
@@ -299,15 +461,11 @@ pub fn generate_trace_rows_for_perm<
     }
 
     // Step 4: Ending full rounds (RF/2 rounds).
-    for (full_round, rc) in perm
-        .ending_full_rounds
-        .iter_mut()
-        .zip(&full_constants.terminal)
-    {
-        generate_full_round::<_, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+    for round in 0..HALF_FULL_ROUNDS {
+        generate_full_round::<F, A, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
-            full_round,
-            rc,
+            &mut perm.ending_full_rounds[round],
+            &full_constants.terminal[round],
             circ_col,
             &full_constants.dense_mds,
         );
@@ -325,12 +483,13 @@ pub fn generate_trace_rows_for_perm<
 #[inline]
 fn generate_full_round<
     F: PrimeField,
+    A: Algebra<F> + Copy,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
 >(
-    state: &mut [F; WIDTH],
-    full_round: &mut FullRound<MaybeUninit<F>, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
+    state: &mut [A; WIDTH],
+    full_round: &mut FullRound<MaybeUninit<A>, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constants: &[F; WIDTH],
     circ_col: &[F; WIDTH],
     dense_mds: &[[F; WIDTH]; WIDTH],
@@ -370,12 +529,13 @@ fn generate_full_round<
 #[inline]
 fn generate_sparse_partial_round<
     F: PrimeField,
+    A: Algebra<F> + Copy,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
 >(
-    state: &mut [F; WIDTH],
-    partial_round: &mut PartialRound<MaybeUninit<F>, SBOX_DEGREE, SBOX_REGISTERS>,
+    state: &mut [A; WIDTH],
+    partial_round: &mut PartialRound<MaybeUninit<A>, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constant: Option<F>,
     first_row: &[F; WIDTH],
     v: &[F; WIDTH],
@@ -393,7 +553,7 @@ fn generate_sparse_partial_round<
 
     // Sparse matrix multiply.
     let old_s0 = state[0];
-    state[0] = F::dot_product(state, first_row);
+    state[0] = A::mixed_dot_product(state, first_row);
     for i in 1..WIDTH {
         state[i] += old_s0 * v[i - 1];
     }
@@ -420,7 +580,7 @@ fn generate_sparse_partial_round<
 ///
 /// Panics if `(DEGREE, REGISTERS)` is not one of the supported configurations.
 #[inline]
-fn generate_sbox<F: PrimeField, const DEGREE: u64, const REGISTERS: usize>(
+fn generate_sbox<F: PrimeCharacteristicRing + Copy, const DEGREE: u64, const REGISTERS: usize>(
     sbox: &mut SBox<MaybeUninit<F>, DEGREE, REGISTERS>,
     x: &mut F,
 ) {

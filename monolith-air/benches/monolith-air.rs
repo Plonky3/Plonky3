@@ -184,20 +184,20 @@ fn bench_prove_verify_m31(c: &mut Criterion) {
     let mut group = c.benchmark_group("monolith_air_m31_prove_verify");
     group.sample_size(10);
 
-    let log_num_hashes = 14;
-    let num_hashes = 1usize << log_num_hashes;
+    for log_num_hashes in [6, 14] {
+        let num_hashes = 1usize << log_num_hashes;
 
-    group.bench_function(
-        BenchmarkId::new("prove_verify", format!("2^{log_num_hashes}")),
-        |b| {
-            b.iter(|| {
-                let trace = air.generate_trace_rows(num_hashes, &bars, log_blowup);
-                let proof = prove(&config, &air, trace, &[]).unwrap();
-                verify(&config, &air, &proof, &[]).expect("verification failed");
-            });
-        },
-    );
-
+        group.bench_function(
+            BenchmarkId::new("prove_verify", format!("2^{log_num_hashes}")),
+            |b| {
+                b.iter(|| {
+                    let trace = air.generate_trace_rows(num_hashes, &bars, log_blowup);
+                    let proof = prove(&config, &air, trace, &[]).unwrap();
+                    verify(&config, &air, &proof, &[]).expect("verification failed");
+                });
+            },
+        );
+    }
     group.finish();
 }
 
@@ -365,25 +365,81 @@ fn bench_prove_verify_goldilocks(c: &mut Criterion) {
     let mut group = c.benchmark_group("monolith_air_goldilocks_prove_verify");
     group.sample_size(10);
 
-    let log_num_hashes = 14;
-    let num_hashes = 1usize << log_num_hashes;
+    for log_num_hashes in [6, 14] {
+        let num_hashes = 1usize << log_num_hashes;
 
-    group.bench_function(
-        BenchmarkId::new("prove_verify", format!("2^{log_num_hashes}")),
-        |b| {
-            b.iter(|| {
-                let trace = air.generate_trace_rows(num_hashes, &bars, log_blowup);
-                let proof = prove(&config, &air, trace, &[]).unwrap();
-                verify(&config, &air, &proof, &[]).expect("verification failed");
-            });
-        },
-    );
-
+        group.bench_function(
+            BenchmarkId::new("prove_verify", format!("2^{log_num_hashes}")),
+            |b| {
+                b.iter(|| {
+                    let trace = air.generate_trace_rows(num_hashes, &bars, log_blowup);
+                    let proof = prove(&config, &air, trace, &[]).unwrap();
+                    verify(&config, &air, &proof, &[]).expect("verification failed");
+                });
+            },
+        );
+    }
     group.finish();
+}
+
+/// Production quotient evaluation on arbitrary coset values, excluding trace generation, LDE, and commitments so constraint-expression changes can be measured independently.
+fn bench_quotient_for<SC, A>(c: &mut Criterion, name: &str, config: &SC, air: &A)
+where
+    SC: p3_uni_stark::StarkGenericConfig,
+    A: p3_uni_stark::QuotientAir<SC>,
+{
+    use p3_commit::{Pcs, PolynomialSpace};
+    use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_uni_stark::{AirLayout, Val, quotient_values};
+
+    let pcs = config.pcs();
+    let trace_domain = pcs.natural_domain_for_degree(1 << 10);
+    let quotient_domain = trace_domain.create_disjoint_domain(1 << 11);
+    let width = air.width();
+    let evaluations = RowMajorMatrix::new(
+        (0..quotient_domain.size() * width)
+            .map(|i| Val::<SC>::from_usize(i.wrapping_mul(12345)))
+            .collect(),
+        width,
+    );
+    let layout = AirLayout {
+        main_width: width,
+        ..Default::default()
+    };
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            quotient_values::<SC, A, _>(
+                pcs,
+                air,
+                &[],
+                layout,
+                trace_domain,
+                quotient_domain,
+                std::hint::black_box(&evaluations),
+                None,
+                SC::Challenge::from_u64(7),
+            )
+        });
+    });
+}
+
+fn bench_quotient_m31(c: &mut Criterion) {
+    let (air, _) = build_monolith_air_m31();
+    let (config, _) = make_stark_config_m31();
+    bench_quotient_for(c, "monolith_air_m31_quotient/2^10", &config, &air);
+}
+
+fn bench_quotient_goldilocks(c: &mut Criterion) {
+    let (air, _) = build_monolith_air_goldilocks();
+    let (config, _) = make_stark_config_goldilocks();
+    bench_quotient_for(c, "monolith_air_goldilocks_quotient/2^10", &config, &air);
 }
 
 criterion_group!(
     benches,
+    bench_quotient_m31,
+    bench_quotient_goldilocks,
     bench_trace_generation_m31,
     bench_prove_m31,
     bench_prove_verify_m31,

@@ -41,12 +41,13 @@ use crate::MerkleTreeError::{
     CapMismatch, IndexOutOfBounds, WrongBatchSize, WrongCapSize, WrongHeight,
 };
 use crate::merkle_tree::{padded_len, select_arity_step};
-use crate::pruning::{MerkleAuthPath, PrunedMerklePaths, prune_paths, restore_paths};
+use crate::pruning::{MerkleAuthPath, PrunedMerklePaths, restore_paths, walk_frontier};
 
 mod batch;
 mod error;
 mod geometry;
 mod pruned;
+mod verify;
 
 pub use error::{MerkleTreeError, PrunedProofError};
 pub(crate) use geometry::{check_widths, validate_commit_reachable_heights};
@@ -71,7 +72,7 @@ fn collect_opening_row<T>(row: impl IntoIterator<Item = T>, width: usize) -> Vec
 /// matrices by arranging their rows into a unified binary tree. The tallest matrix defines
 /// the maximum height, and smaller matrices are integrated at appropriate depths.
 ///
-/// The commitment is a [`MerkleCap`](crate::MerkleCap), which is the `cap_height`-th layer from the root.
+/// The commitment is a [`MerkleCap`], which is the `cap_height`-th layer from the root.
 /// A `cap_height` of 0 means the commitment is just the root (a single hash).
 /// A `cap_height` of h means the commitment contains `2^h` hashes and proofs are `h` elements shorter.
 ///
@@ -114,8 +115,7 @@ struct PrunedFrontier<W, const DIGEST_ELEMS: usize> {
     sorted_unique: Vec<usize>,
 
     /// One authentication path per sorted-unique slot. Complete only when the walk ran with
-    /// recording enabled; otherwise these still hold just the boundary digests
-    /// [`restore_paths`] scattered, with every recomputed inner node left at its default.
+    /// recording enabled; empty during verification.
     restored: Vec<MerkleAuthPath<W, DIGEST_ELEMS>>,
 }
 
@@ -167,7 +167,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     /// - the position of the queried child within its group, `pos_in_group`, in
     ///   the range `0..step`.
     ///
-    /// This helper mirrors the arity logic used in [`Mmcs::verify_batch`](p3_commit::Mmcs::verify_batch) but
+    /// This helper mirrors the arity logic used in [`Mmcs::verify_batch`] but
     /// omits all hashing.
     pub fn replay_arity_and_positions(
         &self,
@@ -405,111 +405,39 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // row index is the global index right-shifted by the height difference.
         let log_max_height = log2_ceil_usize(max_height);
 
-        // Phase 2: The frontier reads the per-level branching factor from the arity schedule.
-        //   (2 for binary, 4 for quad, and so on.)
-
-        // Pre-compute the exact total number of sibling digests in a full
-        // (unpruned) proof. At each level, the sibling count is arity - 1
-        // (one child is ours, the rest are siblings).
-        // This lets us allocate the flat sibling buffer exactly once per
-        // query with no dynamic resizing.
-        //
-        //   Example: 3 binary levels → 1 + 1 + 1 = 3 siblings total
-        //   Example: 2 quad levels   → 3 + 3     = 6 siblings total
-        let expected_siblings: usize = prover_data.arity_schedule[..proof_levels]
-            .iter()
-            .map(|&step| step - 1)
-            .sum();
-
-        // Phase 3: For each queried leaf index, collect its opened rows
-        // and full authentication path.
-        //
-        // Each query is independent: it reads one row from each committed
-        // matrix (at the appropriate bit-shifted index) and walks down the
-        // digest layers to collect all sibling digests.
-        //
-        // The result is unzipped into two parallel vectors:
-        //   - one with the opened matrix rows (for the verifier)
-        //   - one with the flat sibling arrays (for pruning)
-        let (all_opened_values, auth_paths): (Vec<_>, Vec<_>) = indices
+        let all_opened_values = indices
             .iter()
             .map(|&index| {
                 assert!(
                     index < max_height,
                     "index {index} out of bounds for height {max_height}"
                 );
-
-                // Gather the row from each committed matrix at this leaf index.
-                //
-                // Shorter matrices cover fewer rows. The bit-shift
-                // (log_max_height - log_height) maps the global leaf index
-                // down to the row index in that shorter matrix.
-                //
-                //   Example: max_height = 32 (5 bits), matrix height = 8 (3 bits)
-                //     bits_reduced = 5 - 3 = 2
-                //     leaf index 20 → row 20 >> 2 = 5
-                let openings: Vec<Vec<P::Value>> = prover_data
+                prover_data
                     .leaves
                     .iter()
                     .map(|matrix| {
-                        let log2_height = log2_ceil_usize(matrix.height());
-                        let bits_reduced = log_max_height - log2_height;
-                        let reduced_index = index >> bits_reduced;
-                        collect_opening_row(matrix.row(reduced_index).unwrap(), matrix.width())
+                        let bits_reduced = log_max_height - log2_ceil_usize(matrix.height());
+                        collect_opening_row(
+                            matrix.row(index >> bits_reduced).unwrap(),
+                            matrix.width(),
+                        )
                     })
-                    .collect();
-
-                // Walk up the digest layers collecting sibling digests.
-                //
-                // At each level, the queried leaf belongs to a group of
-                // `step` children under one parent. We emit all children
-                // in that group except the queried one — those are the
-                // siblings the verifier needs to recompute the parent hash.
-                //
-                //   Example (binary, step = 2):
-                //     group = [child_0, child_1], queried = child_0
-                //     → emit child_1 (1 sibling)
-                //
-                //   Example (4-ary, step = 4):
-                //     group = [c0, c1, c2, c3], queried = c2
-                //     → emit c0, c1, c3 (3 siblings)
-                //
-                // After collecting siblings at this level, divide the index
-                // by the step to move up to the parent level.
-                let mut siblings = Vec::with_capacity(expected_siblings);
-                let mut idx = index;
-                for layer_idx in 0..proof_levels {
-                    let step = prover_data.arity_schedule[layer_idx];
-                    // Start of the N-child group containing this index.
-                    let group_start = (idx / step) * step;
-                    // Position of the queried child within the group.
-                    let pos_in_group = idx % step;
-                    // Emit every child in the group except the queried one.
-                    for k in 0..step {
-                        if k != pos_in_group {
-                            siblings.push(prover_data.digest_layers[layer_idx][group_start + k]);
-                        }
-                    }
-                    // Move to the parent index for the next level.
-                    idx /= step;
-                }
-
-                (
-                    openings,
-                    MerkleAuthPath {
-                        leaf_index: index,
-                        siblings,
-                    },
-                )
+                    .collect()
             })
-            .unzip();
+            .collect();
 
-        // Phase 4: Prune the authentication paths.
-        //
-        // Fold the frontier up the tree, keeping only boundary siblings.
-        // A boundary sibling is one covering no queried leaf.
-        // The verifier restores the rest from its own indices, with no information lost.
-        let pruned = prune_paths(&prover_data.arity_schedule[..proof_levels], &auth_paths);
+        // Emit boundary children directly, in the same level/group/child order as pruning
+        // full paths. No per-query authentication paths are needed on this path.
+        let mut sorted_unique = indices.to_vec();
+        sorted_unique.sort_unstable();
+        sorted_unique.dedup();
+        let mut sibling_hashes = Vec::new();
+        walk_frontier(
+            &sorted_unique,
+            &prover_data.arity_schedule[..proof_levels],
+            |level, _, _, _, index| sibling_hashes.push(prover_data.digest_layers[level][index]),
+        );
+        let pruned = PrunedMerklePaths { sibling_hashes };
 
         PrunedBatchOpening {
             opened_values: all_opened_values,
@@ -523,7 +451,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     ///
     /// Paths that share a parent at some level reuse a single compression instead of
     /// recomputing it once per query. Mirrors the per-path
-    /// [`Mmcs::verify_batch`](p3_commit::Mmcs::verify_batch) algorithm but fans out into
+    /// [`Mmcs::verify_batch`] algorithm but fans out into
     /// level-by-level groups.
     ///
     /// Every shape and consistency check the pruned-proof soundness argument relies on lives
@@ -643,13 +571,25 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .map(|r| r.expect("every unique slot is one of the queries"))
             .collect();
 
-        // Phase 5: Restore the full authentication paths (sorted-unique order).
-        //
-        // - Scatters the flat boundary digests into each lead path's buffer.
-        // - Rejects a proof whose digest count differs from the frontier.
-        // - No hashing here: the amortized walk recomputes every inner node.
-        let mut restored =
-            restore_paths(proof, &sorted_unique, &arity_schedule, full_sibling_count)?;
+        // Reject malformed boundary counts before any hashing. Only restoration callers
+        // allocate full paths; verification counts the frontier and consumes the wire stream.
+        let mut restored = if RECORD {
+            restore_paths(proof, &sorted_unique, &arity_schedule, full_sibling_count)?
+        } else {
+            let mut expected = 0;
+            walk_frontier(&sorted_unique, &arity_schedule, |_, _, _, _, _| {
+                expected += 1;
+            });
+            if expected != proof.sibling_hashes.len() {
+                return Err(PrunedProofError::SiblingCountMismatch {
+                    expected,
+                    got: proof.sibling_hashes.len(),
+                }
+                .into());
+            }
+            Vec::new()
+        };
+        let mut boundary_cursor = 0;
 
         // Every representative opening must expose one row per committed matrix, each at its
         // matrix's width. Ascending, distinct leaf order already holds by construction.
@@ -683,16 +623,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .map(|(i, _)| i)
             .collect();
 
-        let mut digests: Vec<[PW::Value; DIGEST_ELEMS]> = reps
-            .iter()
-            .map(|&rep| {
-                self.hash.hash_iter_slices(
-                    leaf_matrix_indices
-                        .iter()
-                        .map(|&mi| opened_values[rep][mi].as_ref()),
-                )
-            })
-            .collect();
+        let mut digests = self.hash_opened_rows(&leaf_matrix_indices, &reps, opened_values);
 
         // Per-group state during the walk:
         // - `node_indices[g]` : layer-local node index for group g
@@ -712,31 +643,21 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
         // Reusable scratch — refilled inside the inner loop, never read across iterations.
         let mut new_digests: Vec<[PW::Value; DIGEST_ELEMS]> = Vec::with_capacity(n_unique);
+        let mut compression_inputs = Vec::with_capacity(n_unique);
         let mut new_indices: Vec<usize> = Vec::with_capacity(n_unique);
         let mut new_lead: Vec<usize> = Vec::with_capacity(n_unique);
         let mut new_group_lo: Vec<usize> = Vec::with_capacity(n_unique);
         let mut new_group_hi: Vec<usize> = Vec::with_capacity(n_unique);
 
-        // Prefix sums of per-level chunk sizes, matching `pruning::total_siblings_for_levels`:
-        // the level-`l` chunk of a full path starts at `chunk_base[l]`.
-        //
-        // Every frontier entry advances exactly one level per iteration, so this doubles as
-        // the sibling cursor: at level `l` every group reads its lead's chunk starting at
-        // `chunk_base[l]`, whatever merges have happened below.
-        let mut chunk_base: Vec<usize> = Vec::with_capacity(arity_schedule.len() + 1);
-        chunk_base.push(0);
-        for &step in &arity_schedule {
-            chunk_base.push(chunk_base.last().unwrap() + (step - 1));
-        }
+        // Offset into recorded full paths; verification consumes the boundary stream instead.
+        let mut chunk_start = 0;
 
         // Phase 8: Walk up the tree. At each layer we collapse contiguous
         // groups of unique paths that share a parent, replacing each group
         // with a single combined digest.
-        for (level, &step) in arity_schedule.iter().enumerate() {
-            let num_siblings_per_path = step - 1;
-            let chunk_start = chunk_base[level];
-
+        for &step in &arity_schedule {
             new_digests.clear();
+            compression_inputs.clear();
             new_indices.clear();
             new_lead.clear();
             new_group_lo.clear();
@@ -755,43 +676,19 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                 }
 
                 let lead_path = lead[i];
-                let lead_pos = node_indices[i] - group_start;
 
-                // Restored paths are indexed by sorted-unique slot. The lead of the group is
-                // exactly one such slot, and owns this level's siblings. Copy its chunk out
-                // up front: under `RECORD` the scatter below writes into
-                // `restored[lead_path]` too whenever the lead is one of this group's own
-                // slots, which would conflict with holding a borrow of it.
-                let mut lead_siblings = [default_digest; N];
-                lead_siblings[..num_siblings_per_path].copy_from_slice(
-                    &restored[lead_path].siblings[chunk_start..chunk_start + num_siblings_per_path],
-                );
-
-                // Build the N-ary input array:
-                // - positions hit by group members → their current digest
-                // - other in-range positions → siblings of the lead path
-                // - out-of-range positions (k >= step) → default padding
+                // Frontier members already supply their digests. Missing positions consume
+                // boundary children sequentially, exactly in the prover's wire order.
                 let mut inputs = [default_digest; N];
-                let mut filled = [false; N];
-                for k in i..j {
-                    let pos = node_indices[k] - group_start;
-                    inputs[pos] = digests[k];
-                    filled[pos] = true;
-                }
-
-                // The lead path stored siblings for every non-lead position
-                // in order: index 0, 1, …, step-1 with `lead_pos` skipped.
-                // Walk the same order so the cursor advances by exactly
-                // `num_siblings_per_path`, matching the per-path verifier.
-                let mut sib_idx = 0;
-                for k in 0..step {
-                    if k == lead_pos {
-                        continue;
+                let mut member = i;
+                for (pos, input) in inputs.iter_mut().enumerate().take(step) {
+                    if member < j && node_indices[member] == group_start + pos {
+                        *input = digests[member];
+                        member += 1;
+                    } else {
+                        *input = proof.sibling_hashes[boundary_cursor];
+                        boundary_cursor += 1;
                     }
-                    if !filled[k] {
-                        inputs[k] = lead_siblings[sib_idx];
-                    }
-                    sib_idx += 1;
                 }
 
                 if RECORD {
@@ -812,7 +709,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                     }
                 }
 
-                new_digests.push(self.compress.compress(inputs));
+                compression_inputs.push(inputs);
                 new_indices.push(parent_idx);
                 new_lead.push(lead_path);
                 new_group_lo.push(group_lo[i]);
@@ -821,6 +718,9 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                 i = j;
             }
 
+            new_digests.resize(compression_inputs.len(), default_digest);
+            self.compress_opened_groups(&compression_inputs, &mut new_digests);
+            chunk_start += step - 1;
             core::mem::swap(&mut digests, &mut new_digests);
             core::mem::swap(&mut node_indices, &mut new_indices);
             core::mem::swap(&mut lead, &mut new_lead);
@@ -869,24 +769,18 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                             }
                         }
                     }
-
-                    let next_height_digest = self.hash.hash_iter_slices(
-                        inject_matrix_indices
-                            .iter()
-                            .map(|&mi| opened_values[rep_orig][mi].as_ref()),
-                    );
-
-                    let inject_inputs: [_; N] = core::array::from_fn(|k| {
-                        if k == 0 {
-                            digests[g]
-                        } else if k == 1 {
-                            next_height_digest
-                        } else {
-                            default_digest
-                        }
-                    });
-                    digests[g] = self.compress.compress(inject_inputs);
                 }
+                let inject_reps: Vec<_> = lead.iter().map(|&slot| reps[slot]).collect();
+                let injected =
+                    self.hash_opened_rows(&inject_matrix_indices, &inject_reps, opened_values);
+                compression_inputs.clear();
+                compression_inputs.extend(digests.iter().zip(injected).map(|(&digest, row)| {
+                    let mut inputs = [default_digest; N];
+                    inputs[0] = digest;
+                    inputs[1] = row;
+                    inputs
+                }));
+                self.compress_opened_groups(&compression_inputs, &mut digests);
             }
         }
 
@@ -901,7 +795,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     /// Verifies a pruned batch opening against the commitment.
     ///
     /// Walks the tree once for all queries together via
-    /// [`walk_pruned_frontier`](Self::walk_pruned_frontier): paths that share a parent at
+    /// `walk_pruned_frontier`: paths that share a parent at
     /// some level reuse a single compression instead of recomputing it once per query.
     ///
     /// # Index binding
@@ -963,7 +857,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     /// each amortized group against the commitment; it never needs a usable per-query path,
     /// so it never records one. Some callers do need that — e.g. an in-circuit verifier built
     /// around a single-path-per-query gadget, with no notion of a shared/amortized proof.
-    /// This runs [`walk_pruned_frontier`](Self::walk_pruned_frontier) — literally the same
+    /// This runs `walk_pruned_frontier` — literally the same
     /// walk verification uses, so it costs no more hashing — with recording enabled, which
     /// additionally scatters each level's "other children" into *every* query's own path,
     /// not just the group lead's, including query pairs that only merge partway up the tree,

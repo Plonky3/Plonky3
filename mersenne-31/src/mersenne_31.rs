@@ -131,7 +131,24 @@ impl PartialEq for Mersenne31 {
 
 impl Eq for Mersenne31 {}
 
-impl Packable for Mersenne31 {}
+impl Packable for Mersenne31 {
+    #[inline]
+    fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
+        // SAFETY: Self is repr(transparent) over an initialized u32.
+        unsafe { p3_util::transpose::transpose_words(input, output, width, height) };
+    }
+
+    #[inline]
+    fn transpose_rows<'a>(
+        rows: usize,
+        cols: usize,
+        row: impl Fn(usize) -> &'a [Self],
+        dst: &mut [Self],
+    ) {
+        // SAFETY: Self is repr(transparent) over an initialized u32.
+        unsafe { p3_util::transpose::transpose_rows_words(rows, cols, row, dst) };
+    }
+}
 
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -704,6 +721,57 @@ mod tests {
     use crate::Mersenne31;
 
     type F = Mersenne31;
+
+    /// Repeated maximal products exercise the accumulator bound, including redundant zero.
+    #[test]
+    fn packed_dot_product_four_product_boundaries() {
+        use p3_field::Algebra;
+
+        fn check<const N: usize>() {
+            type PF = <Mersenne31 as Field>::Packing;
+            const P: u32 = 0x7fff_ffff;
+            for value in [P, P - 1] {
+                let scalar = Mersenne31::new_reduced(value);
+                let packed = PF::from(scalar);
+                // Check raw storage: field equality alone cannot distinguish P from zero.
+                assert_eq!(scalar.value, value);
+                assert!(packed.as_slice().iter().all(|lane| lane.value == value));
+                let a = [packed; N];
+                let coeffs = [scalar; N];
+                let expected: PF = a.iter().map(|&x| x * scalar).sum();
+                assert_eq!(
+                    PF::dot_product(&a, &a),
+                    expected,
+                    "N = {N}, value = {value}"
+                );
+                assert_eq!(
+                    PF::mixed_dot_product(&a, &coeffs),
+                    expected,
+                    "N = {N}, value = {value}"
+                );
+            }
+        }
+        check::<0>();
+        check::<1>();
+        check::<3>();
+        check::<4>();
+        check::<5>();
+        check::<7>();
+        check::<8>();
+        check::<9>();
+        check::<11>();
+        check::<12>();
+        check::<13>();
+        check::<15>();
+        check::<16>();
+        check::<17>();
+        check::<63>();
+        check::<64>();
+        check::<65>();
+        check::<255>();
+        check::<256>();
+        check::<257>();
+    }
 
     #[test]
     fn exp_root() {

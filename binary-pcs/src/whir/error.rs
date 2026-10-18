@@ -5,6 +5,7 @@ use p3_whir::{VerifierError, WhirConfigError};
 use thiserror::Error;
 
 use crate::packing::PackError;
+use crate::whir::shape::ProofShapeError;
 
 /// Why a Boolean commitment or opening was refused.
 #[derive(Debug, Error)]
@@ -115,6 +116,10 @@ pub enum BooleanWhirError {
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BudgetError {
+    /// The proof payload could not be bounded.
+    #[error(transparent)]
+    Shape(#[from] ProofShapeError),
+
     /// The verifier would open more positions than the ceiling allows.
     #[error("{actual} opened positions exceed the budget of {budget}")]
     Queries {

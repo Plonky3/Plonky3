@@ -115,6 +115,29 @@ fn a_fitting_stage_is_sliced_and_matches_the_generic_kernel() {
 }
 
 #[test]
+fn successor_free_traces_omit_planes_in_both_layouts() {
+    for height in [SHORTEST, 4 * SHORTEST] {
+        let instance = Instance::honest(FixtureAir::Pair, height, 0xBEEF);
+        let dense = instance.main_table();
+        let packed = packed_boolean_table(&dense);
+        for table in [&dense, &packed] {
+            with_stage_state(
+                &[&instance.air],
+                &[instance.public_values.as_slice()],
+                &[None],
+                &[table],
+                no_lookups(),
+                |state, _| {
+                    let trace = state.sliced_trace::<Gf4>().unwrap();
+                    assert_eq!(trace.cells.len(), height / SLICED_LANES * table.num_polys());
+                    assert_eq!(trace.successors.len(), 0);
+                },
+            );
+        }
+    }
+}
+
+#[test]
 fn packed_boolean_columns_match_dense_sliced_first_round() {
     let instance = Instance::honest(FixtureAir::Pair, SHORTEST, 0xBEEF);
     let dense = instance.main_table();

@@ -34,7 +34,7 @@ const SEGMENT: usize = TILE / NBR_SEGMENTS;
 /// At this size a leaf sub-matrix fits in L2, so further splitting only adds overhead.
 const RECURSIVE_LIMIT: usize = 128;
 
-/// Minimum element count before the parallel column-band path is used.
+/// Minimum element count before the parallel band path is used.
 ///
 /// Smaller matrices are dominated by thread fan-out and cache-coherency traffic.
 #[cfg(feature = "parallel")]
@@ -62,9 +62,13 @@ const fn word_tiles<T>() -> bool {
 /// - `start_x`, `start_y`: the block's first source column and row.
 /// - `out_col_start`: the output row that receives the block's first source column.
 /// - `block_width`, `block_height`: the block's extent.
+///
+/// # Safety
+///
+/// Elements must support the integer-word copies required by `super::transpose_words`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn transpose_block_tiled<T: Copy>(
+unsafe fn transpose_block_tiled<T: Copy>(
     input: &[T],
     output: &mut [T],
     total_cols: usize,
@@ -83,7 +87,10 @@ fn transpose_block_tiled<T: Copy>(
 
     // Output run j of the block starts one output stride after run j - 1.
     let dst = &mut output[out_col_start * total_rows + start_y..];
-    super::rows::transpose_rows_strided(block_height, block_width, row, dst, total_rows);
+    // SAFETY: the word engine caller guarantees integer-word-compatible elements.
+    unsafe {
+        super::rows::transpose_rows_strided_words(block_height, block_width, row, dst, total_rows);
+    };
 }
 
 /// Transpose a row-major matrix from `input` into `output`.
@@ -93,7 +100,7 @@ fn transpose_block_tiled<T: Copy>(
 ///
 /// # Panics
 ///
-/// Panics if either slice length differs from `width * height`.
+/// Panics if `width * height` overflows or differs from either slice length.
 #[inline]
 pub(crate) fn transpose<T: Copy + Send + Sync>(
     input: &[T],
@@ -101,33 +108,48 @@ pub(crate) fn transpose<T: Copy + Send + Sync>(
     width: usize,
     height: usize,
 ) {
-    // Both buffers must describe the same `height x width` matrix.
-    assert_eq!(
-        input.len(),
-        width * height,
-        "input length {} != width*height {}",
-        input.len(),
-        width * height
-    );
-    assert_eq!(
-        output.len(),
-        width * height,
-        "output length {} != width*height {}",
-        output.len(),
-        width * height
-    );
+    // SAFETY: the typed engine never reinterprets elements as integer words.
+    unsafe { transpose_impl::<false, T>(input, output, width, height) };
+}
+
+/// # Safety
+/// Elements must satisfy the integer-word contract of `super::transpose_words`.
+#[inline]
+pub(super) unsafe fn transpose_words<T: Copy + Send + Sync>(
+    input: &[T],
+    output: &mut [T],
+    width: usize,
+    height: usize,
+) {
+    // SAFETY: forwarded representation guarantee.
+    unsafe { transpose_impl::<true, T>(input, output, width, height) };
+}
+
+/// # Safety
+/// With `WORDS`, elements must support integer-word copying.
+#[inline]
+unsafe fn transpose_impl<const WORDS: bool, T: Copy + Send + Sync>(
+    input: &[T],
+    output: &mut [T],
+    width: usize,
+    height: usize,
+) {
+    let len = width
+        .checked_mul(height)
+        .expect("transpose dimensions overflow");
+    assert_eq!(input.len(), len, "transpose input has the wrong length");
+    assert_eq!(output.len(), len, "transpose output has the wrong length");
 
     // A zero-size matrix has nothing to move.
     if width == 0 || height == 0 {
         return;
     }
 
-    let len = width * height;
-
-    // Large matrices: hand off to the parallel column-band split.
+    // Large matrices: hand off to the parallel band split.
     #[cfg(feature = "parallel")]
     if len >= PARALLEL_THRESHOLD {
-        transpose_parallel(input, output, width, height);
+        // SAFETY: checked shape and, when enabled, the forwarded word representation contract.
+        unsafe { transpose_parallel::<WORDS, T>(input, output, width, height) };
         return;
     }
 
@@ -144,10 +166,12 @@ pub(crate) fn transpose<T: Copy + Send + Sync>(
     unsafe {
         if len <= MEDIUM_LEN {
             // Medium: tile the whole matrix once, no recursion overhead.
-            transpose_region::<false, T>(input, output, 0, height, 0, width, width, height, 0);
+            transpose_region::<false, WORDS, T>(
+                input, output, 0, height, 0, width, width, height, 0,
+            );
         } else {
             // Large: recurse down to cache-resident leaves, then tile.
-            transpose_recursive(input, output, 0, height, 0, width, width, height, 0);
+            transpose_recursive::<WORDS, T>(input, output, 0, height, 0, width, width, height, 0);
         }
     }
 }
@@ -296,12 +320,13 @@ unsafe fn transpose_tile_segmented<T: Copy>(
 ///
 /// # Safety
 ///
+/// - If `WORDS`, elements satisfy `super::transpose_words`'s representation contract.
 /// - `input.len() == total_cols * total_rows`.
 /// - `row_end <= total_rows` and `col_end <= total_cols`.
 /// - `output` covers output rows `[col_start - col_out_base, col_end - col_out_base)`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-unsafe fn transpose_region<const SEGMENTED: bool, T: Copy>(
+unsafe fn transpose_region<const SEGMENTED: bool, const WORDS: bool, T: Copy>(
     input: &[T],
     output: &mut [T],
     row_start: usize,
@@ -323,23 +348,26 @@ unsafe fn transpose_region<const SEGMENTED: bool, T: Copy>(
     // Output row index of this region's first source column.
     let out_col_start = col_start - col_out_base;
 
-    if word_tiles::<T>() {
+    if WORDS && word_tiles::<T>() {
         // Register tiles: walk column stripes, so each output row is written front to back.
         //
         // Row stripes would scatter every tile's stores across the whole output instead.
         for x_tile in 0..x_tiles {
             for y_tile in 0..y_tiles {
-                transpose_block_tiled(
-                    input,
-                    output,
-                    total_cols,
-                    total_rows,
-                    col_start + x_tile * TILE,
-                    row_start + y_tile * TILE,
-                    out_col_start + x_tile * TILE,
-                    TILE,
-                    TILE,
-                );
+                // SAFETY: WORDS forwards the representation guarantee; each tile lies in the region.
+                unsafe {
+                    transpose_block_tiled(
+                        input,
+                        output,
+                        total_cols,
+                        total_rows,
+                        col_start + x_tile * TILE,
+                        row_start + y_tile * TILE,
+                        out_col_start + x_tile * TILE,
+                        TILE,
+                        TILE,
+                    );
+                };
             }
         }
     } else {
@@ -442,7 +470,7 @@ unsafe fn transpose_region<const SEGMENTED: bool, T: Copy>(
 /// Same contract as the tiled-region kernel.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-unsafe fn transpose_recursive<T: Copy>(
+unsafe fn transpose_recursive<const WORDS: bool, T: Copy>(
     input: &[T],
     output: &mut [T],
     row_start: usize,
@@ -462,7 +490,7 @@ unsafe fn transpose_recursive<T: Copy>(
             || nbr_rows <= 2
             || nbr_cols <= 2
         {
-            transpose_region::<true, T>(
+            transpose_region::<true, WORDS, T>(
                 input,
                 output,
                 row_start,
@@ -479,7 +507,7 @@ unsafe fn transpose_recursive<T: Copy>(
         if nbr_rows >= nbr_cols {
             // Taller than wide: cut the row range in half.
             let mid = row_start + nbr_rows / 2;
-            transpose_recursive(
+            transpose_recursive::<WORDS, T>(
                 input,
                 output,
                 row_start,
@@ -490,7 +518,7 @@ unsafe fn transpose_recursive<T: Copy>(
                 total_rows,
                 col_out_base,
             );
-            transpose_recursive(
+            transpose_recursive::<WORDS, T>(
                 input,
                 output,
                 mid,
@@ -504,7 +532,7 @@ unsafe fn transpose_recursive<T: Copy>(
         } else {
             // Wider than tall: cut the column range in half.
             let mid = col_start + nbr_cols / 2;
-            transpose_recursive(
+            transpose_recursive::<WORDS, T>(
                 input,
                 output,
                 row_start,
@@ -515,7 +543,7 @@ unsafe fn transpose_recursive<T: Copy>(
                 total_rows,
                 col_out_base,
             );
-            transpose_recursive(
+            transpose_recursive::<WORDS, T>(
                 input,
                 output,
                 row_start,
@@ -530,9 +558,9 @@ unsafe fn transpose_recursive<T: Copy>(
     }
 }
 
-/// Parallel transpose: one rayon task per disjoint output column-band.
+/// Parallel transpose over disjoint output bands.
 ///
-/// Output rows are cut into contiguous bands of whole source columns.
+/// By default, output rows are cut into contiguous bands of whole source columns.
 /// Band `k` holds the transpose of source columns starting at `k * cols_per_task`.
 /// Bands never overlap, so each task gets an exclusive slice — no shared pointers.
 ///
@@ -542,8 +570,18 @@ unsafe fn transpose_recursive<T: Copy>(
 ///     [c, 2c)          ->   output[c*height .. 2c*height)
 ///     ...
 /// ```
+///
+/// For widths up to two that cannot fill the worker pool, each output row is
+/// split again into source-row bands. The band for column `x` and source rows `[a, b)` owns
+/// exactly `output[x * height + a .. x * height + b]`, obtained through safe
+/// slice splitting. Distinct rows and distinct bands within a row never overlap.
+///
+/// # Safety
+///
+/// Both slices describe the checked `width * height` shape, with nonzero dimensions.
+/// If `WORDS`, elements satisfy `super::transpose_words`'s representation contract.
 #[cfg(feature = "parallel")]
-fn transpose_parallel<T: Copy + Send + Sync>(
+unsafe fn transpose_parallel<const WORDS: bool, T: Copy + Send + Sync>(
     input: &[T],
     output: &mut [T],
     width: usize,
@@ -551,9 +589,41 @@ fn transpose_parallel<T: Copy + Send + Sync>(
 ) {
     use p3_maybe_rayon::prelude::*;
 
-    // One band per worker; round up so the final band is the only short one.
     let num_threads = current_num_threads();
-    let cols_per_task = width.div_ceil(num_threads).max(1);
+
+    // Keep wider matrices on the tiled path: column gathers amplify input traffic.
+    if width <= 2 && width < num_threads {
+        // Whole-column bands would expose only `width` tasks. Split each output
+        // row (one source column) into contiguous source-row bands as well.
+        let bands_per_col = num_threads.div_ceil(width);
+        // Rounding to 64 elements keeps band boundaries at the same offset in a
+        // 64-byte cache line within each output row; only the final band can be shorter.
+        // Rows whose start is not line-aligned share one line between adjacent bands.
+        let rows_per_task = height.div_ceil(bands_per_col).next_multiple_of(64);
+        output
+            .par_chunks_mut(height)
+            .enumerate()
+            .for_each(|(x, row)| {
+                row.par_chunks_mut(rows_per_task)
+                    .enumerate()
+                    .for_each(|(task, band)| {
+                        let row_start = task * rows_per_task;
+                        // `band` exclusively owns this contiguous output run.
+                        if width == 1 {
+                            band.copy_from_slice(&input[row_start..row_start + band.len()]);
+                        } else {
+                            let src = input[row_start * width + x..].iter().step_by(width);
+                            for (dst, &value) in band.iter_mut().zip(src) {
+                                *dst = value;
+                            }
+                        }
+                    });
+            });
+        return;
+    }
+
+    // Whole-column bands use at most one worker each; only the last can be short.
+    let cols_per_task = width.div_ceil(num_threads);
 
     // Each band is `cols_per_task` output rows of `height` columns.
     output
@@ -562,14 +632,14 @@ fn transpose_parallel<T: Copy + Send + Sync>(
         .for_each(|(task, band)| {
             // Absolute source columns this band owns.
             let col_start = task * cols_per_task;
-            let col_end = (col_start + cols_per_task).min(width);
+            let col_end = col_start.saturating_add(cols_per_task).min(width);
 
             // SAFETY:
             // - `band` is exactly `(col_end - col_start) * height` long (only the last is shorter).
             // - The engine writes output rows `[0, col_end - col_start)`, all inside `band`.
             // - Reads address the shared `input`, valid for `width * height` elements.
             unsafe {
-                transpose_recursive(
+                transpose_recursive::<WORDS, T>(
                     input, band, 0, height, col_start, col_end, width, height, col_start,
                 );
             }
@@ -586,6 +656,13 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "transpose dimensions overflow")]
+    fn rejects_overflowing_dimensions_before_access() {
+        // The unchecked product would wrap to the slice length of 2.
+        transpose::<u32>(&[0; 2], &mut [0; 2], usize::MAX / 2 + 2, 2);
+    }
 
     /// Independent textbook transpose used as the source of truth.
     fn reference<T: Copy>(input: &[T], width: usize, height: usize, zero: T) -> Vec<T> {
@@ -718,6 +795,105 @@ mod tests {
         fn portable_matches_reference_32byte((width, height) in dims_small()) {
             check(width, height, [0u64; 4], |i| [i as u64, 0, 0, i as u64]);
         }
+    }
+
+    #[cfg(feature = "parallel")]
+    fn check_parallel<T>(width: usize, height: usize, zero: T, make: impl Fn(usize) -> T)
+    where
+        T: Copy + PartialEq + core::fmt::Debug + Send + Sync,
+    {
+        let input: Vec<T> = (0..width * height).map(make).collect();
+        let mut output = vec![zero; input.len()];
+        // SAFETY: both buffers have the nonzero width * height shape used by
+        // these tests, and the typed engine never reinterprets elements as words.
+        unsafe { transpose_parallel::<false, T>(&input, &mut output, width, height) };
+        assert_eq!(output, reference(&input, width, height, zero));
+
+        // These shapes are below the parallel threshold, so this also compares
+        // the parallel decomposition with the existing serial tiled engine.
+        let mut serial = vec![zero; input.len()];
+        transpose(&input, &mut serial, width, height);
+        assert_eq!(output, serial);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn portable_parallel_band_boundaries() {
+        for threads in [1, 2, 4, 16, 32] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for width in [1, 2, 3, 4, 8, 16, 31, 32, 256] {
+                        for height in [1, 15, 16, 17, 63, 64, 65, 127, 128, 129, 257] {
+                            for (w, h) in [(width, height), (height, width)] {
+                                check_parallel(w, h, 0u32, |i| i as u32);
+                                check_parallel(w, h, 0u64, |i| i as u64);
+                                check_parallel(w, h, 0u128, |i| i as u128);
+                                check_parallel(w, h, [0u64; 4], |i| [i as u64; 4]);
+                            }
+                        }
+                    }
+                });
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn portable_parallel_preserves_generic_copy() {
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        #[repr(C)]
+        struct Padded<'a> {
+            value: u8,
+            pointer: &'a u64,
+        }
+        let values = [11u64, 23, 47];
+        for threads in [1, 2, 4, 16, 32] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    for (w, h) in [(1, 129), (2, 257), (3, 257), (8, 129), (17, 65), (65, 17)] {
+                        check_parallel(w, h, [0u8; 3], |i| {
+                            [i as u8, (i >> 8) as u8, (i >> 16) as u8]
+                        });
+                        check_parallel(w, h, &values[0], |i| &values[i % values.len()]);
+                        check_parallel(
+                            w,
+                            h,
+                            Padded {
+                                value: 0,
+                                pointer: &values[0],
+                            },
+                            |i| Padded {
+                                value: i as u8,
+                                pointer: &values[i % values.len()],
+                            },
+                        );
+                        check_parallel(w, h, (), |_| ());
+                    }
+                });
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn portable_parallel_threshold_boundaries() {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(32)
+            .build()
+            .unwrap()
+            .install(|| {
+                for width in [1, 2, 4, 8, 16, 32, 256] {
+                    let height = PARALLEL_THRESHOLD / width;
+                    // Immediately below, at, and above the public dispatch threshold.
+                    for height in [height - 1, height, height + 1] {
+                        check(width, height, 0u32, |i| i as u32);
+                    }
+                }
+            });
     }
 
     #[cfg(feature = "parallel")]

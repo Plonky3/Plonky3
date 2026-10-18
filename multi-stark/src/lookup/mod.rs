@@ -27,7 +27,7 @@ use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr};
 use p3_air::{Air, BaseAir, SymbolicExpression};
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
-use p3_field::{ExtensionField, Field, PackedValue};
+use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
 use p3_lookup::{
     Challenges, InteractionSymbolicBuilder, Kind, Lookups, check_multiplicity_height_bound,
 };
@@ -539,6 +539,14 @@ impl<EF: Field> AirLinkClaim<EF> {
                 plan.num_variables - stage_num_variables..plan.num_variables,
             );
             let eq_suffix = SplitEq::<F, EF>::new_packed(&suffix, EF::ONE);
+            let block_len = 1 << stage_num_variables;
+            // A short block may occupy only part of a packed denominator.
+            // One sub-lane scalar buffer is reused for its claims, so the tall prefix is never unpacked.
+            let mut scalar_denominators = if block_len < F::Packing::WIDTH {
+                EF::zero_vec(block_len)
+            } else {
+                Vec::new()
+            };
 
             for planned in stage {
                 let linked = &self.links_by_air[&planned.air_index];
@@ -559,6 +567,14 @@ impl<EF: Field> AirLinkClaim<EF> {
                     let denominator = match &fraction.d {
                         PolyMaybePacked::Scalar(denominators) => {
                             eq_suffix.eval_ext(Poly::new(&denominators.as_slice()[start..end]))
+                        }
+                        PolyMaybePacked::Packed(denominators) if block_len < F::Packing::WIDTH => {
+                            for (row, value) in scalar_denominators.iter_mut().enumerate() {
+                                let offset = start + row;
+                                *value = denominators.as_slice()[offset / F::Packing::WIDTH]
+                                    .extract(offset % F::Packing::WIDTH);
+                            }
+                            eq_suffix.eval_ext(Poly::new(scalar_denominators.as_slice()))
                         }
                         PolyMaybePacked::Packed(denominators) => eq_suffix.eval_packed(Poly::new(
                             &denominators.as_slice()[packed_start..packed_start + packed_block_len],
@@ -1601,6 +1617,39 @@ mod tests {
             prover_challenger.sample_algebra_element::<EF>(),
             verifier_challenger.sample_algebra_element::<EF>()
         );
+    }
+
+    #[test]
+    fn mixed_height_lookup_claims_include_sub_lane_blocks() {
+        let air = BalancedLookupAir;
+        let mut rng = SmallRng::seed_from_u64(0x51_A11);
+        for short_log in 0..=p3_util::log2_strict_usize(<F as Field>::Packing::WIDTH) {
+            let tall = Table::<F>::rand(&mut rng, 1, 6);
+            let short = Table::<F>::rand(&mut rng, 1, short_log);
+            let airs = [&air, &air, &air];
+            let tables = [&short, &tall, &short];
+            let (proof, runtime) = prove_lookup::<F, EF, _, _>(
+                &airs,
+                &tables,
+                &[None; 3],
+                &[&[][..]; 3],
+                &mut challenger(),
+            );
+            let LookupRuntime::Active(runtime) = runtime else {
+                panic!("lookup runtime must be active");
+            };
+            assert_eq!(
+                runtime.claims_by_air.values().copied().sum::<EF>(),
+                runtime.air_link.claimed_sum
+            );
+            verify_lookup::<F, EF, _>(
+                declared(&airs),
+                &[short_log, 6, short_log],
+                proof.as_ref(),
+                &mut challenger(),
+            )
+            .unwrap();
+        }
     }
 
     #[test]

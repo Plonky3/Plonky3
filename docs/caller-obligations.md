@@ -128,6 +128,15 @@ The commitment trait reports no width, and the schedule is derived before any sc
 **Make sure a rejection predicate can admit as many candidates as are asked of it.**
 The predicate is an opaque closure, and a blanket bound would be wrong for one admitting repeats.
 
+**Maintain the binary reference ZK deployment-wide budgets and fresh randomness.**
+The checked `ClassicalRomBudget` declares external RO-call and GLOBAL cumulative
+salted-leaf-slot caps across every configuration/session, both trees, standalone
+commitments, and aborted attempts after leaf creation. A local object cannot
+observe the adversary's calls or the deployment's other generators, and a
+`CryptoRng` trait cannot enforce fresh seeding or prevent cloning/reset/rollback.
+A real privacy target also requires a separate bound on the complete CSPRNG
+lifecycle's `Delta_rng`. See the [exact security contract](../binary-pcs/src/zk/security.rs).
+
 ## Minimum non-degenerate shapes
 
 A reduction with no rounds samples no challenge.
@@ -156,6 +165,7 @@ Name the value nobody checks, and if you cannot name one, impose no floor.
 | Jagged reduction | live area of one | **Trivial.** One dense cell has no interior to test, and the claim names that cell |
 | Binary PCS opening protocol | no claims | **Trivial.** A run that claims nothing proves nothing, and asserts nothing |
 | WHIR schedule | no opened position | **Rejected** by every constructor, though the fields are public and the verifier does not recount. Queries alone test proximity, so opening none accepts any committed function. The trigger is grinding credited with the whole target, which a saturating difference makes reachable at any target, not only at zero |
+| Binary reference ZK AIR | fewer than two rows or zero private columns | **Rejected.** Compilation requires trace log 1..=8 and width 1..=16; the relation permits repeated rows and enforces only the declared current-row constraints |
 | Plain sumcheck rounds | no rounds | **Trivial**, as above. The surrounding protocol owns any floor |
 
 ## Known gaps

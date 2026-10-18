@@ -15,6 +15,7 @@ use p3_field::{
     BasedVectorSpace, ExtensionField, Field, PrimeField64, TwoAdicField,
     batch_multiplicative_inverse,
 };
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_ceil_usize;
@@ -25,7 +26,7 @@ use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::transcript::{ProverTranscript, StirShape};
 use crate::utils::{
     OodFilter, eval_poly_at_base, eval_poly_parallel, fold_codeword, fold_domain_params,
-    fold_poly_coeffs, interpolate_poly, next_domain_shift, vanishing_poly_from_roots,
+    fold_poly_coeffs, interpolate_poly_mixed_with_vanishing, next_domain_shift,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -177,19 +178,18 @@ struct RoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
     /// evaluation form and therefore already materialized every fold-domain value.
     folded_codeword: Option<Vec<EF>>,
     fold_coeffs: Vec<EF>,
-    next_commit_codeword: Vec<EF>,
     new_data: Option<M::ProverData<RowMajorMatrix<EF>>>,
 
     ood_points: Vec<EF>,
     ood_answers: Vec<EF>,
 
     query_indices: Vec<usize>,
-    query_points: Vec<EF>,
+    query_points: Vec<F>,
     query_answers: Vec<EF>,
     seen_query_indices: Vec<usize>,
 
     ans_poly: Vec<EF>,
-    all_points: Vec<EF>,
+    vanishing_coeffs: Vec<EF>,
 }
 
 impl<'a, F, EF, Dft, M, Challenger> RoundProver<'a, F, EF, Dft, M, Challenger>
@@ -221,7 +221,6 @@ where
             next_shift: next_domain_shift(current_shift, log_arity),
             folded_codeword: None,
             fold_coeffs: Vec::new(),
-            next_commit_codeword: Vec::new(),
             new_data: None,
             ood_points: Vec::new(),
             ood_answers: Vec::new(),
@@ -230,7 +229,7 @@ where
             query_answers: Vec::new(),
             seen_query_indices: Vec::new(),
             ans_poly: Vec::new(),
-            all_points: Vec::new(),
+            vanishing_coeffs: Vec::new(),
         }
     }
 
@@ -238,20 +237,24 @@ where
     /// first prover message and must be absorbed by the caller.
     fn fold_and_commit(
         &mut self,
-        current_oracle: &Oracle<EF>,
+        current_oracle: &mut Oracle<EF>,
         current_shift: F,
         current_log_domain: usize,
         gamma: EF,
     ) -> M::Commitment {
         self.fold_coeffs = match current_oracle {
             Oracle::Evals(codeword) => {
+                // Subsequent queries read the committed matrix or the folded codeword.
+                // Release this redundant natural-order copy as soon as its fold is built.
+                let codeword = core::mem::take(codeword);
                 // `fold_codeword` interpolates at subgroup coordinates `g^{·}`. The codeword
                 // lives on the coset `current_shift · <g>`, so passing `gamma / current_shift`
                 // yields exactly Construction 4.5's coset fold at challenge `gamma`.
                 let fold_beta = gamma * EF::from(current_shift.inverse());
                 let folded = tracing::debug_span!("fold_codeword").in_scope(|| {
-                    fold_codeword::<F, EF>(codeword, fold_beta, self.log_arity, current_log_domain)
+                    fold_codeword::<F, EF>(&codeword, fold_beta, self.log_arity, current_log_domain)
                 });
+                drop(codeword);
                 // The folded polynomial has only `folded_degree_bound` coefficients. Gather
                 // that size sub-coset for interpolation while retaining the full fold codeword
                 // below, since round queries still read it at the original domain size.
@@ -268,7 +271,7 @@ where
             Oracle::Coeffs(coeffs) => fold_poly_coeffs(coeffs, gamma, self.log_arity),
         };
 
-        self.next_commit_codeword = codeword_from_coeffs(
+        let next_commit_codeword = codeword_from_coeffs(
             self.dft,
             self.truncated_fold_coeffs().to_vec(),
             self.next_shift,
@@ -278,7 +281,7 @@ where
             tracing::debug_span!("commit_as_fiber_matrix").in_scope(|| {
                 commit_as_fiber_matrix(
                     &self.config.mmcs,
-                    &self.next_commit_codeword,
+                    &next_commit_codeword,
                     self.config.log_folding_factor,
                 )
             });
@@ -358,7 +361,7 @@ where
         );
 
         self.query_answers = query_answers;
-        self.query_points = query_base_points.into_iter().map(EF::from).collect();
+        self.query_points = query_base_points;
         self.query_indices = query_indices;
         self.seen_query_indices = seen.into_iter().collect();
     }
@@ -367,20 +370,17 @@ where
     /// caller before rho is squeezed — otherwise a malicious prover could fit Ans to satisfy
     /// the interpolation identity at a known rho.
     fn answer_poly(&mut self) -> &[EF] {
-        self.all_points = self
-            .ood_points
-            .iter()
-            .chain(self.query_points.iter())
-            .copied()
-            .collect();
         let all_values: Vec<EF> = self
             .ood_answers
             .iter()
-            .chain(self.query_answers.iter())
+            .chain(&self.query_answers)
             .copied()
             .collect();
-
-        self.ans_poly = interpolate_poly(&self.all_points, &all_values);
+        (self.ans_poly, self.vanishing_coeffs) = interpolate_poly_mixed_with_vanishing(
+            &self.ood_points,
+            &self.query_points,
+            &all_values,
+        );
         &self.ans_poly
     }
 
@@ -403,12 +403,11 @@ where
         // and the vanishing polynomial still need evaluating — their roots are this round's
         // arbitrary interpolation points — but both go through the low-degree coset evaluation
         // rather than a full-size DFT each.
-        let all_points = core::mem::take(&mut self.all_points);
         let next_shift = self.next_shift;
         let next_log_domain = self.next_log_domain;
-        let num_answers = all_points.len();
+        let num_answers = self.ood_points.len() + self.query_points.len();
 
-        let vanishing_coeffs = vanishing_poly_from_roots(&all_points);
+        let vanishing_coeffs = core::mem::take(&mut self.vanishing_coeffs);
         // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
         // `num_answers + 1` coefficients, so the sub-coset has to be at least that wide for
         // the evaluations below to be the polynomials themselves rather than a truncation.
@@ -466,12 +465,23 @@ where
             drop(combined_denoms);
 
             let stride = 1usize << (next_log_domain - log_sub_coset);
-            let commit_codeword = core::mem::take(&mut self.next_commit_codeword);
+            // The MMCS owns the fiber layout from commit_as_fiber_matrix: natural
+            // index i is matrix entry (i % height, i / height). Retain only the
+            // degree-sized sample rather than a second full natural-order codeword.
+            let matrices = self
+                .config
+                .mmcs
+                .get_matrices(self.new_data.as_ref().expect("committed"));
+            let matrix = matrices[0];
+            let height = matrix.height();
+            debug_assert_eq!(matrix.width() * height, 1 << next_log_domain);
             let mut next_oracle_evals: Vec<EF> = (0..sub_coset_len)
                 .into_par_iter()
-                .map(|m| commit_codeword[m * stride])
+                .map(|m| {
+                    let i = m * stride;
+                    matrix.get(i % height, i / height).expect("codeword index")
+                })
                 .collect();
-            drop(commit_codeword);
 
             next_oracle_evals
                 .par_chunks_mut(POWER_CHUNK)
@@ -527,7 +537,7 @@ fn prove_round<F, EF, Dft, M, Challenger>(
     round: usize,
     dft: &Dft,
     transcript: &mut ProverTranscript<'_, Challenger, F, EF>,
-    current_oracle: &Oracle<EF>,
+    current_oracle: &mut Oracle<EF>,
     current_shift: F,
     current_log_domain: usize,
     current_commit_data: Option<&M::ProverData<RowMajorMatrix<EF>>>,
@@ -875,7 +885,7 @@ where
             round,
             dft,
             &mut transcript,
-            &current_oracle,
+            &mut current_oracle,
             current_shift,
             current_log_domain,
             current_commit_data.as_ref(),
@@ -1063,12 +1073,9 @@ where
                     states[i].shift,
                     states[i].log_domain,
                 );
-                let commit = rp.fold_and_commit(
-                    &states[i].oracle,
-                    states[i].shift,
-                    states[i].log_domain,
-                    gamma,
-                );
+                let state = &mut states[i];
+                let commit =
+                    rp.fold_and_commit(&mut state.oracle, state.shift, state.log_domain, gamma);
                 transcript.fold_commitment(commit.clone());
                 Phase1 { rp, commit }
             })

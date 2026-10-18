@@ -17,7 +17,7 @@ use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
     LinearizedPoly8b, PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel, poly_basis,
 };
-use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
+use p3_field::{Algebra, BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -570,6 +570,36 @@ fn bench_dot_width<P: PackedValue + PrimeCharacteristicRing + Copy, const N: usi
     group.bench_function("deferred", |bencher| {
         bencher.iter(|| P::dot_product(black_box(&a), black_box(&b)));
     });
+    group.finish();
+}
+
+/// Packed polynomial-field values weighted by scalar base-field elements.
+fn bench_poly64_mixed_dot(c: &mut Criterion) {
+    type P = <Poly64 as Field>::Packing;
+    let mut rng = SmallRng::seed_from_u64(0x64D07);
+    let mut group = c.benchmark_group("poly64/mixed_dot");
+    macro_rules! length {
+        ($n:literal) => {{
+            let values: [P; $n] = core::array::from_fn(|_| rng.random());
+            let weights: [Poly64; $n] = core::array::from_fn(|_| rng.random());
+            group.bench_function(concat!("separate/", $n), |b| {
+                b.iter(|| {
+                    black_box(&values)
+                        .iter()
+                        .zip(black_box(&weights))
+                        .map(|(&value, &weight)| value * weight)
+                        .sum::<P>()
+                });
+            });
+            group.bench_function(concat!("dispatched/", $n), |b| {
+                b.iter(|| P::mixed_dot_product(black_box(&values), black_box(&weights)));
+            });
+        }};
+    }
+    length!(1);
+    length!(2);
+    length!(4);
+    length!(8);
     group.finish();
 }
 
@@ -1180,6 +1210,7 @@ criterion_group!(
     bench_packing,
     bench_ghash_sqrt,
     bench_ghash_dot,
+    bench_poly64_mixed_dot,
     bench_powers_of_x,
     bench_powers_stream,
     bench_maps,

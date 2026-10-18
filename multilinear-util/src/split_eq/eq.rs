@@ -20,7 +20,10 @@ use itertools::Itertools;
 use p3_field::{Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_util::log2_strict_usize;
 
-use super::packed_kernel::{compress_hi_dot_packed, compress_prefix_to_packed_packed};
+use super::packed_kernel::{
+    compress_hi_dot_packed, compress_prefix_to_packed_packed,
+    compress_prefix_to_packed_packed_strided,
+};
 use crate::point::Point;
 use crate::poly::{Poly, PolyMaybePacked};
 
@@ -363,6 +366,70 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             //     - tiled inner loop for ILP.
             PolyMaybePacked::Packed(eq1) => {
                 compress_prefix_to_packed_packed::<F, EF>(out, eq1.as_slice(), chunk, w0);
+            }
+        }
+    }
+
+    /// Accumulate an output tile from rows separated by `inner_stride` scalars.
+    /// `chunk` starts at this tile's offset within the first source row.
+    pub(super) fn compress_prefix_strided_into(
+        &self,
+        out: &mut [EF],
+        chunk: &[F],
+        w0: EF,
+        inner_stride: usize,
+    ) {
+        let tile_len = out.len();
+        let mut accumulate = |row: usize, w: EF| {
+            let start = row * inner_stride;
+            for (acc, &f) in out.iter_mut().zip(&chunk[start..start + tile_len]) {
+                *acc += w * f;
+            }
+        };
+        match &self.0 {
+            PolyMaybePacked::Scalar(eq1) => {
+                for (row, &w1) in eq1.iter().enumerate() {
+                    accumulate(row, w0 * w1);
+                }
+            }
+            PolyMaybePacked::Packed(eq1) => {
+                for (row, w) in
+                    EF::ExtensionPacking::to_ext_iter(eq1.iter().map(|&w| w * w0)).enumerate()
+                {
+                    accumulate(row, w);
+                }
+            }
+        }
+    }
+
+    /// Packed output-tile contraction with the original source-row stride.
+    pub(super) fn compress_prefix_to_packed_strided_into(
+        &self,
+        out: &mut [EF::ExtensionPacking],
+        chunk: &[F],
+        w0: EF,
+        inner_stride: usize,
+    ) {
+        match &self.0 {
+            PolyMaybePacked::Scalar(eq1) => {
+                let scalar_len = out.len() * F::Packing::WIDTH;
+                for (row, &w1) in eq1.iter().enumerate() {
+                    let start = row * inner_stride;
+                    let source = F::Packing::pack_slice(&chunk[start..start + scalar_len]);
+                    let w = EF::ExtensionPacking::from(w0 * w1);
+                    for (acc, &f) in out.iter_mut().zip(source) {
+                        *acc += w * f;
+                    }
+                }
+            }
+            PolyMaybePacked::Packed(eq1) => {
+                compress_prefix_to_packed_packed_strided::<F, EF>(
+                    out,
+                    eq1.as_slice(),
+                    chunk,
+                    w0,
+                    inner_stride,
+                );
             }
         }
     }

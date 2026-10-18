@@ -186,6 +186,12 @@ fn pack_block(
         block[OUTPUT_FLAG_COLUMN] |= 1u64 << (row - block_start);
     }
 
+    // A padding-only block already has zero state columns. Its flag word is complete,
+    // so avoid transposing 25 all-zero lanes (also preserves a partial final block).
+    if block_start >= num_perm_rows {
+        return;
+    }
+
     // Padding rows and bits beyond the trace height were left zero in the output buffer.
     // Each lane occupies exactly 64 columns, so the transpose needs no extra allocation.
     let (lanes, rest) = block[KECCAK_BINARY_ROWS_PER_PERM..].as_chunks_mut::<BITS_PER_WORD>();

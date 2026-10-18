@@ -36,8 +36,9 @@ use p3_symmetric::CryptographicHasher;
 
 /// Messages one batched compression advances at once.
 ///
-/// - 32 with AVX-512, 16 with AVX2, 8 with SSE2 or NEON, and 1 elsewhere.
+/// - 32 with AVX-512, 16 with AVX2 or NEON, 8 with SSE2, and 1 elsewhere.
 /// - Any batch size works, and a partial group costs one full group of work.
+/// - On NEON, a tail of at most six messages is hashed one message at a time instead.
 pub const LANES: usize = batch::LANES;
 
 /// Bytes in a BLAKE2s-256 digest.

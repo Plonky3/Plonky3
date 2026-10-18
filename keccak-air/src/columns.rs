@@ -1,10 +1,13 @@
 use core::borrow::{Borrow, BorrowMut};
-use core::mem::{size_of, transmute};
+use core::mem::size_of;
+#[cfg(test)]
+use core::mem::transmute;
 
+#[cfg(test)]
 use p3_util::indices_arr;
 
 use crate::constants::R;
-use crate::{NUM_ROUNDS, RATE_LIMBS, U64_LIMBS};
+use crate::{NUM_ROUNDS, U64_LIMBS};
 
 /// Note: The ordering of each array is based on the input mapping. As the spec says,
 ///
@@ -29,24 +32,24 @@ pub struct KeccakCols<T> {
 
     pub a: [[[T; U64_LIMBS]; 5]; 5],
 
-    /// ```ignore
+    /// ```text
     /// C[x] = xor(A[x, 0], A[x, 1], A[x, 2], A[x, 3], A[x, 4])
     /// ```
     pub c: [[T; 64]; 5],
 
-    /// ```ignore
+    /// ```text
     /// C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1])
     /// ```
     pub c_prime: [[T; 64]; 5],
 
     // Note: D is inlined, not stored in the witness.
-    /// ```ignore
+    /// ```text
     /// A'[x, y] = xor(A[x, y], D[x])
     ///          = xor(A[x, y], C[x - 1], ROT(C[x + 1], 1))
     /// ```
     pub a_prime: [[[T; 64]; 5]; 5],
 
-    /// ```ignore
+    /// ```text
     /// A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
     /// ```
     pub a_prime_prime: [[[T; U64_LIMBS]; 5]; 5],
@@ -54,7 +57,7 @@ pub struct KeccakCols<T> {
     /// The bits of `A''[0, 0]`.
     pub a_prime_prime_0_0_bits: [T; 64],
 
-    /// ```ignore
+    /// ```text
     /// A'''[0, 0, z] = A''[0, 0, z] ^ RC[k, z]
     /// ```
     pub a_prime_prime_prime_0_0_limbs: [T; U64_LIMBS],
@@ -91,35 +94,12 @@ impl<T: Copy> KeccakCols<T> {
     }
 }
 
-pub fn input_limb(i: usize) -> usize {
-    debug_assert!(i < RATE_LIMBS);
-
-    let i_u64 = i / U64_LIMBS;
-    let limb_index = i % U64_LIMBS;
-
-    // The 5x5 state is treated as y-major, as per the Keccak spec.
-    let y = i_u64 / 5;
-    let x = i_u64 % 5;
-
-    KECCAK_COL_MAP.preimage[y][x][limb_index]
-}
-
-pub fn output_limb(i: usize) -> usize {
-    debug_assert!(i < RATE_LIMBS);
-
-    let i_u64 = i / U64_LIMBS;
-    let limb_index = i % U64_LIMBS;
-
-    // The 5x5 state is treated as y-major, as per the Keccak spec.
-    let y = i_u64 / 5;
-    let x = i_u64 % 5;
-
-    KECCAK_COL_MAP.a_prime_prime_prime(y, x, limb_index)
-}
-
 pub const NUM_KECCAK_COLS: usize = size_of::<KeccakCols<u8>>();
+
+#[cfg(test)]
 pub(crate) const KECCAK_COL_MAP: KeccakCols<usize> = make_col_map();
 
+#[cfg(test)]
 const fn make_col_map() -> KeccakCols<usize> {
     unsafe { transmute(indices_arr::<NUM_KECCAK_COLS>()) }
 }

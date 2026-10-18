@@ -12,26 +12,34 @@ categories.workspace = true
 # criterion pulls rayon transitively and rayon does not build on wasi.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion.workspace = true
+rand = { workspace = true, features = ["sys_rng"] }
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 test-utils = []
 
 [dependencies]
+p3-air.workspace = true
 p3-binary-dft.workspace = true
 p3-binary-field.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-field.workspace = true
+p3-keccak.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
+p3-merkle-tree.workspace = true
 p3-multilinear-util.workspace = true
 p3-security.workspace = true
 p3-sumcheck.workspace = true
+p3-symmetric.workspace = true
 p3-util.workspace = true
 p3-whir.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
+rand = { workspace = true, features = ["std_rng"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
+tiny-keccak = { workspace = true, features = ["keccak"] }
 tracing.workspace = true
 
 [dev-dependencies]
@@ -60,6 +68,10 @@ harness = false
 
 [[bench]]
 name = "whir"
+harness = false
+
+[[bench]]
+name = "trace"
 harness = false
 
 [lints]

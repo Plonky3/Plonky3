@@ -39,7 +39,7 @@ use crate::{MdsMatrixMersenne31, Mersenne31, PackedMersenne31Neon};
 /// - **Scalar** (`FullRoundConstants<Mersenne31, WIDTH>`) — used by the
 ///   scalar fallback path (`FullRoundLayer<Mersenne31, …>`).
 /// - **Packed** (`Vec<[uint32x4_t; WIDTH]>`) — each constant broadcast to
-///   all four NEON lanes, enabling the fused [`add_rc_and_sbox`] path.
+///   all four NEON lanes, enabling the fused `add_rc_and_sbox` path.
 #[derive(Clone)]
 pub struct Poseidon1ExternalLayerMersenne31<const WIDTH: usize> {
     constants: FullRoundConstants<Mersenne31, WIDTH>,

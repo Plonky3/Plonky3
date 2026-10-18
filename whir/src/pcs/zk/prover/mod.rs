@@ -6,6 +6,8 @@
 
 mod data;
 mod masks;
+#[cfg(test)]
+mod tests;
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -23,7 +25,7 @@ use p3_field::{
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_sumcheck::constraints::statement::SelectStatement;
 use p3_sumcheck::product_polynomial::ProductPolynomial;
@@ -39,11 +41,13 @@ use crate::WhirConfigError;
 use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::zk::base_case::{BaseCaseZkProver, MaskGroupWitness};
 use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
-use crate::pcs::zk::committer::zk_padded_matrix;
+use crate::pcs::zk::committer::{zk_padded_matrix, zk_padded_matrix_view};
 use crate::pcs::zk::config::ZkWhirConfig;
 use crate::pcs::zk::proof::{ZkRoundProof, ZkWhirProof};
 use crate::transcript::zk::{ZkWhirProverTranscript, ZkWhirShape};
-use crate::utils::{eval_ze_star_n, par_add_scaled_powers, par_eval_ze_star_n};
+use crate::utils::{
+    eval_ze_star_n, par_add_scaled_powers, par_add_scaled_powers_packed, par_eval_ze_star_n_view,
+};
 
 /// Chunk length for the parallel power runs over message-length vectors.
 ///
@@ -263,8 +267,8 @@ where
             let folding_next = config.round_folding_factor(round + 1);
             let next_randomness_len = config.oracle_randomness[round + 1];
 
-            let message = batch.residual_prover.evals();
-            let message_len = message.num_evals();
+            let message = batch.residual_prover.evals_view();
+            let message_len = message.num_scalar_evals();
 
             // Commit the folded message into the next interleaved ZK oracle.
             let fresh_randomness: Vec<EF> = (0..next_randomness_len << folding_next)
@@ -272,8 +276,7 @@ where
                 .collect();
             // Interleaved ZK encoding over the extension, base-field DFT.
             let height = config.inv_rate(round) * (1 << (message.num_variables() - folding_next));
-            let padded =
-                zk_padded_matrix(message.as_slice(), &fresh_randomness, folding_next, height);
+            let padded = zk_padded_matrix_view(message, &fresh_randomness, folding_next, height);
             let encoded = self.dft.dft_algebra_batch(padded);
             let (commitment, merkle) = self.extension_mmcs.commit_matrix(encoded);
             transcript.oracle_commitment(commitment.clone());
@@ -312,7 +315,7 @@ where
                 );
                 // ze*(rho) over (message || mask_message): the long message side
                 // runs as chunked parallel Horner, the short mask tail serially.
-                let answer = par_eval_ze_star_n(rho, message.as_slice(), POW_CHUNK)
+                let answer = par_eval_ze_star_n_view(rho, message, POW_CHUNK)
                     + eval_ze_star_n(rho, &mask_message) * rho.exp_u64(message_len as u64);
                 transcript.ood_answer(answer);
                 rho_points.push(rho);
@@ -394,7 +397,7 @@ where
                     combination,
                     1 + rho_points.len(),
                 );
-                packed_delta.unpack::<F, EF>().into_evals()
+                PolyMaybePacked::Packed(packed_delta)
             } else {
                 // Too few variables for the packed kernel: power runs only.
                 let mut weight_delta = EF::zero_vec(message_len);
@@ -405,11 +408,21 @@ where
                         term *= var;
                     }
                 }
-                weight_delta
+                PolyMaybePacked::Scalar(Poly::new(weight_delta))
             };
             // OOD layers: delta[b] += c_j * rho_j^b.
             for (&rho, &coeff) in rho_points.iter().zip(ood_coeffs) {
-                par_add_scaled_powers(&mut weight_delta, rho, coeff, POW_CHUNK);
+                match &mut weight_delta {
+                    PolyMaybePacked::Packed(poly) => par_add_scaled_powers_packed::<F, EF>(
+                        poly.as_mut_slice(),
+                        rho,
+                        coeff,
+                        POW_CHUNK,
+                    ),
+                    PolyMaybePacked::Scalar(poly) => {
+                        par_add_scaled_powers(poly.as_mut_slice(), rho, coeff, POW_CHUNK);
+                    }
+                }
             }
 
             // Mask side: the fresh mask enters the relation.
@@ -426,14 +439,14 @@ where
             //
             //     carried + claim_delta + <mask covector, mask message> = mu'
             //
-            // `accumulate_claim` re-derives it from <evals, weights> in debug builds.
+            // `accumulate_claim_view` re-derives it from <evals, weights> in debug builds.
             let claim_delta = joint
                 - carried
                 - dot_product::<EF, _, _>(
                     mask_covector.iter().copied(),
                     mask_message.iter().copied(),
                 );
-            sumcheck_prover.accumulate_claim(&weight_delta, claim_delta);
+            sumcheck_prover.accumulate_claim_view(weight_delta.as_view(), claim_delta);
 
             // The running total must match a full re-evaluation.
             debug_assert_eq!(masks.aux, masks.claims.evaluate(&masks.messages));
