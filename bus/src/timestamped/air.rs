@@ -174,8 +174,8 @@ impl<C: Field, F: ExtensionField<C>> BaseAir<F> for TimestampedBoundaryAir<C, F>
             return Vec::new();
         };
 
-        // Diagnostics visit every row. Read one sparse word instead of rebuilding
-        // every image column for each visit, retaining the periodic wrapping.
+        // Diagnostics visit every row.
+        // Read one sparse word instead of rebuilding every image column for each visit, retaining the periodic wrapping.
         let cell = row_index % (1 << image.log_cells());
         let runs = image.runs();
         let end = runs.partition_point(|(start, _)| *start <= cell);

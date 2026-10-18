@@ -168,8 +168,7 @@ impl<F: Field> Lookups<F> {
     ///
     /// # Panics
     ///
-    /// Panics if a local interaction's tuples disagree on payload width or their total
-    /// count weight exceeds `u32::MAX`.
+    /// Panics if a local interaction's tuples disagree on payload width or their total count weight exceeds `u32::MAX`.
     pub fn from_interactions(
         global: &[SymbolicInteraction<F>],
         local: &[SymbolicLocalInteraction<F>],

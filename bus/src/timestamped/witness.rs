@@ -58,8 +58,8 @@ impl ClockGapDigits {
 ///
 /// Share one builder across every table and slot using the same pair of range buses.
 /// Padding accesses also consume reads: use the digits of gap one for their factors.
-/// Counts and their inverses advance multiplicatively from one. As with the read-only
-/// memory bus, the total reads of an entry must stay below the order of `F::GENERATOR`.
+/// Counts and their inverses advance multiplicatively from one.
+/// As with the read-only memory bus, the total reads of an entry must stay below the order of `F::GENERATOR`.
 #[derive(Clone, Debug)]
 pub struct ClockRangeWitness<C, F> {
     columns: [Vec<F>; 4],
@@ -93,10 +93,18 @@ impl<C: Field, F: ExtensionField<C>> ClockRangeWitness<C, F> {
     }
 
     /// Consumes one read of each factor, indexing directly by the checked digits.
+    #[must_use]
     pub fn read(&mut self, digits: ClockGapDigits) -> ClockGap<F> {
         let mut read = |side: usize, index: usize| {
-            let value = self.columns[2 * side][index];
-            let count = &mut self.columns[2 * side + 1][index];
+            let (value_column, count_column) = [
+                (ClockRangeAir::<C, F>::LOW, ClockRangeAir::<C, F>::LOW_FINAL),
+                (
+                    ClockRangeAir::<C, F>::HIGH,
+                    ClockRangeAir::<C, F>::HIGH_FINAL,
+                ),
+            ][side];
+            let value = self.columns[value_column][index];
+            let count = &mut self.columns[count_column][index];
             let count_inverse = &mut self.count_inverses[side][index];
             let result = RangeRead {
                 value,
