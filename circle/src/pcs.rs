@@ -1536,7 +1536,7 @@ mod tests {
     }
 
     #[test]
-    fn query_shape_errors_precede_later_collisions() {
+    fn query_shape_and_collision_errors_follow_query_order() {
         let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof_at(0, 0, 0);
         let mut rounds: Vec<CommitmentWithClaims<Val, Challenge, _>> =
             vec![(comm, vec![(d, vec![(zeta, values[0][0][0].clone())])]).into()];
@@ -1589,6 +1589,34 @@ mod tests {
                 );
             }
         }
+        // Mirror the ordering with a collision in query 0 and a shape fault only in query 1.
+        // A shared fault such as missing lambdas would also invalidate query 0.
+        rounds[0].matrices[0].points[0].point = CircleDomain::<Val>::standard(log_height)
+            .nth_point(cfft_permute_index(indices[0], log_height))
+            .to_projective_line()
+            .unwrap()
+            .into();
+        let mut proof = proof.clone();
+        proof.fri_proof.input_openings.first_layer_siblings[1].clear();
+        let err = pcs
+            .verify(
+                rounds,
+                &proof,
+                &mut QueryReplayChallenger {
+                    inner: Challenger::from_hasher(vec![], byte_hash),
+                    indices,
+                    replay: true,
+                    next: 0,
+                },
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FriError::InputError(InputError::OpeningPointMatchesQueryPoint)
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]

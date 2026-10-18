@@ -4129,3 +4129,157 @@ fn opening_helper_rejects_missing_or_short_preprocessed_next_rows() {
         ));
     }
 }
+
+#[test]
+fn opening_helper_and_verify_batch_agree_on_missing_preprocessed_opening() {
+    let config = make_config(2447);
+    let (air, trace, public_values) = create_fib_instance(3);
+    let instances = [StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: public_values.clone(),
+    }];
+    let data = ProverData::from_instances(&config, &instances).unwrap();
+    let mut proof = prove_batch(&config, &instances, &data).unwrap();
+    verify_batch(
+        &config,
+        from_ref(&air),
+        &proof,
+        from_ref(&public_values),
+        &data.common,
+    )
+    .expect("untampered proof verifies");
+    proof.opened_values.instances[0]
+        .base_opened_values
+        .preprocessed = None;
+
+    let batch_result = verify_batch(
+        &config,
+        from_ref(&air),
+        &proof,
+        from_ref(&public_values),
+        &data.common,
+    );
+    let log_num_chunks = proof.opened_values.instances[0]
+        .base_opened_values
+        .quotient_chunks
+        .len()
+        .ilog2() as usize;
+    let helper_result = commitments_with_opening_points(
+        &config,
+        from_ref(&air),
+        Challenge::from(Val::from_u64(11)),
+        &proof.commitments,
+        &proof.opened_values,
+        &data.common,
+        &proof.degree_bits,
+        &[1],
+        &[log_num_chunks],
+    );
+    for result in [batch_result, helper_result.map(|_| ())] {
+        assert!(
+            matches!(
+                result,
+                Err(BatchVerificationError::Verification(
+                    VerificationError::InvalidProofShape(
+                        InvalidProofShapeError::PreprocessedWidthMismatch { air: 0 }
+                    )
+                ))
+            ),
+            "{result:?}"
+        );
+    }
+}
+
+#[test]
+fn batch_preflight_preserves_shape_error_order() {
+    let config = make_config(2447);
+    let (air, trace, public_values) = create_fib_instance(3);
+    let instances = [StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: public_values.clone(),
+    }];
+    let data = ProverData::from_instances(&config, &instances).unwrap();
+    let proof = prove_batch(&config, &instances, &data).unwrap();
+    verify_batch(
+        &config,
+        from_ref(&air),
+        &proof,
+        from_ref(&public_values),
+        &data.common,
+    )
+    .expect("untampered proof verifies");
+    let encoded = postcard::to_allocvec(&proof).unwrap();
+
+    for case in 0..5 {
+        let mut proof: BatchProof<MyConfig> = postcard::from_bytes(&encoded).unwrap();
+        let mut public_values = public_values.clone();
+        let opened = &mut proof.opened_values.instances[0].base_opened_values;
+        match case {
+            0 => {
+                public_values.pop();
+                opened.trace_next = None;
+            }
+            1 => {
+                opened.trace_local.pop();
+                opened.trace_next = None;
+            }
+            2 => {
+                opened.trace_next = None;
+                opened.quotient_chunks.clear();
+            }
+            3 => {
+                opened.quotient_chunks[0].pop();
+                opened.preprocessed = None;
+            }
+            _ => {
+                opened.preprocessed = None;
+                proof.opened_values.instances[0]
+                    .permutation_local
+                    .push(Challenge::ONE);
+            }
+        };
+        let result = verify_batch(
+            &config,
+            from_ref(&air),
+            &proof,
+            from_ref(&public_values),
+            &data.common,
+        );
+        let Err(BatchVerificationError::Verification(VerificationError::InvalidProofShape(error))) =
+            result
+        else {
+            panic!("case {case}: {result:?}")
+        };
+        assert!(
+            matches!(
+                (case, &error),
+                (
+                    0,
+                    InvalidProofShapeError::PublicValuesLengthMismatch {
+                        expected: 3,
+                        got: 2
+                    }
+                ) | (
+                    1,
+                    InvalidProofShapeError::TraceLocalWidthMismatch {
+                        air: 0,
+                        expected: 2,
+                        got: 1
+                    }
+                ) | (
+                    2,
+                    InvalidProofShapeError::TraceNextMismatch { air: Some(0) }
+                ) | (
+                    3,
+                    InvalidProofShapeError::QuotientChunkDimensionMismatch { air: 0 }
+                ) | (
+                    4,
+                    InvalidProofShapeError::PreprocessedWidthMismatch { air: 0 }
+                )
+            ),
+            "case {case}: {error:?}"
+        );
+    }
+}
