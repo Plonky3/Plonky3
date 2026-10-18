@@ -112,7 +112,7 @@ fn packed_batch_eqs<F: Field, EF: ExtensionField<F>>(
         // The transpose gives us one row per column of the input,
         // containing the k_pack variable values for that point.
         init_vars
-            .transpose()
+            .transpose_packable()
             .row_slices()
             .zip(mat.values.iter_mut())
             .for_each(|(vars, packed)| {

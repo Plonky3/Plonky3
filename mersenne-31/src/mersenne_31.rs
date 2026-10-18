@@ -131,7 +131,24 @@ impl PartialEq for Mersenne31 {
 
 impl Eq for Mersenne31 {}
 
-impl Packable for Mersenne31 {}
+impl Packable for Mersenne31 {
+    #[inline]
+    fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
+        // SAFETY: Self is repr(transparent) over an initialized u32.
+        unsafe { p3_util::transpose::transpose_words(input, output, width, height) };
+    }
+
+    #[inline]
+    fn transpose_rows<'a>(
+        rows: usize,
+        cols: usize,
+        row: impl Fn(usize) -> &'a [Self],
+        dst: &mut [Self],
+    ) {
+        // SAFETY: Self is repr(transparent) over an initialized u32.
+        unsafe { p3_util::transpose::transpose_rows_words(rows, cols, row, dst) };
+    }
+}
 
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
