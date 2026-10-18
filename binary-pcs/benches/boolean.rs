@@ -280,5 +280,50 @@ fn bench_batched(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_commit, bench_open, bench_batched);
+/// Full Boolean PCS verification, including the ring-switch closing weights.
+fn bench_verify(c: &mut Criterion) {
+    let mut group = c.benchmark_group("boolean_verify");
+    group.sample_size(10);
+    for &log_bits in &LOG_BITS {
+        let bits = witness(log_bits);
+        let pcs = boolean_pcs(log_bits);
+        let mut prover_chal = challenger();
+        let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
+        for num_points in [1, 4] {
+            let mut rng = SmallRng::seed_from_u64(0xB004);
+            let points: Vec<Point<EF>> = (0..num_points)
+                .map(|_| Point::<EF>::rand(&mut rng, log_bits))
+                .collect();
+            let (values, proof) = pcs
+                .open_at_points(data.clone(), &points, &mut prover_chal.clone())
+                .unwrap();
+            group.bench_function(
+                BenchmarkId::new(if num_points == 1 { "one" } else { "four" }, log_bits),
+                |b| {
+                    b.iter(|| {
+                        let mut verifier_chal = challenger();
+                        pcs.observe_commitment(&commitment, &mut verifier_chal);
+                        pcs.verify_at_points(
+                            &commitment,
+                            &points,
+                            &values,
+                            &proof,
+                            &mut verifier_chal,
+                        )
+                        .unwrap();
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_commit,
+    bench_open,
+    bench_batched,
+    bench_verify
+);
 criterion_main!(benches);
