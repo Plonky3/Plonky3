@@ -105,6 +105,15 @@ fn padded_dit_rejects_excess_padding() {
     let _ = Radix2DitParallel::default().dft_batch_padded(mat, 3);
 }
 
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "padded tail must be zero")]
+fn padded_dit_rejects_nonzero_tail() {
+    let mut mat = RowMajorMatrix::new(vec![BabyBear::ZERO; 16 * 3], 3);
+    mat.values[4 * 3 + 1] = BabyBear::ONE;
+    let _ = Radix2DitParallel::default().dft_batch_padded(mat, 2);
+}
+
 #[test]
 #[should_panic(expected = "padding exceeds matrix height")]
 fn padded_default_rejects_shift_overflow() {
