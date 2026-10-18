@@ -14,4 +14,4 @@ pub use domain::{BinaryWhirAlphabet, BinaryWhirDomain, BooleanWhirDomain, recomm
 pub use error::{BooleanWhirError, BudgetError, ProfileError};
 pub use profile::BinaryWhirProfile;
 pub use proof::BooleanWhirProof;
-pub use shape::ProofShape;
+pub use shape::{ProofShape, ProofShapeError};

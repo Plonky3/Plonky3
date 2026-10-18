@@ -98,7 +98,7 @@ fn packed_batch_pows<F: Field>(points: RowMajorMatrixView<'_, F>) -> RowMajorMat
         // Packing phase: build a scalar 2^{k_pack}-row power table
         // per column and pack it into one SIMD element.
         init_vars
-            .transpose()
+            .transpose_packable()
             .row_slices()
             .zip(mat.values.iter_mut())
             .for_each(|(vars, packed)| {

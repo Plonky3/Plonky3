@@ -3826,3 +3826,460 @@ fn the_lookup_grinding_configuration_is_accounted_for() {
     )
     .unwrap_or_else(|mismatch| panic!("{mismatch}"));
 }
+
+// Direct helper calls do not inherit verify_batch's preflight checks.
+fn opening_helper_inputs() -> (
+    p3_batch_stark::proof::BatchCommitments<p3_batch_stark::config::Commitment<MyConfig>>,
+    p3_batch_stark::proof::BatchOpenedValues<Challenge>,
+) {
+    let commitment = p3_symmetric::MerkleCap::new(vec![[Val::ZERO; 8]]);
+    (
+        p3_batch_stark::proof::BatchCommitments {
+            main: commitment.clone(),
+            quotient_chunks: commitment,
+            permutation: None,
+            random: None,
+        },
+        p3_batch_stark::proof::BatchOpenedValues {
+            instances: vec![OpenedValuesWithLookups {
+                base_opened_values: p3_uni_stark::OpenedValues {
+                    trace_local: vec![Challenge::ONE; 2],
+                    trace_next: Some(vec![Challenge::ONE; 2]),
+                    preprocessed: None,
+                    quotient_chunks: vec![vec![Challenge::ONE; 4]],
+                    random: None,
+                },
+                permutation_local: vec![],
+                permutation_next: vec![],
+            }],
+        },
+    )
+}
+
+#[test]
+fn opening_helper_rejects_mismatched_instance_counts() {
+    let config = make_config(0);
+    let air = FibonacciAir {
+        log_height: 3,
+        tamper_index: None,
+    };
+    for collection in 0..6 {
+        let (commitments, mut opened) = opening_helper_inputs();
+        let airs = if collection == 0 { vec![] } else { vec![air] };
+        if collection == 1 {
+            opened.instances.clear();
+        }
+        let degrees = if collection == 2 { vec![] } else { vec![3] };
+        let widths = if collection == 3 { vec![] } else { vec![0] };
+        let chunks = if collection == 4 { vec![] } else { vec![0] };
+        let common = p3_batch_stark::CommonData::empty(if collection == 5 { 0 } else { 1 });
+        let result = commitments_with_opening_points(
+            &config,
+            &airs,
+            Challenge::from(Val::from_u64(11)),
+            &commitments,
+            &opened,
+            &common,
+            &degrees,
+            &widths,
+            &chunks,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(BatchVerificationError::Verification(
+                    VerificationError::InvalidProofShape(
+                        InvalidProofShapeError::InstanceCountMismatch
+                    )
+                ))
+            ),
+            "collection {collection}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn opening_helper_rejects_missing_or_short_next_rows() {
+    let config = make_config(0);
+    let air = FibonacciAir {
+        log_height: 3,
+        tamper_index: None,
+    };
+    for next in [None, Some(vec![Challenge::ONE])] {
+        let (commitments, mut opened) = opening_helper_inputs();
+        opened.instances[0].base_opened_values.trace_next = next;
+        let result = commitments_with_opening_points(
+            &config,
+            &[air],
+            Challenge::from(Val::from_u64(11)),
+            &commitments,
+            &opened,
+            &p3_batch_stark::CommonData::empty(1),
+            &[3],
+            &[0],
+            &[0],
+        );
+        assert!(matches!(
+            result,
+            Err(BatchVerificationError::Verification(
+                VerificationError::InvalidProofShape(InvalidProofShapeError::TraceNextMismatch {
+                    air: Some(0)
+                })
+            ))
+        ));
+    }
+}
+
+#[test]
+fn opening_helper_rejects_random_openings_without_zk() {
+    let config = make_config(0);
+    let air = FibonacciAir {
+        log_height: 3,
+        tamper_index: None,
+    };
+    let (mut commitments, mut opened) = opening_helper_inputs();
+    commitments.random = Some(commitments.main.clone());
+    for random in [None, Some(vec![Challenge::ONE; 4])] {
+        opened.instances[0].base_opened_values.random = random;
+        let result = commitments_with_opening_points(
+            &config,
+            &[air],
+            Challenge::from(Val::from_u64(11)),
+            &commitments,
+            &opened,
+            &p3_batch_stark::CommonData::empty(1),
+            &[3],
+            &[0],
+            &[0],
+        );
+        assert!(matches!(
+            result,
+            Err(BatchVerificationError::Verification(
+                VerificationError::RandomizationError
+            ))
+        ));
+    }
+}
+
+#[test]
+fn opening_helper_accepts_well_shaped_inputs() {
+    let config = make_config(0);
+    let air = FibonacciAir {
+        log_height: 3,
+        tamper_index: None,
+    };
+    let (commitments, opened) = opening_helper_inputs();
+    let (claims, domains, preprocessed_index) = commitments_with_opening_points(
+        &config,
+        &[air],
+        Challenge::from(Val::from_u64(11)),
+        &commitments,
+        &opened,
+        &p3_batch_stark::CommonData::empty(1),
+        &[3],
+        &[0],
+        &[0],
+    )
+    .unwrap();
+    assert_eq!(claims.len(), 2);
+    assert_eq!(domains.len(), 1);
+    assert_eq!(domains[0].len(), 1);
+    assert_eq!(preprocessed_index, None);
+}
+
+#[test]
+fn opening_helper_rejects_missing_zk_random_openings() {
+    let config = make_config_zk(0);
+    let air = FibonacciAir {
+        log_height: 3,
+        tamper_index: None,
+    };
+    let (mut commitments, mut opened) = opening_helper_inputs();
+    commitments.random = Some(commitments.main.clone());
+    for random in [None, Some(vec![Challenge::ONE])] {
+        opened.instances[0].base_opened_values.random = random;
+        let result = commitments_with_opening_points(
+            &config,
+            &[air],
+            Challenge::from(Val::from_u64(11)),
+            &commitments,
+            &opened,
+            &p3_batch_stark::CommonData::empty(1),
+            &[4],
+            &[0],
+            &[0],
+        );
+        assert!(matches!(
+            result,
+            Err(BatchVerificationError::Verification(
+                VerificationError::RandomizationError
+            ))
+        ));
+    }
+}
+
+#[test]
+fn opening_helper_rejects_invalid_preprocessed_metadata() {
+    use p3_batch_stark::common::{GlobalPreprocessed, PreprocessedInstanceMeta};
+    let config = make_config(0);
+    let air = FibonacciAir {
+        log_height: 3,
+        tamper_index: None,
+    };
+    for case in 0..5 {
+        let (commitments, mut opened) = opening_helper_inputs();
+        opened.instances[0].base_opened_values.preprocessed =
+            Some(p3_uni_stark::PreprocessedOpenedValues {
+                local: vec![Challenge::ONE],
+                next: Some(vec![Challenge::ONE]),
+            });
+        let common = p3_batch_stark::CommonData::new(
+            Some(GlobalPreprocessed {
+                commitment: commitments.main.clone(),
+                instances: if case == 0 {
+                    vec![]
+                } else {
+                    vec![Some(PreprocessedInstanceMeta {
+                        matrix_index: 0,
+                        width: 1,
+                        degree_bits: 3,
+                    })]
+                },
+                matrix_to_instance: match case {
+                    1 => vec![1],
+                    2 => vec![],
+                    _ => vec![0],
+                },
+            }),
+            vec![Default::default()],
+        );
+        let width = if case == 3 { 2 } else { 1 };
+        let degree = if case == 4 { 4 } else { 3 };
+        let result = commitments_with_opening_points(
+            &config,
+            &[air],
+            Challenge::from(Val::from_u64(11)),
+            &commitments,
+            &opened,
+            &common,
+            &[degree],
+            &[width],
+            &[0],
+        );
+        assert!(
+            matches!(
+                result,
+                Err(BatchVerificationError::Verification(
+                    VerificationError::InvalidProofShape(
+                        InvalidProofShapeError::InstanceCountMismatch
+                            | InvalidProofShapeError::PreprocessedMetadataMismatch { .. }
+                    )
+                ))
+            ),
+            "case {case}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn opening_helper_rejects_missing_or_short_preprocessed_next_rows() {
+    use p3_batch_stark::common::{GlobalPreprocessed, PreprocessedInstanceMeta};
+    let config = make_config(0);
+    let air = FibonacciAir {
+        log_height: 3,
+        tamper_index: None,
+    };
+    for next in [None, Some(vec![])] {
+        let (commitments, mut opened) = opening_helper_inputs();
+        opened.instances[0].base_opened_values.preprocessed =
+            Some(p3_uni_stark::PreprocessedOpenedValues {
+                local: vec![Challenge::ONE],
+                next,
+            });
+        let common = p3_batch_stark::CommonData::new(
+            Some(GlobalPreprocessed {
+                commitment: commitments.main.clone(),
+                instances: vec![Some(PreprocessedInstanceMeta {
+                    matrix_index: 0,
+                    width: 1,
+                    degree_bits: 3,
+                })],
+                matrix_to_instance: vec![0],
+            }),
+            vec![Default::default()],
+        );
+        let result = commitments_with_opening_points(
+            &config,
+            &[air],
+            Challenge::from(Val::from_u64(11)),
+            &commitments,
+            &opened,
+            &common,
+            &[3],
+            &[1],
+            &[0],
+        );
+        assert!(matches!(
+            result,
+            Err(BatchVerificationError::Verification(
+                VerificationError::InvalidProofShape(
+                    InvalidProofShapeError::PreprocessedWidthMismatch { air: 0 }
+                )
+            ))
+        ));
+    }
+}
+
+#[test]
+fn opening_helper_and_verify_batch_agree_on_missing_preprocessed_opening() {
+    let config = make_config(2447);
+    let (air, trace, public_values) = create_fib_instance(3);
+    let instances = [StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: public_values.clone(),
+    }];
+    let data = ProverData::from_instances(&config, &instances).unwrap();
+    let mut proof = prove_batch(&config, &instances, &data).unwrap();
+    verify_batch(
+        &config,
+        from_ref(&air),
+        &proof,
+        from_ref(&public_values),
+        &data.common,
+    )
+    .expect("untampered proof verifies");
+    proof.opened_values.instances[0]
+        .base_opened_values
+        .preprocessed = None;
+
+    let batch_result = verify_batch(
+        &config,
+        from_ref(&air),
+        &proof,
+        from_ref(&public_values),
+        &data.common,
+    );
+    let log_num_chunks = proof.opened_values.instances[0]
+        .base_opened_values
+        .quotient_chunks
+        .len()
+        .ilog2() as usize;
+    let helper_result = commitments_with_opening_points(
+        &config,
+        from_ref(&air),
+        Challenge::from(Val::from_u64(11)),
+        &proof.commitments,
+        &proof.opened_values,
+        &data.common,
+        &proof.degree_bits,
+        &[1],
+        &[log_num_chunks],
+    );
+    for result in [batch_result, helper_result.map(|_| ())] {
+        assert!(
+            matches!(
+                result,
+                Err(BatchVerificationError::Verification(
+                    VerificationError::InvalidProofShape(
+                        InvalidProofShapeError::PreprocessedWidthMismatch { air: 0 }
+                    )
+                ))
+            ),
+            "{result:?}"
+        );
+    }
+}
+
+#[test]
+fn batch_preflight_preserves_shape_error_order() {
+    let config = make_config(2447);
+    let (air, trace, public_values) = create_fib_instance(3);
+    let instances = [StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: public_values.clone(),
+    }];
+    let data = ProverData::from_instances(&config, &instances).unwrap();
+    let proof = prove_batch(&config, &instances, &data).unwrap();
+    verify_batch(
+        &config,
+        from_ref(&air),
+        &proof,
+        from_ref(&public_values),
+        &data.common,
+    )
+    .expect("untampered proof verifies");
+    let encoded = postcard::to_allocvec(&proof).unwrap();
+
+    for case in 0..5 {
+        let mut proof: BatchProof<MyConfig> = postcard::from_bytes(&encoded).unwrap();
+        let mut public_values = public_values.clone();
+        let opened = &mut proof.opened_values.instances[0].base_opened_values;
+        match case {
+            0 => {
+                public_values.pop();
+                opened.trace_next = None;
+            }
+            1 => {
+                opened.trace_local.pop();
+                opened.trace_next = None;
+            }
+            2 => {
+                opened.trace_next = None;
+                opened.quotient_chunks.clear();
+            }
+            3 => {
+                opened.quotient_chunks[0].pop();
+                opened.preprocessed = None;
+            }
+            _ => {
+                opened.preprocessed = None;
+                proof.opened_values.instances[0]
+                    .permutation_local
+                    .push(Challenge::ONE);
+            }
+        };
+        let result = verify_batch(
+            &config,
+            from_ref(&air),
+            &proof,
+            from_ref(&public_values),
+            &data.common,
+        );
+        let Err(BatchVerificationError::Verification(VerificationError::InvalidProofShape(error))) =
+            result
+        else {
+            panic!("case {case}: {result:?}")
+        };
+        assert!(
+            matches!(
+                (case, &error),
+                (
+                    0,
+                    InvalidProofShapeError::PublicValuesLengthMismatch {
+                        expected: 3,
+                        got: 2
+                    }
+                ) | (
+                    1,
+                    InvalidProofShapeError::TraceLocalWidthMismatch {
+                        air: 0,
+                        expected: 2,
+                        got: 1
+                    }
+                ) | (
+                    2,
+                    InvalidProofShapeError::TraceNextMismatch { air: Some(0) }
+                ) | (
+                    3,
+                    InvalidProofShapeError::QuotientChunkDimensionMismatch { air: 0 }
+                ) | (
+                    4,
+                    InvalidProofShapeError::PreprocessedWidthMismatch { air: 0 }
+                )
+            ),
+            "case {case}: {error:?}"
+        );
+    }
+}

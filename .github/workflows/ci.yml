@@ -459,6 +459,27 @@ jobs:
           RUSTFLAGS: -C debuginfo=0 -C target-feature=+avx512f,+avx512bw,+vpclmulqdq
         run: cargo +stable clippy --target x86_64-unknown-linux-gnu --all-targets --package p3-binary-field --features wide-poly -- -D warnings
 
+      # Interpret the optional eight-lane packing too: the arithmetic oracle, coordinate transposes and interleaves reach its memory operations without requiring AVX-512 hardware.
+      - name: Interpret optional eight-lane polynomial packing
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.miri_clmul &&
+          needs.plan.outputs.gfni == 'true' &&
+          needs.plan.outputs.binary_field == 'true' &&
+          matrix.features == '+avx512f,+vpclmulqdq'
+        env:
+          RUSTFLAGS: -C debuginfo=0 -C target-feature=+avx512f,+avx512bw,+vpclmulqdq
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: |
+          cargo "+$MIRI_TOOLCHAIN" miri test --package p3-binary-field --features wide-poly --lib -- --exact \
+            packed::avx512_poly::gf64::tests::unaligned_coordinate_moves_preserve_every_word_and_the_boundaries \
+            packed::poly64::tests::every_lane_matches_the_scalar_field_at_the_corners \
+            packed::poly64::tests::every_dot_product_length_matches_the_sum_of_products \
+            packed::poly64::tests::packed_field_tests::test_interleaves \
+            packed::poly192::tests::every_lane_matches_the_scalar_field_at_the_corners \
+            packed::poly192::tests::every_dot_product_length_matches_the_sum_of_products \
+            packed::poly192::tests::the_shared_packed_extension_suite_passes
+
       # The interpreter has shims for the 256-bit carryless multiply, so the `Poly64` butterfly's register kernel runs on every host.
       #
       # The 512-bit arm stays build-only, since the interpreter has no shim for its ternary logic.
