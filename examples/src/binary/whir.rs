@@ -464,7 +464,9 @@ pub(crate) fn boolean_whir_config_with_schedule<A: BinaryAir, H: HarnessHash>(
         BinaryProofError::WhirConfig(p3_binary_pcs::BooleanTraceCommitmentError::Boolean(error))
     })?;
     let (num_claims, successor_tensors) = claim_shape(air, shape, absorbed);
-    let shape = pcs.proof_shape(num_claims, successor_tensors);
+    let shape = pcs
+        .proof_shape(num_claims, successor_tensors)
+        .map_err(|error| BinaryProofError::WhirBudget(error.into()))?;
     whir.budget
         .check_shape(
             &shape,
@@ -480,11 +482,13 @@ pub(crate) fn boolean_whir_config_with_schedule<A: BinaryAir, H: HarnessHash>(
         packed_variables,
         cap_height,
         total_opened_positions: shape.stir_queries,
-        pcs_payload_bytes: shape.max_bytes(
-            ENCODED_BASE_ELEMENT_BYTES,
-            ENCODED_EXTENSION_ELEMENT_BYTES,
-            DIGEST_BYTES,
-        ),
+        pcs_payload_bytes: shape
+            .max_bytes(
+                ENCODED_BASE_ELEMENT_BYTES,
+                ENCODED_EXTENSION_ELEMENT_BYTES,
+                DIGEST_BYTES,
+            )
+            .map_err(|error| BinaryProofError::WhirBudget(error.into()))?,
         max_grinding_bits: shape.grinding_bits,
     };
     Ok(BooleanWhirStarkConfig {

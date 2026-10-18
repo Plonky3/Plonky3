@@ -9,7 +9,25 @@ use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacterist
 /// A trait to constrain types that can be packed into a packed value.
 ///
 /// The `Packable` trait allows us to specify implementations for potentially conflicting types.
-pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
+pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {
+    /// Transpose a row-major matrix.
+    /// Audited integer representations can override this to use register kernels; other types keep typed copies.
+    #[inline]
+    fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
+        p3_util::transpose::transpose(input, output, width, height);
+    }
+
+    /// Transpose separately stored rows into contiguous columns.
+    #[inline]
+    fn transpose_rows<'a>(
+        rows: usize,
+        cols: usize,
+        row: impl Fn(usize) -> &'a [Self],
+        dst: &mut [Self],
+    ) {
+        p3_util::transpose::transpose_rows(rows, cols, row, dst);
+    }
+}
 
 /// A trait for array-like structs made up of multiple scalar elements.
 ///
@@ -706,8 +724,42 @@ impl Packable for u8 {}
 
 impl Packable for u16 {}
 
-impl Packable for u32 {}
+impl Packable for u32 {
+    #[inline]
+    fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
+        // SAFETY: integers have initialized, padding-free, pointer-free representations.
+        unsafe { p3_util::transpose::transpose_words(input, output, width, height) };
+    }
 
-impl Packable for u64 {}
+    #[inline]
+    fn transpose_rows<'a>(
+        rows: usize,
+        cols: usize,
+        row: impl Fn(usize) -> &'a [Self],
+        dst: &mut [Self],
+    ) {
+        // SAFETY: integers have initialized, padding-free, pointer-free representations.
+        unsafe { p3_util::transpose::transpose_rows_words(rows, cols, row, dst) };
+    }
+}
+
+impl Packable for u64 {
+    #[inline]
+    fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
+        // SAFETY: integers have initialized, padding-free, pointer-free representations.
+        unsafe { p3_util::transpose::transpose_words(input, output, width, height) };
+    }
+
+    #[inline]
+    fn transpose_rows<'a>(
+        rows: usize,
+        cols: usize,
+        row: impl Fn(usize) -> &'a [Self],
+        dst: &mut [Self],
+    ) {
+        // SAFETY: integers have initialized, padding-free, pointer-free representations.
+        unsafe { p3_util::transpose::transpose_rows_words(rows, cols, row, dst) };
+    }
+}
 
 impl Packable for u128 {}

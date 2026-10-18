@@ -440,23 +440,18 @@ where
             height: params.domain_size >> params.folding_factor,
             width: 1 << params.folding_factor,
         }];
-        let answers = self.verify_merkle_proof(
+        let query_randomness = match self.variable_order {
+            VariableOrder::Prefix => folding_randomness.clone(),
+            VariableOrder::Suffix => folding_randomness.reversed(),
+        };
+        let folds = self.verify_and_fold_leaves(
             proof,
             commitment,
             &stir_challenges_indexes,
             &dimensions,
             round_index,
+            &query_randomness,
         )?;
-        let query_randomness = match self.variable_order {
-            VariableOrder::Prefix => folding_randomness.clone(),
-            VariableOrder::Suffix => folding_randomness.reversed(),
-        };
-
-        // Evaluate folded polynomial at each queried position.
-        let folds: Vec<_> = answers
-            .into_iter()
-            .map(|answer| Poly::new(answer).eval_ext::<F>(&query_randomness))
-            .collect();
 
         let mut statement = SelectStatement::initialize(params.num_variables);
         for (&index, evaluation) in stir_challenges_indexes.iter().zip(folds) {
@@ -476,17 +471,18 @@ where
         Ok(statement)
     }
 
-    /// Verify the Merkle multi-opening of one round at the given indices.
+    /// Verify the Merkle multi-opening and fold each borrowed row at the given point.
     ///
-    /// Returns the opened rows lifted to the extension field.
-    fn verify_merkle_proof(
+    /// Base-field rows use mixed-field evaluation without materializing a lift.
+    fn verify_and_fold_leaves(
         &self,
         proof: &WhirProof<F, EF, MT>,
         root: &MT::Commitment,
         indices: &[usize],
         dimensions: &[Dimensions],
         round_index: usize,
-    ) -> Result<Vec<Vec<EF>>, VerifierError> {
+        randomness: &Point<EF>,
+    ) -> Result<Vec<EF>, VerifierError> {
         let openings = if round_index == self.n_rounds() {
             &proof.final_openings
         } else {
@@ -520,7 +516,7 @@ where
                 Ok(opening
                     .rows
                     .iter()
-                    .map(|row| row.iter().map(|&f| f.into()).collect())
+                    .map(|row| Poly::new(row.as_slice()).eval_base(randomness))
                     .collect())
             }
             (QueryOpenings::Extension(opening), false) => {
@@ -538,7 +534,11 @@ where
                         position: 0,
                         reason: "Extension field Merkle multiproof verification failed".to_string(),
                     })?;
-                Ok(opening.rows.clone())
+                Ok(opening
+                    .rows
+                    .iter()
+                    .map(|row| Poly::new(row.as_slice()).eval_ext::<F>(randomness))
+                    .collect())
             }
             _ => Err(VerifierError::MerkleProofInvalid {
                 position: 0,

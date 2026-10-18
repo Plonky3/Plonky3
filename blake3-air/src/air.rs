@@ -22,8 +22,8 @@ impl Blake3Air {
     /// Generate a trace over `num_hashes` fixed-seed random permutation inputs.
     ///
     /// This is for benches/examples only — it does not let callers supply the actual
-    /// inputs being hashed. Use the free [`generate_trace_rows`] function directly to
-    /// prove specific inputs.
+    /// inputs being compressed. Use [`crate::generate_trace_rows_with_inputs`] to supply
+    /// specific inputs and compression metadata.
     pub fn generate_random_trace_rows<F: PrimeField64>(
         &self,
         num_hashes: usize,

@@ -76,8 +76,8 @@ pub use proof::{BaseCaseZkProof, BlindedMask, MaskOpeningPair, ZkRoundProof, ZkW
 pub use prover::HidingWhirProverData;
 pub use security::{
     HidingBaseCaseSecurityReport, HidingBoundClassification, HidingCodeRole,
-    HidingCodeSecurityReport, HidingErrorBound, HidingGammaRoundReport, HidingListBound,
-    HidingQueryRoundReport,
+    HidingCodeSecurityReport, HidingErrorBound, HidingGammaRoundReport,
+    HidingIntermediateSourceSecurityReport, HidingListBound, HidingQueryRoundReport,
 };
 pub use verifier::ZkVerifierError;
 

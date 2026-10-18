@@ -595,7 +595,7 @@ where
                 Ok(opening
                     .rows
                     .iter()
-                    .map(|row| Poly::new(row.clone()).eval_base(randomness))
+                    .map(|row| Poly::new(row.as_slice()).eval_base(randomness))
                     .collect())
             }
             (ActiveOracle::Ext(commitment), QueryOpenings::Extension(opening)) => {
@@ -606,7 +606,7 @@ where
                 Ok(opening
                     .rows
                     .iter()
-                    .map(|row| Poly::new(row.clone()).eval_ext::<F>(randomness))
+                    .map(|row| Poly::new(row.as_slice()).eval_ext::<F>(randomness))
                     .collect())
             }
             _ => Err(reject()),
