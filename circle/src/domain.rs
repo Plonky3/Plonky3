@@ -287,6 +287,27 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         // below instead of being recomputed (as a `log_n`-step squaring chain) per point.
         let shift_v_n = self.shift.v_n(self.log_n);
 
+        // On larger standard domains, the vanishing values have a reflected period:
+        // for B = |coset| / |self|, the indices are 0..B, then B-1..0.
+        // Only those B distinct values need squaring chains and inversions.
+        let standard_z = (self.is_standard() && coset.is_standard() && coset.log_n > self.log_n)
+            .then(|| {
+                let blowup = 1 << (coset.log_n - self.log_n);
+                pts[..blowup]
+                    .iter()
+                    .map(|at| at.v_n(self.log_n) - shift_v_n)
+                    .collect_vec()
+            });
+        // Standard coset points are (2i + 1)h with h = gen(m + 1), where m = coset.log_n.
+        // v_n takes the x-coordinate after n - 1 doublings, so it depends on (2i + 1)
+        // modulo 4B up to sign, with n = self.log_n and B = |coset| / |self|.
+        // t and 2B - 1 - t give opposite residues, hence min(t, mask - t).
+        let reflected_index = |i: usize, distinct: usize| {
+            let mask = 2 * distinct - 1;
+            let t = i & mask;
+            t.min(mask - t)
+        };
+
         // Fused parallel pass over the coset points: `vanishing_poly` and the
         // denominators of the two reciprocal selectors are independent per point.
         // Keeping the selectors as numerators over denominators avoids two individual
@@ -299,8 +320,12 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .zip(den_shift.par_iter_mut())
             .zip(den_negshift_k.par_iter_mut())
             .zip(pts.par_iter())
-            .for_each(|(((z, ds), dnk), &at)| {
-                *z = at.v_n(self.log_n) - shift_v_n;
+            .enumerate()
+            .for_each(|(i, (((z, ds), dnk), &at))| {
+                *z = standard_z.as_ref().map_or_else(
+                    || at.v_n(self.log_n) - shift_v_n,
+                    |values| values[reflected_index(i, values.len())],
+                );
                 let (_, den_shift) = self.shift.recip_v_tilde_p_num_den(at);
                 let (_, den_negshift) = neg_shift.recip_v_tilde_p_num_den(at);
                 *ds = den_shift;
@@ -308,7 +333,16 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             });
 
         // Batch inverses (already internally parallel).
-        let inv_vanishing = batch_multiplicative_inverse(&z_vals);
+        let inv_vanishing = standard_z.map_or_else(
+            || batch_multiplicative_inverse(&z_vals),
+            |values| {
+                let inverses = batch_multiplicative_inverse(&values);
+                (0..n)
+                    .into_par_iter()
+                    .map(|i| inverses[reflected_index(i, inverses.len())])
+                    .collect()
+            },
+        );
         let inv_den_shift = batch_multiplicative_inverse(&den_shift);
         let inv_den_negshift_k = batch_multiplicative_inverse(&den_negshift_k);
 
@@ -583,21 +617,52 @@ mod tests {
     }
 
     #[test]
-    fn selectors_on_nonstandard_disjoint_coset_match_single_point_selectors() {
+    fn selectors_on_disjoint_cosets_match_single_point_selectors() {
         type F = Mersenne31;
 
-        let domain = CircleDomain::<F>::new(8, Point::generator(31) * 3);
-        let coset = CircleDomain::<F>::new(8, Point::generator(31) * 5);
-        let domain_points: HashSet<_> = domain.points().collect();
-        assert!(coset.points().all(|point| !domain_points.contains(&point)));
+        let mut domains = Vec::new();
+        // Exercise the reflected periods, including more than one complete period.
+        for log_n in 1..=6 {
+            for log_blowup in 1..=4 {
+                domains.push((
+                    CircleDomain::<F>::standard(log_n),
+                    CircleDomain::<F>::standard(log_n + log_blowup),
+                ));
+            }
+        }
+        domains.extend([
+            // Equal-size, nonstandard twin cosets remain on the generic path.
+            (
+                CircleDomain::<F>::new(8, Point::generator(31) * 3),
+                CircleDomain::<F>::new(8, Point::generator(31) * 5),
+            ),
+            // Either domain being nonstandard must disable the standard-position shortcut.
+            (
+                CircleDomain::<F>::new(5, Point::generator(31) * 3),
+                CircleDomain::<F>::standard(8),
+            ),
+            (
+                CircleDomain::<F>::standard(5),
+                CircleDomain::<F>::new(8, Point::generator(31) * 5),
+            ),
+            // A smaller evaluation domain is valid too.
+            (
+                CircleDomain::<F>::standard(8),
+                CircleDomain::<F>::standard(5),
+            ),
+        ]);
 
-        let selectors = domain.selectors_on_coset(coset);
-        for (i, point) in coset.points().enumerate() {
-            let at_point = domain.selectors_at_point(point.to_projective_line().unwrap());
-            assert_eq!(selectors.is_first_row[i], at_point.is_first_row);
-            assert_eq!(selectors.is_last_row[i], at_point.is_last_row);
-            assert_eq!(selectors.is_transition[i], at_point.is_transition);
-            assert_eq!(selectors.inv_vanishing[i], at_point.inv_vanishing);
+        for (domain, coset) in domains {
+            let domain_points: HashSet<_> = domain.points().collect();
+            assert!(coset.points().all(|point| !domain_points.contains(&point)));
+            let selectors = domain.selectors_on_coset(coset);
+            for (i, point) in coset.points().enumerate() {
+                let at_point = domain.selectors_at_point(point.to_projective_line().unwrap());
+                assert_eq!(selectors.is_first_row[i], at_point.is_first_row);
+                assert_eq!(selectors.is_last_row[i], at_point.is_last_row);
+                assert_eq!(selectors.is_transition[i], at_point.is_transition);
+                assert_eq!(selectors.inv_vanishing[i], at_point.inv_vanishing);
+            }
         }
     }
 

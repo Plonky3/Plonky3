@@ -8,11 +8,11 @@ use core::marker::PhantomData;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
-use p3_commit::Pcs;
 use p3_commit::testing::TrivialPcs;
+use p3_commit::{Pcs, PolynomialSpace};
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_uni_stark::{
     Domain, InvalidProofShapeError, StarkConfig, VerificationError, recompose_quotient_from_chunks,
     verify_constraints,
@@ -182,6 +182,65 @@ fn recompose_accepts_one_chunk_per_domain() {
         recompose_quotient_from_chunks::<MyConfig>(&[domain], &[coefficients], Challenge::ONE),
         Ok(value) if value == Challenge::ONE
     ));
+}
+
+#[test]
+fn recomposition_matches_direct_products_including_chunk_points() {
+    let domain = trace_domain().create_disjoint_domain(64);
+    for count in [1, 2, 4, 8] {
+        let domains = domain.split_domains(count);
+        let chunks: Vec<Vec<Challenge>> = (0..count)
+            .map(|i| {
+                (0..<Challenge as BasedVectorSpace<Val>>::DIMENSION)
+                    .map(|j| Challenge::from_u64((i * 7 + j + 1) as u64))
+                    .collect()
+            })
+            .collect();
+        let points = [Challenge::ZERO, Challenge::from_u64(11)]
+            .into_iter()
+            .chain(domains.iter().map(|d| Challenge::from(d.first_point())));
+        for zeta in points {
+            let expected = domains
+                .iter()
+                .enumerate()
+                .map(|(i, domain)| {
+                    let weight: Challenge = domains
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != i)
+                        .map(|(_, other)| {
+                            other.vanishing_poly_at_point(zeta)
+                                * other
+                                    .vanishing_poly_at_point(domain.first_point())
+                                    .inverse()
+                        })
+                        .product();
+                    weight
+                        * <Challenge as ExtensionField<Val>>::from_ext_basis_coefficients(
+                            &chunks[i],
+                        )
+                        .unwrap()
+                })
+                .sum::<Challenge>();
+            assert_eq!(
+                recompose_quotient_from_chunks::<MyConfig>(&domains, &chunks, zeta).unwrap(),
+                expected,
+                "{count} chunks at {zeta:?}"
+            );
+        }
+        for i in 0..count {
+            let mut malformed = chunks.clone();
+            malformed[i].pop();
+            assert!(matches!(
+                recompose_quotient_from_chunks::<MyConfig>(&domains, &malformed, Challenge::ZERO),
+                Err(InvalidProofShapeError::OpenedValuesDimensionMismatch),
+            ));
+        }
+    }
+    assert_eq!(
+        recompose_quotient_from_chunks::<MyConfig>(&[], &[], Challenge::ZERO).unwrap(),
+        Challenge::ZERO
+    );
 }
 
 /// The expected width must come from trusted AIR/key metadata, not the supplied rows.
