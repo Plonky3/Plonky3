@@ -149,11 +149,10 @@ const PARALLEL_THRESHOLD: usize = 4 * 1024 * 1024;
 
 /// Transpose a matrix from row-major `input` to row-major `output`.
 ///
-/// Given an input matrix with `height` rows and `width` columns, produces
-/// an output matrix with `width` rows and `height` columns.
+/// Given an input matrix with `height` rows and `width` columns, produces an output matrix with `width` rows and `height` columns.
 ///
-/// Typed copies support arbitrary `Copy` representations. Audited integer
-/// representations can use [`transpose_words`] for register kernels.
+/// Typed copies support arbitrary `Copy` representations.
+/// Audited integer representations can use [`transpose_words`] for register kernels.
 ///
 /// # Memory Layout
 ///
@@ -199,16 +198,16 @@ pub fn transpose<T: Copy + Send + Sync>(
 
 /// Transpose elements whose representation can be copied through integer words.
 ///
-/// This enables architecture-specific register kernels. Other sizes and
-/// alignments use the typed-copy fallback. Shape validation is always checked.
+/// This enables architecture-specific register kernels.
+/// Other sizes and alignments use the typed-copy fallback.
+/// Shape validation is always checked.
 ///
 /// # Safety
 ///
-/// If `T` has size and alignment 4 or 8, every byte of every input and output
-/// element must be initialized, with no padding or pointer provenance. Copying
-/// an entire element through a `u32` or `u64` must preserve its validity and value.
-/// Integer wrappers with `#[repr(transparent)]` satisfy this contract; `Copy`
-/// alone does not. The kernels only move whole elements, without changing bits.
+/// If `T` has size and alignment 4 or 8, every byte of every input and output element must be initialized, with no padding or pointer provenance.
+/// Copying an entire element through a `u32` or `u64` must preserve its validity and value.
+/// Integer wrappers with `#[repr(transparent)]` satisfy this contract; `Copy` alone does not.
+/// The kernels only move whole elements, without changing bits.
 #[inline]
 pub unsafe fn transpose_words<T: Copy + Send + Sync>(
     input: &[T],
@@ -1921,16 +1920,16 @@ mod tests {
     #[test]
     #[should_panic(expected = "transpose dimensions overflow")]
     fn rejects_overflowing_word_dimensions_before_access() {
+        // The unchecked product would wrap to the slice length of 2.
         // SAFETY: u32 has an initialized, padding-free, pointer-free representation.
-        unsafe { transpose_words::<u32>(&[], &mut [], usize::MAX, 2) };
+        unsafe { transpose_words::<u32>(&[0; 2], &mut [0; 2], usize::MAX / 2 + 2, 2) };
     }
 
     #[test]
     #[should_panic(expected = "transpose dimensions overflow")]
     fn rejects_overflowing_dimensions_before_access() {
-        // The old code rejects the mismatched empty slice before accessing it,
-        // so this regression never exercises its unchecked loops.
-        transpose::<u32>(&[], &mut [], usize::MAX, 2);
+        // The unchecked product would wrap to the slice length of 2.
+        transpose::<u32>(&[0; 2], &mut [0; 2], usize::MAX / 2 + 2, 2);
     }
 
     #[test]

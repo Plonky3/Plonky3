@@ -36,8 +36,8 @@ use core::slice;
 /// ```
 ///
 /// The rows need not be adjacent in memory, so a caller can gather them from anywhere.
-/// Typed copies support arbitrary `Copy` representations; audited integer
-/// representations can use [`transpose_rows_words`] for register kernels.
+/// Typed copies support arbitrary `Copy` representations.
+/// Audited integer representations can use [`transpose_rows_words`] for register kernels.
 ///
 /// # Arguments
 ///
@@ -122,9 +122,8 @@ pub(crate) fn transpose_rows_strided<'a, T, R>(
 ///
 /// # Safety
 ///
-/// The input rows and destination elements must satisfy the representation
-/// contract of [`super::transpose_words`]. This applies to every slice returned
-/// by the callback, including when the callback changes its result.
+/// The input rows and destination elements must satisfy the representation contract of [`super::transpose_words`].
+/// This applies to every slice returned by the callback, including when the callback changes its result.
 #[inline]
 pub unsafe fn transpose_rows_words<'a, T, R>(rows: usize, cols: usize, row: R, dst: &mut [T])
 where
@@ -700,13 +699,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "transpose dimensions overflow")]
     fn rejects_overflowing_word_dimensions_before_access() {
+        // The unchecked product and strided extent would both wrap to 2.
         // SAFETY: u32 has an initialized, padding-free, pointer-free representation.
         unsafe {
             transpose_rows_words::<u32, _>(
-                usize::MAX,
+                usize::MAX / 2 + 2,
                 2,
                 |_| panic!("must not read a row"),
-                &mut [],
+                &mut [0; 2],
             );
         };
     }
@@ -714,7 +714,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "transpose dimensions overflow")]
     fn rejects_overflowing_dimensions_before_access() {
-        transpose_rows::<u32, _>(usize::MAX, 2, |_| panic!("must not read a row"), &mut []);
+        // Rows must not be read when the product and strided extent overflow.
+        transpose_rows::<u32, _>(
+            usize::MAX / 2 + 2,
+            2,
+            |_| panic!("must not read a row"),
+            &mut [0; 2],
+        );
     }
 
     #[test]
@@ -728,7 +734,7 @@ mod tests {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let row = |_| -> &[u32] {
                         calls.set(calls.get() + 1);
-                        // Stop the old code before any load or store.
+                        // Rows must not be read once the strided extent overflows.
                         panic!("must not read a row");
                     };
                     if words {

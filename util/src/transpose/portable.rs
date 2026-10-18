@@ -623,9 +623,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "transpose dimensions overflow")]
     fn rejects_overflowing_dimensions_before_access() {
-        // The old code rejects the mismatched empty slice before accessing it,
-        // so this regression never exercises its unchecked loops.
-        transpose::<u32>(&[], &mut [], usize::MAX, 2);
+        // The unchecked product would wrap to the slice length of 2.
+        transpose::<u32>(&[0; 2], &mut [0; 2], usize::MAX / 2 + 2, 2);
     }
 
     /// Independent textbook transpose used as the source of truth.

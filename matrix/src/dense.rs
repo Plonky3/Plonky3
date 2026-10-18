@@ -945,6 +945,7 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
 
 impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
     /// Return the transpose of this matrix.
+    /// Field matrices should use [`Self::transpose_packable`] to retain audited register kernels.
     pub fn transpose(&self) -> RowMajorMatrix<T> {
         let nelts = self.height() * self.width();
         let mut values = vec![T::default(); nelts];
@@ -958,6 +959,7 @@ impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
     }
 
     /// Transpose the matrix returning the result in `other` without intermediate allocation.
+    /// Field matrices should use [`Self::transpose_packable_into`] to retain audited register kernels.
     pub fn transpose_into<W: DenseStorage<T> + BorrowMut<[T]>>(
         &self,
         other: &mut DenseMatrix<T, W>,
@@ -975,6 +977,7 @@ impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
 
 impl<T: Packable, V: DenseStorage<T>> DenseMatrix<T, V> {
     /// Transpose using the element type's `Packable` implementation.
+    #[must_use]
     pub fn transpose_packable(&self) -> RowMajorMatrix<T> {
         let mut values = vec![T::default(); self.values.borrow().len()];
         T::transpose(

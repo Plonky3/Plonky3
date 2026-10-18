@@ -10,8 +10,8 @@ use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacterist
 ///
 /// The `Packable` trait allows us to specify implementations for potentially conflicting types.
 pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {
-    /// Transpose a row-major matrix. Audited integer representations can override
-    /// this to use register kernels; other types keep typed copies.
+    /// Transpose a row-major matrix.
+    /// Audited integer representations can override this to use register kernels; other types keep typed copies.
     #[inline]
     fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
         p3_util::transpose::transpose(input, output, width, height);
