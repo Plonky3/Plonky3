@@ -31,11 +31,10 @@ use core::ops::RangeInclusive;
 use core::{array, mem};
 
 use itertools::Itertools;
-use p3_field::PackedValue;
+use p3_field::{Packable, PackedValue};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
-use p3_util::transpose::transpose_rows;
 
 use crate::merkle_tree::{padded_len, select_arity_step};
 
@@ -660,7 +659,7 @@ where
             if let Some(rows) = m.contiguous_rows(first..first + lanes) {
                 // Keep the handle alive through the transpose: some matrices return owned rows.
                 // Dense matrices lend this whole group without allocating per-row handles.
-                transpose_rows(
+                P::Value::transpose_rows(
                     lanes,
                     cols,
                     |lane| &rows[lane * cols..(lane + 1) * cols],
@@ -672,7 +671,7 @@ where
                 let rows: Vec<_> = (0..lanes)
                     .map(|lane| unsafe { m.row_slice_unchecked(first + lane) })
                     .collect();
-                transpose_rows(lanes, cols, |lane| &*rows[lane], block);
+                P::Value::transpose_rows(lanes, cols, |lane| &*rows[lane], block);
             }
             start += cols;
         }
@@ -913,7 +912,7 @@ where
 
     // Same shape on every call, so the resize allocates once per task.
     scratch.resize(lanes * words, P::Value::default());
-    transpose_rows(
+    P::Value::transpose_rows(
         lanes,
         words,
         |lane| kids[arity * lane..arity * (lane + 1)].as_flattened(),
@@ -951,7 +950,7 @@ fn unpack_digests<P, const DIGEST_ELEMS: usize>(
 
     // Row k of the source is packed word k, one entry per lane.
     let words = P::unpack_slice(packed);
-    transpose_rows(
+    P::Value::transpose_rows(
         DIGEST_ELEMS,
         lanes,
         |k| &words[k * lanes..(k + 1) * lanes],

@@ -7,6 +7,8 @@
 //! FRI-shaped parameters (height 1<<20, 80 queries, binary tree) are the
 //! intended consumer of this code path.
 
+use std::hint::black_box;
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_commit::{BatchOpeningRef, Mmcs};
@@ -50,10 +52,20 @@ fn bench_pruned_verify(c: &mut Criterion) {
     let mut group = c.benchmark_group("verify_batch_pruned");
     group.sample_size(20);
 
-    for &log_height in &[16usize, 20] {
-        for &num_queries in &[40usize, 80] {
+    // Restrict fixture construction as well as timed cases for isolated verifier runs.
+    let selected_height = std::env::var("P3_PRUNED_LOG_HEIGHT")
+        .ok()
+        .map(|v| v.parse::<usize>().unwrap());
+    let selected_queries = std::env::var("P3_PRUNED_QUERIES")
+        .ok()
+        .map(|v| v.parse::<usize>().unwrap());
+    let heights = selected_height.map_or_else(|| vec![16, 20], |h| vec![h]);
+    let queries = selected_queries.map_or_else(|| vec![40, 80], |q| vec![q]);
+    let cols = std::env::var("P3_PRUNED_COLS").map_or(4, |v| v.parse::<usize>().unwrap());
+    for &log_height in &heights {
+        for &num_queries in &queries {
             let height = 1 << log_height;
-            let cols = 4;
+            assert!(num_queries <= height);
 
             let mmcs = make_mmcs(1);
             let mut rng = SmallRng::seed_from_u64(2);
@@ -70,6 +82,8 @@ fn bench_pruned_verify(c: &mut Criterion) {
                 .map(|&i| mmcs.open_batch(i, &prover_data))
                 .collect();
 
+            drop(prover_data);
+
             let id = format!("h2^{log_height}_q{num_queries}");
             group.bench_with_input(
                 BenchmarkId::new("amortized", &id),
@@ -77,11 +91,11 @@ fn bench_pruned_verify(c: &mut Criterion) {
                 |b, (commit, dims)| {
                     b.iter(|| {
                         mmcs.verify_batch_pruned(
-                            commit,
-                            dims,
-                            &indices,
-                            &pruned.opened_values,
-                            &pruned.pruned_proof,
+                            black_box(commit),
+                            black_box(dims),
+                            black_box(&indices),
+                            black_box(&pruned.opened_values),
+                            black_box(&pruned.pruned_proof),
                         )
                         .unwrap();
                     });
@@ -97,7 +111,13 @@ fn bench_pruned_verify(c: &mut Criterion) {
                                 &opening.opened_values,
                                 &opening.opening_proof,
                             );
-                            mmcs.verify_batch(commit, dims, *idx, bref).unwrap();
+                            mmcs.verify_batch(
+                                black_box(commit),
+                                black_box(dims),
+                                black_box(*idx),
+                                black_box(bref),
+                            )
+                            .unwrap();
                         }
                     });
                 },

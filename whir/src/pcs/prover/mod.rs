@@ -89,6 +89,18 @@ where
     _marker: PhantomData<Layout>,
 }
 
+impl<EF, F, Dft, MT, Challenger, L> WhirProver<EF, F, Dft, MT, Challenger, L>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Commitment backend used by the initial and folded codewords.
+    #[must_use]
+    pub const fn mmcs(&self) -> &MT {
+        &self.mmcs
+    }
+}
+
 impl<EF, F, Dft, MT, Challenger, Layout> Deref for WhirProver<EF, F, Dft, MT, Challenger, Layout>
 where
     F: Field,

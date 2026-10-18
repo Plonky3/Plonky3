@@ -23,8 +23,8 @@ use thiserror::Error;
 use tracing::{debug_span, info_span};
 
 use crate::deep_quotient::{
-    VanishingParts, accumulate_deep_quotient, compute_vanishing_parts, deep_quotient_reduce_row,
-    extract_lambda,
+    VanishingParts, accumulate_deep_quotient, batch_query_vanishing_parts, compute_vanishing_parts,
+    deep_quotient_reduce_row, extract_lambda,
 };
 use crate::domain::CircleDomain;
 use crate::folding::{
@@ -932,6 +932,98 @@ where
                         .map_err(InputError::InputMmcsError)?;
                 }
 
+                // Convert each distinct opening point once. Matrices at the same height
+                // share the query/opening-point geometry, even across commitment batches.
+                let mut circle_points: Vec<(Challenge, Option<Point<Challenge>>)> = Vec::new();
+                let mut geometry_ids = BTreeMap::new();
+                let mut geometries = Vec::new();
+                let matrix_geometry_ids: Vec<Vec<Vec<usize>>> = rounds
+                    .iter()
+                    .map(|CommitmentOpening { matrices, .. }| {
+                        matrices
+                            .iter()
+                            .map(|MatrixOpening { domain, points }| {
+                                let log_height = domain.log_n + self.fri_params.log_blowup;
+                                points
+                                    .iter()
+                                    .map(|PointOpening { point, .. }| {
+                                        let point_id = circle_points
+                                            .iter()
+                                            .position(|(zeta, _)| zeta == point)
+                                            .unwrap_or_else(|| {
+                                                circle_points.push((*point, None));
+                                                circle_points.len() - 1
+                                            });
+                                        let next_id = geometries.len();
+                                        *geometry_ids.entry((log_height, point_id)).or_insert_with(
+                                            || {
+                                                geometries.push((log_height, point_id));
+                                                next_id
+                                            },
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .collect()
+                    })
+                    .collect();
+
+                let mut vanishing_parts = Vec::with_capacity(indices.len() * geometries.len());
+                for (query, &index) in indices.iter().enumerate() {
+                    let mut query_points = BTreeMap::new();
+                    let mut query_parts = vec![None; geometries.len()];
+
+                    // Preserve the original shape/collision rejection order while checking
+                    // the denominators before the batch inversion (which requires nonzero inputs).
+                    for (batch, CommitmentOpening { matrices, .. }) in rounds.iter().enumerate() {
+                        for (matrix, MatrixOpening { points, .. }) in matrices.iter().enumerate() {
+                            let ps_at_x = &input_openings[batch].opened_values[query][matrix];
+                            for (
+                                point,
+                                PointOpening {
+                                    values: ps_at_zeta, ..
+                                },
+                            ) in points.iter().enumerate()
+                            {
+                                if ps_at_zeta.len() != ps_at_x.len() {
+                                    return Err(InputError::InputShapeError);
+                                }
+                                let geometry_id = matrix_geometry_ids[batch][matrix][point];
+                                let (re, _) = *query_parts[geometry_id].get_or_insert_with(|| {
+                                    let (log_height, point_id) = geometries[geometry_id];
+                                    let (zeta_uni, zeta) = &mut circle_points[point_id];
+                                    let zeta = *zeta.get_or_insert_with(|| {
+                                        Point::from_projective_line(*zeta_uni)
+                                    });
+                                    let x = *query_points.entry(log_height).or_insert_with(|| {
+                                        let bits_reduced = log_global_max_height - log_height;
+                                        let orig_idx =
+                                            cfft_permute_index(index >> bits_reduced, log_height);
+                                        CircleDomain::<Val>::standard(log_height)
+                                            .nth_point(orig_idx)
+                                    });
+                                    x.v_p(zeta)
+                                });
+                                if re.is_zero() {
+                                    return Err(InputError::OpeningPointMatchesQueryPoint);
+                                }
+                            }
+                        }
+                    }
+                    // Finish this query's first-layer shape checks before looking for
+                    // collisions in later queries, matching the original rejection order.
+                    let num_heights = query_points.len();
+                    if first_layer_siblings[query].len() != num_heights
+                        || proof.lambdas.len() != num_heights
+                    {
+                        return Err(InputError::InputShapeError);
+                    }
+                    // Every geometry came from a matrix/point visited above.
+                    vanishing_parts.extend(query_parts.into_iter().map(Option::unwrap));
+                }
+                let vanishing_parts = batch_query_vanishing_parts(&vanishing_parts)
+                    .ok_or(InputError::OpeningPointMatchesQueryPoint)?;
+
                 // Per query, reduce the (now authenticated) opened rows into the FRI inputs
                 // and rebuild the first-layer leaves that the shared proof will authenticate.
                 let mut all_fri_inputs = Vec::with_capacity(indices.len());
@@ -962,42 +1054,28 @@ where
                         .enumerate()
                         {
                             let log_height = mat_domain.log_n + self.fri_params.log_blowup;
-                            let bits_reduced = log_global_max_height - log_height;
-                            let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
-
-                            let committed_domain = CircleDomain::standard(log_height);
-                            let x = committed_domain.nth_point(orig_idx);
-
                             let (alpha_offset, ro) = reduced_openings
                                 .entry(log_height)
                                 .or_insert((Challenge::ONE, Challenge::ZERO));
                             let (alpha_pow_width, alpha_pow_width_2) =
                                 matrix_alpha_pows[batch][matrix];
 
-                            for PointOpening {
-                                point: zeta_uni,
-                                values: ps_at_zeta,
-                            } in mat_points_and_values
+                            for (
+                                point,
+                                PointOpening {
+                                    values: ps_at_zeta, ..
+                                },
+                            ) in mat_points_and_values.iter().enumerate()
                             {
-                                // The claimed opening must have exactly as many
-                                // values as the committed row has columns.
-                                if ps_at_zeta.len() != ps_at_x.len() {
-                                    return Err(InputError::InputShapeError);
-                                }
-                                let zeta = Point::from_projective_line(*zeta_uni);
-
-                                // A vanishing denominator means this opening point lands on the
-                                // query point; reject the proof rather than dividing by zero.
+                                let geometry_id = matrix_geometry_ids[batch][matrix][point];
                                 *ro += *alpha_offset
                                     * deep_quotient_reduce_row(
                                         alpha_pow_width,
                                         &alpha_powers,
-                                        x,
-                                        zeta,
+                                        vanishing_parts[query * geometries.len() + geometry_id],
                                         ps_at_x,
                                         ps_at_zeta,
-                                    )
-                                    .ok_or(InputError::OpeningPointMatchesQueryPoint)?;
+                                    );
 
                                 *alpha_offset *= alpha_pow_width_2;
                             }
@@ -1197,7 +1275,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_challenger::{HashChallenger, SerializingChallenger32};
+    use p3_challenger::{CanSample, CanSampleBits, HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
@@ -1403,6 +1481,217 @@ mod tests {
         // Smoke test: an honestly generated proof must verify successfully.
         let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof(0);
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).expect("verify err");
+    }
+
+    /// Preserve authenticated query locations while changing the claimed opening point.
+    /// All grinding difficulties are zero in this fixture, so bit samples are only queries.
+    struct QueryReplayChallenger {
+        inner: Challenger,
+        indices: Vec<usize>,
+        replay: bool,
+        next: usize,
+    }
+
+    impl<T: Clone> CanObserve<T> for QueryReplayChallenger
+    where
+        Challenger: CanObserve<T>,
+    {
+        fn observe(&mut self, value: T) {
+            self.inner.observe(value);
+        }
+
+        fn observe_slice(&mut self, values: &[T]) {
+            self.inner.observe_slice(values);
+        }
+    }
+
+    impl CanSample<Val> for QueryReplayChallenger {
+        fn sample(&mut self) -> Val {
+            self.inner.sample()
+        }
+    }
+
+    impl CanSampleBits<usize> for QueryReplayChallenger {
+        fn sample_bits(&mut self, bits: usize) -> usize {
+            let sampled = self.inner.sample_bits(bits);
+            if self.replay {
+                let index = self.indices[self.next];
+                self.next += 1;
+                index
+            } else {
+                self.indices.push(sampled);
+                sampled
+            }
+        }
+    }
+
+    impl FieldChallenger<Val> for QueryReplayChallenger {}
+
+    impl GrindingChallenger for QueryReplayChallenger {
+        type Witness = Val;
+
+        fn grind(&mut self, bits: usize) -> Val {
+            self.inner.grind(bits)
+        }
+    }
+
+    #[test]
+    fn query_shape_and_collision_errors_follow_query_order() {
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof_at(0, 0, 0);
+        let mut rounds: Vec<CommitmentWithClaims<Val, Challenge, _>> =
+            vec![(comm, vec![(d, vec![(zeta, values[0][0][0].clone())])]).into()];
+        let mut challenger = QueryReplayChallenger {
+            inner: Challenger::from_hasher(vec![], byte_hash),
+            indices: Vec::new(),
+            replay: false,
+            next: 0,
+        };
+        pcs.verify(rounds.clone(), &proof, &mut challenger).unwrap();
+        let indices = challenger.indices;
+        assert_ne!(indices[0], indices[1], "fixture needs distinct queries");
+        let log_height = d.log_n + pcs.fri_params.log_blowup;
+        let collision = CircleDomain::<Val>::standard(log_height)
+            .nth_point(cfft_permute_index(indices[1], log_height))
+            .to_projective_line()
+            .unwrap();
+        rounds[0].matrices[0].points[0].point = collision.into();
+
+        // The collision is reached through CirclePcs::verify and real input MMCS checks.
+        // With either earlier query-0 shape fault, that shape error must win instead.
+        for shape_fault in 0..3 {
+            let mut proof = proof.clone();
+            match shape_fault {
+                1 => proof.fri_proof.input_openings.first_layer_siblings[0].clear(),
+                2 => proof.lambdas.clear(),
+                _ => {}
+            }
+            let err = pcs
+                .verify(
+                    rounds.clone(),
+                    &proof,
+                    &mut QueryReplayChallenger {
+                        inner: Challenger::from_hasher(vec![], byte_hash),
+                        indices: indices.clone(),
+                        replay: true,
+                        next: 0,
+                    },
+                )
+                .unwrap_err();
+            if shape_fault == 0 {
+                assert!(matches!(
+                    err,
+                    FriError::InputError(InputError::OpeningPointMatchesQueryPoint)
+                ));
+            } else {
+                assert!(
+                    matches!(err, FriError::InputError(InputError::InputShapeError)),
+                    "{err:?}"
+                );
+            }
+        }
+        // Mirror the ordering with a collision in query 0 and a shape fault only in query 1.
+        // A shared fault such as missing lambdas would also invalidate query 0.
+        rounds[0].matrices[0].points[0].point = CircleDomain::<Val>::standard(log_height)
+            .nth_point(cfft_permute_index(indices[0], log_height))
+            .to_projective_line()
+            .unwrap()
+            .into();
+        let mut proof = proof.clone();
+        proof.fri_proof.input_openings.first_layer_siblings[1].clear();
+        let err = pcs
+            .verify(
+                rounds,
+                &proof,
+                &mut QueryReplayChallenger {
+                    inner: Challenger::from_hasher(vec![], byte_hash),
+                    indices,
+                    replay: true,
+                    next: 0,
+                },
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FriError::InputError(InputError::OpeningPointMatchesQueryPoint)
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn circle_pcs_mixed_heights_and_repeated_points() {
+        let (pcs, byte_hash, ..) = setup_valid_proof_at(0, 0, 0);
+        let mut rng = SmallRng::seed_from_u64(19);
+        let zeta: Challenge = rng.random();
+        let other_zeta: Challenge = rng.random();
+        let domains = [5, 3, 5, 4].map(CircleDomain::<Val>::standard);
+        let points = vec![
+            vec![zeta, other_zeta, zeta],
+            vec![other_zeta, zeta],
+            vec![zeta, zeta],
+            vec![other_zeta],
+        ];
+        let mut commitments = Vec::new();
+        let mut prover_data = Vec::new();
+        for _ in 0..2 {
+            let (commitment, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(
+                &pcs,
+                domains.iter().enumerate().map(|(matrix, &domain)| {
+                    (
+                        domain,
+                        RowMajorMatrix::rand(&mut rng, domain.size(), matrix + 1),
+                    )
+                }),
+            )
+            .unwrap();
+            commitments.push(commitment);
+            prover_data.push(data);
+        }
+        let (values, proof) = pcs
+            .open(
+                prover_data
+                    .iter()
+                    .map(|data| OpeningRequest {
+                        prover_data: data,
+                        points: points.clone(),
+                    })
+                    .collect(),
+                &mut Challenger::from_hasher(vec![], byte_hash),
+            )
+            .unwrap();
+        let rounds = commitments
+            .into_iter()
+            .enumerate()
+            .map(|(batch, commitment)| {
+                (
+                    commitment,
+                    domains
+                        .iter()
+                        .enumerate()
+                        .map(|(matrix, &domain)| {
+                            (
+                                domain,
+                                points[matrix]
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(point, &zeta)| {
+                                        (zeta, values[batch][matrix][point].clone())
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                    .into()
+            })
+            .collect();
+        pcs.verify(
+            rounds,
+            &proof,
+            &mut Challenger::from_hasher(vec![], byte_hash),
+        )
+        .unwrap();
     }
 
     #[test]

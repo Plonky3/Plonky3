@@ -9,6 +9,11 @@ use p3_util::log2_ceil_usize;
 
 use super::{TimestampedMemory, TimestampedMemoryError};
 
+#[cfg(test)]
+std::thread_local! {
+    pub(super) static COLUMN_MATERIALIZATIONS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
 /// Starting contents the verifier knows, as sparse runs of words over `2^log_cells` cells.
 ///
 /// Every cell outside a run starts at zero.
@@ -118,6 +123,8 @@ impl<F: Field> PublicImage<F> {
     /// Every cell's starting value, one full column per word component.
     #[must_use]
     pub fn columns(&self) -> Vec<Vec<F>> {
+        #[cfg(test)]
+        COLUMN_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
         let mut columns = vec![F::zero_vec(1 << self.log_cells); self.value_width];
         for (start, words) in &self.runs {
             for (offset, word) in words.chunks_exact(self.value_width).enumerate() {

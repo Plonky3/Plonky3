@@ -230,8 +230,9 @@ impl<T: Send + Sync + Clone, Left: Matrix<T>, Right: Matrix<T>> Matrix<T>
         T: Copy,
         P: PackedValue<Value = T>,
     {
+        let next_row = crate::add_wrapped_row(r % self.height(), step, self.height());
         self.vertically_packed_row::<P>(r)
-            .chain(self.vertically_packed_row::<P>(r + step))
+            .chain(self.vertically_packed_row::<P>(next_row))
             .collect()
     }
 }
