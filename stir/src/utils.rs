@@ -257,7 +257,24 @@ pub fn reduce_mod_x_pow_minus_c<F: Field, EF: ExtensionField<F>>(
 pub fn vanishing_poly_from_roots<F: Field>(roots: &[F]) -> Vec<F> {
     let mut coeffs = Vec::with_capacity(roots.len() + 1);
     coeffs.push(F::ONE);
+    extend_vanishing_poly(coeffs, roots)
+}
 
+/// Vanishing polynomial for extension-field OOD roots and base-field query roots.
+///
+/// The quadratic query-root expansion stays in the base field, then the OOD factors
+/// are appended in the extension field. Repeated roots are preserved.
+pub fn vanishing_poly_from_roots_mixed<F: Field, EF: ExtensionField<F>>(
+    ood_points: &[EF],
+    query_points: &[F],
+) -> Vec<EF> {
+    let query_vanishing = vanishing_poly_from_roots(query_points);
+    let coeffs = query_vanishing.into_iter().map(EF::from).collect();
+    extend_vanishing_poly(coeffs, ood_points)
+}
+
+fn extend_vanishing_poly<F: Field>(mut coeffs: Vec<F>, roots: &[F]) -> Vec<F> {
+    coeffs.reserve(roots.len());
     for &root in roots {
         coeffs.push(F::ZERO);
         for i in (1..coeffs.len()).rev() {
@@ -388,6 +405,13 @@ impl<F: Field> OodFilter<F> {
 /// Panics if `points.len() != values.len()` or if any two points are equal
 /// (duplicate points yield division by zero).
 pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
+    interpolate_poly_at_base(points, values)
+}
+
+fn interpolate_poly_at_base<F: Field, EF: ExtensionField<F>>(
+    points: &[F],
+    values: &[EF],
+) -> Vec<EF> {
     assert_eq!(
         points.len(),
         values.len(),
@@ -428,7 +452,7 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
     // Evaluate Newton's forward difference expansion into coefficient form.
     // poly(x) = dd[0] + dd[1]*(x-p[0]) + dd[2]*(x-p[0])*(x-p[1]) + ...
     // We expand this iteratively.
-    let mut coeffs = vec![F::ZERO; n];
+    let mut coeffs = vec![EF::ZERO; n];
     // Build coefficient form by Horner: accumulate from the highest term.
     // basis[k] = prod_{j<k} (X - points[j]) in coefficient form.
     let mut basis: Vec<F> = vec![F::ONE];
@@ -452,11 +476,78 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
     }
 
     // Remove trailing zeros.
-    while coeffs.last() == Some(&F::ZERO) && coeffs.len() > 1 {
+    while coeffs.last() == Some(&EF::ZERO) && coeffs.len() > 1 {
         coeffs.pop();
     }
 
     coeffs
+}
+
+/// Interpolate extension-field values on OOD nodes followed by base-field query nodes.
+///
+/// Query differences, Newton basis coefficients, and the query vanishing polynomial stay
+/// in the base field.
+/// The OOD constraints are added as `A_query + Z_query * H`.
+/// The output uses the same canonical coefficients and duplicate-node rejection as the
+/// extension-only interpolator.
+///
+/// # Panics
+///
+/// Panics when the value count differs from the total node count, or nodes coincide.
+pub fn interpolate_poly_mixed<F: Field, EF: ExtensionField<F>>(
+    ood_points: &[EF],
+    query_points: &[F],
+    values: &[EF],
+) -> Vec<EF> {
+    interpolate_poly_mixed_with_vanishing(ood_points, query_points, values).0
+}
+
+/// Return the interpolant and the vanishing polynomial `prod (X - node)` over all nodes.
+/// Share the base-field query-root expansion and multiply in the OOD factors last.
+pub(crate) fn interpolate_poly_mixed_with_vanishing<F: Field, EF: ExtensionField<F>>(
+    ood_points: &[EF],
+    query_points: &[F],
+    values: &[EF],
+) -> (Vec<EF>, Vec<EF>) {
+    assert_eq!(
+        ood_points.len() + query_points.len(),
+        values.len(),
+        "interpolate_poly_mixed_with_vanishing: points and values must have the same length"
+    );
+    for (i, &z) in ood_points.iter().enumerate() {
+        assert!(
+            !ood_points[..i].contains(&z) && !query_points.iter().any(|&y| z == EF::from(y)),
+            "all interpolation points must be distinct"
+        );
+    }
+    let (ood_values, query_values) = values.split_at(ood_points.len());
+    let mut ans = interpolate_poly_at_base(query_points, query_values);
+    let query_vanishing = vanishing_poly_from_roots(query_points);
+    let vanishing: Vec<EF> = query_vanishing.iter().copied().map(EF::from).collect();
+    if !ood_points.is_empty() {
+        let denominators: Vec<EF> = ood_points
+            .iter()
+            .map(|&z| eval_poly(&vanishing, z))
+            .collect();
+        let inverses = batch_multiplicative_inverse(&denominators);
+        let residuals: Vec<EF> = ood_points
+            .iter()
+            .zip(ood_values)
+            .zip(inverses)
+            .map(|((&z, &v), inverse)| (v - eval_poly(&ans, z)) * inverse)
+            .collect();
+        let correction = interpolate_poly(ood_points, &residuals);
+        ans.resize(values.len(), EF::ZERO);
+        for (i, &h) in correction.iter().enumerate() {
+            for (j, &z) in query_vanishing.iter().enumerate() {
+                ans[i + j] += h * z;
+            }
+        }
+    }
+    while ans.last() == Some(&EF::ZERO) && ans.len() > 1 {
+        ans.pop();
+    }
+    (ans, extend_vanishing_poly(vanishing, ood_points))
 }
 
 /// Verify at a random point `rho` that `ans` interpolates `(points, values)`.
@@ -529,6 +620,74 @@ pub fn check_ans_interpolates<F: Field>(ans: &[F], points: &[F], values: &[F], r
         denominator += term;
     }
 
+    eval_poly(ans, rho) * denominator == numerator
+}
+
+/// Check an answer polynomial with extension-field OOD nodes followed by base-field queries.
+///
+/// Uses the same length, empty-set, evaluation-node, and duplicate-node rejection rules as
+/// the extension-only answer check.
+/// Values are in OOD-then-query order.
+/// Query-query factors of the barycentric weights are computed in the base field.
+/// The final weight and distance denominators still share one extension-field batch inverse.
+#[must_use]
+pub fn check_ans_interpolates_mixed<F: Field, EF: ExtensionField<F>>(
+    ans: &[EF],
+    ood_points: &[EF],
+    query_points: &[F],
+    values: &[EF],
+    rho: EF,
+) -> bool {
+    let n = ood_points.len() + query_points.len();
+    if n != values.len() {
+        return false;
+    }
+    if n == 0 {
+        return ans.iter().all(|c| c.is_zero());
+    }
+    if ood_points.contains(&rho) || query_points.iter().any(|&y| rho == EF::from(y)) {
+        return false;
+    }
+    let mut denominators = Vec::with_capacity(2 * n);
+    for (i, &y) in ood_points.iter().enumerate() {
+        let mut product: EF = ood_points
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != i)
+            .map(|(_, &z)| y - z)
+            .product();
+        for &z in query_points {
+            product *= y - z;
+        }
+        denominators.push(product);
+    }
+    for (i, &y) in query_points.iter().enumerate() {
+        let base_product: F = query_points
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != i)
+            .map(|(_, &z)| y - z)
+            .product();
+        let mut product = EF::from(base_product);
+        for &z in ood_points {
+            product *= EF::from(y) - z;
+        }
+        denominators.push(product);
+    }
+    if denominators.contains(&EF::ZERO) {
+        return false;
+    }
+    denominators.extend(ood_points.iter().map(|&y| rho - y));
+    denominators.extend(query_points.iter().map(|&y| rho - y));
+    let inverses = batch_multiplicative_inverse(&denominators);
+    let (weights, diff_invs) = inverses.split_at(n);
+    let mut numerator = EF::ZERO;
+    let mut denominator = EF::ZERO;
+    for ((&w, &diff_inv), &v) in weights.iter().zip(diff_invs).zip(values) {
+        let term = w * diff_inv;
+        numerator += term * v;
+        denominator += term;
+    }
     eval_poly(ans, rho) * denominator == numerator
 }
 

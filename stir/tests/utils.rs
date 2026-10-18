@@ -517,3 +517,180 @@ proptest! {
         );
     }
 }
+
+#[test]
+fn test_mixed_answer_check_matches_extension_check_at_boundaries() {
+    use p3_stir::utils::check_ans_interpolates_mixed;
+    let mut rng = SmallRng::seed_from_u64(0xace);
+    for q in [0, 1, 2, 9] {
+        for s in [0, 1, 2, 4] {
+            let queries: Vec<F> = (0..q).map(|i| f(i + 1)).collect();
+            let ood: Vec<EF> = (0..s).map(|_| rng.random()).collect();
+            let points: Vec<EF> = ood
+                .iter()
+                .copied()
+                .chain(queries.iter().copied().map(EF::from))
+                .collect();
+            let values: Vec<EF> = points.iter().map(|_| rng.random()).collect();
+            let ans = interpolate_poly(&points, &values);
+            let mut rhos: Vec<EF> = (0..4).map(|_| rng.random()).collect();
+            rhos.extend_from_slice(&points);
+            for rho in rhos {
+                for candidate in [&ans[..], &[EF::ONE][..], &[][..]] {
+                    assert_eq!(
+                        check_ans_interpolates_mixed(candidate, &ood, &queries, &values, rho),
+                        check_ans_interpolates(candidate, &points, &values, rho)
+                    );
+                }
+            }
+            assert!(!check_ans_interpolates_mixed(
+                &ans,
+                &ood,
+                &queries,
+                &[EF::ZERO; 30],
+                ef(99)
+            ));
+        }
+    }
+    for (ood, queries) in [
+        (vec![], vec![f(1), f(1)]),
+        (vec![ef(1)], vec![f(1)]),
+        (vec![ef(1), ef(1)], vec![]),
+    ] {
+        let values = vec![EF::ONE; ood.len() + queries.len()];
+        assert!(!check_ans_interpolates_mixed(
+            &[EF::ONE],
+            &ood,
+            &queries,
+            &values,
+            ef(99)
+        ));
+    }
+}
+
+#[test]
+fn test_mixed_interpolation_matches_canonical_extension_coefficients() {
+    use p3_stir::utils::interpolate_poly_mixed;
+    let mut rng = SmallRng::seed_from_u64(0xcafe);
+    for q in [0, 1, 2, 9, 32] {
+        for s in [0, 1, 2, 4] {
+            let queries: Vec<F> = (0..q).map(|i| f(i + 1)).collect();
+            let ood: Vec<EF> = (0..s).map(|_| rng.random()).collect();
+            let points: Vec<EF> = ood
+                .iter()
+                .copied()
+                .chain(queries.iter().copied().map(EF::from))
+                .collect();
+            for coeffs in [
+                vec![],
+                vec![EF::ZERO],
+                vec![ef(7)],
+                (0..points.len()).map(|_| rng.random()).collect(),
+            ] {
+                let values: Vec<EF> = points.iter().map(|&x| eval_poly(&coeffs, x)).collect();
+                assert_eq!(
+                    interpolate_poly_mixed(&ood, &queries, &values),
+                    interpolate_poly(&points, &values),
+                    "q={q}, s={s}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "all interpolation points must be distinct")]
+fn test_mixed_interpolation_rejects_query_duplicates() {
+    p3_stir::utils::interpolate_poly_mixed(&[], &[f(1), f(1)], &[ef(2), ef(3)]);
+}
+
+#[test]
+#[should_panic(expected = "all interpolation points must be distinct")]
+fn test_mixed_interpolation_rejects_cross_field_duplicates() {
+    p3_stir::utils::interpolate_poly_mixed(&[ef(1)], &[f(1)], &[ef(2), ef(3)]);
+}
+
+#[test]
+#[should_panic(expected = "all interpolation points must be distinct")]
+fn test_mixed_interpolation_rejects_ood_duplicates() {
+    p3_stir::utils::interpolate_poly_mixed(&[ef(1), ef(1)], &[] as &[F], &[ef(2), ef(3)]);
+}
+
+#[test]
+#[should_panic(expected = "points and values must have the same length")]
+fn test_mixed_interpolation_rejects_wrong_value_count() {
+    p3_stir::utils::interpolate_poly_mixed(&[ef(1)], &[f(2)], &[ef(3)]);
+}
+
+#[test]
+fn test_mixed_vanishing_matches_extension_root_expansion() {
+    use p3_stir::utils::{vanishing_poly_from_roots, vanishing_poly_from_roots_mixed};
+    let mut rng = SmallRng::seed_from_u64(0xcafe);
+    for q in [0, 1, 2, 9, 32] {
+        for s in [0, 1, 2, 4] {
+            // Duplicates are valid roots of a vanishing polynomial too.
+            let queries: Vec<F> = (0..q).map(|i| f(i % 3)).collect();
+            let ood: Vec<EF> = (0..s).map(|_| rng.random()).collect();
+            let points: Vec<EF> = ood
+                .iter()
+                .copied()
+                .chain(queries.iter().copied().map(EF::from))
+                .collect();
+            assert_eq!(
+                vanishing_poly_from_roots_mixed(&ood, &queries),
+                vanishing_poly_from_roots(&points)
+            );
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn test_mixed_arithmetic_matches_extension_arithmetic_on_random_nodes(
+        q in 0usize..40,
+        s in 0usize..5,
+        seed: u64,
+    ) {
+        use p3_stir::utils::{
+            check_ans_interpolates_mixed, interpolate_poly_mixed,
+            vanishing_poly_from_roots, vanishing_poly_from_roots_mixed,
+        };
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut queries: Vec<F> = (0..q).map(|_| rng.random()).collect();
+        queries.sort_unstable();
+        queries.dedup();
+        let mut ood = Vec::with_capacity(s);
+        while ood.len() < s {
+            let point: EF = rng.random();
+            if !ood.contains(&point) && !queries.iter().any(|&y| point == EF::from(y)) {
+                ood.push(point);
+            }
+        }
+        let points: Vec<EF> = ood.iter().copied()
+            .chain(queries.iter().copied().map(EF::from))
+            .collect();
+        let values: Vec<EF> = points.iter().map(|_| rng.random()).collect();
+        let ans = interpolate_poly(&points, &values);
+        prop_assert_eq!(&interpolate_poly_mixed(&ood, &queries, &values), &ans);
+        prop_assert_eq!(
+            vanishing_poly_from_roots_mixed(&ood, &queries),
+            vanishing_poly_from_roots(&points),
+        );
+        let rho: EF = rng.random();
+        let mut incorrect_ans = ans.clone();
+        if incorrect_ans.is_empty() {
+            incorrect_ans.push(EF::ONE);
+        } else {
+            incorrect_ans[0] += EF::ONE;
+        }
+        for candidate in [&ans[..], &incorrect_ans[..]] {
+            prop_assert_eq!(
+                check_ans_interpolates_mixed(candidate, &ood, &queries, &values, rho),
+                check_ans_interpolates(candidate, &points, &values, rho),
+            );
+        }
+    }
+}

@@ -17,9 +17,9 @@ use crate::error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel,
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::transcript::{StirShape, VerifierTranscript};
 use crate::utils::{
-    OodFilter, check_ans_interpolates, eval_poly, eval_poly_at_base, fold_domain_params,
-    interpolate_poly, lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c,
-    vanishing_poly_from_roots,
+    OodFilter, check_ans_interpolates_mixed, eval_poly, eval_poly_at_base, fold_domain_params,
+    interpolate_poly_mixed, lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c,
+    vanishing_poly_from_roots_mixed,
 };
 
 /// `(index, row)` pairs for a round's queries, in draw order.
@@ -270,15 +270,17 @@ where
 /// Resolve the explicitly configured encoding before the original transcript observation.
 /// Reconstruction uses the prover's canonical representation, including `[ZERO]` for a
 /// zero interpolant through a nonempty set of points.
-fn resolve_ans_polynomial<'a, EF: Field, MmcsError, InputError>(
+fn resolve_ans_polynomial<'a, F: Field, EF: ExtensionField<F>, MmcsError, InputError>(
     round: RoundLabel,
     compact: bool,
     transmitted: &'a [EF],
-    points: &[EF],
+    ood_points: &[EF],
+    query_points: &[F],
     values: &[EF],
 ) -> Result<Cow<'a, [EF]>, StirError<MmcsError, InputError>> {
+    let nodes = ood_points.len() + query_points.len();
     if !compact {
-        check_ans_length(round, transmitted, points.len())?;
+        check_ans_length(round, transmitted, nodes)?;
         return Ok(Cow::Borrowed(transmitted));
     }
     if !transmitted.is_empty() {
@@ -288,16 +290,23 @@ fn resolve_ans_polynomial<'a, EF: Field, MmcsError, InputError>(
         }
         .into());
     }
-    // interpolate_poly asserts these preconditions. Keep malformed inputs fallible here.
-    if points.len() != values.len()
-        || points
+    // The mixed interpolator asserts these preconditions. Keep malformed inputs fallible here.
+    if nodes != values.len()
+        || ood_points.iter().enumerate().any(|(i, &z)| {
+            ood_points[..i].contains(&z) || query_points.iter().any(|&y| z == EF::from(y))
+        })
+        || query_points
             .iter()
             .enumerate()
-            .any(|(i, point)| points[..i].contains(point))
+            .any(|(i, y)| query_points[..i].contains(y))
     {
         return Err(StirError::InvalidAnsConsistency { round });
     }
-    Ok(Cow::Owned(interpolate_poly(points, values)))
+    Ok(Cow::Owned(interpolate_poly_mixed(
+        ood_points,
+        query_points,
+        values,
+    )))
 }
 
 #[cfg(test)]
@@ -311,12 +320,12 @@ mod compact_answer_tests {
     fn compact_answers_reconstruct_canonical_zero_and_reject_invalid_nodes() {
         let round = RoundLabel::Round(2);
         assert!(
-            resolve_ans_polynomial::<F, (), ()>(round, true, &[], &[], &[])
+            resolve_ans_polynomial::<F, F, (), ()>(round, true, &[], &[], &[], &[])
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
-            resolve_ans_polynomial::<F, (), ()>(round, true, &[], &[F::ONE], &[F::ZERO])
+            resolve_ans_polynomial::<F, F, (), ()>(round, true, &[], &[F::ONE], &[], &[F::ZERO])
                 .unwrap()
                 .as_ref(),
             &[F::ZERO]
@@ -326,7 +335,7 @@ mod compact_answer_tests {
             (&[F::ONE, F::ONE][..], &[F::ZERO, F::ZERO][..]),
         ] {
             assert!(matches!(
-                resolve_ans_polynomial::<F, (), ()>(round, true, &[], points, values),
+                resolve_ans_polynomial::<F, F, (), ()>(round, true, &[], points, &[], values),
                 Err(StirError::InvalidAnsConsistency {
                     round: RoundLabel::Round(2)
                 })
@@ -334,16 +343,53 @@ mod compact_answer_tests {
         }
         // The default representation still borrows the provided coefficients verbatim.
         assert!(matches!(
-            resolve_ans_polynomial::<F, (), ()>(
+            resolve_ans_polynomial::<F, F, (), ()>(
                 round,
                 false,
                 &[F::ZERO, F::ZERO],
-                &[F::ZERO, F::ONE],
+                &[F::ZERO],
+                &[F::ONE],
                 &[F::ZERO, F::ZERO]
             )
             .unwrap(),
             Cow::Borrowed([F::ZERO, F::ZERO])
         ));
+    }
+
+    #[test]
+    fn compact_answers_validate_separate_ood_and_query_nodes() {
+        type EF = p3_field::extension::BinomialExtensionField<F, 4>;
+
+        let round = RoundLabel::Round(2);
+        let z = EF::from_basis_coefficients_slice(&[F::ONE, F::ONE, F::ZERO, F::ZERO]).unwrap();
+        // Reconstruct the line 3 + 2X from one extension node and one base-field query.
+        assert_eq!(
+            resolve_ans_polynomial::<F, EF, (), ()>(
+                round,
+                true,
+                &[],
+                &[z],
+                &[F::TWO],
+                &[EF::from_u64(3) + z.double(), EF::from_u64(7)],
+            )
+            .unwrap()
+            .as_ref(),
+            &[EF::from_u64(3), EF::TWO],
+        );
+        for (ood, queries, values) in [
+            (&[][..], &[F::ONE][..], &[][..]),
+            (&[EF::ONE][..], &[F::TWO][..], &[EF::ZERO][..]),
+            (&[][..], &[F::ONE, F::ONE][..], &[EF::ZERO, EF::ZERO][..]),
+            (&[EF::ONE, EF::ONE][..], &[][..], &[EF::ZERO, EF::ZERO][..]),
+            (&[EF::ONE][..], &[F::ONE][..], &[EF::ZERO, EF::ZERO][..]),
+        ] {
+            assert!(matches!(
+                resolve_ans_polynomial::<F, EF, (), ()>(round, true, &[], ood, queries, values),
+                Err(StirError::InvalidAnsConsistency {
+                    round: RoundLabel::Round(2)
+                })
+            ));
+        }
     }
 
     #[test]
@@ -359,11 +405,12 @@ mod compact_answer_tests {
         //
         // Mutation: send the compact encoding to a default-mode reader.
         assert!(matches!(
-            resolve_ans_polynomial::<F, (), ()>(
+            resolve_ans_polynomial::<F, F, (), ()>(
                 round,
                 false,
                 &[],
-                &[F::ONE, F::TWO],
+                &[F::ONE],
+                &[F::TWO],
                 &[F::ZERO, F::ZERO]
             ),
             Err(StirError::InvalidProofShape(
@@ -381,7 +428,7 @@ mod compact_answer_tests {
         //
         // Both spell the same virtual oracle, so the shape is all that separates them.
         assert!(matches!(
-            resolve_ans_polynomial::<F, (), ()>(round, false, &[], &[F::ONE], &[F::ZERO]),
+            resolve_ans_polynomial::<F, F, (), ()>(round, false, &[], &[F::ONE], &[], &[F::ZERO]),
             Err(StirError::InvalidProofShape(
                 ProofShapeError::MissingAnsPolynomial {
                     round: RoundLabel::Round(2),
@@ -392,7 +439,7 @@ mod compact_answer_tests {
 
         // Fixture state: no nodes at all, so the empty vector is the only encoding there is.
         assert!(
-            resolve_ans_polynomial::<F, (), ()>(round, false, &[], &[], &[])
+            resolve_ans_polynomial::<F, F, (), ()>(round, false, &[], &[], &[], &[])
                 .unwrap()
                 .is_empty()
         );
@@ -592,7 +639,7 @@ struct RoundVerifier<F, EF: Field> {
 
     fold_beta: EF,
     ood_points: Vec<EF>,
-    query_points: Vec<EF>,
+    query_points: Vec<F>,
     query_answers: Vec<EF>,
     first_round_pairs: FirstRoundPairs<EF>,
     first_round_draws: Vec<usize>,
@@ -695,7 +742,7 @@ where
             alloc::collections::BTreeSet::new();
 
         for (q, (&j, row_evals)) in query_indices.iter().zip(&round_rows).enumerate() {
-            let fold_point = EF::from(self.fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
+            let fold_point = self.fold_shift * fold_gen.exp_u64(j as u64);
 
             let fold_val = query_fold_value(
                 row_evals,
@@ -724,30 +771,26 @@ where
         Ok(())
     }
 
-    /// The OOD + query points and their claimed values, in the order `Ans` interpolates them.
-    fn all_points_and_values(&self, ood_answers: &[EF]) -> (Vec<EF>, Vec<EF>) {
-        let all_points: Vec<EF> = self
-            .ood_points
-            .iter()
-            .chain(self.query_points.iter())
-            .copied()
-            .collect();
-        let all_values: Vec<EF> = ood_answers
+    /// The OOD + query values, in the order `Ans` interpolates them.
+    fn all_values(&self, ood_answers: &[EF]) -> Vec<EF> {
+        ood_answers
             .iter()
             .chain(self.query_answers.iter())
             .copied()
-            .collect();
-        (all_points, all_values)
+            .collect()
     }
 
     /// Touches no transcript state, so it may run after the caller has moved on to other
     /// instances.
-    fn finish(self, ans_polynomial: Vec<EF>, all_points: &[EF]) -> RoundVerifyOutput<F, EF> {
-        let gap = all_points.len();
+    fn finish(self, ans_polynomial: Vec<EF>) -> RoundVerifyOutput<F, EF> {
+        let gap = self.ood_points.len() + self.query_points.len();
         let r_comb_pow_gap1 = self.r_comb.exp_u64((gap + 1) as u64);
         RoundVerifyOutput {
             ctx: VirtualRoundContext {
-                vanishing_coeffs: vanishing_poly_from_roots(all_points),
+                vanishing_coeffs: vanishing_poly_from_roots_mixed(
+                    &self.ood_points,
+                    &self.query_points,
+                ),
                 ans_poly: ans_polynomial,
                 r_comb: self.r_comb,
                 gap,
@@ -834,13 +877,14 @@ where
     )?;
 
     // Step 4: ans polynomial observation and consistency check.
-    let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
+    let all_values = rv.all_values(&rp.ood_answers);
 
     let ans = resolve_ans_polynomial(
         RoundLabel::Round(round),
         config.options().compact_answers,
         &rp.ans_polynomial,
-        &all_points,
+        &rv.ood_points,
+        &rv.query_points,
         &all_values,
     )?;
 
@@ -848,13 +892,13 @@ where
     // check; observing Ans first means the prover commits to it before learning rho.
     let rho = transcript.answer_phase(round, 0, &ans)?;
 
-    if !check_ans_interpolates(&ans, &all_points, &all_values, rho) {
+    if !check_ans_interpolates_mixed(&ans, &rv.ood_points, &rv.query_points, &all_values, rho) {
         return Err(StirError::InvalidAnsConsistency {
             round: RoundLabel::Round(round),
         });
     }
 
-    Ok(rv.finish(ans.into_owned(), &all_points))
+    Ok(rv.finish(ans.into_owned()))
 }
 
 /// One instance's in-flight final round, advanced in the order the transcript demands.
@@ -1699,25 +1743,32 @@ where
         for (&i, rv) in active.iter().zip(rvs) {
             let local_r = r - offset(i);
             let rp = &proofs[i].round_proofs[local_r];
-            let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
+            let all_values = rv.all_values(&rp.ood_answers);
 
             let ans = resolve_ans_polynomial(
                 RoundLabel::Round(local_r),
                 configs[i].options().compact_answers,
                 &rp.ans_polynomial,
-                &all_points,
+                &rv.ood_points,
+                &rv.query_points,
                 &all_values,
             )?;
 
             let rho = transcript.answer_phase(r, i, &ans)?;
 
-            if !check_ans_interpolates(&ans, &all_points, &all_values, rho) {
+            if !check_ans_interpolates_mixed(
+                &ans,
+                &rv.ood_points,
+                &rv.query_points,
+                &all_values,
+                rho,
+            ) {
                 return Err(StirError::InvalidAnsConsistency {
                     round: RoundLabel::Round(local_r),
                 });
             }
 
-            finishes.push((i, rv.finish(ans.into_owned(), &all_points)));
+            finishes.push((i, rv.finish(ans.into_owned())));
         }
 
         // Phase 5: touches no transcript state, so instance order no longer matters.
