@@ -243,7 +243,6 @@ where
     }
 }
 
-// The inner MMCS commits the base-field coefficients of the extension rows, so hiding them hides the rows.
 impl<F, EF, InnerMmcs> HidingMmcs<EF> for ExtensionMmcs<F, EF, InnerMmcs>
 where
     F: Field,

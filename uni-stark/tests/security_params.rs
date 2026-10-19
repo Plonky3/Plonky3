@@ -62,7 +62,7 @@ fn setup() -> (Perm, ValMmcs, FriParameters<ChallengeMmcs>) {
     (perm, mmcs, fri)
 }
 
-/// The input MMCS of a hiding PCS must salt its leaves.
+/// Salted base-field commitments, since a hiding PCS rejects a plain Merkle tree.
 type HidingValMmcs = MerkleTreeHidingMmcs<
     <Val as Field>::Packing,
     <Val as Field>::Packing,
@@ -73,9 +73,11 @@ type HidingValMmcs = MerkleTreeHidingMmcs<
     8,
     4,
 >;
+
+/// Challenge-field commitments over the salted tree.
 type HidingChallengeMmcs = ExtensionMmcs<Val, Challenge, HidingValMmcs>;
 
-/// The same parameters as [`setup`], over the salted MMCS.
+/// Same parameters as the plain setup, over salted commitments.
 fn hiding_setup() -> (Perm, HidingValMmcs, FriParameters<HidingChallengeMmcs>) {
     let mut rng = StdRng::seed_from_u64(42);
     let perm = Perm::new_from_rng_128(&mut rng);
