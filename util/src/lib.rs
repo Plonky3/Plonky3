@@ -273,7 +273,7 @@ where
         //
         // If `lb_n` is odd, i.e., `n` is not a square number, then the above procedure requires
         // slight modification. At steps 1 and 3 we bit-reverse bits `ceil(lb_n / 2)..lb_n`, of the
-        // index (shuffling `floor(lb_n / 2)` chunks of length `ceil(lb_n / 2)`). At step 2, we
+        // index (shuffling `2^floor(lb_n / 2)` chunks of length `2^ceil(lb_n / 2)`). At step 2, we
         // perform _two_ transposes. We treat `arr` as two matrices, one where the middle bit of the
         // index is `0` and another, where the middle bit is `1`; we transpose each individually.
 

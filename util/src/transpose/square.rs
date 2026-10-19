@@ -64,8 +64,9 @@ unsafe fn transpose_in_place_square_small<T>(
 /// The recursion always splits along the longer dimension to balance cache and workload.
 ///
 /// # Safety
-/// - `a` and `b` must be valid for `rows * cols` reads and writes.
-/// - The regions pointed to by `a` and `b` must be disjoint.
+/// - For every `i < rows` and `j < cols`, `a.add(i * width_outer_mat + j)` and
+///   `b.add(j * width_outer_mat + i)` must be valid for reads and writes of initialized `T` values.
+/// - The elements accessed through `a` and `b` must be disjoint.
 /// - `width_outer_mat` must be large enough to avoid overlapping accesses during index calculations.
 pub(super) unsafe fn transpose_swap<T: Send + Sync>(
     a: *mut T,
