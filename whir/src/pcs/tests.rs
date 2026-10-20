@@ -1913,7 +1913,7 @@ mod initial_weight {
         }
     }
 
-    fn pcs() -> TestWhirPcs<L> {
+    fn pcs(commitment_ood: bool) -> TestWhirPcs<L> {
         let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
         let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
         let params = ProtocolParameters {
@@ -1924,15 +1924,22 @@ mod initial_weight {
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         };
-        TestWhirPcs::<L>::new(
-            WhirConfig::new(NUM_VARIABLES, params).unwrap(),
-            MyDft::default(),
-            mmcs,
-        )
+        let config = WhirConfig::new(NUM_VARIABLES, params).unwrap();
+        let config = if commitment_ood {
+            config
+        } else {
+            config.without_commitment_ood()
+        };
+        TestWhirPcs::<L>::new(config, MyDft::default(), mmcs)
     }
 
     #[test]
     fn an_extra_initial_weight_opens_and_a_wrong_one_is_refused() {
+        check_an_extra_initial_weight(true);
+        check_an_extra_initial_weight(false);
+    }
+
+    fn check_an_extra_initial_weight(commitment_ood: bool) {
         let mut rng = SmallRng::seed_from_u64(9);
         let table = Table::rand(&mut rng, 1, NUM_VARIABLES);
         let evals: Poly<EF> = Poly::new(
@@ -1944,7 +1951,7 @@ mod initial_weight {
                 .collect(),
         );
         let weights: Poly<EF> = Poly::new((0..1 << NUM_VARIABLES).map(|_| rng.random()).collect());
-        let pcs = pcs();
+        let pcs = pcs(commitment_ood);
         let shapes = [TableShape::new(NUM_VARIABLES, 1)];
 
         let mut prover = challenger();
