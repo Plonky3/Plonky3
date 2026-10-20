@@ -326,7 +326,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                 curr_height_padded,
                 leaf_height_npt,
                 heights_tallest_first.clone().map(|(_, dims)| dims.height),
-            );
+            )?;
             schedule.push(step);
 
             // - Shrink by `step`,

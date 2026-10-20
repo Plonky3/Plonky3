@@ -59,7 +59,10 @@ pub struct ArityAndPositions {
     pub query_positions: Vec<usize>,
 }
 
-/// Validates that a batch of matrix heights forms a tree geometry the commitment can build.
+/// Validates that matrix heights lie on the binary height ladder.
+///
+/// Higher arities additionally require a progressing injection schedule; that check
+/// is shared by tree construction and verification through `select_arity_step`.
 ///
 /// # Overview
 ///
