@@ -310,16 +310,28 @@ where
 /// Both fields are the same by default, which is the square case above.
 #[derive(Clone, Debug)]
 pub struct BitRingSwitch<F, EF = F> {
-    /// The evaluation point of the claim, over every variable of the witness.
+    /// The point the claim binds: over every variable, or the kept ones of a weighted claim.
     ///
     /// Held whole because the transcript binds it whole.
     point: Point<EF>,
-    /// The equality table of the coordinates one packed element absorbs.
-    eq_low: Poly<EF>,
-    /// The trailing coordinates the successor view steps within, when there is one.
-    successor: Option<usize>,
+    /// The weights the claim puts on the absorbed bit patterns.
+    low: LowWeights<EF>,
     /// Marker for the packing level.
     _packing: PhantomData<F>,
+}
+
+/// The weights a claim puts on the bit patterns one packed element absorbs.
+#[derive(Clone, Debug)]
+enum LowWeights<EF> {
+    /// The equality table of the absorbed coordinates, which the point names.
+    Equality {
+        /// `eq(r_low, v)` for every absorbed bit pattern `v`.
+        table: Poly<EF>,
+        /// The trailing coordinates the successor view steps within, when there is one.
+        successor: Option<usize>,
+    },
+    /// Weights the claim supplies itself, its point naming the kept coordinates alone.
+    Supplied(Poly<EF>),
 }
 
 impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF> {
@@ -357,11 +369,59 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
         let (_, low) = r.split_at(r.num_variables() - Self::ABSORBED);
 
         Ok(Self {
-            eq_low: Poly::new_from_point(low.as_slice(), EF::ONE),
+            low: LowWeights::Equality {
+                table: Poly::new_from_point(low.as_slice(), EF::ONE),
+                successor: None,
+            },
             point: r.clone(),
-            successor: None,
             _packing: PhantomData,
         })
+    }
+
+    /// Set up the reduction of a claim whose absorbed bit patterns carry explicit weights.
+    ///
+    /// The claim is `sum_v weights[v] * t(high, v)`; a univariate-skip claim weighs by the Lagrange basis.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless there is one weight per absorbed bit pattern.
+    pub fn with_low_weights(high: &Point<EF>, weights: &[EF]) -> Result<Self, BitRingSwitchError> {
+        let expected = 1 << Self::ABSORBED;
+        if weights.len() != expected {
+            return Err(BitRingSwitchError::LowWeights {
+                expected,
+                actual: weights.len(),
+            });
+        }
+        Ok(Self {
+            low: LowWeights::Supplied(Poly::new(weights.to_vec())),
+            point: high.clone(),
+            _packing: PhantomData,
+        })
+    }
+
+    /// The weights a weighted claim supplied for the absorbed bit patterns.
+    #[must_use]
+    pub fn low_weights(&self) -> Option<&[EF]> {
+        match &self.low {
+            LowWeights::Supplied(weights) => Some(weights.as_slice()),
+            LowWeights::Equality { .. } => None,
+        }
+    }
+
+    /// The weights of the absorbed bit patterns, whichever way the claim gave them.
+    fn low_table(&self) -> &[EF] {
+        match &self.low {
+            LowWeights::Equality { table, .. } | LowWeights::Supplied(table) => table.as_slice(),
+        }
+    }
+
+    /// The trailing coordinates the successor view steps within, when there is one.
+    const fn successor(&self) -> Option<usize> {
+        match self.low {
+            LowWeights::Equality { successor, .. } => successor,
+            LowWeights::Supplied(_) => None,
+        }
     }
 
     /// Set up the reduction of a claim at one point, also answering its successor view.
@@ -381,10 +441,11 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
                 num_variables: r.num_variables(),
             });
         }
-        Ok(Self {
-            successor: Some(row_variables),
-            ..Self::new(r)?
-        })
+        let mut reduction = Self::new(r)?;
+        if let LowWeights::Equality { successor, .. } = &mut reduction.low {
+            *successor = Some(row_variables);
+        }
+        Ok(reduction)
     }
 
     /// Variables the packed polynomial this reduction runs against must have.
@@ -392,10 +453,14 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
     /// This is the maximum number of sumcheck rounds the reduction takes.
     /// Each leading Boolean selector coordinate selects a slot and removes one round.
     pub fn num_variables(&self) -> usize {
-        self.point.num_variables() - Self::ABSORBED
+        // A weighted claim holds the kept coordinates alone.
+        match self.low {
+            LowWeights::Supplied(_) => self.point.num_variables(),
+            LowWeights::Equality { .. } => self.point.num_variables() - Self::ABSORBED,
+        }
     }
 
-    /// The evaluation point of the claim, over every variable of the witness.
+    /// The point the claim binds: over every variable, or the kept ones of a weighted claim.
     pub(super) const fn point(&self) -> &Point<EF> {
         &self.point
     }
@@ -411,7 +476,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
     ///
     /// Rows that fit in one element keep none, and the view is a column reading.
     fn kept_row_variables(&self) -> Option<usize> {
-        self.successor
+        self.successor()
             .filter(|&rows| rows > Self::ABSORBED)
             .map(|rows| rows - Self::ABSORBED)
     }
@@ -426,12 +491,16 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
 
     /// The transcript description this reduction plays.
     pub(super) fn shape(&self) -> BitRingSwitchShape {
-        let num_variables = self.point.num_variables();
-        match self.successor {
-            Some(rows) if self.sends_successor_tensors() => {
+        let num_variables = self.num_variables() + Self::ABSORBED;
+        match self.low {
+            LowWeights::Supplied(_) => BitRingSwitchShape::with_low_weights(num_variables),
+            LowWeights::Equality {
+                successor: Some(rows),
+                ..
+            } if self.sends_successor_tensors() => {
                 BitRingSwitchShape::with_successor_rows(num_variables, rows)
             }
-            _ => BitRingSwitchShape::new(num_variables),
+            LowWeights::Equality { .. } => BitRingSwitchShape::new(num_variables),
         }
     }
 
@@ -512,7 +581,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
     /// Yet the carry reads the element one before, which that indicator would cut away.
     fn prefix_limit(&self) -> usize {
         let limit = self.num_variables();
-        self.successor
+        self.successor()
             .map_or(limit, |rows| limit.min(self.point.num_variables() - rows))
     }
 
@@ -743,7 +812,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
         tensor
             .columns()
             .iter()
-            .zip(self.eq_low.as_slice())
+            .zip(self.low_table())
             .map(|(&column, &weight)| column * weight)
             .sum()
     }
@@ -897,7 +966,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
     ///     n[v] = (x != 0 ? eq_low[v - 1] : 0) + (x = 2^a - 1 ? eq_low[v] : 0)
     /// ```
     fn successor_low_weights(&self, row_variables: usize) -> Vec<EF> {
-        let eq_low = self.eq_low.as_slice();
+        let eq_low = self.low_table();
         if self.sends_successor_tensors() {
             return (0..eq_low.len())
                 .map(|v| if v == 0 { EF::ZERO } else { eq_low[v - 1] })
@@ -938,7 +1007,9 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
         tensor: &BitTensor<EF, F>,
         successor: Option<&SuccessorTensors<F, EF>>,
     ) -> Result<EF, BitRingSwitchError> {
-        let rows = self.successor.ok_or(BitRingSwitchError::NoSuccessorView)?;
+        let rows = self
+            .successor()
+            .ok_or(BitRingSwitchError::NoSuccessorView)?;
         assert_eq!(
             successor.is_some(),
             self.sends_successor_tensors(),
@@ -954,7 +1025,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
         Ok(successor.map_or(settled, |elements| {
             let d = Coefficients::<F>::DIMENSION;
             let ripple = elements.carry.column(0) + elements.last.column(d - 1);
-            settled + self.eq_low.as_slice()[d - 1] * ripple
+            settled + self.low_table()[d - 1] * ripple
         }))
     }
 
@@ -1461,6 +1532,14 @@ pub enum BitRingSwitchError {
     /// A batch of claims was asked for with no claim in it.
     #[error("a batch of ring-switch claims needs at least one claim")]
     NoClaims,
+    /// A weighted claim does not weigh every absorbed bit pattern exactly once.
+    #[error("a weighted claim carries {actual} low weights, expected {expected}")]
+    LowWeights {
+        /// One weight per absorbed bit pattern.
+        expected: usize,
+        /// Weights supplied.
+        actual: usize,
+    },
 }
 
 /// The two elements a successor view adds when its rows outrun one packed element.
@@ -1735,13 +1814,19 @@ where
         // They are therefore ready before the transcript needs them.
         let mut transcript =
             BitRingSwitchProverTranscript::<Challenger, F, EF>::new(challenger, self.shape());
-        let (r_batch, alpha) = transcript.statement(
-            &self.point,
-            tensor.rows(),
-            successor
-                .as_ref()
-                .map(|elements| (elements.carry.rows(), elements.last.rows())),
-        );
+        let (r_batch, alpha) = match self.low_weights() {
+            Some(weights) => (
+                transcript.weighted_statement(&self.point, weights, tensor.rows()),
+                None,
+            ),
+            None => transcript.statement(
+                &self.point,
+                tensor.rows(),
+                successor
+                    .as_ref()
+                    .map(|elements| (elements.carry.rows(), elements.last.rows())),
+            ),
+        };
 
         // The batching challenges arrived after the elements, which is the order soundness needs.
         let batch = self
@@ -1946,14 +2031,20 @@ where
         let rounds = self.num_variables() - prefix;
         let mut transcript =
             BitRingSwitchVerifierTranscript::<Challenger, F, EF>::new(challenger, self.shape());
-        let (r_batch, alpha) = transcript.statement(
-            &self.point,
-            proof.tensor.rows(),
-            proof
-                .successor
-                .as_ref()
-                .map(|elements| (elements.carry.rows(), elements.last.rows())),
-        )?;
+        let (r_batch, alpha) = match self.low_weights() {
+            Some(weights) => (
+                transcript.weighted_statement(&self.point, weights, proof.tensor.rows())?,
+                None,
+            ),
+            None => transcript.statement(
+                &self.point,
+                proof.tensor.rows(),
+                proof
+                    .successor
+                    .as_ref()
+                    .map(|elements| (elements.carry.rows(), elements.last.rows())),
+            )?,
+        };
 
         if let Err(error) = self.check_readings(proof, current, next) {
             transcript.abort();
@@ -2036,7 +2127,7 @@ where
         if current.is_none() && next.is_none() {
             return Err(BitRingSwitchProofError::NoReading);
         }
-        if next.is_some() && self.successor.is_none() {
+        if next.is_some() && self.successor().is_none() {
             return Err(BitRingSwitchProofError::NoSuccessorView);
         }
         Ok(())
@@ -3492,7 +3583,7 @@ mod tests {
         // Nothing constrains d_0, so any nonzero value does.
         //
         // It comes from a byte pattern, since an integer would reduce modulo two.
-        let eq_low = reduction.eq_low.as_slice();
+        let eq_low = reduction.low_table();
         assert_ne!(
             eq_low[1],
             EF::ZERO,

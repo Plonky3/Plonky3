@@ -3,16 +3,12 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_binary_field::{BinaryChallenger, Poly64};
-use p3_challenger::HashChallenger;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use rand::rngs::SmallRng;
 use rand::{Rng, RngExt, SeedableRng};
 
-use crate::{Builder, Circuit, Wire, Witness};
-
-/// Fiat-Shamir sponge.
-pub(crate) type Challenger = BinaryChallenger<Poly64, HashChallenger<u8, Keccak256Hash, 32>>;
+use crate::{Builder, Circuit, FlockChallenger, Val, Wire, Witness};
 
 /// A random circuit over the builder's whole vocabulary, with a narrow port and undriven outputs.
 pub(crate) fn random_circuit(rng: &mut SmallRng, max_gates: u32) -> Circuit {
@@ -84,6 +80,24 @@ fn witness_by_instance(
         );
     }
     Witness::from_tables(z, az, bz, log_n)
+}
+
+/// Packed bits as field elements, one per bit.
+pub(crate) fn unpack<V: Field>(words: &[u64]) -> Vec<V> {
+    words
+        .iter()
+        .flat_map(|&w| (0..64).map(move |b| V::from_bool((w >> b) & 1 == 1)))
+        .collect()
+}
+
+/// Whether packed `z` satisfies every row `(A z)_s * (B z)_s = z_s` of every instance, by the forward walk.
+pub(crate) fn satisfies(c: &Circuit, z: &[u64]) -> bool {
+    z.chunks((1 << c.k_log()) / 64).all(|words| {
+        let z = unpack::<Val>(words);
+        let mut rows = vec![Val::ZERO; z.len()];
+        c.walk_rows(&z, |s, a, b| rows[s] = a * b);
+        rows == z
+    })
 }
 
 #[test]
@@ -160,4 +174,96 @@ fn the_digest_separates_circuits_and_matches_equal_ones() {
     };
     assert_eq!(build(false).digest(), build(false).digest());
     assert_ne!(build(false).digest(), build(true).digest());
+}
+
+#[test]
+fn the_forward_walk_reproduces_the_witness_tables() {
+    let mut rng = SmallRng::seed_from_u64(0xF0E);
+    for _ in 0..5 {
+        // Fixture state: 8 instances of a random circuit.
+        let c = random_circuit(&mut rng, 600);
+        let (rows, padding) = random_rows(&mut rng, 8);
+        let w = Witness::generate(&c, 3, &rows, &padding, |row, words| {
+            words.copy_from_slice(row);
+        });
+
+        // Invariant: the walk gives A z and B z, and rows no gate commits stay zero.
+        let words = (1 << c.k_log()) / 64;
+        let tables = w
+            .z()
+            .chunks(words)
+            .zip(w.az().chunks(words))
+            .zip(w.bz().chunks(words));
+        for ((z, az), bz) in tables {
+            let mut ab = [vec![Val::ZERO; 64 * words], vec![Val::ZERO; 64 * words]];
+            c.walk_rows(&unpack::<Val>(z), |s, a, b| {
+                ab[0][s] = a;
+                ab[1][s] = b;
+            });
+            assert_eq!(ab, [unpack::<Val>(az), unpack::<Val>(bz)]);
+        }
+        assert!(satisfies(&c, w.z()));
+
+        // Mutation: one committed product bit of instance 0 flips, so its row breaks.
+        let mut bad = w.z().to_vec();
+        let slot = c.useful_bits() - 1;
+        bad[slot / 64] ^= 1 << (slot % 64);
+        assert!(!satisfies(&c, &bad));
+
+        // Invariant: the rows are homogeneous, so only the pinned constant rules out z = 0.
+        assert!(satisfies(&c, &vec![0; bad.len()]));
+    }
+}
+
+/// One batch of a random circuit large enough for the zerocheck, with its witness.
+fn proof_fixture(seed: u64) -> (Circuit, Witness, usize) {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let c = random_circuit(&mut rng, 1500);
+    let log_n = crate::zerocheck::MIN_LOG_N.saturating_sub(c.k_log()).max(3);
+    let (rows, padding) = random_rows(&mut rng, (1 << log_n) - 5);
+    let w = Witness::generate(&c, log_n, &rows, &padding, |row, words| {
+        words.copy_from_slice(row);
+    });
+    (c, w, log_n)
+}
+
+/// A fresh sponge.
+fn sponge() -> FlockChallenger {
+    FlockChallenger::from_hasher(Vec::new(), Keccak256Hash)
+}
+
+#[test]
+fn a_batch_proof_verifies() {
+    let (c, w, log_n) = proof_fixture(0xF10C);
+    let batch = crate::Batch::new(&c, log_n).unwrap();
+    let config = crate::FlockConfig::default();
+    let proof = crate::prove(&config, &batch, &w, &mut sponge()).unwrap();
+    crate::verify(&config, &batch, &proof, &mut sponge()).unwrap();
+}
+
+#[test]
+fn a_wrong_witness_or_a_tampered_proof_is_rejected() {
+    let (c, w, log_n) = proof_fixture(0xBAD);
+    let batch = crate::Batch::new(&c, log_n).unwrap();
+    let config = crate::FlockConfig::default();
+
+    // Mutation: one committed product bit of instance 0 flips, so its row breaks.
+    let mut bad = w.clone();
+    let slot = c.useful_bits() - 1;
+    bad.tables_mut()[0][slot / 64] ^= 1 << (slot % 64);
+    let proof = crate::prove(&config, &batch, &bad, &mut sponge()).unwrap();
+    assert!(crate::verify(&config, &batch, &proof, &mut sponge()).is_err());
+
+    // Mutation: an honest proof checked against another batch's commitment.
+    let honest = crate::prove(&config, &batch, &w, &mut sponge()).unwrap();
+    let mut swapped = honest.clone();
+    swapped.commitment = proof.commitment;
+    assert!(crate::verify(&config, &batch, &swapped, &mut sponge()).is_err());
+
+    // Mutation: the proof of one batch size checked as another.
+    let wider = crate::Batch::new(&c, log_n + 1).unwrap();
+    assert!(crate::verify(&config, &wider, &honest, &mut sponge()).is_err());
+
+    // Mutation: a witness of another batch size is refused before anything is sent.
+    assert!(crate::prove(&config, &wider, &w, &mut sponge()).is_err());
 }

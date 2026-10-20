@@ -15,12 +15,12 @@ use super::fixed::eq_coordinates;
 use super::transcript::{ProverTranscript, ZerocheckShape};
 use super::*;
 use crate::skip::{SKIP_SIZE, lagrange_weights, phi8, round1_at};
-use crate::tests::{Challenger, random_circuit, random_rows};
-use crate::{Batch, BatchError, Builder, Circuit, Witness};
+use crate::tests::{random_circuit, random_rows};
+use crate::{Batch, BatchError, Builder, Circuit, FlockChallenger, Witness};
 
 /// A fresh sponge.
-fn fresh() -> Challenger {
-    Challenger::from_hasher(Vec::new(), Keccak256Hash)
+fn fresh() -> FlockChallenger {
+    FlockChallenger::from_hasher(Vec::new(), Keccak256Hash)
 }
 
 /// The bit at global index `i` of packed words.
@@ -52,7 +52,7 @@ fn quirky_eval(words: &[u64], point: &QuirkyPoint) -> Poly192 {
 fn reference_prove(
     batch: &Batch<'_>,
     witness: &Witness,
-    challenger: &mut Challenger,
+    challenger: &mut FlockChallenger,
     pow_bits: usize,
 ) -> ZerocheckProof {
     let shape = ZerocheckShape::new(batch, pow_bits);

@@ -57,7 +57,9 @@ pub(crate) use self::gfni::plane_matrices;
         target_feature = "vpclmulqdq"
     )
 ))]
-pub(crate) use self::gfni::{IDENTITY, OUT_BYTES, Stage, store_f192, weight_matrices};
+pub(crate) use self::gfni::{
+    IDENTITY, OUT_BYTES, Stage, store_f192, transpose_rows, weight_matrices,
+};
 #[cfg(any(
     test,
     all(

@@ -89,5 +89,5 @@ pub use tensor::{BitTensor, MalformedBitTensor};
 pub use transcript::{
     BitRingSwitchClaimsProverTranscript, BitRingSwitchClaimsShape,
     BitRingSwitchClaimsVerifierTranscript, BitRingSwitchProverTranscript, BitRingSwitchShape,
-    BitRingSwitchVerifierTranscript, ClaimStatement, ClaimsDraws, TranscriptWidth,
+    BitRingSwitchVerifierTranscript, ClaimForm, ClaimStatement, ClaimsDraws, TranscriptWidth,
 };

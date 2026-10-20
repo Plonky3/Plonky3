@@ -47,6 +47,8 @@ impl SliceRegister for Model {
         }
     }
 
+    fn prefetch(_at: *const u8) {}
+
     fn xor(self, other: Self) -> Self {
         Self(core::array::from_fn(|i| self.0[i] ^ other.0[i]))
     }
@@ -98,5 +100,9 @@ impl SliceRegister for Model {
         Self(core::array::from_fn(|i| {
             apply(matrices.qword(i / 8), self.0[i])
         }))
+    }
+
+    fn transpose_qwords(rows: [Self; 8]) -> [Self; 8] {
+        core::array::from_fn(|g| Self::from_qwords(core::array::from_fn(|r| rows[r].qword(g))))
     }
 }

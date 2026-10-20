@@ -8,7 +8,10 @@ mod profile;
 mod proof;
 mod shape;
 
-pub use boolean::{BooleanWhirData, BooleanWhirPcs, BooleanWhirProver, BooleanWhirTracePcs};
+pub use boolean::{
+    BooleanWhirData, BooleanWhirPcs, BooleanWhirProver, BooleanWhirTracePcs, WeightedClaim,
+    WeightedOpening,
+};
 pub use budget::BinaryWhirBudget;
 pub use domain::{BinaryWhirAlphabet, BinaryWhirDomain, BooleanWhirDomain, recommended_cap_height};
 pub use error::{BooleanWhirError, BudgetError, ProfileError};
