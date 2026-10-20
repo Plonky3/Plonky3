@@ -12,6 +12,10 @@ categories.workspace = true
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tikv-jemallocator.workspace = true
 
+# Criterion pulls Rayon transitively, which does not build for WASI.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion.workspace = true
+
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 
@@ -31,7 +35,6 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 proptest.workspace = true
 rand = { workspace = true, features = ["std_rng"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
