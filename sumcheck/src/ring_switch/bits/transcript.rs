@@ -77,6 +77,9 @@ const SUCCESSOR_ELEMENTS: usize = 2;
 /// Step label of the bracket around the delegated sumcheck.
 const BATCHED_SUMCHECK: &str = "batched_sumcheck";
 
+/// Instance label of a batch whose sum the commitment's own sumcheck proves.
+const DEFERRED: &[u8] = b"deferred";
+
 /// Step label of the value the surviving claim carries.
 const SURVIVING_CLAIM: &str = "surviving_claim";
 
@@ -661,6 +664,8 @@ pub struct ClaimsDraws<EF> {
 pub struct BitRingSwitchClaimsShape {
     /// The shape of each claim, in the order the claims are bound.
     pub claims: Vec<BitRingSwitchShape>,
+    /// Whether the batched sum is left to the commitment's own sumcheck, so no rounds run here.
+    pub deferred: bool,
 }
 
 impl BitRingSwitchClaimsShape {
@@ -712,6 +717,10 @@ impl BitRingSwitchClaimsShape {
         }
         // Powers of one more challenge fold the claims' sums into the one the rounds prove.
         steps.push(scalar_challenge(CLAIM_BATCHING));
+        // A deferred sum is proven by whoever runs next, so the run ends at the draws.
+        if self.deferred {
+            return InteractionPattern::new(steps).expect("a flat pattern is always well formed");
+        }
         steps.extend([
             Interaction::marker::<BatchedSumcheck>(
                 Hierarchy::Begin,
@@ -746,6 +755,9 @@ impl BitRingSwitchClaimsShape {
     {
         let mut separator = DomainSeparator::new(VERSION, CLAIMS_NAME, self.pattern::<F, EF>());
         separator.instance(&(self.claims.len() as u64).to_be_bytes());
+        if self.deferred {
+            separator.instance(DEFERRED);
+        }
         for claim in &self.claims {
             match claim.form {
                 ClaimForm::Successor { rows } => separator.instance(&(rows as u64).to_be_bytes()),
@@ -1699,6 +1711,7 @@ mod tests {
             seed_digest(
                 &BitRingSwitchClaimsShape {
                     claims: claims.to_vec(),
+                    deferred: false,
                 }
                 .domain_separator::<EF, EF>(),
             )
@@ -1710,6 +1723,16 @@ mod tests {
             ("successor, plain", batch(&[successor, plain])),
             ("plain, wider successor", batch(&[plain, wider])),
             ("one-claim run", seed_of(plain)),
+            (
+                "deferred",
+                seed_digest(
+                    &BitRingSwitchClaimsShape {
+                        claims: vec![plain, plain],
+                        deferred: true,
+                    }
+                    .domain_separator::<EF, EF>(),
+                ),
+            ),
         ];
         assert_seeds_pairwise_distinct(&seeds);
 
@@ -1717,7 +1740,8 @@ mod tests {
         assert!(
             pow_difficulties(
                 &BitRingSwitchClaimsShape {
-                    claims: vec![plain, successor]
+                    claims: vec![plain, successor],
+                    deferred: false,
                 }
                 .pattern::<EF, EF>()
             )
@@ -1730,6 +1754,7 @@ mod tests {
         // The verifier checks every claim's widths before the sponge moves.
         let shape = BitRingSwitchClaimsShape {
             claims: vec![base_shape(), base_shape()],
+            deferred: false,
         };
         let point = point_of(NUM_VARIABLES, 1);
         let rows = rows_of(1);
