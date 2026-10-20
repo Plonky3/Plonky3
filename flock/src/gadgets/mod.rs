@@ -39,6 +39,9 @@ pub trait Gadget {
 
     /// Decode the output ports' words.
     fn decode_output(words: &[u64]) -> Self::Output;
+
+    /// Pack an output into the output ports' words, the inverse of decoding.
+    fn write_output(output: &Self::Output, words: &mut [u64]);
 }
 
 /// Pack 32-bit words two per 64-bit word, low half first.

@@ -94,4 +94,8 @@ impl Gadget for Blake2sCompress {
     fn decode_output(words: &[u64]) -> [u32; 8] {
         unpack_u32s(words)
     }
+
+    fn write_output(output: &[u32; 8], words: &mut [u64]) {
+        pack_u32s(output, words);
+    }
 }

@@ -6,6 +6,7 @@ mod builder;
 mod wire;
 
 use alloc::vec::Vec;
+use core::ops::Range;
 
 pub use builder::Builder;
 use p3_field::Field;
@@ -39,6 +40,15 @@ fn slot(index: usize) -> u32 {
     u32::try_from(index).expect("circuit index fits in 32 bits")
 }
 
+/// A port of a circuit, by its index among the inputs or among the outputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Port {
+    /// An input port.
+    Input(usize),
+    /// An output port.
+    Output(usize),
+}
+
 /// A finished gate list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Circuit {
@@ -52,25 +62,35 @@ pub struct Circuit {
     useful_bits: usize,
     /// Words the input ports span.
     n_input_words: usize,
+    /// Each input port's words.
+    inputs: Vec<Range<usize>>,
+    /// Each output port's words, after the inputs'.
+    outputs: Vec<Range<usize>>,
     /// Keccak-256 of the encoding, the one binding of the circuit every transcript absorbs.
     digest: [u8; 32],
 }
 
 impl Circuit {
     /// Seal a gate list, hashing its encoding once.
+    ///
+    /// The constant sits right after the last port.
     fn new(
         gates: Vec<Gate>,
-        const_pos: usize,
+        inputs: Vec<Range<usize>>,
+        outputs: Vec<Range<usize>>,
         k_log: usize,
         useful_bits: usize,
-        n_input_words: usize,
     ) -> Self {
+        let n_input_words = inputs.last().map_or(0, |r| r.end);
+        let port_words = outputs.last().map_or(n_input_words, |r| r.end);
         let mut circuit = Self {
             gates,
-            const_pos,
+            const_pos: 64 * port_words,
             k_log,
             useful_bits,
             n_input_words,
+            inputs,
+            outputs,
             digest: [0; 32],
         };
         circuit.digest = circuit.compute_digest();
@@ -99,6 +119,16 @@ impl Circuit {
     #[must_use]
     pub const fn n_input_words(&self) -> usize {
         self.n_input_words
+    }
+
+    /// A port's words in an instance, or none if the circuit has no such port.
+    #[must_use]
+    pub fn port(&self, port: Port) -> Option<Range<usize>> {
+        match port {
+            Port::Input(i) => self.inputs.get(i),
+            Port::Output(i) => self.outputs.get(i),
+        }
+        .cloned()
     }
 
     /// Keccak-256 of the circuit's injective encoding.

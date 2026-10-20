@@ -8,16 +8,16 @@ use crate::lincheck::LincheckProof;
 use crate::opening::{Commitment, OpeningProof};
 use crate::zerocheck::ZerocheckProof;
 
-/// A proof that some committed witness satisfies every instance of a batch's circuit.
+/// A proof that a committed witness satisfies every instance of a batch's circuit and holds its public port words.
 ///
-/// No port is bound to a public value, and the proof is not zero-knowledge.
+/// The proof is not zero-knowledge.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FlockProof {
     /// Commitment to the packed witness.
     pub commitment: Commitment,
     /// Zerocheck of `A z o B z = z`.
     pub zerocheck: ZerocheckProof,
-    /// Reduction of the zerocheck claims to one witness claim.
+    /// Reduction of the zerocheck claims and the public words to one witness claim.
     pub lincheck: LincheckProof,
     /// Opening of that claim.
     pub opening: OpeningProof,
