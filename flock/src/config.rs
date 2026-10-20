@@ -21,23 +21,30 @@ pub struct FlockConfig {
 /// WHIR parameters of the bit commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PcsParams {
-    /// Target in bits for every error term of the opening.
+    /// Bits the composed opening error must reach.
     pub security_bits: usize,
     /// Log inverse rate of the first codeword.
     pub log_inv_rate: usize,
-    /// Variables each WHIR round folds.
+    /// Variables the first WHIR round folds, one Merkle leaf holding `2^first_folding` elements.
+    pub first_folding: usize,
+    /// Bits the codeword domain loses after the first round.
+    pub first_reduction: usize,
+    /// Variables each later WHIR round folds.
     pub folding: usize,
+    /// Grinding before every query phase.
+    pub query_grinding: usize,
 }
 
 impl Default for PcsParams {
-    /// Each term at 128 bits, rate 1/2, list decoding up to the Johnson bound.
-    ///
-    /// The terms add up: the opening reaches about 126 bits, and Keccak-256 caps the hashes at 128.
+    /// 128 composed bits at rate 1/2, list decoding up to the Johnson bound.
     fn default() -> Self {
         Self {
             security_bits: 128,
             log_inv_rate: 1,
+            first_folding: 6,
+            first_reduction: 3,
             folding: 4,
+            query_grinding: 16,
         }
     }
 }

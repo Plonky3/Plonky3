@@ -184,3 +184,16 @@ fn a_witness_narrower_than_one_element_has_no_commitment() {
         Err(OpeningError::TooFewVariables { num_variables: 5 })
     ));
 }
+
+#[test]
+fn the_default_commitment_composes_to_its_target() {
+    // Invariant: the union of every opening error term reaches the requested bits at every size.
+    for num_variables in [12, 14, 20, 26, 32] {
+        let pcs = WitnessPcs::new(num_variables, &PcsParams::default()).unwrap();
+        let bits = pcs.0.readings_security(1, false).unwrap().error().bits();
+        assert!(
+            bits >= 128.0,
+            "{num_variables} variables compose to {bits} bits"
+        );
+    }
+}
