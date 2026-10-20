@@ -9,6 +9,7 @@
 //!
 //! Each group and the tile pass then cost one read and one write of the matrix.
 
+use p3_commit::{RowSink, hand_over_rows};
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_floor_usize};
 
@@ -295,17 +296,23 @@ fn tile_stages<F: ButterflyField, const INVERSE: bool>(
 /// Run the bottom `log_rows` stages inside each contiguous tile of `2^log_rows` rows.
 ///
 /// Those stages pair rows closer than a tile, so each tile is read once and written once.
+///
+/// A sink, with the first row the matrix starts at, receives each tile while it is still in cache.
 fn deep_tiles<F: ButterflyField, const INVERSE: bool>(
     values: &mut [F],
     width: usize,
     log_rows: usize,
     twiddles: &Twiddles<F>,
+    sink: Option<(&RowSink<'_, F>, usize)>,
 ) {
     values
         .par_chunks_mut((1 << log_rows) * width)
         .enumerate()
         .for_each(|(index, tile)| {
             tile_stages::<F, INVERSE>(tile, width, log_rows, 0, index, twiddles);
+            if let Some((sink, first_row)) = sink {
+                sink(first_row + (index << log_rows), tile);
+            }
         });
 }
 
@@ -403,29 +410,34 @@ pub(super) fn run<F: ButterflyField, const INVERSE: bool>(
     let cut = Cut::new(schedule, log_n);
     if INVERSE {
         if cut.tile > 0 {
-            deep_tiles::<F, true>(values, width, cut.tile, twiddles);
+            deep_tiles::<F, true>(values, width, cut.tile, twiddles, None);
         }
         for g in 0..cut.groups {
             group_pass::<F, true>(values, width, cut.bounds(g), cut.slab, twiddles);
         }
     } else {
-        forward_below(values, width, cut, cut.groups, twiddles);
+        forward_below(values, width, cut, cut.groups, twiddles, None);
     }
 }
 
 /// The forward groups below the first `groups` from the bottom, then the tile.
+///
+/// A sink, with the first row the matrix starts at, receives every finished row once.
 fn forward_below<F: ButterflyField>(
     values: &mut [F],
     width: usize,
     cut: Cut,
     groups: usize,
     twiddles: &Twiddles<F>,
+    sink: Option<(&RowSink<'_, F>, usize)>,
 ) {
     for g in (0..groups).rev() {
         group_pass::<F, false>(values, width, cut.bounds(g), cut.slab, twiddles);
     }
     if cut.tile > 0 {
-        deep_tiles::<F, false>(values, width, cut.tile, twiddles);
+        deep_tiles::<F, false>(values, width, cut.tile, twiddles, sink);
+    } else if let Some((sink, first_row)) = sink {
+        hand_over_rows(values, width, first_row, sink);
     }
 }
 
@@ -453,6 +465,7 @@ pub(super) fn run_cosets<F: ButterflyField>(
     log_message: usize,
     twiddles: &[Twiddles<F>],
     schedule: &Schedule,
+    sink: Option<&RowSink<'_, F>>,
 ) {
     let len = width << log_message;
     let cut = Cut::new(schedule, log_message);
@@ -480,6 +493,9 @@ pub(super) fn run_cosets<F: ButterflyField>(
                 tile_stages::<F, false>(tile, width, cut.tile, 0, index, &twiddles[coset]);
             },
         );
+        if let Some(sink) = sink {
+            hand_over_rows(values, width, 0, sink);
+        }
         return;
     }
 
@@ -513,7 +529,15 @@ pub(super) fn run_cosets<F: ButterflyField>(
     values
         .par_chunks_mut(len)
         .zip(twiddles.par_iter())
-        .for_each(|(coset, twiddles)| {
-            forward_below(coset, width, cut, cut.groups - 1, twiddles);
+        .enumerate()
+        .for_each(|(index, (coset, twiddles))| {
+            forward_below(
+                coset,
+                width,
+                cut,
+                cut.groups - 1,
+                twiddles,
+                sink.map(|sink| (sink, index << log_message)),
+            );
         });
 }

@@ -3,7 +3,7 @@
 use p3_binary_dft::{AdditiveRsEncoder, LchNtt, PolyBasisNtt, domain_point};
 use p3_binary_field::{BinaryField32, BinaryField128, Poly64, TowerLevel};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_commit::{Encoder, zero_padded};
+use p3_commit::{Encoder, RowSink, zero_padded};
 use p3_field::{BasedVectorSpace, ExtensionField, Field};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_multilinear_util::point::Point;
@@ -219,6 +219,16 @@ where
         log_inv_rate: usize,
     ) -> RowMajorMatrix<Poly64> {
         self.encoder.encode_batch_borrowed(message, log_inv_rate)
+    }
+
+    fn encode_batch_borrowed_with(
+        &self,
+        message: RowMajorMatrixView<'_, Poly64>,
+        log_inv_rate: usize,
+        sink: &RowSink<'_, Poly64>,
+    ) -> RowMajorMatrix<Poly64> {
+        self.encoder
+            .encode_batch_borrowed_with(message, log_inv_rate, sink)
     }
 }
 
