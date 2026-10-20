@@ -2,8 +2,8 @@
 
 use p3_commit::{Encoder, Mmcs};
 use p3_field::Field;
-use p3_matrix::Matrix;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use tracing::info_span;
@@ -131,10 +131,21 @@ where
     let message = RowMajorMatrixView::new(message, 1 << folding);
     let codeword_height = message.height() << starting_log_inv_rate;
 
-    let encoded = info_span!("encode", height = codeword_height, width = message.width)
-        .in_scope(|| encoder.encode_batch_borrowed(message, starting_log_inv_rate));
-
-    info_span!("commit_matrix").in_scope(|| mmcs.commit_matrix(encoded))
+    // The scheme hashes each codeword row as the encoder finishes it.
+    let dimensions = Dimensions {
+        width: message.width,
+        height: codeword_height,
+    };
+    info_span!(
+        "encode and commit",
+        height = codeword_height,
+        width = message.width
+    )
+    .in_scope(|| {
+        mmcs.commit_matrix_streamed(dimensions, |sink| {
+            encoder.encode_batch_borrowed_with(message, starting_log_inv_rate, sink)
+        })
+    })
 }
 
 #[cfg(test)]
