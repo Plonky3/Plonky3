@@ -1,10 +1,10 @@
 //! Evaluation-domain operations used by the non-hiding WHIR prover.
 
-use p3_commit::Encoder;
+use p3_commit::{Encoder, zero_padded};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, PackedValue, TwoAdicField};
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_security::SecurityAssumption;
@@ -59,6 +59,17 @@ where
         message: RowMajorMatrix<EF>,
         log_inv_rate: usize,
     ) -> RowMajorMatrix<EF>;
+
+    /// Encodes an extension-field coefficient matrix held elsewhere, at `2^log_inv_rate` times its height.
+    ///
+    /// The default copies it under a zero tail, then encodes that.
+    fn encode_extension_batch_borrowed(
+        &self,
+        message: RowMajorMatrixView<'_, EF>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<EF> {
+        self.encode_extension_batch_padded(zero_padded(message, log_inv_rate), log_inv_rate)
+    }
 
     /// Returns selector coordinates for a queried codeword position.
     fn query_point(
