@@ -16,7 +16,8 @@ use super::twiddles::Twiddles;
 use crate::butterfly::ButterflyField;
 use crate::cache::CacheBudget;
 use crate::staging::{
-    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
+    Dispatch, SHARED_CACHE_BYTES, StagedRuns, Store, for_each_staged_tile,
+    for_each_staged_tile_into_cosets, for_each_staged_tile_into_cosets_stored, prefault,
 };
 
 /// Field elements one butterfly task covers on each side of a block.
@@ -134,6 +135,14 @@ impl Schedule {
             0
         } else {
             staged_rows
+        };
+
+        // The fewest groups cover the stages above the tile, each as shallow as that count allows.
+        let above = log_n.saturating_sub(log_tile_rows);
+        let log_staged_rows = if log_staged_rows >= MIN_FUSED_STAGES && above > 0 {
+            above.div_ceil(above.div_ceil(log_staged_rows))
+        } else {
+            log_staged_rows
         };
 
         Self {
@@ -434,9 +443,12 @@ fn forward_below<F: ButterflyField>(
 ///
 /// No pass copies the message into the cosets before transforming them.
 ///
+/// A separate source stands in for the leading coset, whose prior contents are then never read.
+///
 /// Each coset then finishes its remaining passes on its own rows.
 pub(super) fn run_cosets<F: ButterflyField>(
     values: &mut [F],
+    source: Option<&[F]>,
     width: usize,
     log_message: usize,
     twiddles: &[Twiddles<F>],
@@ -445,10 +457,11 @@ pub(super) fn run_cosets<F: ButterflyField>(
     let len = width << log_message;
     let cut = Cut::new(schedule, log_message);
 
-    // The cosets past the leading one hold zeros, and the shared pass is their first write.
+    // Every coset the shared pass writes first is faulted in beforehand by a contiguous sweep.
     //
-    // A contiguous sweep faults their pages in beforehand.
-    prefault(&mut values[len..], F::ZERO);
+    // That is the leading one too when the message lies elsewhere.
+    let fresh = if source.is_some() { 0 } else { len };
+    prefault(&mut values[fresh..], F::ZERO);
 
     if cut.groups == 0 {
         // The contiguous tile covers every stage, so the shared pass is the whole transform.
@@ -458,7 +471,7 @@ pub(super) fn run_cosets<F: ButterflyField>(
         let tasks = len / (width << cut.tile);
         for_each_staged_tile_into_cosets(
             values,
-            None,
+            source,
             len,
             runs,
             staged_dispatch(tasks),
@@ -475,12 +488,21 @@ pub(super) fn run_cosets<F: ButterflyField>(
     let (top, depth) = (high - 1, high - low);
     let row_len = (1 << cut.slab) * width;
     let tasks = len / (row_len << depth);
-    for_each_staged_tile_into_cosets(
+    // A matrix past the shared cache is read back from memory by the next pass anyway.
+    //
+    // Its scatter therefore streams around the cache, which also skips reading each line first.
+    let store = if size_of_val(values) > SHARED_CACHE_BYTES {
+        Store::Streamed
+    } else {
+        Store::Cached
+    };
+    for_each_staged_tile_into_cosets_stored(
         values,
-        None,
+        source,
         len,
         staged_runs(width, top, depth, cut.slab),
         staged_dispatch(tasks),
+        store,
         |_| {},
         |tile, block, coset| {
             tile_stages::<F, false>(tile, row_len, depth, low, block, &twiddles[coset]);

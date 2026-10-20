@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 pub(crate) use schedule::BUTTERFLY_GRAIN;
@@ -16,7 +16,8 @@ use twiddles::Twiddles;
 
 use crate::butterfly::ButterflyField;
 use crate::domain::domain_point;
-use crate::traits::AdditiveNtt;
+use crate::staging::zeroed;
+use crate::traits::{AdditiveNtt, padded_len};
 
 /// The Lin-Chung-Han additive NTT over the Cantor-basis domain.
 ///
@@ -55,6 +56,24 @@ impl<F: ButterflyField> AdditiveNtt<F> for LchNtt<F> {
         // The zero tail starts where the message ends, which fixes the coset size.
         F::lch_transform_cosets(&mut mat.values, width, log_n - log_inv_rate);
         mat
+    }
+
+    fn ntt_batch_borrowed(
+        &self,
+        mat: RowMajorMatrixView<'_, F>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<F> {
+        let width = mat.width();
+        let log_message = log2_strict_usize(mat.height());
+        assert!(
+            log_message + log_inv_rate <= 1 << F::LOG_BITS,
+            "domain exceeds field dimension"
+        );
+
+        // The transform reads the message where it lies, so it is never copied into the codeword.
+        let mut values = zeroed(padded_len(mat.values.len(), log_inv_rate), F::ZERO);
+        F::lch_transform_cosets_from(&mut values, mat.values, width, log_message);
+        RowMajorMatrix::new(values, width)
     }
 }
 
@@ -117,11 +136,26 @@ pub(crate) fn transform_cosets<F: ButterflyField>(
     width: usize,
     log_message: usize,
 ) {
+    transform_cosets_from(values, None, width, log_message);
+}
+
+/// As [`transform_cosets`], the message read from `source` when one is given.
+///
+/// The leading coset's prior contents are then never read.
+pub(crate) fn transform_cosets_from<F: ButterflyField>(
+    values: &mut [F],
+    source: Option<&[F]>,
+    width: usize,
+    log_message: usize,
+) {
     let len = width << log_message;
 
     // A coset within one tile is cheap to copy and transform on its own.
     if size_of::<F>() * len <= CACHED_MATRIX_BYTES {
         let (message, rest) = values.split_at_mut(len);
+        if let Some(source) = source {
+            message.copy_from_slice(source);
+        }
         rest.par_chunks_mut(len).enumerate().for_each(|(c, coset)| {
             coset.copy_from_slice(message);
             transform::<F, false>(coset, width, domain_point::<F>((c + 1) << log_message));
@@ -136,6 +170,7 @@ pub(crate) fn transform_cosets<F: ButterflyField>(
         .collect();
     run_cosets(
         values,
+        source,
         width,
         log_message,
         &twiddles,
@@ -367,6 +402,24 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_borrowed_message_encodes_as_its_zero_padded_copy() {
+        // Fixture state: one coset in a tile, and cosets past a tile on the staged and deep paths.
+        for (log_n, width, log_inv_rate) in [(4, 3, 2), (11, 16, 1), (12, 64, 1), (9, 48, 4)] {
+            let message = matrix::<Poly64>(log_n, width, 7);
+            let mut padded = message.clone();
+            padded
+                .values
+                .resize(message.values.len() << log_inv_rate, Poly64::ZERO);
+            let ntt = LchNtt::<Poly64>::default();
+            assert_eq!(
+                ntt.ntt_batch_borrowed(message.as_view(), log_inv_rate),
+                ntt.ntt_batch_padded(padded, log_inv_rate),
+                "log_n={log_n} width={width} rate={log_inv_rate}"
+            );
         }
     }
 
@@ -825,7 +878,7 @@ mod tests {
         let twiddles: Vec<_> = (0..1usize << log_inv_rate)
             .map(|c| Twiddles::new(log_message, domain_point::<F>(c << log_message)))
             .collect();
-        run_cosets(&mut padded, width, log_message, &twiddles, schedule);
+        run_cosets(&mut padded, None, width, log_message, &twiddles, schedule);
         assert_eq!(
             padded, expected.values,
             "log_message={log_message} width={width} rate={log_inv_rate} {schedule:?}"
