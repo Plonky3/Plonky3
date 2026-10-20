@@ -13,9 +13,16 @@ extern crate std;
 mod batch;
 mod byteslice;
 mod circuit;
+mod config;
+mod error;
+pub mod lincheck;
+pub mod opening;
 mod point;
+mod proof;
+mod prover;
 mod skip;
 mod stream;
+mod verifier;
 mod witness;
 pub mod zerocheck;
 
@@ -24,7 +31,12 @@ mod tests;
 
 pub use batch::{Batch, BatchError};
 pub use circuit::{Builder, Circuit, Wire, Word};
-pub use point::QuirkyPoint;
+pub use config::{FlockChallenger, FlockConfig, PcsParams};
+pub use error::{ProvingError, VerificationError};
+pub use point::{QuirkyClaim, QuirkyPoint};
+pub use proof::FlockProof;
+pub use prover::prove;
+pub use verifier::verify;
 pub use witness::Witness;
 
 /// The committed field: a witness packs 64 bits per element.

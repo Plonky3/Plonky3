@@ -24,6 +24,9 @@ pub(crate) trait SliceRegister: Copy {
     /// The address must be writable for 64 bytes.
     unsafe fn store(to: *mut u8, value: Self);
 
+    /// Hint that the line at an address is read soon; any address is allowed.
+    fn prefetch(at: *const u8);
+
     /// Bitwise exclusive or.
     fn xor(self, other: Self) -> Self;
 
@@ -47,6 +50,9 @@ pub(crate) trait SliceRegister: Copy {
 
     /// Every byte through the block of its quadword, output bit `k` reading block byte `7 - k`.
     fn affine(self, matrices: Self) -> Self;
+
+    /// Quadword `g` of input `r` becomes quadword `r` of output `g`.
+    fn transpose_qwords(rows: [Self; 8]) -> [Self; 8];
 }
 
 /// The 512-bit register, over AVX-512 and GFNI.
@@ -60,10 +66,11 @@ pub(crate) trait SliceRegister: Copy {
 ))]
 mod x86_64 {
     use core::arch::x86_64::{
-        __m512i, _mm512_gf2p8affine_epi64_epi8, _mm512_loadu_si512, _mm512_mask_permutexvar_epi8,
-        _mm512_mask_permutexvar_epi64, _mm512_permutex2var_epi8, _mm512_permutex2var_epi64,
-        _mm512_permutexvar_epi8, _mm512_set1_epi64, _mm512_setzero_si512, _mm512_storeu_si512,
-        _mm512_ternarylogic_epi64, _mm512_xor_si512,
+        __m512i, _MM_HINT_T0, _mm_prefetch, _mm512_gf2p8affine_epi64_epi8, _mm512_loadu_si512,
+        _mm512_mask_permutexvar_epi8, _mm512_mask_permutexvar_epi64, _mm512_permutex2var_epi8,
+        _mm512_permutex2var_epi64, _mm512_permutexvar_epi8, _mm512_set1_epi64, _mm512_setr_epi64,
+        _mm512_setzero_si512, _mm512_shuffle_i64x2, _mm512_storeu_si512, _mm512_ternarylogic_epi64,
+        _mm512_unpackhi_epi64, _mm512_unpacklo_epi64, _mm512_xor_si512,
     };
 
     use super::SliceRegister;
@@ -90,6 +97,12 @@ mod x86_64 {
         unsafe fn store(to: *mut u8, value: Self) {
             // SAFETY: the writability of the address is the caller's obligation.
             unsafe { _mm512_storeu_si512(to.cast(), value) }
+        }
+
+        #[inline(always)]
+        fn prefetch(at: *const u8) {
+            // A prefetch never faults, whatever the address.
+            unsafe { _mm_prefetch::<_MM_HINT_T0>(at.cast()) }
         }
 
         #[inline(always)]
@@ -130,6 +143,42 @@ mod x86_64 {
         #[inline(always)]
         fn affine(self, matrices: Self) -> Self {
             unsafe { _mm512_gf2p8affine_epi64_epi8::<0>(self, matrices) }
+        }
+
+        #[inline(always)]
+        fn transpose_qwords(rows: [Self; 8]) -> [Self; 8] {
+            unsafe {
+                // Pairs: t[2p] holds the even quadwords of rows 2p, 2p + 1, t[2p + 1] the odd ones.
+                let t: [Self; 8] = core::array::from_fn(|i| {
+                    let (a, b) = (rows[i & !1], rows[i | 1]);
+                    if i & 1 == 0 {
+                        _mm512_unpacklo_epi64(a, b)
+                    } else {
+                        _mm512_unpackhi_epi64(a, b)
+                    }
+                });
+                // Quads: u[4q + w] holds quadwords w and w + 4 of rows 4q .. 4q + 4.
+                let lo = _mm512_setr_epi64(0, 1, 8, 9, 4, 5, 12, 13);
+                let hi = _mm512_setr_epi64(2, 3, 10, 11, 6, 7, 14, 15);
+                let u: [Self; 8] = core::array::from_fn(|i| {
+                    let (q, w) = (i / 4, i % 4);
+                    let (a, b) = (t[4 * q + (w & 1)], t[4 * q + 2 + (w & 1)]);
+                    if w < 2 {
+                        _mm512_permutex2var_epi64(a, lo, b)
+                    } else {
+                        _mm512_permutex2var_epi64(a, hi, b)
+                    }
+                });
+                // Halves: quadword g of all eight rows.
+                core::array::from_fn(|g| {
+                    let (a, b) = (u[g % 4], u[4 + g % 4]);
+                    if g < 4 {
+                        _mm512_shuffle_i64x2::<0x44>(a, b)
+                    } else {
+                        _mm512_shuffle_i64x2::<0xEE>(a, b)
+                    }
+                })
+            }
         }
     }
 }
