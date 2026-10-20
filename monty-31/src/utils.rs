@@ -190,13 +190,18 @@ pub(crate) const fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
     //   2*R*P            <  2^64
     //   lo               <= 2^64 - 1   (arbitrary u64)
     //
-    // So the low limb can exceed the accepted range by at most one copy of 2*R*P.
-    // Subtracting it once is always enough because 2^64 < 4*R*P for any 31-bit prime.
+    // For primes with bit 30 set (P >= 2^30), 2^64 < 4*R*P holds strictly, so the low
+    // limb can exceed [0, 2*R*P) by at most one copy of 2*R*P and a single subtraction
+    // suffices. For smaller primes supported by MontyParameters (such as test fields where
+    // P <= 2^30), lo can exceed 2*R*P by multiple copies, so we reduce modulo 2*R*P.
     //
-    // Correctness: 2*R*P is a multiple of P, so this subtraction
-    // does not change the residue modulo P.
+    // Correctness: 2*R*P is a multiple of P, so this reduction does not change the residue modulo P.
     let two_rp = ((MP::PRIME as u64) << MP::MONTY_BITS) << 1;
-    let lo_reduced = if lo >= two_rp { lo - two_rp } else { lo };
+    let lo_reduced = if MP::PRIME >= (1 << 30) {
+        if lo >= two_rp { lo - two_rp } else { lo }
+    } else {
+        lo % two_rp
+    };
 
     // Reduce the low limb: lo * R^{-1} mod P.
     //
@@ -244,6 +249,22 @@ mod tests {
     }
 
     const KB_P: u32 = KB::PRIME;
+    #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash)]
+    struct Tiny;
+    impl MontyParameters for Tiny {
+        const PRIME: u32 = 3;
+        const MONTY_BITS: u32 = 32;
+        const MONTY_MU: u32 = 0xaaaa_aaab;
+    }
+
+    #[test]
+    fn test_tiny_monty_reduce_u128_boundary() {
+        let x = 0x10_0000_0000u128;
+        let res = monty_reduce_u128::<Tiny>(x);
+        assert!(res < 3, "res must be < 3, got {res}");
+        assert_eq!(res, 1, "res must be 1 mod 3");
+    }
+
     const BB_P: u32 = BB::PRIME;
 
     // R = 2^32, the Montgomery radix for both fields.
@@ -522,6 +543,22 @@ mod tests {
             let x = (hi as u128) << 64 | lo as u128;
             let result = monty_reduce_u128::<BB>(x) as u128;
             prop_assert_eq!((result * R as u128) % BB_P as u128, x % BB_P as u128);
+        }
+
+        #[test]
+        fn tiny_monty_reduce_u128_output_range(lo: u64, hi: u32) {
+            let x = (hi as u128) << 64 | lo as u128;
+            prop_assert!(monty_reduce_u128::<Tiny>(x) < Tiny::PRIME);
+        }
+
+        #[test]
+        fn tiny_monty_reduce_u128_identity(lo: u64, hi: u32) {
+            let x = (hi as u128) << 64 | lo as u128;
+            let result = monty_reduce_u128::<Tiny>(x) as u128;
+            prop_assert_eq!(
+                (result * R as u128) % Tiny::PRIME as u128,
+                x % Tiny::PRIME as u128
+            );
         }
 
         #[test]
