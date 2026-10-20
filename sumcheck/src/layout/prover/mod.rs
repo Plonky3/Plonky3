@@ -29,7 +29,7 @@ use crate::layout::transcript::{
     BatchingShape, LayoutBinding, OpeningProverTranscript, OpeningShape, PointSource,
     VirtualProverTranscript, VirtualShape, prover_batching_challenge,
 };
-use crate::layout::{LayoutStrategy, Table, Witness};
+use crate::layout::{InitialWeight, LayoutStrategy, Table, Witness};
 use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 use crate::table::{OpeningEvals, OpeningRequest, TableShape};
 use crate::transcript::{ProverTranscript, SumcheckShape};
@@ -579,6 +579,31 @@ where
     L: Layout<F, EF>,
     Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
+    let (alpha, sum, rs, _) = preprocess_with(layout, None, sumcheck_data, pow_bits, challenger);
+    (alpha, sum, rs)
+}
+
+/// As [`preprocess`], each round also measuring an extra weight under the next batching power.
+///
+/// # Returns
+///
+/// - Batching challenge that weights the recorded openings.
+/// - Running claimed sum after the preprocessing rounds, the extra weight's share included.
+/// - Folding challenges, in sampling order.
+/// - The power of the batching challenge the extra weight takes.
+fn preprocess_with<F, EF, L, Ch>(
+    layout: &L,
+    mut weight: Option<&mut dyn InitialWeight<EF>>,
+    sumcheck_data: &mut SumcheckData<F, EF>,
+    pow_bits: usize,
+    challenger: &mut Ch,
+) -> (EF, EF, Point<EF>, EF)
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    L: Layout<F, EF>,
+    Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+{
     let claims = layout.claims();
 
     // Sanity: preprocessing cannot consume more rounds than the stacked arity.
@@ -592,8 +617,14 @@ where
     // Batch every recorded claim's accumulators under the drawn challenge.
     let accumulators = claims.batched_accumulators(alpha);
 
+    // The extra weight takes the power after every recorded claim.
+    let scale = alpha.exp_u64((layout.num_claims() + layout.num_virtual_claims()) as u64);
+
     // Drive the preprocessing rounds from the accumulators.
     let mut sum = claims.sum(alpha);
+    if let Some(weight) = weight.as_deref() {
+        sum += scale * weight.claimed_sum();
+    }
     let mut rs = Vec::new();
 
     // One driver spans the whole preprocessing batch, so the description is walked exactly once.
@@ -601,7 +632,12 @@ where
     let mut transcript = ProverTranscript::<Ch, F, EF>::new(challenger, shape);
 
     for _ in 0..claims.folding {
-        let (c0, c_inf) = accumulators.round_coefficients(&rs);
+        let (mut c0, mut c_inf) = accumulators.round_coefficients(&rs);
+        if let Some(weight) = weight.as_deref_mut() {
+            let (w0, w_inf) = weight.round(&rs);
+            c0 += scale * w0;
+            c_inf += scale * w_inf;
+        }
 
         // Observe coefficients, sample r, extrapolate the running sum.
         let r = sumcheck_data.observe_and_sample(&mut transcript, c0, c_inf);
@@ -612,7 +648,7 @@ where
     // Require that every described step was played.
     transcript.finish();
 
-    (alpha, sum, Point::new(rs))
+    (alpha, sum, Point::new(rs), scale)
 }
 
 #[cfg(test)]

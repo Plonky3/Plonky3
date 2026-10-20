@@ -13,9 +13,11 @@ use p3_multilinear_util::split_eq::SplitEq;
 
 use crate::layout::opening::{EqSvoPartials, NextSvoPartials, Opening, ProverMultiClaim};
 use crate::layout::prover::banked::STAGE_ROUNDS;
-use crate::layout::prover::{Layout, StackedClaims, SuffixResidualProver, preprocess};
+use crate::layout::prover::{
+    Layout, StackedClaims, SuffixResidualProver, preprocess, preprocess_with,
+};
 use crate::layout::witness::{Table, column_slots};
-use crate::layout::{LayoutStrategy, Witness};
+use crate::layout::{InitialWeight, LayoutStrategy, Witness};
 use crate::product_polynomial::ProductPolynomial;
 use crate::strategy::{IntoTranscriptField, ReprSumcheckProver, SumcheckProver, VariableOrder};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
@@ -429,22 +431,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         let compressed = self.compress_stacked(&reversed);
         // Factor 2 of the product: the batched equality-weight poly.
         let weights = self.combine_weights(&reversed, alpha);
-        // Pair them; the product polynomial drives the remaining rounds.
-        let poly = if F::Packing::WIDTH > 1 && compressed.num_evals() > F::Packing::WIDTH {
-            // Release each scalar source before allocating the next packed table.
-            let packed_evals = compressed.pack::<F, EF>();
-            drop(compressed);
-            let packed_weights = weights.pack::<F, EF>();
-            drop(weights);
-            ProductPolynomial::new_packed(VariableOrder::Suffix, packed_evals, packed_weights)
-        } else {
-            ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights)
-        };
-        // Cross-check: the dot product of the two factors must equal the
-        // running sum accumulated across the preprocessing rounds.
-        debug_assert_eq!(poly.dot_product(), sum);
-
-        (SumcheckProver::new(poly, sum), rs)
+        (residual_prover(compressed, weights, sum), rs)
     }
 
     fn strategy() -> LayoutStrategy {
@@ -452,7 +439,69 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
     }
 }
 
+/// The residual prover pairing the compressed polynomial with its weights.
+fn residual_prover<F: Field, EF: ExtensionField<F>>(
+    compressed: Poly<EF>,
+    weights: Poly<EF>,
+    sum: EF,
+) -> SumcheckProver<F, EF> {
+    let poly = if F::Packing::WIDTH > 1 && compressed.num_evals() > F::Packing::WIDTH {
+        // Release each scalar source before allocating the next packed table.
+        let packed_evals = compressed.pack::<F, EF>();
+        drop(compressed);
+        let packed_weights = weights.pack::<F, EF>();
+        drop(weights);
+        ProductPolynomial::new_packed(VariableOrder::Suffix, packed_evals, packed_weights)
+    } else {
+        ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights)
+    };
+    // Cross-check: the dot product of the two factors must equal the
+    // running sum accumulated across the preprocessing rounds.
+    debug_assert_eq!(poly.dot_product(), sum);
+    SumcheckProver::new(poly, sum)
+}
+
 impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
+    /// As [`Layout::into_sumcheck`], the preprocessing rounds also proving an extra weight.
+    ///
+    /// The weight takes the batching power after every recorded claim, the last variable first.
+    ///
+    /// # Returns
+    ///
+    /// - Residual sumcheck prover over the unpacked product polynomial.
+    /// - Folding challenges sampled during preprocessing.
+    #[tracing::instrument(skip_all)]
+    pub fn into_sumcheck_with_weight<W, Ch>(
+        self,
+        mut weight: W,
+        sumcheck_data: &mut SumcheckData<F, EF>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
+    where
+        F: TranscriptField,
+        W: InitialWeight<EF>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let (alpha, sum, rs, scale) = preprocess_with(
+            &self,
+            Some(&mut weight),
+            sumcheck_data,
+            pow_bits,
+            challenger,
+        );
+        let reversed = rs.reversed();
+        let compressed = self.compress_stacked(&reversed);
+        let mut weights = self.combine_weights(&reversed, alpha);
+        let extra = weight.into_folded(rs.as_slice());
+        weights
+            .as_mut_slice()
+            .par_iter_mut()
+            .zip(extra.as_slice().par_iter())
+            .for_each(|(weight, &extra)| *weight += scale * extra);
+        (residual_prover(compressed, weights, sum), rs)
+    }
+
     /// Whether supplied evaluations are the ones the opened columns hold at the point.
     ///
     /// This runs exactly the passes a supplied evaluation exists to avoid, so it is only

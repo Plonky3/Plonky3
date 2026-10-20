@@ -75,6 +75,7 @@ mod plan;
 mod prover;
 pub(crate) mod transcript;
 mod verifier;
+mod weight;
 mod witness;
 
 pub use opening::{
@@ -86,6 +87,7 @@ pub use plan::plan_stacked_layout;
 pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver, SuffixResidualProver};
 pub use transcript::{commitment_domain_separator, observe_commitment};
 pub use verifier::Verifier;
+pub use weight::InitialWeight;
 pub use witness::{
     ColumnOut, ColumnView, FilledSuffixWitness, Selector, SuffixFillError, SuffixLayoutPlan,
     SuffixLayoutPlanError, SuffixTableSource, Table, TablePlacement, Witness,
