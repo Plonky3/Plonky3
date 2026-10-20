@@ -27,6 +27,16 @@ use crate::transcript::{WhirShape, WhirVerifierTranscript};
 
 pub mod errors;
 
+/// An extra initial weight a verifier closes: its claimed sum, and its extension at a point.
+#[derive(Clone, Copy)]
+#[allow(missing_debug_implementations)]
+pub struct InitialWeightCheck<'a, EF> {
+    /// The weight's claimed inner product with the committed polynomial.
+    pub sum: EF,
+    /// The weight's multilinear extension at a point, in natural variable order.
+    pub eval: &'a dyn Fn(&Point<EF>) -> EF,
+}
+
 /// Replays a WHIR opening proof against a public commitment and the
 /// constraint built by the layout adapter.
 ///
@@ -161,6 +171,57 @@ where
     where
         Challenger: CanObserve<MT::Commitment>,
     {
+        self.verify_inner(
+            proof,
+            challenger,
+            parsed_commitment,
+            num_opening_claims,
+            layout,
+            None,
+        )
+    }
+
+    /// As [`Self::verify`], the initial fold also proving an extra weight the caller describes.
+    ///
+    /// The weight takes the batching power after every claim the layout recorded.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify`].
+    pub fn verify_with_initial_weight(
+        &self,
+        proof: &WhirProof<F, EF, MT>,
+        challenger: &mut Challenger,
+        parsed_commitment: &MT::Commitment,
+        layout: &LayoutVerifier<F, EF>,
+        weight: InitialWeightCheck<'_, EF>,
+    ) -> Result<Point<EF>, VerifierError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        self.verify_inner(
+            proof,
+            challenger,
+            parsed_commitment,
+            0,
+            layout,
+            Some(weight),
+        )
+    }
+
+    /// The verification both entry points share, with an optional extra initial weight.
+    fn verify_inner(
+        &self,
+        proof: &WhirProof<F, EF, MT>,
+        challenger: &mut Challenger,
+        parsed_commitment: &MT::Commitment,
+        num_opening_claims: usize,
+        layout: &LayoutVerifier<F, EF>,
+        weight: Option<InitialWeightCheck<'_, EF>>,
+    ) -> Result<Point<EF>, VerifierError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
         // Reject a proof that carries the wrong number of rounds before any
         // transcript work. The per-round commitment slot is checked further
         // down, where each round is parsed.
@@ -206,7 +267,7 @@ where
 
         // A rejection releases the driver's completeness check on its way out.
         // Dropping an unfinished driver otherwise panics on top of the error.
-        match self.replay(proof, &mut transcript, parsed_commitment, layout) {
+        match self.replay(proof, &mut transcript, parsed_commitment, layout, weight) {
             Ok(randomness) => {
                 transcript.finish();
                 Ok(randomness)
@@ -230,6 +291,7 @@ where
         transcript: &mut WhirVerifierTranscript<'_, Challenger, F, EF>,
         parsed_commitment: &MT::Commitment,
         layout: &LayoutVerifier<F, EF>,
+        weight: Option<InitialWeightCheck<'_, EF>>,
     ) -> Result<Point<EF>, VerifierError>
     where
         Challenger: CanObserve<MT::Commitment>,
@@ -246,12 +308,18 @@ where
         //
         // Initial sumcheck rounds == first-round folding factor.
         // `verify_rounds` rejects a proof that carries the wrong number of rounds.
+        let mut weight_scale = EF::ZERO;
         let (constraint, mut claimed_eval, folding_randomness) =
             transcript.delegate_initial_fold(|challenger| {
                 let alpha = layout.batching_challenge(challenger);
                 let constraint = layout.constraint(alpha);
                 let mut claimed_eval = EF::ZERO;
                 constraint.combine_evals(&mut claimed_eval);
+                // An extra weight takes the power after every recorded claim.
+                if let Some(weight) = weight {
+                    weight_scale = layout.extra_weight_scale(alpha);
+                    claimed_eval += weight_scale * weight.sum;
+                }
                 let randomness = proof.initial_sumcheck.verify_rounds(
                     challenger,
                     &mut claimed_eval,
@@ -388,9 +456,16 @@ where
         );
 
         // Evaluate the constraint polynomial at the folding point.
-        let evaluation_of_weights = self
+        let mut evaluation_of_weights = self
             .variable_order
             .eval_constraints_poly(&constraints, &folding_randomness);
+        if let Some(weight) = weight {
+            // Each round binds its variables in the binding order, so the natural point is read back.
+            let reversed = (self.variable_order == VariableOrder::Suffix)
+                .then(|| folding_randomness.reversed());
+            evaluation_of_weights +=
+                weight_scale * (weight.eval)(reversed.as_ref().unwrap_or(&folding_randomness));
+        }
 
         // Final consistency check: claimed_eval == weight * f(r).
         let final_value = match self.variable_order {
