@@ -238,7 +238,7 @@ fn a_batch_proof_verifies() {
     let batch = crate::Batch::new(&c, log_n).unwrap();
     let config = crate::FlockConfig::default();
     let bare = crate::PublicPorts::default();
-    let proof = crate::prove(&config, &batch, &bare, &w, &mut sponge()).unwrap();
+    let proof = crate::prove(&config, &batch, &bare, w, &mut sponge()).unwrap();
     crate::verify(&config, &batch, &bare, &proof, &mut sponge()).unwrap();
 }
 
@@ -253,11 +253,11 @@ fn a_wrong_witness_or_a_tampered_proof_is_rejected() {
     let mut bad = w.clone();
     let slot = c.useful_bits() - 1;
     bad.tables_mut()[0][slot / 64] ^= 1 << (slot % 64);
-    let proof = crate::prove(&config, &batch, &bare, &bad, &mut sponge()).unwrap();
+    let proof = crate::prove(&config, &batch, &bare, bad, &mut sponge()).unwrap();
     assert!(crate::verify(&config, &batch, &bare, &proof, &mut sponge()).is_err());
 
     // Mutation: an honest proof checked against another batch's commitment.
-    let honest = crate::prove(&config, &batch, &bare, &w, &mut sponge()).unwrap();
+    let honest = crate::prove(&config, &batch, &bare, w.clone(), &mut sponge()).unwrap();
     let mut swapped = honest.clone();
     swapped.commitment = proof.commitment;
     assert!(crate::verify(&config, &batch, &bare, &swapped, &mut sponge()).is_err());
@@ -267,5 +267,5 @@ fn a_wrong_witness_or_a_tampered_proof_is_rejected() {
     assert!(crate::verify(&config, &wider, &bare, &honest, &mut sponge()).is_err());
 
     // Mutation: a witness of another batch size is refused before anything is sent.
-    assert!(crate::prove(&config, &wider, &bare, &w, &mut sponge()).is_err());
+    assert!(crate::prove(&config, &wider, &bare, w, &mut sponge()).is_err());
 }

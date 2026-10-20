@@ -139,11 +139,15 @@ fn opening(c: &mut Criterion) {
             value: claims.c,
         };
         group.bench_function(BenchmarkId::new("commit", log_instances), |b| {
-            b.iter(|| pcs.commit(&w, &mut challenger()).unwrap());
+            b.iter_batched(
+                || w.z().to_vec(),
+                |z| pcs.commit(z, &mut challenger()).unwrap(),
+                BatchSize::LargeInput,
+            );
         });
         group.bench_function(BenchmarkId::new("open", log_instances), |b| {
             b.iter_batched(
-                || pcs.commit(&w, &mut challenger()).unwrap(),
+                || pcs.commit(w.z().to_vec(), &mut challenger()).unwrap(),
                 |(_, data)| {
                     pcs.open(data, core::slice::from_ref(&claim), &[], &mut challenger())
                         .unwrap()
@@ -152,7 +156,7 @@ fn opening(c: &mut Criterion) {
             );
         });
         let mut sponge = challenger();
-        let (commitment, data) = pcs.commit(&w, &mut sponge).unwrap();
+        let (commitment, data) = pcs.commit(w.z().to_vec(), &mut sponge).unwrap();
         let proof = pcs
             .open(data, core::slice::from_ref(&claim), &[], &mut sponge)
             .unwrap();

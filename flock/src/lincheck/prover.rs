@@ -33,11 +33,11 @@ pub fn prove<C>(
 where
     C: CanObserve<Val> + CanSample<Val>,
 {
-    let (proof, claim, _) = prove_folded(batch, witness, claims, public, challenger);
+    let (proof, claim, _) = prove_folded(batch, witness.z(), claims, public, challenger);
     (proof, claim)
 }
 
-/// As [`prove`], also returning the witness folded over the instances.
+/// As [`prove`] over the witness bits alone, also returning them folded over the instances.
 ///
 /// Entry `64 i + v` is the folded bit `v` of inner row `i`, before the sumcheck binds anything.
 ///
@@ -47,7 +47,7 @@ where
 #[instrument(skip_all, name = "lincheck prove", fields(log_n = batch.log_n()))]
 pub fn prove_folded<C>(
     batch: &Batch<'_>,
-    witness: &Witness,
+    z: &[u64],
     claims: &ZerocheckClaims,
     public: &PublicPorts,
     challenger: &mut C,
@@ -56,7 +56,6 @@ where
     C: CanObserve<Val> + CanSample<Val>,
 {
     let circuit = batch.circuit();
-    let z = witness.z();
     assert_eq!(
         z.len(),
         1 << (batch.log_n() - K_SKIP),

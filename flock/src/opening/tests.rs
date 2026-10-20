@@ -14,7 +14,7 @@ use crate::lincheck::LincheckProof;
 use crate::point::QuirkyPoint;
 use crate::tests::{random_circuit, random_rows};
 use crate::zerocheck::{MIN_LOG_N, ZerocheckClaims};
-use crate::{Batch, Circuit, PublicPorts, lincheck};
+use crate::{Batch, Circuit, PublicPorts, Witness, lincheck};
 
 /// A fresh sponge.
 fn challenger() -> FlockChallenger {
@@ -49,7 +49,7 @@ fn run(
     let circuit = random_circuit(&mut rng, gates);
     let log_instances = log_instances.max(MIN_LOG_N.saturating_sub(circuit.k_log()));
     let (rows, padding) = random_rows(&mut rng, 1 << log_instances);
-    let w = crate::Witness::generate(&circuit, log_instances, &rows, &padding, |row, words| {
+    let w = Witness::generate(&circuit, log_instances, &rows, &padding, |row, words| {
         words.copy_from_slice(row);
     });
     let k_log = circuit.k_log();
@@ -58,7 +58,7 @@ fn run(
 
     // Commit, then draw the zerocheck point after the commitment.
     let mut sponge = challenger();
-    let (commitment, data) = pcs.commit(&w, &mut sponge).unwrap();
+    let (commitment, data) = pcs.commit(w.z().to_vec(), &mut sponge).unwrap();
     let point = draw_point(&mut sponge, m);
     let zc = ZerocheckClaims {
         a: point.evaluate_packed(w.az(), k_log),
@@ -68,7 +68,7 @@ fn run(
     };
     let batch = Batch::new(&circuit, log_instances).unwrap();
     let (lincheck, claim, folded) =
-        lincheck::prove_folded(&batch, &w, &zc, &PublicPorts::default(), &mut sponge);
+        lincheck::prove_folded(&batch, w.z(), &zc, &PublicPorts::default(), &mut sponge);
 
     // The lincheck's claim, and the zerocheck's c-claim as a second quirky claim.
     let claims = alloc::vec![claim, QuirkyClaim { point, value: zc.c }];
@@ -177,7 +177,7 @@ fn the_prover_refuses_a_claim_its_witness_does_not_satisfy() {
     let witness = Witness::from_tables(z.clone(), z.clone(), z.clone(), 6);
     let pcs = WitnessPcs::new(14, &PcsParams::default()).unwrap();
     let mut sponge = challenger();
-    let (_, data) = pcs.commit(&witness, &mut sponge).unwrap();
+    let (_, data) = pcs.commit(witness.z().to_vec(), &mut sponge).unwrap();
     let point = draw_point(&mut sponge, 14);
     let value = point.evaluate_packed(&z, 8) + Challenge::ONE;
     assert!(matches!(
@@ -188,7 +188,7 @@ fn the_prover_refuses_a_claim_its_witness_does_not_satisfy() {
     // A witness of another width is refused.
     let narrow = Witness::from_tables(z[..128].to_vec(), Vec::new(), Vec::new(), 5);
     assert!(matches!(
-        pcs.commit(&narrow, &mut challenger()),
+        pcs.commit(narrow.z().to_vec(), &mut challenger()),
         Err(OpeningError::WitnessLength { .. })
     ));
 }
@@ -239,14 +239,14 @@ fn a_split_from_the_folded_witness_reproduces_the_computed_opening() {
     let circuit = random_circuit(&mut rng, 6000);
     let log_instances = log_instances.max(MIN_LOG_N.saturating_sub(circuit.k_log()));
     let (rows, padding) = random_rows(&mut rng, 1 << log_instances);
-    let w = crate::Witness::generate(&circuit, log_instances, &rows, &padding, |row, words| {
+    let w = Witness::generate(&circuit, log_instances, &rows, &padding, |row, words| {
         words.copy_from_slice(row);
     });
     let k_log = circuit.k_log();
     let m = k_log + log_instances;
     let pcs = WitnessPcs::new(m, &PcsParams::default()).unwrap();
     let mut sponge = challenger();
-    let (_, data) = pcs.commit(&w, &mut sponge).unwrap();
+    let (_, data) = pcs.commit(w.z().to_vec(), &mut sponge).unwrap();
     let point = draw_point(&mut sponge, m);
     let zc = ZerocheckClaims {
         a: point.evaluate_packed(w.az(), k_log),
@@ -256,7 +256,7 @@ fn a_split_from_the_folded_witness_reproduces_the_computed_opening() {
     };
     let batch = Batch::new(&circuit, log_instances).unwrap();
     let (_, claim, folded) =
-        lincheck::prove_folded(&batch, &w, &zc, &PublicPorts::default(), &mut sponge);
+        lincheck::prove_folded(&batch, w.z(), &zc, &PublicPorts::default(), &mut sponge);
     let split = pcs.suffix_tensors(&folded, &claim.point, log_instances);
     assert!(split.is_some(), "k_log {k_log} leaves no split");
 
