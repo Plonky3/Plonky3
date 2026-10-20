@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -124,6 +125,56 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
             (builder.build(), builder.arity_schedule())
         };
 
+        Self {
+            leaves,
+            digest_layers,
+            arity_schedule,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Build a tree over one matrix whose leaf digests the caller already hashed with `h`.
+    ///
+    /// Digest `i` must be `h` of row `i`, which this does not check.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless there is one digest per row, as [`Self::new`] does on a bad shape.
+    #[instrument(
+        name = "build merkle tree over leaf digests",
+        level = "debug",
+        skip_all
+    )]
+    pub fn new_over_leaf_digests<P, PW, H, C>(
+        h: &H,
+        c: &C,
+        leaf: M,
+        leaf_digests: Vec<[W; DIGEST_ELEMS]>,
+    ) -> Self
+    where
+        P: PackedValue<Value = F>,
+        PW: PackedValue<Value = W>,
+        W: Default,
+        H: CryptographicHasher<F, [W; DIGEST_ELEMS]>
+            + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+            + Sync,
+        C: PseudoCompressionFunction<[W; DIGEST_ELEMS], N>
+            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
+            + Sync,
+    {
+        const {
+            assert!(N >= 2, "Arity N must be at least 2");
+            assert!(N.is_power_of_two(), "Arity N must be a power of two");
+            assert!(P::WIDTH == PW::WIDTH, "Packing widths must match");
+        }
+        let leaves = vec![leaf];
+        let (digest_layers, arity_schedule) = {
+            let builder = TreeBuilder::<P, PW, H, C, M, N, DIGEST_ELEMS>::new(h, c, &leaves);
+            (
+                builder.build_over_leaf_digests(leaf_digests),
+                builder.arity_schedule(),
+            )
+        };
         Self {
             leaves,
             digest_layers,
