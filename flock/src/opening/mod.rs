@@ -149,6 +149,11 @@ impl WitnessPcs {
         .with_first_round(params.first_folding.min(packed), params.first_reduction)
         .with_query_grinding(params.query_grinding);
         let config = profile.config::<Challenge, Val, FlockChallenger, _>(packed, &domain)?;
+        let config = if params.commitment_ood {
+            config
+        } else {
+            config.without_commitment_ood()
+        };
         let cap_height = recommended_cap_height(&config);
         let mmcs = FlockMmcs::new(
             Hash::new(Keccak256Hash),

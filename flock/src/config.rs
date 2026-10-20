@@ -33,6 +33,10 @@ pub struct PcsParams {
     pub folding: usize,
     /// Grinding before every query phase.
     pub query_grinding: usize,
+    /// Whether the initial commitment takes its own out-of-domain samples.
+    ///
+    /// Without them the outer protocol's soundness error grows by the list size (ePrint 2026/1329, Appendix C, Remark 11).
+    pub commitment_ood: bool,
 }
 
 impl Default for PcsParams {
@@ -45,6 +49,7 @@ impl Default for PcsParams {
             first_reduction: 3,
             folding: 4,
             query_grinding: 16,
+            commitment_ood: false,
         }
     }
 }
