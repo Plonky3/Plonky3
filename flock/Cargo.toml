@@ -41,6 +41,7 @@ tracing.workspace = true
 [dev-dependencies]
 blake2.workspace = true
 blake3.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
 rand = { workspace = true, features = ["std_rng"] }
 sha2.workspace = true
