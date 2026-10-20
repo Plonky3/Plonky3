@@ -13,6 +13,7 @@ members = [
     "blake3-air",
     "bn254",
     "bus",
+    "ccs",
     "challenger",
     "circle",
     "commit",
@@ -126,6 +127,7 @@ p3-blake3-air = { path = "blake3-air", version = "0.8.0" }
 p3-bn254 = { path = "bn254", version = "0.8.0" }
 # The bus debugger is opt-in: a consumer that wants it enables "diagnostics".
 p3-bus = { path = "bus", version = "0.8.0", default-features = false }
+p3-ccs = { path = "ccs", version = "0.8.0" }
 p3-challenger = { path = "challenger", version = "0.8.0" }
 p3-circle = { path = "circle", version = "0.8.0" }
 p3-commit = { path = "commit", version = "0.8.0" }
