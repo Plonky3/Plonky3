@@ -26,7 +26,7 @@ use tracing::instrument;
 use crate::config::{FlockChallenger, PcsParams};
 use crate::point::{QuirkyClaim, QuirkyPoint};
 use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
-use crate::{Challenge, Val, Witness};
+use crate::{Challenge, Val};
 
 /// Bits past the target a single error term may be asked for, before the search gives up.
 const MAX_TERM_SLACK: usize = 16;
@@ -166,18 +166,19 @@ impl WitnessPcs {
         )?))
     }
 
-    /// Commit to a witness's packed bits, observing the commitment.
+    /// Commit to a witness's packed words, taking them over, and observe the commitment.
+    ///
+    /// [`Self::committed_words`] reads them back from the prover data.
     ///
     /// # Errors
     ///
-    /// The witness does not have the committed variables.
+    /// The words do not have the committed variables.
     #[instrument(skip_all, name = "flock commit")]
     pub fn commit(
         &self,
-        witness: &Witness,
+        z: Vec<u64>,
         challenger: &mut FlockChallenger,
     ) -> Result<(Commitment, ProverData), OpeningError> {
-        let z = witness.z();
         let expected = 1usize << (BooleanBackend::<Challenge>::num_variables(&self.0) - K_SKIP);
         if z.len() != expected {
             return Err(OpeningError::WitnessLength {
@@ -186,8 +187,15 @@ impl WitnessPcs {
             });
         }
         // Bit j of word w is bit 64 w + j, the order the packing reads.
-        let packed = PackedWords::<Val>::from_words(z).expect("Poly64 is one word");
+        let packed = PackedWords::<Val>::from_word_vec(z).expect("Poly64 is one word");
         Ok(self.0.commit_packed(packed, challenger)?)
+    }
+
+    /// The witness words a commitment holds.
+    #[must_use]
+    pub fn committed_words(data: &ProverData) -> &[u64] {
+        PackedWords::<Val>::words_of(data.table(0).poly(0).into_slice())
+            .expect("Poly64 is one word")
     }
 
     /// Observe a commitment on the verifier side, as committing does on the prover side.

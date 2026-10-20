@@ -88,7 +88,7 @@ fn run<G: Gadget + Sync>(
         }
 
         let t = Instant::now();
-        let proof = prove(&config, &batch, &statement, &witness, &mut sponge()).expect("prove");
+        let proof = prove(&config, &batch, &statement, witness, &mut sponge()).expect("prove");
         pro.push(t.elapsed());
 
         let t = Instant::now();

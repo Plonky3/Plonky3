@@ -635,7 +635,7 @@ where
     let batch = Batch::new(&circuit, log_instances).unwrap();
     let public = statement(&batch, rows);
     let config = FlockConfig::default();
-    let proof = prove(&config, &batch, &public, &w, &mut sponge()).unwrap();
+    let proof = prove(&config, &batch, &public, w, &mut sponge()).unwrap();
     verify(&config, &batch, &public, &proof, &mut sponge()).unwrap();
 }
 
@@ -783,14 +783,14 @@ fn batches_of_compressions_prove_their_public_inputs_and_outputs() {
             &config,
             &batch,
             &statement(&batch, &wrong),
-            &w,
+            w.clone(),
             &mut sponge()
         )
         .is_err()
     );
 
     // Mutation: an honest proof checked against the wrong outputs.
-    let proof = prove(&config, &batch, &statement(&batch, &sha), &w, &mut sponge()).unwrap();
+    let proof = prove(&config, &batch, &statement(&batch, &sha), w, &mut sponge()).unwrap();
     assert!(
         verify(
             &config,

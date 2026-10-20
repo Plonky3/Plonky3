@@ -65,7 +65,7 @@ fn honest_statements_verify_for_every_choice_of_ports() {
         &[],
     ] {
         let public = from_witness(&batch, &w, ports);
-        let proof = prove(&config, &batch, &public, &w, &mut sponge()).unwrap();
+        let proof = prove(&config, &batch, &public, w.clone(), &mut sponge()).unwrap();
         verify(&config, &batch, &public, &proof, &mut sponge()).unwrap();
     }
 }
@@ -76,7 +76,7 @@ fn a_changed_swapped_or_unbound_public_word_is_rejected() {
     let batch = Batch::new(&c, log_n).unwrap();
     let config = FlockConfig::default();
     let public = from_witness(&batch, &w, &ALL);
-    let proof = prove(&config, &batch, &public, &w, &mut sponge()).unwrap();
+    let proof = prove(&config, &batch, &public, w.clone(), &mut sponge()).unwrap();
     let rejects = |public: &PublicPorts, proof: &FlockProof| {
         verify(&config, &batch, public, proof, &mut sponge()).is_err()
     };
@@ -101,11 +101,11 @@ fn a_changed_swapped_or_unbound_public_word_is_rejected() {
 
     // Mutation: a statement with one more public port than the proof bound.
     let fewer = from_witness(&batch, &w, &ALL[..4]);
-    let narrow = prove(&config, &batch, &fewer, &w, &mut sponge()).unwrap();
+    let narrow = prove(&config, &batch, &fewer, w.clone(), &mut sponge()).unwrap();
     assert!(rejects(&public, &narrow));
 
     // Mutation: a bare proof claimed for public words, and the other way round.
-    let bare = prove(&config, &batch, &PublicPorts::default(), &w, &mut sponge()).unwrap();
+    let bare = prove(&config, &batch, &PublicPorts::default(), w, &mut sponge()).unwrap();
     assert!(rejects(&public, &bare));
     assert!(rejects(&PublicPorts::default(), &proof));
 
@@ -124,7 +124,7 @@ fn an_honest_prover_refuses_a_statement_its_witness_breaks() {
     let mut public = from_witness(&batch, &w, &ALL);
     public.values[3 * public.stride] ^= 1;
     assert!(matches!(
-        prove(&FlockConfig::default(), &batch, &public, &w, &mut sponge()),
+        prove(&FlockConfig::default(), &batch, &public, w, &mut sponge()),
         Err(ProvingError::Ports(PortsError::Mismatch { instance: 3 }))
     ));
 }
@@ -141,7 +141,7 @@ fn a_prover_whose_witness_breaks_the_statement_is_rejected() {
     let mut ch = sponge();
     public.bind(&batch, &mut ch).unwrap();
     let pcs = WitnessPcs::new(batch.log_n(), &config.pcs).unwrap();
-    let (commitment, data) = pcs.commit(&w, &mut ch).unwrap();
+    let (commitment, data) = pcs.commit(w.z().to_vec(), &mut ch).unwrap();
     let (zerocheck, claims) = zerocheck::prove(&batch, &w, config.pow_bits, &mut ch);
     let (lincheck, claim) = lincheck::prove(&batch, &w, &claims, &public, &mut ch);
     let opening = pcs.open(data, &[claim], &[], &mut ch).unwrap();

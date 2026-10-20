@@ -108,6 +108,11 @@ impl Witness {
         &self.z
     }
 
+    /// Move the bits out, leaving only `A z` and `B z` to read.
+    pub(crate) fn take_z(&mut self) -> Vec<u64> {
+        core::mem::take(&mut self.z)
+    }
+
     /// Left factor of every row, `A z`.
     #[must_use]
     pub fn az(&self) -> &[u64] {
