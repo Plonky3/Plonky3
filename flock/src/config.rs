@@ -46,7 +46,7 @@ impl Default for PcsParams {
             security_bits: 128,
             log_inv_rate: 1,
             first_folding: 6,
-            first_reduction: 3,
+            first_reduction: 4,
             folding: 4,
             query_grinding: 16,
             commitment_ood: false,
