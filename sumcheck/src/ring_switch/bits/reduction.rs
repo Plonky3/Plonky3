@@ -730,6 +730,44 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
         banks.pop().expect("one bank has one element")
     }
 
+    /// The equality table of some kept coordinates, factored as the sweeps read it.
+    pub(super) fn factored_equality(coordinates: &[EF]) -> FactoredEquality<EF> {
+        FactoredEquality::new(coordinates, LOG_CHUNK)
+    }
+
+    /// The element split by the trailing `depth` kept coordinates, one bank per value they spell.
+    ///
+    /// Bank `b` sums `eq(head, x) ⊗ t'(x, b)` over the leading coordinates `x` alone.
+    ///
+    /// The packing is reordered bank-major once, so each bank is one contiguous run.
+    pub(super) fn suffix_bank_tensors<S: Borrow<[F]>>(
+        &self,
+        packing: &BitPacking<F, S>,
+        depth: usize,
+    ) -> Vec<BitTensor<EF, F>>
+    where
+        F: Send + Sync,
+        EF: Send + Sync,
+    {
+        let n = self.num_variables();
+        let banks = 1usize << depth;
+        let rows = 1usize << (n - depth);
+        let source = packing.poly().as_slice();
+        let mut reordered = F::zero_vec(source.len());
+        reordered
+            .par_chunks_mut(rows)
+            .enumerate()
+            .for_each(|(bank, run)| {
+                for (x, value) in run.iter_mut().enumerate() {
+                    *value = source[x * banks + bank];
+                }
+            });
+        let reordered = BitPacking::from_packed(Poly::new(reordered))
+            .expect("a reordered packing keeps its level and height");
+        let head = Self::factored_equality(&self.high()[..n - depth]);
+        Self::bank_tensors_over(&reordered, 0, banks, &head)
+    }
+
     /// The element of each of `banks` consecutive runs, accumulated in one sweep over them all.
     ///
     /// Run `b` starts `b * equality.num_evals()` elements past `offset`.
@@ -752,7 +790,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
     ///
     /// A block of zero elements adds nothing to its bank, so it is read but never summed.
     /// A stacked trace leaves the slots past its last column zero, so its tail costs one read.
-    fn bank_tensors_over<S: Borrow<[F]>>(
+    pub(super) fn bank_tensors_over<S: Borrow<[F]>>(
         packing: &BitPacking<F, S>,
         offset: usize,
         banks: usize,
@@ -1151,6 +1189,18 @@ pub struct BitRingSwitchBatch<'a, F, EF = F> {
     alpha: Option<EF>,
 }
 
+impl<'a, F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchBatch<'a, F, EF> {
+    /// The reduction this stage batches.
+    pub(super) const fn reduction(&self) -> &'a BitRingSwitch<F, EF> {
+        self.reduction
+    }
+
+    /// One batching weight per coordinate of `EF`, the padding past them dropped.
+    pub(super) fn coordinate_weights(&self) -> &[EF] {
+        &self.eq_batch.as_slice()[..Coefficients::<EF>::DIMENSION]
+    }
+}
+
 impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchBatch<'_, F, EF> {
     /// The weight multilinear the sumcheck runs against the packing.
     ///
@@ -1342,7 +1392,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchBatch<'
     }
 
     /// Build the tail weights from the compact prover's settled coordinate images.
-    fn weights_from_generators<R>(
+    pub(super) fn weights_from_generators<R>(
         &self,
         equality: &FactoredEquality<EF>,
         generators: &[R],
@@ -1539,6 +1589,19 @@ pub enum BitRingSwitchError {
         expected: usize,
         /// Weights supplied.
         actual: usize,
+    },
+    /// A deferred batch was asked of a claim sending successor elements.
+    #[error("a deferred batch carries no successor elements")]
+    DeferredSuccessor,
+    /// A deferred batch splits over more trailing coordinates than the packing keeps.
+    #[error(
+        "a deferred batch splits over {depth} trailing variables, the packing keeps {num_variables}"
+    )]
+    DeferredDepth {
+        /// Trailing coordinates asked for.
+        depth: usize,
+        /// Coordinates the packing keeps.
+        num_variables: usize,
     },
 }
 

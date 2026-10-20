@@ -85,12 +85,13 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
 
+use super::deferred::{BitRingSwitchDeferredProof, DeferredClosing, DeferredWeight, check_depth};
 use super::packing::BitPacking;
 use super::reduction::{
     BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError, BitRingSwitchProof,
     BitRingSwitchProofError, SuccessorTensors, check_no_grinding, slot_packing,
 };
-use super::tensor::BitTensor;
+use super::tensor::{BitTensor, SuffixTensors};
 use super::transcript::{
     BitRingSwitchClaimsProverTranscript, BitRingSwitchClaimsShape,
     BitRingSwitchClaimsVerifierTranscript, ClaimStatement, ClaimsDraws,
@@ -193,6 +194,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchClaims<
     fn shape(&self) -> BitRingSwitchClaimsShape {
         BitRingSwitchClaimsShape {
             claims: self.reductions.iter().map(BitRingSwitch::shape).collect(),
+            deferred: false,
         }
     }
 
@@ -490,6 +492,168 @@ where
         Ok((self.restore_prefix(prefix, &r_prime), proof.final_eval))
     }
 
+    /// Bind every claim and draw the batch's challenges, leaving its sum to the commitment's first fold.
+    ///
+    /// Each claim's element is split over the trailing `depth` kept coordinates, the first the fold binds.
+    ///
+    /// Entry `i` of `suffix_tensors`, when it splits over `depth` coordinates, is claim `i`'s split.
+    ///
+    /// A missing entry is computed from the packing, which costs one sweep of it.
+    ///
+    /// Wrong supplied splits yield a proof the verifier rejects, never a weaker check.
+    ///
+    /// # Errors
+    ///
+    /// A claim sending successor elements, or a split deeper than the packing.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the packing has the variables the evaluation points leave.
+    #[allow(clippy::type_complexity)]
+    pub fn prove_deferred<Challenger, S>(
+        &self,
+        packing: &BitPacking<F, S>,
+        suffix_tensors: &[Option<&SuffixTensors<EF, F>>],
+        depth: usize,
+        challenger: &mut Challenger,
+    ) -> Result<(BitRingSwitchDeferredProof<F, EF>, DeferredWeight<'_, F, EF>), BitRingSwitchError>
+    where
+        F: Send + Sync,
+        EF: Send + Sync,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+        S: Borrow<[F]>,
+    {
+        let num_variables = self.num_variables();
+        assert_eq!(
+            packing.num_variables(),
+            num_variables,
+            "the packing must have the {num_variables} variables the evaluation points leave"
+        );
+        check_depth(depth, num_variables)?;
+        if self
+            .reductions
+            .iter()
+            .any(BitRingSwitch::sends_successor_tensors)
+        {
+            return Err(BitRingSwitchError::DeferredSuccessor);
+        }
+
+        // Each claim's banks, from the caller where it holds them, from the packing otherwise.
+        let banks = self
+            .reductions
+            .iter()
+            .enumerate()
+            .map(
+                |(index, reduction)| match suffix_tensors.get(index).copied().flatten() {
+                    Some(tensors) if tensors.depth() == depth => tensors.banks().to_vec(),
+                    _ => reduction.suffix_bank_tensors(packing, depth),
+                },
+            )
+            .collect::<Vec<_>>();
+        let claims = self
+            .reductions
+            .iter()
+            .zip(&banks)
+            .map(|(reduction, banks)| {
+                let tail = &reduction.high()[num_variables - depth..];
+                let split = SuffixTensors::new(banks.clone()).expect("a power of two banks");
+                ClaimElements {
+                    tensor: split.total(tail),
+                    successor: None,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut transcript = BitRingSwitchClaimsProverTranscript::<Challenger, F, EF>::new(
+            challenger,
+            self.deferred_shape(),
+        );
+        let draws = transcript.statement(&self.statements(&claims));
+        transcript.finish();
+
+        let batches = self.batches(&draws);
+        let weights = claim_weights(draws.lambda, self.reductions.len());
+        let sum = Self::batched_sum(&batches, &claims, &weights);
+        let weight = DeferredWeight::new(batches, &banks, &weights, sum);
+        Ok((BitRingSwitchDeferredProof { claims }, weight))
+    }
+
+    /// Replay a deferred batch, returning the sum and the weight the commitment's first fold must close.
+    ///
+    /// # Errors
+    ///
+    /// Before the challenger is touched, a claim count or element that does not fit the setup.
+    ///
+    /// After it, a reading disagreeing with its claim's element.
+    pub fn verify_deferred<Challenger>(
+        &self,
+        proof: &BitRingSwitchDeferredProof<F, EF>,
+        readings: &[EF],
+        challenger: &mut Challenger,
+    ) -> Result<DeferredClosing<'_, F, EF>, BitRingSwitchProofError>
+    where
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let expected = self.reductions.len();
+        if let Some(actual) = [proof.claims.len(), readings.len()]
+            .into_iter()
+            .find(|&count| count != expected)
+        {
+            return Err(BitRingSwitchProofError::ClaimCount { expected, actual });
+        }
+        if self
+            .reductions
+            .iter()
+            .any(BitRingSwitch::sends_successor_tensors)
+        {
+            return Err(BitRingSwitchError::DeferredSuccessor.into());
+        }
+        // Every structural rejection runs before the challenger is touched.
+        for ((reduction, claim), &current) in
+            self.reductions.iter().zip(&proof.claims).zip(readings)
+        {
+            reduction.check_elements(
+                &claim.tensor,
+                claim.successor.as_ref(),
+                Some(current),
+                None,
+            )?;
+        }
+
+        let mut transcript = BitRingSwitchClaimsVerifierTranscript::<Challenger, F, EF>::new(
+            challenger,
+            self.deferred_shape(),
+        );
+        let draws = transcript.statement(&self.statements(&proof.claims))?;
+        for ((reduction, claim), &current) in
+            self.reductions.iter().zip(&proof.claims).zip(readings)
+        {
+            if let Err(error) = reduction.check_element_readings(
+                &claim.tensor,
+                claim.successor.as_ref(),
+                Some(current),
+                None,
+            ) {
+                transcript.abort();
+                return Err(error);
+            }
+        }
+        transcript.finish();
+
+        let batches = self.batches(&draws);
+        let weights = claim_weights(draws.lambda, self.reductions.len());
+        let sum = Self::batched_sum(&batches, &proof.claims, &weights);
+        Ok(DeferredClosing::new(self, batches, weights, sum))
+    }
+
+    /// The transcript description a deferred batch plays, whatever its size.
+    fn deferred_shape(&self) -> BitRingSwitchClaimsShape {
+        BitRingSwitchClaimsShape {
+            deferred: true,
+            ..self.shape()
+        }
+    }
+
     /// What every claim binds, borrowed from the claims and their elements.
     fn statements<'a>(
         &'a self,
@@ -536,7 +700,7 @@ where
     /// ```text
     ///     A_i(r') = eq(bits_i[p..p_i], r'[..p_i - p]) * A_i|slot(r'[p_i - p..])
     /// ```
-    fn closing_weight(
+    pub(super) fn closing_weight(
         &self,
         batches: &[BitRingSwitchBatch<'_, F, EF>],
         weights: &[EF],
