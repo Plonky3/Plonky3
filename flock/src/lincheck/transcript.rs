@@ -9,6 +9,7 @@ use p3_challenger::fs::{
 use p3_challenger::{CanObserve, CanSample};
 
 use crate::point::QuirkyPoint;
+use crate::ports::PublicPorts;
 use crate::skip::{K_SKIP, SKIP_SIZE};
 use crate::{Batch, Challenge, Val};
 
@@ -23,6 +24,9 @@ const POINT: &str = "zerocheck_point";
 
 /// Zerocheck values label.
 const EVALS: &str = "zerocheck_evals";
+
+/// Public port weights label: the skip coordinate, then the region coordinates.
+const PORTS: &str = "ports";
 
 /// Batching challenge label.
 const ALPHA: &str = "alpha";
@@ -54,15 +58,33 @@ pub(crate) struct LincheckShape {
     log_instances: usize,
     /// The circuit's digest.
     statement: [u8; 32],
+    /// Public words of one instance, ascending.
+    ports: Vec<usize>,
+    /// Digest of the public values, so the lincheck alone binds the table it checks.
+    values: [u8; 32],
+    /// Word bits of the region the public words lie in.
+    region_bits: usize,
 }
 
 impl LincheckShape {
-    /// The shape of a batch's lincheck.
-    pub(crate) const fn new(batch: &Batch<'_>) -> Self {
+    /// The shape of a batch's lincheck with its public words.
+    pub(crate) fn new(batch: &Batch<'_>, public: &PublicPorts) -> Self {
         Self {
             k_log: batch.circuit().k_log(),
             log_instances: batch.log_instances(),
             statement: *batch.circuit().digest(),
+            ports: public.words().to_vec(),
+            values: *public.digest(),
+            region_bits: public.region_bits(),
+        }
+    }
+
+    /// Coordinates the public port weights draw: none without public words, else the skip and the region's.
+    pub(crate) const fn port_coordinates(&self) -> usize {
+        if self.ports.is_empty() {
+            0
+        } else {
+            1 + self.region_bits
         }
     }
 
@@ -84,6 +106,13 @@ impl LincheckShape {
             Length::Fixed(1 + self.k_log + self.log_instances - K_SKIP),
         ));
         steps.push(algebra(Kind::Message, EVALS, Length::Fixed(3)));
+        if self.port_coordinates() > 0 {
+            steps.push(algebra(
+                Kind::Challenge,
+                PORTS,
+                Length::Fixed(self.port_coordinates()),
+            ));
+        }
         steps.push(algebra(Kind::Challenge, ALPHA, Length::Scalar));
         // Each round sends q(0) and q(inf), then draws its challenge.
         for _ in 0..self.rounds() {
@@ -96,13 +125,17 @@ impl LincheckShape {
         InteractionPattern::new(steps).expect("a flat pattern is always well formed")
     }
 
-    /// Bind the protocol identity, this shape and the circuit.
-    fn domain_separator(&self) -> DomainSeparator<Alphabet> {
+    /// Bind the protocol identity, this shape, the public words, their values and the circuit.
+    pub(super) fn domain_separator(&self) -> DomainSeparator<Alphabet> {
         let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern());
-        for value in [self.k_log, self.log_instances] {
+        for value in [self.k_log, self.log_instances, self.ports.len()]
+            .into_iter()
+            .chain(self.ports.iter().copied())
+        {
             separator.instance(&(value as u64).to_be_bytes());
         }
         separator.instance(&self.statement);
+        separator.instance(&self.values);
         separator
     }
 }
@@ -121,8 +154,13 @@ impl<'a, C: CanObserve<Val> + CanSample<Val>> ProverTranscript<'a, C> {
         }
     }
 
-    /// Bind the input claims, then draw the batching challenge.
-    pub(crate) fn claims(&mut self, point: &QuirkyPoint, evals: [Challenge; 3]) -> Challenge {
+    /// Bind the input claims, then draw the port coordinates and the batching challenge.
+    pub(crate) fn claims(
+        &mut self,
+        point: &QuirkyPoint,
+        evals: [Challenge; 3],
+        ports: usize,
+    ) -> (Vec<Challenge>, Challenge) {
         let coordinates: Vec<Challenge> = point.coordinates().collect();
         let _ = self
             .state
@@ -130,9 +168,20 @@ impl<'a, C: CanObserve<Val> + CanSample<Val>> ProverTranscript<'a, C> {
         let _ = self
             .state
             .observe_extensions::<Val, Challenge, Codec>(EVALS, &evals);
-        self.state
+        let ports = if ports == 0 {
+            Vec::new()
+        } else {
+            self.state
+                .challenge_extensions::<Val, Challenge, Codec>(PORTS, ports)
+                .into_iter()
+                .map(|c| c.into_inner())
+                .collect()
+        };
+        let alpha = self
+            .state
             .challenge_extension::<Val, Challenge, Codec>(ALPHA)
-            .into_inner()
+            .into_inner();
+        (ports, alpha)
     }
 
     /// Bind one round's `q(0)` and `q(inf)`, then draw its challenge.
@@ -180,21 +229,32 @@ impl<'a, C: CanObserve<Val> + CanSample<Val>> VerifierTranscript<'a, C> {
         }
     }
 
-    /// Bind the input claims, then draw the batching challenge.
+    /// Bind the input claims, then draw the port coordinates and the batching challenge.
     pub(crate) fn claims(
         &mut self,
         point: &QuirkyPoint,
         evals: [Challenge; 3],
-    ) -> Result<Challenge, TranscriptError> {
+        ports: usize,
+    ) -> Result<(Vec<Challenge>, Challenge), TranscriptError> {
         let coordinates: Vec<Challenge> = point.coordinates().collect();
         self.state
             .observe_extensions::<Val, Challenge, Codec>(POINT, &coordinates)?;
         self.state
             .observe_extensions::<Val, Challenge, Codec>(EVALS, &evals)?;
-        Ok(self
+        let ports = if ports == 0 {
+            Vec::new()
+        } else {
+            self.state
+                .challenge_extensions::<Val, Challenge, Codec>(PORTS, ports)
+                .into_iter()
+                .map(|c| c.into_inner())
+                .collect()
+        };
+        let alpha = self
             .state
             .challenge_extension::<Val, Challenge, Codec>(ALPHA)
-            .into_inner())
+            .into_inner();
+        Ok((ports, alpha))
     }
 
     /// Bind one round's `q(0)` and `q(inf)`, then draw its challenge.

@@ -13,20 +13,22 @@ use super::sumcheck::ProductSumcheck;
 use super::transcript::{LincheckShape, ProverTranscript};
 use super::{LincheckProof, slice_claim, split_point};
 use crate::point::QuirkyClaim;
-use crate::skip::K_SKIP;
+use crate::ports::PublicPorts;
+use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
 use crate::zerocheck::ZerocheckClaims;
 use crate::{Batch, Challenge, Val, Witness};
 
-/// Reduce the zerocheck's claims on a batch to one claim on `z`.
+/// Reduce the zerocheck's claims on a batch, and its public words, to one claim on `z`.
 ///
 /// # Panics
 ///
-/// - The witness or the claims are not the batch's.
+/// - The witness, the claims or the public words are not the batch's.
 #[instrument(skip_all, name = "lincheck prove", fields(log_n = batch.log_n()))]
 pub fn prove<C>(
     batch: &Batch<'_>,
     witness: &Witness,
     claims: &ZerocheckClaims,
+    public: &PublicPorts,
     challenger: &mut C,
 ) -> (LincheckProof, QuirkyClaim)
 where
@@ -40,11 +42,15 @@ where
         "the witness is the batch's"
     );
     let (outer, inner) = split_point(&claims.point, batch).expect("the claims are the batch's");
-    let shape = LincheckShape::new(batch);
+    let shape = LincheckShape::new(batch, public);
     let mut transcript = ProverTranscript::new(challenger, &shape);
 
-    // Phase 1: alpha batches A, B, C and the constant pin.
-    let alpha = transcript.claims(&claims.point, [claims.a, claims.b, claims.c]);
+    // Phase 1: alpha batches A, B, C, the constant pin and the public words.
+    let (ports, alpha) = transcript.claims(
+        &claims.point,
+        [claims.a, claims.b, claims.c],
+        shape.port_coordinates(),
+    );
     let alpha_sq = alpha.square();
 
     // Phase 2: the column weights of A_0 + alpha B_0 by one backward walk, then C = I and the pin.
@@ -56,6 +62,17 @@ where
         *c += alpha_sq * e;
     }
     comb[circuit.const_pos()] += alpha_sq * alpha;
+
+    // Each public word's weight at its slots, at the port skip coordinate.
+    if let Some((&skip, region)) = ports.split_first() {
+        let lagrange = lagrange_weights(skip, SKIP_SIZE);
+        let alpha_4 = alpha_sq.square();
+        for (w, weight) in public.weights(region) {
+            for (c, &l) in comb[SKIP_SIZE * w..][..SKIP_SIZE].iter_mut().zip(&lagrange) {
+                *c += alpha_4 * weight * l;
+            }
+        }
+    }
 
     // Phase 3: the witness folded at the instance coordinates.
     let folded = info_span!("partial fold").in_scope(|| {

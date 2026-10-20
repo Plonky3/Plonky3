@@ -79,4 +79,8 @@ impl Gadget for Blake3Compress {
     fn decode_output(words: &[u64]) -> [u32; 16] {
         unpack_u32s(words)
     }
+
+    fn write_output(output: &[u32; 16], words: &mut [u64]) {
+        pack_u32s(output, words);
+    }
 }

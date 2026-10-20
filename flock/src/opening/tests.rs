@@ -13,7 +13,7 @@ use crate::lincheck::LincheckProof;
 use crate::point::QuirkyPoint;
 use crate::tests::{random_circuit, random_rows};
 use crate::zerocheck::{MIN_LOG_N, ZerocheckClaims};
-use crate::{Batch, Circuit, lincheck};
+use crate::{Batch, Circuit, PublicPorts, lincheck};
 
 /// A fresh sponge.
 fn challenger() -> FlockChallenger {
@@ -66,7 +66,7 @@ fn run(
         point: point.clone(),
     };
     let batch = Batch::new(&circuit, log_instances).unwrap();
-    let (lincheck, claim) = lincheck::prove(&batch, &w, &zc, &mut sponge);
+    let (lincheck, claim) = lincheck::prove(&batch, &w, &zc, &PublicPorts::default(), &mut sponge);
 
     // The lincheck's claim, and the zerocheck's c-claim as a second quirky claim.
     let claims = alloc::vec![claim, QuirkyClaim { point, value: zc.c }];
@@ -102,7 +102,8 @@ fn verify_run(
     let batch = Batch::new(circuit, run.log_instances).unwrap();
     let point = draw_point(&mut sponge, batch.log_n());
     assert_eq!(point, zc.point);
-    let claim = lincheck::verify(&batch, zc, lincheck, &mut sponge).unwrap();
+    let claim =
+        lincheck::verify(&batch, zc, &PublicPorts::default(), lincheck, &mut sponge).unwrap();
     assert_eq!(claim, run.claims[0]);
     run.pcs.verify(&run.commitment, claims, proof, &mut sponge)
 }

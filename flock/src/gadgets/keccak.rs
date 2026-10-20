@@ -101,4 +101,8 @@ impl Gadget for KeccakF1600 {
     fn decode_output(words: &[u64]) -> [u64; 25] {
         core::array::from_fn(|i| words[i])
     }
+
+    fn write_output(output: &[u64; 25], words: &mut [u64]) {
+        words.copy_from_slice(output);
+    }
 }
