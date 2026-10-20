@@ -1,7 +1,9 @@
 //! The BLAKE3 compression function (BLAKE3 specification, Section 2.2): seven rounds of eight G's, 184 products per G.
 
-use super::arx::{G_LANES, IV, g};
-use super::{Gadget, pack_u32s, unpack_u32s};
+use super::arx::{G_LANES, IV, g, g_rows};
+use super::rows::Rows;
+use super::{Gadget, assert_shape, pack_u32s, unpack_u32s};
+use crate::Witness;
 use crate::circuit::{Builder, Circuit, Word};
 
 /// The message word permutation between rounds (BLAKE3 specification, Table 2).
@@ -10,6 +12,12 @@ pub(crate) const MSG_PERMUTATION: [usize; 16] =
 
 /// Rounds.
 const ROUNDS: usize = 7;
+
+/// Slot of the constant: after 14 input and 8 output words.
+const CONST_POS: usize = 64 * 22;
+
+/// Committed bits: the ports, the constant and seven rounds of products.
+const USEFUL_BITS: usize = CONST_POS + 1 + 10_298;
 
 /// One compression: `compress(cv, block, counter, block_len, flags)`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -82,5 +90,63 @@ impl Gadget for Blake3Compress {
 
     fn write_output(output: &[u32; 16], words: &mut [u64]) {
         pack_u32s(output, words);
+    }
+
+    fn witness(circuit: &Circuit, log_instances: usize, rows: &[Self], padding: &Self) -> Witness {
+        assert_shape(circuit, 14, CONST_POS, USEFUL_BITS);
+        Witness::by_instance(14, log_instances, rows, padding, Self::rows)
+    }
+}
+
+impl Blake3Compress {
+    /// One instance's `A z` and `B z`, computed on words.
+    fn rows(&self, az: &mut [u64], bz: &mut [u64]) {
+        let mut rows = Rows::new(az, bz, CONST_POS / 64);
+        rows.push(1, 1, 1);
+        let mut v: [u32; 16] = core::array::from_fn(|i| match i {
+            0..8 => self.cv[i],
+            8..12 => IV[i - 8],
+            12 => self.counter as u32,
+            13 => (self.counter >> 32) as u32,
+            14 => self.block_len,
+            _ => self.flags,
+        });
+        let mut literal = 0x0F00;
+        let mut m = self.block;
+        for _ in 0..ROUNDS {
+            for (i, &lanes) in G_LANES.iter().enumerate() {
+                g_rows(
+                    &mut rows,
+                    &mut v,
+                    &mut literal,
+                    lanes,
+                    m[2 * i],
+                    m[2 * i + 1],
+                );
+            }
+            m = core::array::from_fn(|i| m[MSG_PERMUTATION[i]]);
+        }
+
+        // Ports: the input words, then the output words.
+        let mut words = [0; 14];
+        self.write_input(&mut words);
+        for (w, &word) in words.iter().enumerate() {
+            rows.port(w, word, u64::MAX);
+        }
+        let out: [u32; 16] = core::array::from_fn(|i| {
+            if i < 8 {
+                v[i] ^ v[i + 8]
+            } else {
+                v[i] ^ self.cv[i - 8]
+            }
+        });
+        for (w, pair) in out.as_chunks::<2>().0.iter().enumerate() {
+            rows.port(
+                14 + w,
+                u64::from(pair[0]) | (u64::from(pair[1]) << 32),
+                u64::MAX,
+            );
+        }
+        rows.finish();
     }
 }
