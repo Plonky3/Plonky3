@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
+use p3_commit::{BatchOpening, BatchOpeningRef, HidingMmcs, Mmcs};
 use p3_field::PackedValue;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::HorizontalPair;
@@ -65,7 +65,17 @@ impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS
     ///   while a cap_height of h uses all hashes from the h-th level below the root (2^h
     ///   in the case of a binary tree)
     /// * `rng` - A random number generator for generating salts.
+    ///
+    /// An empty salt hides nothing, so it fails to compile.
+    ///
+    /// Hiding is only as strong as the salt entropy.
     pub const fn new(hash: H, compress: C, cap_height: usize, rng: R) -> Self {
+        const {
+            assert!(
+                SALT_ELEMS > 0,
+                "a hiding MMCS needs at least one salt element per leaf"
+            );
+        }
         let inner = MerkleTreeMmcs::new(hash, compress, cap_height);
         Self {
             inner,
@@ -93,6 +103,25 @@ where
             rng: Mutex::new(R::from_rng(&mut *self.rng.lock())),
         }
     }
+}
+
+impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
+    HidingMmcs<P::Value> for MerkleTreeHidingMmcs<P, PW, H, C, R, N, DIGEST_ELEMS, SALT_ELEMS>
+where
+    P: PackedValue,
+    P::Value: Serialize + DeserializeOwned,
+    PW: PackedValue,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
+        + Sync,
+    R: CryptoRng + SeedableRng + Send,
+    PW::Value: Eq + Clone,
+    [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<P::Value>,
+{
 }
 
 impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>

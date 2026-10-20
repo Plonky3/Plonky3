@@ -230,6 +230,13 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     ) -> Result<(), Self::Error>;
 }
 
+/// A commitment scheme that reveals nothing about the rows it never opens.
+///
+/// Implementing it is a security claim the compiler cannot check.
+pub trait HidingMmcs<T: Send + Sync + Clone>: Mmcs<T> {}
+
+impl<T: Send + Sync + Clone, M: HidingMmcs<T>> HidingMmcs<T> for &M {}
+
 /// Lets a shared reference be used wherever an owned [`Mmcs`] is expected.
 impl<T: Send + Sync + Clone, M: Mmcs<T>> Mmcs<T> for &M {
     type ProverData<Mat> = M::ProverData<Mat>;
