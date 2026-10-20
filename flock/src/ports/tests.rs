@@ -144,7 +144,7 @@ fn a_prover_whose_witness_breaks_the_statement_is_rejected() {
     let (commitment, data) = pcs.commit(&w, &mut ch).unwrap();
     let (zerocheck, claims) = zerocheck::prove(&batch, &w, config.pow_bits, &mut ch);
     let (lincheck, claim) = lincheck::prove(&batch, &w, &claims, &public, &mut ch);
-    let opening = pcs.open(data, &[claim], &mut ch).unwrap();
+    let opening = pcs.open(data, &[claim], &[], &mut ch).unwrap();
     let forged = FlockProof {
         commitment,
         zerocheck,

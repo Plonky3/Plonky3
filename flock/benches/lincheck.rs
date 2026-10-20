@@ -145,7 +145,7 @@ fn opening(c: &mut Criterion) {
             b.iter_batched(
                 || pcs.commit(&w, &mut challenger()).unwrap(),
                 |(_, data)| {
-                    pcs.open(data, core::slice::from_ref(&claim), &mut challenger())
+                    pcs.open(data, core::slice::from_ref(&claim), &[], &mut challenger())
                         .unwrap()
                 },
                 BatchSize::PerIteration,
@@ -154,7 +154,7 @@ fn opening(c: &mut Criterion) {
         let mut sponge = challenger();
         let (commitment, data) = pcs.commit(&w, &mut sponge).unwrap();
         let proof = pcs
-            .open(data, core::slice::from_ref(&claim), &mut sponge)
+            .open(data, core::slice::from_ref(&claim), &[], &mut sponge)
             .unwrap();
         group.bench_function(BenchmarkId::new("verify", log_instances), |b| {
             b.iter(|| {

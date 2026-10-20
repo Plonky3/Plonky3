@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub(crate) use self::fold::partial_fold;
-pub use self::prover::prove;
+pub use self::prover::{prove, prove_folded};
 pub use self::verifier::verify;
 use crate::point::{QuirkyClaim, QuirkyPoint};
 use crate::ports::PortsError;

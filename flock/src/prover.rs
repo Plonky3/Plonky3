@@ -35,10 +35,12 @@ pub fn prove(
     let (zerocheck, claims) = zerocheck::prove(batch, witness, config.pow_bits, challenger);
 
     // Those claims and the public words, reduced to one claim on the committed bits.
-    let (lincheck, claim) = lincheck::prove(batch, witness, &claims, public, challenger);
+    let (lincheck, claim, folded) =
+        lincheck::prove_folded(batch, witness, &claims, public, challenger);
 
-    // That claim, opened.
-    let opening = pcs.open(data, &[claim], challenger)?;
+    // That claim, opened, its element split from the folded witness rather than from the commitment.
+    let split = pcs.suffix_tensors(&folded, &claim.point, batch.log_instances());
+    let opening = pcs.open(data, &[claim], &[split.as_ref()], challenger)?;
     Ok(FlockProof {
         commitment,
         zerocheck,
