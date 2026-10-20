@@ -112,3 +112,32 @@ pub enum VerificationError {
     #[error("the witness value does not close the linear sumcheck")]
     LinearMismatch,
 }
+
+/// Why the verifier rejects a proof over a committed witness.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CommittedVerificationError<E> {
+    /// The reduction itself is rejected.
+    #[error("reduction: {0}")]
+    Reduction(#[from] VerificationError),
+    /// A public region lies outside the witness.
+    #[error("public region {region} lies outside a witness of 2^{log_cols} cells")]
+    PublicOutOfRange {
+        /// Position of the region.
+        region: usize,
+        /// Witness variables.
+        log_cols: usize,
+    },
+    /// The commitment opening is rejected.
+    #[error("opening: {0:?}")]
+    Opening(E),
+    /// The opened witness value differs from the one the reduction claims.
+    #[error("the opened witness value differs from the claimed one")]
+    WitnessMismatch,
+    /// The committed cells of a public region differ from its values.
+    #[error("the committed cells of public region {region} differ from its values")]
+    PublicMismatch {
+        /// Position of the region.
+        region: usize,
+    },
+}

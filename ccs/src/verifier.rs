@@ -1,5 +1,7 @@
 //! Verifier of the two-phase reduction, leaving one witness evaluation claim.
 
+use alloc::vec::Vec;
+
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, dot_product};
@@ -21,7 +23,6 @@ use crate::transcript::{ReductionShape, VerifierTranscript};
 /// # Errors
 ///
 /// Returns the first check the proof fails.
-#[instrument(skip_all, name = "ccs verify", fields(log_rows = ccs.log_rows(), log_cols = ccs.log_cols()))]
 pub fn verify<F, EF, O, C>(
     ccs: &Ccs<F, O>,
     proof: &CcsProof<F, EF>,
@@ -34,9 +35,26 @@ where
     O: LinearOperator<F>,
     C: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
+    check(ccs, proof, ReductionShape::new(ccs, pow_bits), challenger).map(|(claim, _)| claim)
+}
+
+/// Check a reduction under a shape, returning the claim and the public points.
+#[instrument(skip_all, name = "ccs verify", fields(log_rows = ccs.log_rows(), log_cols = ccs.log_cols()))]
+pub(crate) fn check<F, EF, O, C>(
+    ccs: &Ccs<F, O>,
+    proof: &CcsProof<F, EF>,
+    shape: ReductionShape,
+    challenger: &mut C,
+) -> Result<(WitnessClaim<EF>, Vec<Vec<EF>>), VerificationError>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    O: LinearOperator<F>,
+    C: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+{
     let (log_rows, log_cols) = (ccs.log_rows(), ccs.log_cols());
-    let mut transcript =
-        VerifierTranscript::<C, F, EF>::new(challenger, ReductionShape::new(ccs, pow_bits));
+    let pow_bits = shape.pow_bits();
+    let mut transcript = VerifierTranscript::<C, F, EF>::new(challenger, shape);
 
     // Release the transcript completeness check before rejecting.
     let reject = |transcript: &mut VerifierTranscript<'_, C, F, EF>, error| {
@@ -109,9 +127,10 @@ where
         return reject(&mut transcript, VerificationError::LinearMismatch);
     }
 
-    transcript.finish(proof.witness_eval);
-    Ok(WitnessClaim {
+    let public_points = transcript.finish(proof.witness_eval);
+    let claim = WitnessClaim {
         point: col_point,
         value: proof.witness_eval,
-    })
+    };
+    Ok((claim, public_points))
 }

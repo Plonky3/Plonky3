@@ -26,7 +26,13 @@ tracing.workspace = true
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-binary-field = { path = "../binary-field" }
+p3-commit = { path = "../commit" }
+p3-dft = { path = "../dft" }
 p3-keccak = { path = "../keccak" }
+p3-matrix = { path = "../matrix" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-symmetric = { path = "../symmetric" }
+p3-whir = { path = "../whir" }
 
 criterion.workspace = true
 proptest.workspace = true

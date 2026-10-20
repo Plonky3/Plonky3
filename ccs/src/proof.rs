@@ -1,4 +1,4 @@
-//! Reduction proof and the witness claim it leaves.
+//! Reduction proofs and the witness claim a bare reduction leaves.
 
 use alloc::vec::Vec;
 
@@ -29,4 +29,13 @@ pub struct WitnessClaim<EF> {
     pub point: Point<EF>,
     /// Expected opening value.
     pub value: EF,
+}
+
+/// A reduction proof together with the opening of every witness claim it leaves.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommittedProof<F, EF, Opening> {
+    /// The reduction to one witness evaluation.
+    pub reduction: CcsProof<F, EF>,
+    /// One commitment opening: the reduction's point, then one point per public region.
+    pub opening: Opening,
 }

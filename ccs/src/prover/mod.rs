@@ -27,7 +27,6 @@ use crate::transcript::{ProverTranscript, ReductionShape};
 /// # Panics
 ///
 /// - The witness length is not the column count.
-#[instrument(skip_all, name = "ccs prove", fields(log_rows = ccs.log_rows(), log_cols = ccs.log_cols()))]
 pub fn prove<F, EF, O, C>(
     ccs: &Ccs<F, O>,
     z: &[F],
@@ -40,11 +39,29 @@ where
     O: LinearOperator<F>,
     C: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
+    let (proof, claim, _) = reduce(ccs, z, ReductionShape::new(ccs, pow_bits), challenger);
+    (proof, claim)
+}
+
+/// Run the reduction under a shape, returning the proof, the claim and the public points.
+#[instrument(skip_all, name = "ccs prove", fields(log_rows = ccs.log_rows(), log_cols = ccs.log_cols()))]
+pub(crate) fn reduce<F, EF, O, C>(
+    ccs: &Ccs<F, O>,
+    z: &[F],
+    shape: ReductionShape,
+    challenger: &mut C,
+) -> (CcsProof<F, EF>, WitnessClaim<EF>, Vec<Vec<EF>>)
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    O: LinearOperator<F>,
+    C: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+{
     assert_eq!(z.len(), 1 << ccs.log_cols(), "witness length");
 
     let (log_rows, log_cols) = (ccs.log_rows(), ccs.log_cols());
-    let mut transcript =
-        ProverTranscript::<C, F, EF>::new(challenger, ReductionShape::new(ccs, pow_bits));
+    let pow_bits = shape.pow_bits();
+    let mut transcript = ProverTranscript::<C, F, EF>::new(challenger, shape);
 
     // Phase 1: zerocheck, 0 = sum_x eq(tau, x) * sum_k alpha_k * g_k(x).
     let alphas = transcript.alphas();
@@ -84,7 +101,7 @@ where
 
     // Witness is now its value at the final point.
     let witness_eval = linear.witness_eval();
-    transcript.finish(witness_eval);
+    let public_points = transcript.finish(witness_eval);
 
     let proof = CcsProof {
         zerocheck: zerocheck_proof,
@@ -98,5 +115,6 @@ where
             point: col_point,
             value: witness_eval,
         },
+        public_points,
     )
 }

@@ -12,6 +12,7 @@ use p3_challenger::{CanObserve, CanSample};
 use p3_field::ExtensionField;
 
 use crate::operator::{LinearOperator, encode_usize};
+use crate::public::PublicRegion;
 use crate::relation::Ccs;
 
 /// Protocol version bound into the seed.
@@ -41,6 +42,9 @@ const LINEAR: &str = "linear";
 /// Witness value label.
 const WITNESS_EVAL: &str = "witness_eval";
 
+/// Public region point label.
+const PUBLIC_POINT: &str = "public_point";
+
 /// Base-field sponge alphabet.
 type Alphabet<F> = FieldUnit<F>;
 
@@ -65,6 +69,10 @@ pub(crate) struct ReductionShape {
     pow_bits: usize,
     /// Injective system encoding.
     statement: Vec<u8>,
+    /// Cell variables of each public region, each drawing one point after the witness value.
+    public_log_lens: Vec<usize>,
+    /// Injective encoding of the public regions.
+    public: Vec<u8>,
 }
 
 impl ReductionShape {
@@ -83,7 +91,25 @@ impl ReductionShape {
             num_operators: ccs.operators().len(),
             pow_bits,
             statement,
+            public_log_lens: Vec::new(),
+            public: Vec::new(),
         }
+    }
+
+    /// Bind public regions into the seed, each drawing one point over its cells at the end.
+    pub(crate) fn with_public<F: TranscriptField>(mut self, regions: &[PublicRegion<F>]) -> Self {
+        self.public_log_lens = regions.iter().map(PublicRegion::log_len).collect();
+        self.public.clear();
+        encode_usize(&mut self.public, regions.len());
+        for region in regions {
+            region.encode(&mut self.public);
+        }
+        self
+    }
+
+    /// Grinding bits per sumcheck round.
+    pub(crate) const fn pow_bits(&self) -> usize {
+        self.pow_bits
     }
 
     /// Interaction pattern of this shape.
@@ -150,6 +176,15 @@ impl ReductionShape {
         // Final witness value.
         steps.push(algebra(Kind::Message, WITNESS_EVAL, Length::Scalar));
 
+        // One point per public region, drawn once the witness is fixed; a lone cell draws none.
+        for &log_len in self.public_log_lens.iter().filter(|&&n| n > 0) {
+            steps.push(algebra(
+                Kind::Challenge,
+                PUBLIC_POINT,
+                Length::Fixed(log_len),
+            ));
+        }
+
         InteractionPattern::new(steps).expect("two matched brackets are always well formed")
     }
 
@@ -167,7 +202,7 @@ impl ReductionShape {
             encode_usize(&mut bytes, value);
             separator.instance(&bytes);
         }
-        separator.instance(&self.statement);
+        separator.instance(&self.statement).instance(&self.public);
         separator
     }
 }
@@ -236,21 +271,23 @@ where
         output
     }
 
-    /// Bind the final witness value and close the transcript.
+    /// Bind the final witness value, draw the public points, and close the transcript.
     ///
     /// # Panics
     ///
     /// - An earlier step was skipped.
-    pub(crate) fn finish(mut self, witness_eval: EF) {
+    pub(crate) fn finish(mut self, witness_eval: EF) -> Vec<Vec<EF>> {
         let _ = self
             .state
             .observe_extension::<F, EF, FieldToFieldCodec<F>>(WITNESS_EVAL, &witness_eval);
+        let points = play_public_points::<F, EF, _>(&mut self.state, &self.shape);
 
         // The proof carries every value.
         assert!(
             self.state.finalize().is_empty(),
             "the reduction carries every value in its own proof"
         );
+        points
     }
 }
 
@@ -318,20 +355,22 @@ where
         output
     }
 
-    /// Bind the final witness value and close the transcript.
+    /// Bind the final witness value, draw the public points, and close the transcript.
     ///
     /// # Panics
     ///
     /// - An earlier step was skipped; an empty wire never leaves bytes over.
-    pub(crate) fn finish(mut self, witness_eval: EF) {
+    pub(crate) fn finish(mut self, witness_eval: EF) -> Vec<Vec<EF>> {
         let _ = self
             .state
             .observe_extension::<F, EF, FieldToFieldCodec<F>>(WITNESS_EVAL, &witness_eval);
+        let points = play_public_points::<F, EF, _>(&mut self.state, &self.shape);
 
         // The wire is empty.
         self.state
             .finalize()
             .expect("the reduction reads an empty wire");
+        points
     }
 
     /// Release the completeness check before rejecting.
@@ -366,6 +405,24 @@ where
         return Vec::new();
     }
     draw::<F, EF, S>(state, TAU, shape.log_rows)
+}
+
+/// Draw one point per public region on either side; a lone cell gets the empty point.
+fn play_public_points<F, EF, S>(state: &mut S, shape: &ReductionShape) -> Vec<Vec<EF>>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    S: SymmetricSteps,
+    S::Challenger: CanObserve<F> + CanSample<F>,
+{
+    shape
+        .public_log_lens
+        .iter()
+        .map(|&log_len| match log_len {
+            0 => Vec::new(),
+            _ => draw::<F, EF, S>(state, PUBLIC_POINT, log_len),
+        })
+        .collect()
 }
 
 /// Draw a list of challenges as one step on either side.
