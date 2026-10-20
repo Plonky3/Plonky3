@@ -4,17 +4,19 @@ use alloc::vec::Vec;
 use core::cmp::Reverse;
 
 use itertools::Itertools;
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MmcsProofGeometry};
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MmcsProofGeometry, RowSink};
 use p3_field::PackedValue;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
-use p3_util::log2_ceil_usize;
+use p3_util::{DisjointMutPtr, log2_ceil_usize};
 use serde::{Deserialize, Serialize};
 
 use super::{check_widths, collect_opening_row, validate_commit_reachable_heights};
 use crate::MerkleTreeError::{
     CapMismatch, EmptyBatch, IndexOutOfBounds, WrongBatchSize, WrongHeight,
 };
+use crate::builder::default_digest_layer;
 use crate::merkle_tree::padded_len;
 use crate::pruning::PrunedMerklePaths;
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
@@ -73,6 +75,45 @@ where
 
         let cap = tree.cap(effective_cap_height);
         (cap, tree)
+    }
+
+    /// Hash every row as the producer hands it over, then build the tree above those digests.
+    fn commit_matrix_streamed<Fill>(
+        &self,
+        dimensions: Dimensions,
+        fill: Fill,
+    ) -> (Self::Commitment, Self::ProverData<RowMajorMatrix<P::Value>>)
+    where
+        Fill: FnOnce(&RowSink<'_, P::Value>) -> RowMajorMatrix<P::Value>,
+    {
+        let Dimensions { width, height } = dimensions;
+        assert!(height > 0, "all matrices have height 0");
+        let mut digests = default_digest_layer::<PW::Value, DIGEST_ELEMS>(height);
+        let slots = DisjointMutPtr::new(&mut digests);
+        let sink = |first_row: usize, rows: &[P::Value]| {
+            let count = rows.len() / width.max(1);
+            assert!(first_row + count <= height, "rows past the matrix");
+            // SAFETY: the producer hands every row over exactly once, so the slots are disjoint.
+            let out = unsafe { slots.slice_mut(first_row, count) };
+            <H as CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>>::hash_many(
+                &self.hash, rows, out,
+            );
+        };
+        let matrix = fill(&sink);
+        assert_eq!(
+            matrix.dimensions(),
+            dimensions,
+            "the matrix the producer promised"
+        );
+
+        let tree = MerkleTree::new_over_leaf_digests::<P, PW, H, C>(
+            &self.hash,
+            &self.compress,
+            matrix,
+            digests,
+        );
+        let effective_cap_height = self.cap_height.min(tree.num_layers().saturating_sub(1));
+        (tree.cap(effective_cap_height), tree)
     }
 
     /// Opens a batch of rows from committed matrices.
@@ -374,6 +415,63 @@ mod tests {
     type MyCompress4 = TruncatedPermutation<PermWide, 4, 8, 32>;
     type MyMmcs4 =
         MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress4, 4, 8>;
+
+    /// Commit through the streamed path, handing rows over in shuffled blocks of `block` rows.
+    fn commit_streamed<M: Mmcs<F, ProverData<RowMajorMatrix<F>> = P>, P>(
+        mmcs: &M,
+        matrix: &RowMajorMatrix<F>,
+        block: usize,
+    ) -> (M::Commitment, P) {
+        let width = matrix.width;
+        mmcs.commit_matrix_streamed(matrix.dimensions(), |sink| {
+            let mut blocks: Vec<_> = matrix.values.chunks(block * width).enumerate().collect();
+            blocks.reverse();
+            for (index, rows) in blocks {
+                sink(index * block, rows);
+            }
+            matrix.clone()
+        })
+    }
+
+    #[test]
+    fn a_streamed_commitment_is_the_committed_one() {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(7));
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 1);
+        let mut rng = SmallRng::seed_from_u64(8);
+        // A byte hasher that batches several rows per call.
+        type ByteMmcs = MerkleTreeMmcs<
+            F,
+            u8,
+            p3_symmetric::SerializingHasher<p3_keccak::Keccak256Hash>,
+            p3_symmetric::CompressionFunctionFromHasher<p3_keccak::Keccak256Hash, 2, 32>,
+            2,
+            32,
+        >;
+        let bytes = ByteMmcs::new(
+            p3_symmetric::SerializingHasher::new(p3_keccak::Keccak256Hash),
+            p3_symmetric::CompressionFunctionFromHasher::new(p3_keccak::Keccak256Hash),
+            2,
+        );
+        for (height, width, block) in [(1, 3, 1), (64, 8, 5), (100, 7, 16), (256, 16, 256)] {
+            let matrix = RowMajorMatrix::<F>::rand(&mut rng, height, width);
+            let (commitment, data) = mmcs.commit_matrix(matrix.clone());
+            let (streamed, streamed_data) = commit_streamed(&mmcs, &matrix, block);
+            assert_eq!(streamed, commitment, "height={height} width={width}");
+            assert_eq!(
+                commit_streamed(&bytes, &matrix, block).0,
+                bytes.commit_matrix(matrix.clone()).0,
+                "bytes height={height} width={width}"
+            );
+            for index in [0, height / 2, height - 1] {
+                let (streamed, committed) = (
+                    mmcs.open_batch(index, &streamed_data),
+                    mmcs.open_batch(index, &data),
+                );
+                assert_eq!(streamed.opened_values, committed.opened_values);
+                assert_eq!(streamed.opening_proof, committed.opening_proof);
+            }
+        }
+    }
 
     #[test]
     fn opening_row_reuses_owned_buffer() {
