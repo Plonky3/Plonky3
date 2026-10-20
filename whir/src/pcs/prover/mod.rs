@@ -13,19 +13,23 @@ use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::TableShape;
 use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
 use p3_sumcheck::constraints::{Constraint, Statements};
-use p3_sumcheck::layout::Layout;
+use p3_sumcheck::layout::{InitialWeight, Layout, SuffixProver, Verifier as LayoutVerifier};
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use tracing::instrument;
 
 use crate::WhirConfigError;
 use crate::domain::{WhirDomain, WhirQueryPoint};
 use crate::parameters::WhirConfig;
+use crate::pcs::WhirProverData;
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{
     QueryOpenings, SharedProofOpening, SumcheckData, WhirProof, WhirRoundProof,
 };
+use crate::pcs::verifier::errors::VerifierError;
+use crate::pcs::verifier::{InitialWeightCheck, WhirVerifier};
 use crate::transcript::{WhirProverTranscript, WhirShape};
 
 /// Per-round prover state with the Merkle authentication shapes
@@ -209,9 +213,47 @@ where
         Challenger: CanObserve<MT::Commitment>,
     {
         assert_eq!(self.round_folding_factor(0), layout.folding());
+        let num_claims = layout.num_claims();
+        let starting_folding_pow_bits = self.starting_folding_pow_bits;
+        self.prove_from(
+            initial_ood_answers,
+            challenger,
+            num_claims,
+            prover_data,
+            num_opening_claims,
+            |initial_sumcheck, challenger| {
+                layout.into_sumcheck(initial_sumcheck, starting_folding_pow_bits, challenger)
+            },
+        )
+    }
+
+    /// Run every round of the opening after an initial fold the caller plays.
+    ///
+    /// # Arguments
+    ///
+    /// - `initial_ood_answers`: answers at the commitment phase's out-of-domain points.
+    /// - `challenger`: the sponge the whole proof shares, borrowed for this run.
+    /// - `num_claims`: claims the initial fold batches, out-of-domain ones excluded.
+    /// - `prover_data`: Merkle prover data behind the initial commitment.
+    /// - `num_opening_claims`: opening claims the caller bound before this run.
+    /// - `initial_fold`: plays the initial fold inside its delegation bracket.
+    fn prove_from(
+        &self,
+        initial_ood_answers: Vec<EF>,
+        challenger: &mut Challenger,
+        num_claims: usize,
+        prover_data: Arc<MT::ProverData<DenseMatrix<F>>>,
+        num_opening_claims: usize,
+        initial_fold: impl FnOnce(
+            &mut SumcheckData<F, EF>,
+            &mut Challenger,
+        ) -> (SumcheckProver<F, EF>, Point<EF>),
+    ) -> Result<WhirProof<F, EF, MT>, WhirConfigError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
         self.config.validate_initial_claims(
-            layout
-                .num_claims()
+            num_claims
                 .checked_add(initial_ood_answers.len())
                 .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
         )?;
@@ -223,14 +265,8 @@ where
 
         // The delegate draws the claim-batching challenge, then plays its own rounds.
         let mut initial_sumcheck = SumcheckData::default();
-        let (sumcheck_prover, folding_randomness) =
-            transcript.delegate_initial_fold(|challenger| {
-                layout.into_sumcheck(
-                    &mut initial_sumcheck,
-                    self.starting_folding_pow_bits,
-                    challenger,
-                )
-            });
+        let (sumcheck_prover, folding_randomness) = transcript
+            .delegate_initial_fold(|challenger| initial_fold(&mut initial_sumcheck, challenger));
 
         let mut round_state = RoundState {
             sumcheck_prover,
@@ -480,5 +516,89 @@ where
             final_openings,
             final_sumcheck,
         )
+    }
+}
+
+impl<EF, F, Dft, MT, Challenger> WhirProver<EF, F, Dft, MT, Challenger, SuffixProver<F, EF>>
+where
+    F: Field + TranscriptField + Ord,
+    EF: ExtensionField<F>,
+    Dft: WhirDomain<F, EF>,
+    Challenger: FieldChallenger<F>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>
+        + CanObserve<MT::Commitment>,
+    MT: Mmcs<F>,
+{
+    /// Open the commitment against one extra weight, which its initial fold proves.
+    ///
+    /// The commitment's own out-of-domain samples are drawn first, as for any opening.
+    ///
+    /// The caller binds the weight's claimed sum before this call.
+    ///
+    /// # Errors
+    ///
+    /// The schedule refuses the claim count.
+    pub fn open_with_initial_weight<W: InitialWeight<EF>>(
+        &self,
+        mut prover_data: WhirProverData<F, EF, MT, SuffixProver<F, EF>>,
+        weight: W,
+        challenger: &mut Challenger,
+    ) -> Result<WhirProof<F, EF, MT>, WhirConfigError> {
+        let initial_ood_answers = tracing::info_span!("ood claims").in_scope(|| {
+            (0..self.commitment_ood_samples)
+                .map(|_| prover_data.layout.add_virtual_eval(challenger))
+                .collect::<Vec<_>>()
+        });
+        let layout = prover_data.layout;
+        assert_eq!(self.round_folding_factor(0), layout.folding());
+        // The extra weight is one more claim the initial fold batches.
+        let num_claims = layout.num_claims() + 1;
+        let pow_bits = self.starting_folding_pow_bits;
+        self.prove_from(
+            initial_ood_answers,
+            challenger,
+            num_claims,
+            prover_data.merkle_data,
+            0,
+            |initial_sumcheck, challenger| {
+                layout.into_sumcheck_with_weight(weight, initial_sumcheck, pow_bits, challenger)
+            },
+        )
+    }
+
+    /// Check an opening against one extra weight, given its claimed sum and its extension.
+    ///
+    /// The commitment is not bound here, the caller binds it before drawing anything.
+    ///
+    /// # Errors
+    ///
+    /// A wrong out-of-domain count, a refused claim count, or any rejection of the run.
+    pub fn verify_with_initial_weight(
+        &self,
+        commitment: &MT::Commitment,
+        proof: &WhirProof<F, EF, MT>,
+        table_shapes: &[TableShape],
+        weight: InitialWeightCheck<'_, EF>,
+        challenger: &mut Challenger,
+    ) -> Result<(), VerifierError> {
+        let strategy = <SuffixProver<F, EF> as Layout<F, EF>>::strategy();
+        let mut layout = LayoutVerifier::<F, EF>::new(table_shapes, strategy);
+        if proof.initial_ood_answers.len() != self.commitment_ood_samples {
+            return Err(VerifierError::InitialOodAnswerCountMismatch {
+                expected: self.commitment_ood_samples,
+                actual: proof.initial_ood_answers.len(),
+            });
+        }
+        for &eval in &proof.initial_ood_answers {
+            layout.add_virtual_eval(eval, challenger);
+        }
+        self.config
+            .validate_initial_claims(self.commitment_ood_samples.saturating_add(1))?;
+        let verifier =
+            WhirVerifier::new(&self.config, &self.dft, &self.mmcs, strategy.variable_order);
+        verifier
+            .verify_with_initial_weight(proof, challenger, commitment, &layout, weight)
+            .map(|_| ())
     }
 }
