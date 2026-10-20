@@ -609,9 +609,16 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
     EF: ExtensionField<F> + ExtensionField<IF>,
     E: EqualityEvaluator<InputField = IF, OutputField = EF>,
 {
-    // Handle empty batch case
+    // An empty batch sums to the zero polynomial.
+    //
+    // Overwrite mode must still write that zero.
+    //
+    // Accumulate mode adds zero, so the buffer stays as it is.
     if evals.width() == 0 {
         debug_assert!(scalars.is_empty());
+        if !INITIALIZED {
+            out.fill(EF::ZERO);
+        }
         return;
     }
 
@@ -1290,6 +1297,35 @@ mod tests {
         if !should_split(16, size_of::<EF4>()) {
             assert_eq!(log_task_count(16, size_of::<EF4>(), 16), 0);
         }
+    }
+
+    #[test]
+    fn empty_batch_honours_the_initialized_flag() {
+        // Fixture state: no points, so the matrix has width 0 and height 0.
+        //
+        // The output holds 2^0 = 1 entry, preset to one.
+        let ext_evals = RowMajorMatrixView::<EF4>::new(&[], 0);
+        let base_evals = RowMajorMatrixView::<F>::new(&[], 0);
+
+        // Invariant: an empty batch is the zero polynomial.
+        //
+        // Overwrite mode replaces the preset value with zero.
+        let mut out = [EF4::ONE];
+        eval_eq_batch::<F, EF4, false>(ext_evals, &mut out, &[]);
+        assert_eq!(out, [EF4::ZERO]);
+
+        let mut out = [EF4::ONE];
+        eval_eq_base_batch::<F, EF4, false>(base_evals, &mut out, &[]);
+        assert_eq!(out, [EF4::ZERO]);
+
+        // Accumulate mode adds zero, so the preset value survives.
+        let mut out = [EF4::ONE];
+        eval_eq_batch::<F, EF4, true>(ext_evals, &mut out, &[]);
+        assert_eq!(out, [EF4::ONE]);
+
+        let mut out = [EF4::ONE];
+        eval_eq_base_batch::<F, EF4, true>(base_evals, &mut out, &[]);
+        assert_eq!(out, [EF4::ONE]);
     }
 
     #[test]
