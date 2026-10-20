@@ -41,6 +41,10 @@ type L = PrefixProver<F, EF>;
 /// WHIR over that layout.
 type Pcs = WhirProver<EF, F, Radix2DFTSmallBatch<F>, Mmcs, Challenger, L>;
 
+/// Commitment to the witness.
+type Commitment = <Pcs as MultilinearPcs<EF, Challenger>>::Commitment;
+/// Full proof over a committed witness.
+type Proof = CommittedProof<F, EF, <Pcs as MultilinearPcs<EF, Challenger>>::Proof>;
 /// Rejection of a full proof.
 type Rejection = CommittedVerificationError<p3_whir::VerifierError>;
 
@@ -114,15 +118,7 @@ fn fibonacci_start() -> Vec<PublicRegion<F>> {
 }
 
 /// Commit the witness and prove; returns the commitment, the proof and the prover's final sponge.
-fn prove(
-    ccs: &Ccs<F>,
-    z: &[F],
-    public: &[PublicRegion<F>],
-) -> (
-    <Pcs as MultilinearPcs<EF, Challenger>>::Commitment,
-    CommittedProof<F, EF, <Pcs as MultilinearPcs<EF, Challenger>>::Proof>,
-    Challenger,
-) {
+fn prove(ccs: &Ccs<F>, z: &[F], public: &[PublicRegion<F>]) -> (Commitment, Proof, Challenger) {
     let pcs = pcs(ccs.log_cols());
     let witness = L::new_witness(
         vec![Table::new(RowMajorMatrix::new(z.to_vec(), z.len()))],
@@ -136,9 +132,9 @@ fn prove(
 
 fn verify(
     ccs: &Ccs<F>,
-    commitment: &<Pcs as MultilinearPcs<EF, Challenger>>::Commitment,
+    commitment: &Commitment,
     public: &[PublicRegion<F>],
-    proof: &CommittedProof<F, EF, <Pcs as MultilinearPcs<EF, Challenger>>::Proof>,
+    proof: &Proof,
 ) -> Result<Challenger, Rejection> {
     let mut ch = challenger();
     let pcs = pcs(ccs.log_cols());
