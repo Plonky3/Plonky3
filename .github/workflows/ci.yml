@@ -13,9 +13,14 @@ on:
   pull_request:
     branches: [ "*" ]
 
+# One group per commit, so a second run of the same commit waits instead of cancelling the first.
+#
+# GitHub can fire two pull_request events for one commit, e.g. when a PR opens inside a stack.
+# Cancelling the first while `plan` runs would leave its matrix check, under the unexpanded name, failed for good.
+# Runs of superseded commits are cancelled by the plan job instead.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -28,7 +33,11 @@ jobs:
   plan:
     name: Plan CI
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     outputs:
+      duplicate: ${{ steps.duplicate.outputs.duplicate }}
       packages: ${{ steps.impact.outputs.packages }}
       rust: ${{ steps.impact.outputs.rust }}
       parallel: ${{ steps.impact.outputs.parallel }}
@@ -47,6 +56,41 @@ jobs:
       lint: ${{ steps.impact.outputs.lint }}
 
     steps:
+      # A run of a commit that already passed has nothing left to check, so every job skips.
+      - name: Detect a passed run of this commit
+        id: duplicate
+        # Should the API fail, the output stays unset and every job runs.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          passed=$(gh run list --workflow "$GITHUB_WORKFLOW" --commit "$HEAD_SHA" \
+            --json databaseId,conclusion \
+            --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID and .conclusion == \"success\")] | length")
+          echo "duplicate=$([[ "$passed" -gt 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # Runs of older commits of this pull request are stale once a new commit arrives.
+      #
+      # Only runs attached to this pull request are cancelled; a fork's token cannot cancel, so those finish.
+      - name: Cancel runs of superseded commits
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?event=pull_request&branch=$BRANCH&per_page=100" \
+            --jq ".workflow_runs[]
+              | select(.head_sha != \"$HEAD_SHA\" and .status != \"completed\")
+              | select(any(.pull_requests[]; .number == $PR))
+              | .id" \
+            | xargs -r -n1 gh run cancel
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -200,7 +244,9 @@ jobs:
             target: aarch64-unknown-linux-gnu
             modes: serial parallel
     runs-on: ${{ matrix.os }}
-    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+    if: >-
+      needs.plan.outputs.duplicate != 'true' &&
+      !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
 
     steps:
       - uses: actions/checkout@v6
@@ -510,6 +556,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     if: >-
+      needs.plan.outputs.duplicate != 'true' &&
       needs.plan.outputs.embedded == 'true' &&
       !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
 
@@ -540,6 +587,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     if: >-
+      needs.plan.outputs.duplicate != 'true' &&
       (needs.plan.outputs.wasm == 'true' || needs.plan.outputs.wasm_blake3 == 'true') &&
       !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
     env:
@@ -593,6 +641,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     if: >-
+      needs.plan.outputs.duplicate != 'true' &&
       needs.plan.outputs.lint == 'true' &&
       !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
 
