@@ -7,6 +7,7 @@
 use alloc::vec::Vec;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 use core::arch::x86_64::{__m512i, _mm_sfence, _mm512_loadu_si512, _mm512_stream_si512};
+use core::mem::MaybeUninit;
 use core::ptr;
 
 use p3_maybe_rayon::prelude::*;
@@ -29,6 +30,12 @@ pub(crate) enum Store {
     Streamed,
 }
 
+/// Bytes of shared cache a matrix is taken to fit inside.
+///
+/// - A `no_std` crate cannot read the cache size, so the matrix size against a fixed figure is the signal.
+/// - A smaller real cache only forgoes the deeper tiles' win, which is the safe direction.
+pub(crate) const SHARED_CACHE_BYTES: usize = 128 * 1024 * 1024;
+
 /// An element a staging pass can write around the cache.
 pub(crate) trait Staged: Copy + Send + Sync {
     /// Write `source` over `target`, using streaming stores where the target supports them.
@@ -46,32 +53,33 @@ pub(crate) trait Staged: Copy + Send + Sync {
     fn fence() {}
 }
 
-impl Staged for u128 {
+impl<T: Copy + Send + Sync> Staged for T {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     unsafe fn stream(target: &mut [Self], source: &[Self]) {
-        const WORDS_PER_LINE: usize = 64 / size_of::<u128>();
-
         assert_eq!(target.len(), source.len(), "a run is copied whole");
-        if target.is_empty() {
+        let size = size_of::<Self>();
+        if target.is_empty() || size == 0 || 64 % size != 0 {
+            target.copy_from_slice(source);
             return;
         }
+        let per_line = 64 / size;
 
-        // A u128 is 16-byte aligned, so at most three cached words reach a 64-byte boundary.
-        // `align_offset` cannot fail for that relationship, but cap it at the run for short tails.
+        // Elements up to the first 64-byte boundary are stored through the cache.
+        // An element size dividing 64 reaches one, and a short run is capped at its length.
         let prefix = target.as_ptr().align_offset(64).min(target.len());
         let (target_prefix, target) = target.split_at_mut(prefix);
         let (source_prefix, source) = source.split_at(prefix);
         target_prefix.copy_from_slice(source_prefix);
 
-        let body = source.len() / WORDS_PER_LINE * WORDS_PER_LINE;
+        let body = source.len() / per_line * per_line;
         let (source_body, source_tail) = source.split_at(body);
         let (target_body, target_tail) = target.split_at_mut(body);
-        for offset in (0..body).step_by(WORDS_PER_LINE) {
+        for offset in (0..body).step_by(per_line) {
             // SAFETY:
             // - The cached prefix aligns `target_body` to 64 bytes. Every offset advances by one
             //   64-byte line, preserving the alignment `_mm512_stream_si512` requires.
             // - `body` is a whole number of lines, so each pointer names 64 initialized bytes.
-            // - The load is explicitly unaligned, so the source needs only u128 alignment.
+            // - The load is explicitly unaligned, so the source needs only its own alignment.
             // - Each target line is inside the exclusively borrowed target body.
             unsafe {
                 let source_line = source_body.as_ptr().add(offset).cast::<__m512i>();
@@ -88,6 +96,39 @@ impl Staged for u128 {
         // SAFETY: a store fence has no precondition; it orders this thread's earlier stores.
         unsafe { _mm_sfence() };
     }
+}
+
+/// A vector of `len` copies of `zero`, written by every worker.
+///
+/// A recycled allocation is not zero already, so one thread clearing it would serialise its caller.
+///
+/// Past the shared cache the stores go around it, since the caller reads the vector back from memory anyway.
+pub(crate) fn zeroed<T: Copy + Send + Sync>(len: usize, zero: T) -> Vec<T> {
+    /// Elements one store run covers.
+    const RUN: usize = 1 << 9;
+    let mut values = Vec::with_capacity(len);
+    let source = [MaybeUninit::new(zero); RUN];
+    let streamed = len.saturating_mul(size_of::<T>()) > SHARED_CACHE_BYTES;
+    let fence = MaybeUninit::<T>::fence;
+    values.spare_capacity_mut()[..len]
+        .par_chunks_mut(RUN << 6)
+        .for_each(|slots| {
+            let _fence = FenceOnDrop { fence: &fence };
+            for slots in slots.chunks_mut(RUN) {
+                let source = &source[..slots.len()];
+                if streamed {
+                    // SAFETY: the guard above fences this thread's streamed stores before it returns.
+                    //
+                    // The slots are not touched again until every task has returned.
+                    unsafe { MaybeUninit::stream(slots, source) };
+                } else {
+                    slots.copy_from_slice(source);
+                }
+            }
+        });
+    // SAFETY: the sweep above initialised every one of the first `len` slots, and fenced them.
+    unsafe { values.set_len(len) };
+    values
 }
 
 /// Runs a publication fence on the current thread when its task returns or unwinds.
@@ -495,29 +536,30 @@ mod tests {
         for_each_staged_tile_into_cosets_with, prefault,
     };
 
-    #[test]
-    fn streamed_u128_runs_match_cached_copies_at_every_alignment_and_length() {
+    /// Stream runs of one element type at every offset, against a cached copy.
+    fn check_streamed_runs<T: Copy + Send + Sync + PartialEq + core::fmt::Debug>(
+        element: impl Fn(usize) -> T,
+        guard: T,
+    ) {
         // A wrong prefix rounds the destination down and overwrites the guard; a wrong tail
         // leaves sentinels in the copied run. Offsetting both slices also exercises unaligned
         // source loads independently of the destination's 64-byte alignment.
-        for target_offset in 0..4 {
-            for source_offset in 0..4 {
-                for len in [0usize, 1, 3, 4, 5, 7, 8, 9, 13] {
-                    let source: Vec<u128> = (0..len + 4)
-                        .map(|i| (i as u128).wrapping_mul(0x101_0000_0001))
-                        .collect();
-                    let mut actual = vec![u128::MAX; len + 8];
+        for target_offset in 0..8 {
+            for source_offset in 0..8 {
+                for len in [0usize, 1, 3, 4, 5, 7, 8, 9, 13, 16, 17, 33] {
+                    let source: Vec<T> = (0..len + 8).map(&element).collect();
+                    let mut actual = vec![guard; len + 16];
                     let mut expected = actual.clone();
 
                     let source = &source[source_offset..source_offset + len];
                     expected[target_offset..target_offset + len].copy_from_slice(source);
                     {
-                        let fence = <u128 as Staged>::fence;
+                        let fence = <T as Staged>::fence;
                         let _fence = FenceOnDrop { fence: &fence };
                         // SAFETY: `_fence` is armed on this thread, and `actual` is not observed
                         // or released until the guard leaves this inner scope.
                         unsafe {
-                            <u128 as Staged>::stream(
+                            <T as Staged>::stream(
                                 &mut actual[target_offset..target_offset + len],
                                 source,
                             );
@@ -531,6 +573,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn streamed_runs_match_cached_copies_at_every_alignment_and_length() {
+        check_streamed_runs(|i| (i as u128).wrapping_mul(0x101_0000_0001), u128::MAX);
+        check_streamed_runs(|i| (i as u64).wrapping_mul(0x9e37_79b9), u64::MAX);
+        check_streamed_runs(|i| [i as u64, !(i as u64), 7, 9], [u64::MAX; 4]);
+        // An element whose size does not divide a line is copied through the cache.
+        check_streamed_runs(|i| [i as u64, 3, 5], [u64::MAX; 3]);
+    }
+
+    #[test]
+    fn zeroed_vectors_hold_zero_on_both_sides_of_the_shared_cache() {
+        for len in [0usize, 1, 511, 513, 1 << 15] {
+            assert_eq!(super::zeroed(len, 0u64), vec![0u64; len]);
+        }
+        let past = super::SHARED_CACHE_BYTES / size_of::<u64>() + 9;
+        assert!(super::zeroed(past, 0u64).iter().all(|&x| x == 0));
     }
 
     #[test]

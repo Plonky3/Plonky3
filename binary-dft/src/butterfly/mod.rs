@@ -82,6 +82,22 @@ pub trait ButterflyField: TowerLevel {
     fn lch_transform_cosets(values: &mut [Self], width: usize, log_message: usize) {
         lch::transform_cosets::<Self>(values, width, log_message);
     }
+
+    /// As [`Self::lch_transform_cosets`], the message read from `source` instead of the leading coset.
+    ///
+    /// # Panics
+    ///
+    /// - As [`Self::lch_transform_cosets`], or if the source is not one coset long.
+    #[inline]
+    fn lch_transform_cosets_from(
+        values: &mut [Self],
+        source: &[Self],
+        width: usize,
+        log_message: usize,
+    ) {
+        values[..source.len()].copy_from_slice(source);
+        Self::lch_transform_cosets(values, width, log_message);
+    }
 }
 
 /// Apply the twelve butterflies of three stages through each field's kernel.
@@ -211,6 +227,16 @@ impl ButterflyField for Poly64 {
     #[inline]
     fn butterfly_radix8<const INVERSE: bool>(rows: &mut [&mut [Self]; 8], t: &[Self; 7]) {
         poly64::radix8::<INVERSE>(rows, t);
+    }
+
+    #[inline]
+    fn lch_transform_cosets_from(
+        values: &mut [Self],
+        source: &[Self],
+        width: usize,
+        log_message: usize,
+    ) {
+        lch::transform_cosets_from::<Self>(values, Some(source), width, log_message);
     }
 }
 

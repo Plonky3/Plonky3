@@ -6,12 +6,12 @@ use p3_binary_field::poly_basis::{LOW_STAGES, LowStageTwiddles};
 use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
 use p3_maybe_rayon::prelude::*;
 
-use super::plan::{Plan, SHARED_CACHE_BYTES};
+use super::plan::Plan;
 use crate::domain::domain_point;
 use crate::lch::BUTTERFLY_GRAIN;
 use crate::staging::{
-    Dispatch, StagedRuns, Store, for_each_staged_tile, for_each_staged_tile_into_cosets_stored,
-    prefault,
+    Dispatch, SHARED_CACHE_BYTES, StagedRuns, Store, for_each_staged_tile,
+    for_each_staged_tile_into_cosets_stored, prefault,
 };
 
 /// Stage bases and the steps between consecutive block twiddles, in polynomial coordinates.
