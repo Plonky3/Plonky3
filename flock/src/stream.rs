@@ -29,6 +29,41 @@ impl Stream {
             );
         }
     }
+
+    /// Write `a & b` into unwritten words, streaming whole cache lines.
+    #[inline]
+    pub(crate) fn write_and(&self, dst: &mut [MaybeUninit<u64>], a: &[u64], b: &[u64]) {
+        assert!(
+            dst.len() == a.len() && dst.len() == b.len(),
+            "a streaming AND is elementwise"
+        );
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+        {
+            use core::arch::x86_64::{_mm512_and_si512, _mm512_loadu_si512, _mm512_stream_si512};
+
+            /// Words of a cache line.
+            const LINE: usize = 8;
+            let head = dst.as_ptr().align_offset(64).min(dst.len());
+            let body = (dst.len() - head) & !(LINE - 1);
+            for i in (0..head).chain(head + body..dst.len()) {
+                dst[i].write(a[i] & b[i]);
+            }
+            for i in (head..head + body).step_by(LINE) {
+                // SAFETY: the line lies in all three slices and `dst + i` is line-aligned.
+                unsafe {
+                    let v = _mm512_and_si512(
+                        _mm512_loadu_si512(a.as_ptr().add(i).cast()),
+                        _mm512_loadu_si512(b.as_ptr().add(i).cast()),
+                    );
+                    _mm512_stream_si512(dst.as_mut_ptr().add(i).cast(), v);
+                }
+            }
+        }
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+        for ((d, &a), &b) in dst.iter_mut().zip(a).zip(b) {
+            d.write(a & b);
+        }
+    }
 }
 
 impl Drop for Stream {
@@ -103,6 +138,30 @@ mod tests {
                 let got: Vec<u32> = got.iter().map(|x| unsafe { x.assume_init() }).collect();
                 let mut want = vec![0u32; head + len];
                 want[head..].copy_from_slice(&src[..len]);
+                assert_eq!(got, want, "head {head}, len {len}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_streamed_and_is_a_plain_one() {
+        let a: Vec<u64> = (0..300u64)
+            .map(|i| i.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .collect();
+        let b: Vec<u64> = (0..300u64).map(|i| !i.rotate_left(17)).collect();
+        for head in 0..12 {
+            for len in [0, 1, 7, 8, 9, 64, 131] {
+                let mut got = vec![MaybeUninit::new(0u64); head + len];
+                {
+                    let stream = Stream::new();
+                    stream.write_and(&mut got[head..], &a[..len], &b[..len]);
+                }
+                // SAFETY: every slot was initialized above.
+                let got: Vec<u64> = got.iter().map(|x| unsafe { x.assume_init() }).collect();
+                let mut want = vec![0u64; head + len];
+                for (w, (&a, &b)) in want[head..].iter_mut().zip(a.iter().zip(&b)) {
+                    *w = a & b;
+                }
                 assert_eq!(got, want, "head {head}, len {len}");
             }
         }
