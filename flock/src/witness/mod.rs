@@ -1,4 +1,4 @@
-//! Packed witness tables for a batch of circuit instances, filled 64 instances per gate walk.
+//! Packed witness tables for a batch of circuit instances, by the gate walk or a word-level generator.
 
 mod walk;
 
@@ -18,6 +18,9 @@ const LANES: usize = 64;
 
 /// Slot groups transposed together: one cache line of each lane.
 const BLOCK: usize = 8;
+
+/// Instances a word-level generator fills before streaming them out.
+const INSTANCE_GROUP: usize = 8;
 
 /// One batch's packed tables, 64 bits per word, instance-major.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,6 +104,39 @@ impl Witness {
                             }
                         }
                     }
+                }
+            },
+        )
+    }
+
+    /// The witness of instances of `2^k_log` bits from a word-level generator, one instance at a time.
+    ///
+    /// The generator writes every word of one instance's `A z` and `B z`.
+    ///
+    /// # Panics
+    ///
+    /// - There are more rows than instances.
+    pub(crate) fn by_instance<S: Sync>(
+        k_log: usize,
+        log_instances: usize,
+        rows: &[S],
+        padding: &S,
+        instance: impl Fn(&S, &mut [u64], &mut [u64]) + Sync,
+    ) -> Self {
+        assert!(rows.len() <= 1 << log_instances, "more rows than instances");
+        let words = (1usize << k_log) / 64;
+        Self::fill(
+            words,
+            log_instances,
+            INSTANCE_GROUP,
+            || (),
+            |(), first, az, bz| {
+                for (i, (az, bz)) in az
+                    .chunks_exact_mut(words)
+                    .zip(bz.chunks_exact_mut(words))
+                    .enumerate()
+                {
+                    instance(rows.get(first + i).unwrap_or(padding), az, bz);
                 }
             },
         )

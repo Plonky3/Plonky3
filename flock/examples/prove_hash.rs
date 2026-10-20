@@ -12,9 +12,7 @@ use p3_flock::gadgets::blake2s::Blake2sCompress;
 use p3_flock::gadgets::blake3::Blake3Compress;
 use p3_flock::gadgets::keccak::KeccakF1600;
 use p3_flock::gadgets::sha256::Sha256Compress;
-use p3_flock::{
-    Batch, FlockChallenger, FlockConfig, Gadget, Port, PublicPorts, Witness, prove, verify,
-};
+use p3_flock::{Batch, FlockChallenger, FlockConfig, Gadget, Port, PublicPorts, prove, verify};
 use p3_keccak::Keccak256Hash;
 use rand::rngs::SmallRng;
 use rand::{Rng, RngExt, SeedableRng};
@@ -64,7 +62,7 @@ fn run<G: Gadget + Sync>(
     let mut build = Duration::ZERO;
     for _ in 0..runs {
         let t = Instant::now();
-        let witness = Witness::generate(&circuit, log_n, &rows, &rows[0], G::write_input);
+        let witness = G::witness(&circuit, log_n, &rows, &rows[0]);
         wit.push(t.elapsed());
 
         // Every input and output word, the outputs read from the witness.

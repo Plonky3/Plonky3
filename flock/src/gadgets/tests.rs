@@ -7,6 +7,7 @@ use core::fmt::Debug;
 use blake2::digest::consts::U32;
 use blake2::{Blake2s, Digest};
 use p3_keccak::Keccak256Hash;
+use proptest::prelude::*;
 use rand::rngs::SmallRng;
 use rand::{Rng, RngExt, SeedableRng};
 
@@ -42,6 +43,10 @@ where
     let circuit = G::circuit();
     let words = (1 << circuit.k_log()) / 64;
     let w = Witness::generate(&circuit, LOG_N, rows, padding, G::write_input);
+    assert!(
+        G::witness(&circuit, LOG_N, rows, padding) == w,
+        "the gadget's witness is the walk's"
+    );
     for i in 0..1 << LOG_N {
         let row = rows.get(i).unwrap_or(padding);
         let range = i * words..(i + 1) * words;
@@ -816,4 +821,61 @@ fn writing_an_output_inverts_decoding_it() {
     assert_eq!(out[..4], words[..4]);
     Blake2sCompress::write_output(&Blake2sCompress::decode_output(&words[..4]), &mut out[..4]);
     assert_eq!(out[..4], words[..4]);
+}
+
+/// The gadget's witness against the gate walk, bit for bit, on random rows and padding.
+fn check_generator<G: Gadget + Sync>(
+    circuit: &Circuit,
+    seed: u64,
+    log_n: usize,
+    n_rows: usize,
+    random: impl Fn(&mut SmallRng) -> G,
+) {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let rows: Vec<G> = (0..n_rows).map(|_| random(&mut rng)).collect();
+    let padding = random(&mut rng);
+    let fast = G::witness(circuit, log_n, &rows, &padding);
+    let walk = Witness::generate(circuit, log_n, &rows, &padding, G::write_input);
+    assert!(
+        fast == walk,
+        "generator and walk differ: seed {seed}, 2^{log_n}, {n_rows} rows"
+    );
+}
+
+/// Every gadget's witness against the walk at one size.
+fn check_generators(seed: u64, log_n: usize, n_rows: usize) {
+    static CIRCUITS: std::sync::OnceLock<[Circuit; 4]> = std::sync::OnceLock::new();
+    let [b3, b2, sha, keccak] = CIRCUITS.get_or_init(|| {
+        [
+            Blake3Compress::circuit(),
+            Blake2sCompress::circuit(),
+            Sha256Compress::circuit(),
+            KeccakF1600::circuit(),
+        ]
+    });
+    check_generator(b3, seed, log_n, n_rows, random_blake3);
+    check_generator(b2, seed, log_n, n_rows, random_blake2s);
+    check_generator(sha, seed, log_n, n_rows, random_sha256);
+    check_generator(keccak, seed, log_n, n_rows, random_keccak);
+}
+
+#[test]
+fn generators_match_the_walk_at_every_size() {
+    // Fixed seeds: full batches and batches mostly padding, 2^3 to 2^8 instances.
+    for log_n in 3..=8 {
+        for (seed, n_rows) in [(1, 1 << log_n), (2, 1), (3, (1 << log_n) - 3)] {
+            check_generators(seed, log_n, n_rows);
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+
+    #[test]
+    fn generators_match_the_walk_on_random_batches(seed: u64, log_n in 3usize..=8, fill in 0.0f64..=1.0) {
+        // Invariant: the word-level generators commit exactly the walk's z, A z and B z.
+        let n_rows = ((1usize << log_n) as f64 * fill) as usize;
+        check_generators(seed, log_n, n_rows);
+    }
 }

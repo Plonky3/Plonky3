@@ -1,5 +1,6 @@
 //! The add-rotate-XOR core BLAKE2s and BLAKE3 share: the IV, the G function and its lanes.
 
+use super::rows::Rows;
 use crate::circuit::{Builder, Wire, Word};
 
 /// The initial value of BLAKE2s (RFC 7693, Section 2.6) and BLAKE3, the SHA-256 IV.
@@ -39,5 +40,34 @@ pub(crate) fn g(
         v[d] = c.xor_word(&v[d], &v[a]).rotate_right(r1);
         v[cc] = c.wrapping_sum(&[&v[cc], &v[d]]);
         v[b] = c.xor_word(&v[b], &v[cc]).rotate_right(r2);
+    }
+}
+
+/// One G on words, appending its rows; bit `i` of `literal` marks lane `i` still a constant.
+#[inline(always)]
+pub(crate) fn g_rows(
+    rows: &mut Rows<'_>,
+    v: &mut [u32; 16],
+    literal: &mut u16,
+    [a, b, c, d]: [usize; 4],
+    mx: u32,
+    my: u32,
+) {
+    for (m, r1, r2) in [(mx, 16, 12), (my, 8, 7)] {
+        debug_assert_eq!(
+            *literal & ((1 << a) | (1 << b)),
+            0,
+            "a summed lane is variable"
+        );
+        v[a] = rows.add3(v[a], v[b], m);
+        v[d] = (v[d] ^ v[a]).rotate_right(r1);
+        // An IV lane is a constant operand of its first sum.
+        v[c] = if *literal & (1 << c) != 0 {
+            rows.add_const(v[c], v[d])
+        } else {
+            rows.add2(v[c], v[d])
+        };
+        *literal &= !((1 << c) | (1 << d));
+        v[b] = (v[b] ^ v[c]).rotate_right(r2);
     }
 }
