@@ -21,6 +21,7 @@ members = [
     "examples",
     "field",
     "field-testing",
+    "flock",
     "fri",
     "goldilocks",
     "keccak",
@@ -135,6 +136,7 @@ p3-dft = { path = "dft", version = "0.8.0" }
 p3-examples = { path = "examples", version = "0.3.0" }
 p3-field = { path = "field", version = "0.8.0" }
 p3-field-testing = { path = "field-testing", version = "0.8.0" }
+p3-flock = { path = "flock", version = "0.8.0" }
 p3-fri = { path = "fri", version = "0.8.0" }
 p3-goldilocks = { path = "goldilocks", version = "0.8.0" }
 p3-keccak = { path = "keccak", version = "0.8.0" }

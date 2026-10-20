@@ -1,0 +1,29 @@
+[package]
+name = "p3-flock"
+description = "Flock: batched Boolean R1CS proving over binary fields (ePrint 2026/1329)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[dependencies]
+p3-binary-field.workspace = true
+p3-ccs.workspace = true
+p3-challenger.workspace = true
+p3-field.workspace = true
+p3-keccak.workspace = true
+p3-maybe-rayon.workspace = true
+p3-multilinear-util.workspace = true
+p3-symmetric.workspace = true
+
+[dev-dependencies]
+rand = { workspace = true, features = ["std_rng"] }
+
+[lints]
+workspace = true
