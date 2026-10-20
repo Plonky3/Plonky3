@@ -8,7 +8,7 @@ use crate::columns::{RescueCols, num_cols};
 
 /// Generate a trace with one Rescue permutation per row.
 ///
-/// The rows replay the permutation exactly as [`p3_rescue::Rescue`] does, so a
+/// The rows replay the permutation exactly as `p3_rescue::Rescue` does, so a
 /// trace accepted by [`crate::RescueAir`] is a trace of that permutation.
 /// The number of rows is padded to a power of two with all-zero inputs.
 ///

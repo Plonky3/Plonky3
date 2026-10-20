@@ -9,7 +9,7 @@ use crate::columns::{RescueCols, num_cols};
 
 /// An AIR for the Rescue permutation, one permutation per row.
 ///
-/// `ALPHA` is the S-box exponent and must match the [`p3_rescue::Rescue`]
+/// `ALPHA` is the S-box exponent and must match the `p3_rescue::Rescue`
 /// instance whose traces this AIR is meant to accept.
 #[derive(Debug, Clone)]
 pub struct RescueAir<F, const WIDTH: usize, const ALPHA: u64, const NUM_ROUNDS: usize> {
@@ -20,7 +20,7 @@ pub struct RescueAir<F, const WIDTH: usize, const ALPHA: u64, const NUM_ROUNDS: 
     pub mds: [[F; WIDTH]; WIDTH],
 
     /// `2 * WIDTH * NUM_ROUNDS` constants, laid out exactly as
-    /// [`p3_rescue::Rescue`] consumes them: the first `WIDTH` of each round's
+    /// `p3_rescue::Rescue` consumes them: the first `WIDTH` of each round's
     /// pair follow the forward S-box, the second `WIDTH` the inverse S-box.
     pub round_constants: Vec<F>,
 }

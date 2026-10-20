@@ -2,7 +2,7 @@
 //!
 //! One permutation per row. Each Rescue round is
 //! `x -> x^ALPHA`, MDS, constants, `x -> x^(1/ALPHA)`, MDS, constants,
-//! matching [`p3_rescue::Rescue`].
+//! matching `p3_rescue::Rescue`.
 //!
 //! The inverse S-box is what makes Rescue cheap to constrain: rather than
 //! expressing `x^(1/ALPHA)` as a polynomial, the trace commits to its output
