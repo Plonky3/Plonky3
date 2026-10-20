@@ -72,9 +72,10 @@ fn collect_opening_row<T>(row: impl IntoIterator<Item = T>, width: usize) -> Vec
 /// matrices by arranging their rows into a unified binary tree. The tallest matrix defines
 /// the maximum height, and smaller matrices are integrated at appropriate depths.
 ///
-/// The commitment is a [`MerkleCap`], which is the `cap_height`-th layer from the root.
+/// The commitment is a [`MerkleCap`], at most `cap_height` layers below the root.
 /// A `cap_height` of 0 means the commitment is just the root (a single hash).
-/// A `cap_height` of h means the commitment contains `2^h` hashes and proofs are `h` elements shorter.
+/// The effective cap height is reduced when necessary so every matrix is injected at or below
+/// the cap. A cap must not expose a layer that omits shorter matrices.
 ///
 /// Type Parameters:
 /// - `P`: Packed leaf value (e.g. a field element or vector of elements)
@@ -91,8 +92,8 @@ pub struct MerkleTreeMmcs<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize
     /// The compression function used to hash internal tree nodes.
     compress: C,
 
-    /// The height of the Merkle cap. A cap_height of 0 uses only the root,
-    /// while a cap_height of h uses 2^h hashes from h levels below the root.
+    /// The maximum height of the Merkle cap, measured in layers below the root.
+    /// It is reduced when necessary to include every matrix injection.
     cap_height: usize,
 
     /// Phantom type to associate `P` and `PW` without storing values.
@@ -139,8 +140,9 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     /// # Arguments
     /// * `hash` - The hash function used to hash individual matrix rows (leaf level).
     /// * `compress` - The compression function used to hash internal tree nodes.
-    /// * `cap_height` - The height of the Merkle cap. A cap_height of 0 uses only the root,
-    ///   while a cap_height of h uses 2^h hashes from h levels below the root.
+    /// * `cap_height` - The maximum number of layers below the root for the cap.
+    ///   A height of 0 uses only the root. Mixed-height batches may use a smaller
+    ///   height so the cap includes every matrix injection.
     pub const fn new(hash: H, compress: C, cap_height: usize) -> Self {
         const {
             assert!(N >= 2, "Arity N must be at least 2");
@@ -154,6 +156,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         }
     }
 
+    /// The configured maximum cap height. Mixed-height batches may use a smaller cap height
+    /// to keep every matrix bound to the commitment.
     pub const fn cap_height(&self) -> usize {
         self.cap_height
     }
@@ -242,7 +246,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
     /// Reject a commitment that does not hold exactly the roots the tree's top layers produce.
     ///
-    /// The cap is the layer as many steps below the root as the configured cap height.
+    /// The cap sits at most the configured number of layers below the root,
+    /// and never below the final matrix injection.
     ///
     /// Its length is the product of the arities above it, fixed by the dimensions alone.
     ///
@@ -312,6 +317,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         //     step:        s_0   s_1   s_2  ...
         //     schedule  = [s_0,  s_1,  s_2,  ...]
         let mut schedule = Vec::new();
+        let mut last_injection_level = 0;
         while curr_height_padded > 1 {
             // Arity at this layer:
             //   N → full N-ary compression
@@ -339,16 +345,34 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                 heights_tallest_first
                     .peeking_take_while(|(_, dims)| dims.height == next_height)
                     .for_each(|_| {});
+                last_injection_level = schedule.len();
             }
         }
 
-        // Phase 3: strip the top `cap_height` entries
-        //
-        // Those layers live inside the verifier's cap, not in the proof.
+        // The proof must reach every injection, including one at the cap layer itself.
+        // Cutting below the last injection would leave that matrix outside the commitment.
         let total_levels = schedule.len();
-        let effective_cap_height = self.cap_height.min(total_levels);
+        let proof_levels =
+            (total_levels - self.cap_height.min(total_levels)).max(last_injection_level);
 
-        Ok((schedule, total_levels - effective_cap_height))
+        Ok((schedule, proof_levels))
+    }
+
+    /// Derive the same cap boundary for committing and both opening paths as for verification.
+    fn cap_height_and_proof_levels<M>(
+        &self,
+        prover_data: &MerkleTree<P::Value, PW::Value, M, N, DIGEST_ELEMS>,
+    ) -> (usize, usize)
+    where
+        P: PackedValue,
+        PW: PackedValue,
+        M: Matrix<P::Value>,
+    {
+        let dimensions: Vec<_> = prover_data.leaves.iter().map(Matrix::dimensions).collect();
+        let (schedule, proof_levels) = self
+            .arity_schedule_and_proof_levels(&dimensions)
+            .expect("committed matrices have valid heights");
+        (schedule.len() - proof_levels, proof_levels)
     }
 
     // Amortized multi-query openings with pruned authentication paths.
@@ -395,11 +419,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .map(|m| m.height())
             .max()
             .expect("No committed matrices?");
-        let num_layers = prover_data.digest_layers.len();
-        let effective_cap_height = self.cap_height.min(num_layers.saturating_sub(1));
-        let proof_levels = num_layers
-            .saturating_sub(1)
-            .saturating_sub(effective_cap_height);
+        let (_, proof_levels) = self.cap_height_and_proof_levels(prover_data);
         // Used to compute the bit-shift from global leaf index to a shorter
         // matrix's row index. Smaller matrices have fewer rows, so their
         // row index is the global index right-shifted by the height difference.
@@ -782,6 +802,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                 }));
                 self.compress_opened_groups(&compression_inputs, &mut digests);
             }
+        }
+
+        if heights_tallest_first.peek().is_some() {
+            return Err(CapMismatch);
         }
 
         Ok(PrunedFrontier {

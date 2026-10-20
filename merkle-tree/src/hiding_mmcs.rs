@@ -61,9 +61,9 @@ impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS
     /// # Arguments
     /// * `hash` - The hash function used to hash individual matrix rows (leaf level).
     /// * `compress` - The compression function used to hash internal tree nodes.
-    /// * `cap_height` - The height of the Merkle cap. A cap_height of 0 uses only the root,
-    ///   while a cap_height of h uses all hashes from the h-th level below the root (2^h
-    ///   in the case of a binary tree)
+    /// * `cap_height` - The maximum number of layers below the root for the cap.
+    ///   A height of 0 uses only the root. Mixed-height batches may use a smaller
+    ///   height so the cap includes every matrix injection.
     /// * `rng` - A random number generator for generating salts.
     pub const fn new(hash: H, compress: C, cap_height: usize, rng: R) -> Self {
         let inner = MerkleTreeMmcs::new(hash, compress, cap_height);
