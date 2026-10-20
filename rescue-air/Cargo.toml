@@ -1,0 +1,25 @@
+[package]
+name = "p3-rescue-air"
+description = "An AIR implementation of the Rescue permutation for use in zero-knowledge proof systems."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-air.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-mds.workspace = true
+p3-symmetric.workspace = true
+
+[dev-dependencies]
+p3-mersenne-31 = { path = "../mersenne-31" }
+p3-rescue = { path = "../rescue" }
+rand = { workspace = true, features = ["std_rng"] }
+
+[lints]
+workspace = true
