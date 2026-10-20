@@ -106,6 +106,18 @@ impl<U: Underlier> PackedGf2<U> {
         self.0
     }
 
+    /// A run of blocks read in place as a run of packings over them.
+    #[inline]
+    pub const fn from_bits_slice(bits: &[U]) -> &[Self] {
+        wrap(bits)
+    }
+
+    /// A run of blocks read in place as a run of packings over them.
+    #[inline]
+    pub const fn from_bits_slice_mut(bits: &mut [U]) -> &mut [Self] {
+        wrap_mut(bits)
+    }
+
     /// The backing words, lowest lanes first.
     #[inline]
     #[must_use]

@@ -78,6 +78,20 @@ fn stage<U: Underlier, const STEP: usize>(group: &mut [PackedGf2<U>]) {
     }
 }
 
+/// The bit transpose of an 8 x 8 matrix whose byte `r` is row `r`: bit `8r + c` moves to `8c + r`.
+///
+/// Three exchange rounds at block sizes 1, 2 and 4.
+#[inline]
+#[must_use]
+pub const fn transpose_8x8(mut value: u64) -> u64 {
+    let mut exchange = (value ^ (value >> 7)) & 0x00aa_00aa_00aa_00aa;
+    value ^= exchange ^ (exchange << 7);
+    exchange = (value ^ (value >> 14)) & 0x0000_cccc_0000_cccc;
+    value ^= exchange ^ (exchange << 14);
+    exchange = (value ^ (value >> 28)) & 0x0000_0000_f0f0_f0f0;
+    value ^ exchange ^ (exchange << 28)
+}
+
 impl<U: Underlier> PackedGf2<U> {
     /// Replace the square bit matrix whose row `i` is `rows[i]` by its transpose.
     ///
@@ -126,7 +140,29 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
 
-    use crate::{Gf2, PackedGf2x8, PackedGf2x64, PackedGf2x128};
+    use crate::{Gf2, PackedGf2x8, PackedGf2x64, PackedGf2x128, transpose_8x8};
+
+    proptest! {
+        #[test]
+        fn transpose_8x8_moves_every_bit_across_the_diagonal(value in any::<u64>()) {
+            // Invariant: bit 8r + c of the input is bit 8c + r of the output.
+            let out = transpose_8x8(value);
+            for r in 0..8 {
+                for c in 0..8 {
+                    prop_assert_eq!((out >> (8 * c + r)) & 1, (value >> (8 * r + c)) & 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_slice_of_words_reads_as_packings_in_place() {
+        // Fixture state: the identity matrix, transposed through the in-place view.
+        let mut words: [u64; 64] = core::array::from_fn(|r| 1 << r);
+        PackedGf2x64::transpose(PackedGf2x64::from_bits_slice_mut(&mut words));
+        assert_eq!(words, core::array::from_fn(|r| 1 << r));
+        assert_eq!(PackedGf2x64::from_bits_slice(&words)[5].to_bits(), 1 << 5);
+    }
 
     /// One test module per matrix side, against the definition read lane by lane.
     macro_rules! transpose_tests {

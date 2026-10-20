@@ -17,4 +17,5 @@ pub use packing::{
     PackedGf2, PackedGf2x8, PackedGf2x16, PackedGf2x32, PackedGf2x64, PackedGf2x128, PackedGf2x256,
     PackedGf2x512,
 };
+pub use transpose::transpose_8x8;
 pub use underlier::{Divisible, M128, M256, M512, Underlier, Word};
