@@ -147,6 +147,8 @@ fn a_false_claim_or_a_tampered_proof_is_refused() {
     rows[7] += Val::ONE;
     proof.reduction.claims[0].tensor = rows.try_into().unwrap();
     assert!(verify(&r.claims, &proof).is_err(), "tensor row");
+    // The commitment takes no out-of-domain sample, so a smuggled answer is refused.
+    assert!(r.proof.opening.initial_ood_answers.is_empty());
     let mut proof = r.proof.clone();
     proof.opening.initial_ood_answers.push(Challenge::ONE);
     assert!(verify(&r.claims, &proof).is_err(), "out-of-domain answer");
