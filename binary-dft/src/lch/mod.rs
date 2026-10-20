@@ -6,6 +6,7 @@ mod twiddles;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use p3_commit::RowSink;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
@@ -72,7 +73,26 @@ impl<F: ButterflyField> AdditiveNtt<F> for LchNtt<F> {
 
         // The transform reads the message where it lies, so it is never copied into the codeword.
         let mut values = zeroed(padded_len(mat.values.len(), log_inv_rate), F::ZERO);
-        F::lch_transform_cosets_from(&mut values, mat.values, width, log_message);
+        F::lch_transform_cosets_from(&mut values, mat.values, width, log_message, None);
+        RowMajorMatrix::new(values, width)
+    }
+
+    fn ntt_batch_borrowed_with(
+        &self,
+        mat: RowMajorMatrixView<'_, F>,
+        log_inv_rate: usize,
+        sink: &RowSink<'_, F>,
+    ) -> RowMajorMatrix<F> {
+        let width = mat.width();
+        let log_message = log2_strict_usize(mat.height());
+        assert!(
+            log_message + log_inv_rate <= 1 << F::LOG_BITS,
+            "domain exceeds field dimension"
+        );
+
+        // Each finished tile goes to the sink while it is still in cache.
+        let mut values = zeroed(padded_len(mat.values.len(), log_inv_rate), F::ZERO);
+        F::lch_transform_cosets_from(&mut values, mat.values, width, log_message, Some(sink));
         RowMajorMatrix::new(values, width)
     }
 }
@@ -136,7 +156,7 @@ pub(crate) fn transform_cosets<F: ButterflyField>(
     width: usize,
     log_message: usize,
 ) {
-    transform_cosets_from(values, None, width, log_message);
+    transform_cosets_from(values, None, width, log_message, None);
 }
 
 /// As [`transform_cosets`], the message read from `source` when one is given.
@@ -147,6 +167,7 @@ pub(crate) fn transform_cosets_from<F: ButterflyField>(
     source: Option<&[F]>,
     width: usize,
     log_message: usize,
+    sink: Option<&RowSink<'_, F>>,
 ) {
     let len = width << log_message;
 
@@ -159,8 +180,14 @@ pub(crate) fn transform_cosets_from<F: ButterflyField>(
         rest.par_chunks_mut(len).enumerate().for_each(|(c, coset)| {
             coset.copy_from_slice(message);
             transform::<F, false>(coset, width, domain_point::<F>((c + 1) << log_message));
+            if let Some(sink) = sink {
+                sink((c + 1) << log_message, coset);
+            }
         });
         transform::<F, false>(message, width, F::ZERO);
+        if let Some(sink) = sink {
+            sink(0, message);
+        }
         return;
     }
 
@@ -175,6 +202,7 @@ pub(crate) fn transform_cosets_from<F: ButterflyField>(
         log_message,
         &twiddles,
         &Schedule::new::<F>(width, log_message),
+        sink,
     );
 }
 
@@ -385,6 +413,42 @@ mod tests {
                         t += twiddles.step(block + 1);
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn the_sink_sees_every_codeword_row_once_as_it_ends() {
+        extern crate std;
+        use std::sync::Mutex;
+
+        // Fixture state: one coset in a tile, cosets past a tile, and a deep pass with a tile.
+        for (log_n, width, log_inv_rate) in [(4, 3, 2), (11, 16, 1), (12, 64, 1), (9, 48, 4)] {
+            let message = matrix::<Poly64>(log_n, width, 9);
+            let ntt = LchNtt::<Poly64>::default();
+            let seen = Mutex::new(vec![None; 1 << (log_n + log_inv_rate)]);
+            let sink = |first: usize, rows: &[Poly64]| {
+                let mut seen = seen.lock().unwrap();
+                for (offset, row) in rows.chunks(width).enumerate() {
+                    assert!(
+                        seen[first + offset].is_none(),
+                        "row {} twice",
+                        first + offset
+                    );
+                    seen[first + offset] = Some(row.to_vec());
+                }
+            };
+            let codeword = ntt.ntt_batch_borrowed_with(message.as_view(), log_inv_rate, &sink);
+            assert_eq!(
+                codeword,
+                ntt.ntt_batch_borrowed(message.as_view(), log_inv_rate)
+            );
+            for (row, seen) in codeword
+                .values
+                .chunks(width)
+                .zip(seen.into_inner().unwrap())
+            {
+                assert_eq!(Some(row.to_vec()), seen, "log_n={log_n} width={width}");
             }
         }
     }
@@ -814,7 +878,15 @@ mod tests {
         let twiddles: Vec<_> = (0..1usize << log_inv_rate)
             .map(|c| Twiddles::new(log_message, domain_point::<F>(c << log_message)))
             .collect();
-        run_cosets(&mut padded, None, width, log_message, &twiddles, schedule);
+        run_cosets(
+            &mut padded,
+            None,
+            width,
+            log_message,
+            &twiddles,
+            schedule,
+            None,
+        );
         assert_eq!(
             padded, expected.values,
             "log_message={log_message} width={width} rate={log_inv_rate} {schedule:?}"

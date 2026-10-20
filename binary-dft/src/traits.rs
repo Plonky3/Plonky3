@@ -1,7 +1,7 @@
 //! The additive NTT interface shared by the reference and fast transforms.
 
 use p3_binary_field::TowerLevel;
-use p3_commit::zero_padded;
+use p3_commit::{RowSink, hand_over_rows, zero_padded};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_util::log2_strict_usize;
@@ -72,6 +72,20 @@ pub trait AdditiveNtt<F: TowerLevel> {
     }
 
     /// Recover the coefficients from evaluations on the subspace `S_l` itself.
+    /// As [`Self::ntt_batch_borrowed`], handing every finished row to `sink` once.
+    ///
+    /// The default hands the rows over once the whole codeword is done.
+    fn ntt_batch_borrowed_with(
+        &self,
+        mat: RowMajorMatrixView<'_, F>,
+        log_inv_rate: usize,
+        sink: &RowSink<'_, F>,
+    ) -> RowMajorMatrix<F> {
+        let encoded = self.ntt_batch_borrowed(mat, log_inv_rate);
+        hand_over_rows(&encoded.values, encoded.width, 0, sink);
+        encoded
+    }
+
     fn intt_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         self.shifted_intt_batch(mat, F::ZERO)
     }
