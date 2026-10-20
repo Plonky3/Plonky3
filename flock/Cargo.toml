@@ -9,17 +9,37 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tikv-jemallocator.workspace = true
+
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 
 [dependencies]
+p3-binary-dft.workspace = true
 p3-binary-field.workspace = true
+p3-challenger.workspace = true
+p3-field.workspace = true
 p3-keccak.workspace = true
 p3-maybe-rayon.workspace = true
+p3-multilinear-util.workspace = true
 p3-symmetric.workspace = true
+p3-util.workspace = true
+
+serde = { workspace = true, features = ["derive", "alloc"] }
+thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
 rand = { workspace = true, features = ["std_rng"] }
+tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+
+[[bench]]
+name = "zerocheck"
+harness = false
 
 [lints]
 workspace = true

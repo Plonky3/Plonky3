@@ -141,6 +141,12 @@ impl Witness {
             log_instances,
         }
     }
+
+    /// The three tables, to tamper with.
+    #[cfg(test)]
+    pub(crate) const fn tables_mut(&mut self) -> [&mut Vec<u64>; 3] {
+        [&mut self.z, &mut self.az, &mut self.bz]
+    }
 }
 
 /// Walk the gates once for 64 instances, bit `l` of every word being instance `l`.

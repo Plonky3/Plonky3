@@ -3,13 +3,19 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_binary_field::{BinaryChallenger, Poly64};
+use p3_challenger::HashChallenger;
+use p3_keccak::Keccak256Hash;
 use rand::rngs::SmallRng;
 use rand::{Rng, RngExt, SeedableRng};
 
 use crate::{Builder, Circuit, Wire, Witness};
 
+/// Fiat-Shamir sponge.
+pub(crate) type Challenger = BinaryChallenger<Poly64, HashChallenger<u8, Keccak256Hash, 32>>;
+
 /// A random circuit over the builder's whole vocabulary, with a narrow port and undriven outputs.
-fn random_circuit(rng: &mut SmallRng, max_gates: u32) -> Circuit {
+pub(crate) fn random_circuit(rng: &mut SmallRng, max_gates: u32) -> Circuit {
     let narrow = rng.random_range(1..64);
     let mut c = Builder::new(&[64, narrow, 64], &[64, narrow]);
     let mut pool: Vec<Wire> = (0..3).flat_map(|port| c.input(port).to_vec()).collect();
@@ -50,7 +56,7 @@ fn random_circuit(rng: &mut SmallRng, max_gates: u32) -> Circuit {
 }
 
 /// Random input rows plus a padding row.
-fn random_rows(rng: &mut SmallRng, n: usize) -> (Vec<[u64; 3]>, [u64; 3]) {
+pub(crate) fn random_rows(rng: &mut SmallRng, n: usize) -> (Vec<[u64; 3]>, [u64; 3]) {
     let mut row = || -> [u64; 3] { core::array::from_fn(|_| rng.next_u64()) };
     ((0..n).map(|_| row()).collect(), row())
 }
