@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_field::{ExtensionField, Field, PackedFieldExtension};
+use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::extension::FlatMatrixView;
@@ -99,10 +99,23 @@ where
             let unpacked;
             let message = match poly {
                 PolyMaybePacked::Scalar(scalar) => scalar.into_slice(),
-                PolyMaybePacked::Packed(_) => {
+                PolyMaybePacked::Packed(packed) => {
                     unpacked = info_span!("unpack").in_scope(|| {
-                        let mut values = EF::zero_vec(poly.num_scalar_evals());
-                        poly.unpack_into(&mut values);
+                        // Each worker unpacks its own run of packed elements.
+                        let lanes = F::Packing::WIDTH;
+                        let chunk = min_task_len(packed.num_evals(), size_of::<EF>() * lanes);
+                        let mut values = EF::zero_vec(packed.num_evals() * lanes);
+                        values
+                            .par_chunks_mut(chunk * lanes)
+                            .zip(packed.as_slice().par_chunks(chunk))
+                            .for_each(|(out, packed)| {
+                                for (out, value) in out
+                                    .iter_mut()
+                                    .zip(EF::ExtensionPacking::to_ext_iter(packed.iter().copied()))
+                                {
+                                    *out = value;
+                                }
+                            });
                         values
                     });
                     &unpacked
