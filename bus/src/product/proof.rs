@@ -58,23 +58,25 @@ pub struct ProductGkrOutput<EF> {
 }
 
 /// Product layers and roots bound to one validated statement shape.
-pub(crate) struct PreparedProductGkr<EF> {
+///
+/// Borrowed leaves stay borrowed until the first fold of the leaf layer.
+pub(crate) struct PreparedProductGkr<'a, EF: Clone> {
     shape: ProductGkrShape,
-    all_layers: Vec<ProductLayers<EF>>,
+    all_layers: Vec<ProductLayers<'a, EF>>,
     roots: Vec<EF>,
 }
 
-impl<EF: Field> PreparedProductGkr<EF> {
+impl<'a, EF: Field> PreparedProductGkr<'a, EF> {
     /// Prepare layers without asserting the shared-root relation or touching a transcript.
-    pub(crate) fn new(inputs: &[&[EF]], shape: ProductGkrShape) -> Self {
+    pub(crate) fn new(inputs: &[&'a [EF]], shape: ProductGkrShape) -> Self {
         Self::validate_lengths(inputs.iter().map(|input| input.len()), shape);
 
         // Keep only explicit prefixes at every product level.
-        // A leaf moves two elements to be copied and fewer than two more to be reduced.
+        // The leaves stay borrowed, and a leaf moves fewer than two elements to be reduced.
         // Each tree is charged the average, so the gate sees every tree's bytes together.
         let tree_bytes = inputs
             .iter()
-            .map(|input| input.len() * 4 * size_of::<EF>())
+            .map(|input| input.len() * 2 * size_of::<EF>())
             .sum::<usize>()
             .checked_div(inputs.len())
             .unwrap_or(0);
@@ -119,7 +121,7 @@ impl<EF: Field> PreparedProductGkr<EF> {
         }
     }
 
-    fn from_layers(shape: ProductGkrShape, all_layers: Vec<ProductLayers<EF>>) -> Self {
+    fn from_layers(shape: ProductGkrShape, all_layers: Vec<ProductLayers<'a, EF>>) -> Self {
         let roots = all_layers
             .iter()
             .map(ProductLayers::root)
@@ -190,7 +192,7 @@ impl<EF> ProductGkrProof<EF> {
 
     /// Run the transcript after the statement and product layers have been checked.
     fn prove_inner<F, Challenger>(
-        prepared: PreparedProductGkr<EF>,
+        prepared: PreparedProductGkr<'_, EF>,
         challenger: &mut Challenger,
     ) -> (Self, ProductGkrOutput<EF>)
     where

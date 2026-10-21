@@ -1,5 +1,6 @@
 //! Identity-padded storage and folding state used by the product prover.
 
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
@@ -11,16 +12,20 @@ use super::ROUND_POLY_LEN;
 use super::math::interpolate_pair;
 
 /// An arbitrary table prefix whose omitted suffix is the multiplicative identity.
-struct IdentityPrefix<F> {
+///
+/// The leaves may stay borrowed from the caller, since the prover only reads them.
+struct IdentityPrefix<'a, F: Clone> {
     /// Explicit values after removing trailing identities.
-    values: Vec<F>,
+    values: Cow<'a, [F]>,
 }
 
-impl<F: Field> IdentityPrefix<F> {
+impl<'a, F: Field> IdentityPrefix<'a, F> {
     /// Creates a canonical explicit prefix from a complete or partial table.
-    fn new(values: Vec<F>) -> Self {
+    fn new(values: impl Into<Cow<'a, [F]>>) -> Self {
         // Trailing identities have the same semantics when left implicit.
-        let mut prefix = Self { values };
+        let mut prefix = Self {
+            values: values.into(),
+        };
         prefix.trim();
         prefix
     }
@@ -32,7 +37,7 @@ impl<F: Field> IdentityPrefix<F> {
     }
 
     /// Multiplies fixed-size groups into the next retained product layer.
-    fn reduce(&self, arity: usize) -> Self {
+    fn reduce(&self, arity: usize) -> IdentityPrefix<'static, F> {
         // A partial final group is completed by implicit identity factors.
         let values = self
             .values
@@ -40,36 +45,48 @@ impl<F: Field> IdentityPrefix<F> {
             .map_collect_min_task_bytes((arity + 1) * size_of::<F>(), |chunk| {
                 chunk.iter().copied().product()
             });
-        Self::new(values)
+        IdentityPrefix::new(values)
     }
 
     /// Restores the canonical shortest representation.
     fn trim(&mut self) {
-        while self.values.last() == Some(&F::ONE) {
-            self.values.pop();
+        let ones = self
+            .values
+            .iter()
+            .rev()
+            .take_while(|&&value| value == F::ONE);
+        let len = self.values.len() - ones.count();
+        match &mut self.values {
+            Cow::Borrowed(values) => *values = &values[..len],
+            Cow::Owned(values) => values.truncate(len),
         }
     }
 }
 
 /// Product levels retained for one identity-padded input prefix.
-pub(super) struct ProductLayers<F> {
+pub(super) struct ProductLayers<'a, F: Clone> {
     /// Explicit prefixes indexed by their base-two depth above the leaves.
-    layers: Vec<IdentityPrefix<F>>,
+    layers: Vec<IdentityPrefix<'a, F>>,
 }
 
-impl<F: Field> ProductLayers<F> {
-    /// Builds every product level needed by the radix-four descent.
-    pub(super) fn new(leaves: &[F], log_height: usize) -> Self {
-        Self::new_owned(leaves.to_vec(), log_height)
+impl<'a, F: Field> ProductLayers<'a, F> {
+    /// Builds every product level needed by the radix-four descent, borrowing the leaves.
+    pub(super) fn new(leaves: &'a [F], log_height: usize) -> Self {
+        Self::from_leaves(IdentityPrefix::new(leaves), log_height)
     }
 
     /// Builds the retained levels while taking ownership of the leaf allocation.
     pub(super) fn new_owned(leaves: Vec<F>, log_height: usize) -> Self {
+        Self::from_leaves(IdentityPrefix::new(leaves), log_height)
+    }
+
+    /// Builds every retained level above the given leaves.
+    fn from_leaves(leaves: IdentityPrefix<'a, F>, log_height: usize) -> Self {
         // Unvisited depths remain empty constant-one prefixes.
         let mut layers = (0..=log_height)
             .map(|_| IdentityPrefix::new(Vec::new()))
             .collect::<Vec<_>>();
-        layers[0] = IdentityPrefix::new(leaves);
+        layers[0] = leaves;
 
         // Two multiplication levels are retained per radix-four layer.
         let mut depth = 0;
@@ -102,12 +119,12 @@ impl<F: Field> ProductLayers<F> {
     /// Copies the binary child claims and releases their consumed source level.
     pub(super) fn take_binary_children(&mut self, depth: usize) -> [F; 2] {
         let children = self.binary_children(depth);
-        self.layers[depth].values = Vec::new();
+        self.layers[depth].values = Cow::Owned(Vec::new());
         children
     }
 
     /// Takes a retained level, releasing it from the layers.
-    fn take_layer(&mut self, depth: usize) -> IdentityPrefix<F> {
+    fn take_layer(&mut self, depth: usize) -> IdentityPrefix<'a, F> {
         IdentityPrefix {
             values: core::mem::take(&mut self.layers[depth].values),
         }
@@ -140,16 +157,16 @@ const EQ_LOW_VARS: usize = 10;
 /// Row `z` holds the children `values[4z..4z + 4]`.
 ///
 /// Rows past the explicit prefix are all ones.
-struct RadixFourState<F> {
+struct RadixFourState<'a, F: Clone> {
     /// Explicit child values after removing trailing identities.
-    values: IdentityPrefix<F>,
+    values: IdentityPrefix<'a, F>,
     /// The buffer a fold writes, then swaps with the values.
     spare: Vec<F>,
 }
 
-impl<F: Field> RadixFourState<F> {
+impl<'a, F: Field> RadixFourState<'a, F> {
     /// Wraps a retained level without moving its values.
-    const fn new(values: IdentityPrefix<F>) -> Self {
+    const fn new(values: IdentityPrefix<'a, F>) -> Self {
         Self {
             values,
             spare: Vec::new(),
@@ -221,7 +238,11 @@ impl<F: Field> RadixFourState<F> {
 
         // SAFETY: the tasks' chunks cover the first `len` slots, and each task wrote all of its own.
         unsafe { self.spare.set_len(len) };
-        core::mem::swap(&mut self.values.values, &mut self.spare);
+        // The folded rows become the values, and an owned source becomes the next spare.
+        let folded = Cow::Owned(core::mem::take(&mut self.spare));
+        if let Cow::Owned(source) = core::mem::replace(&mut self.values.values, folded) {
+            self.spare = source;
+        }
         self.values.trim();
 
         weights.map(|_| {
@@ -696,28 +717,24 @@ impl<F: Field> EqPrefix<F> {
 }
 
 /// Per-tree states reduced by one shared radix-four sumcheck.
-pub(super) struct RadixFourBatch<F> {
+pub(super) struct RadixFourBatch<'a, F: Clone> {
     /// One folding state for each product tree.
-    states: Vec<RadixFourState<F>>,
+    states: Vec<RadixFourState<'a, F>>,
 }
 
-impl<F: Field> RadixFourBatch<F> {
-    /// Creates the batched states from one retained level per tree.
+impl<'a, F: Field> RadixFourBatch<'a, F> {
+    /// Creates the batched states from one retained level per tree, borrowing each.
     #[cfg(test)]
-    pub(super) fn new(layers: &[ProductLayers<F>], depth: usize) -> Self {
+    pub(super) fn new(layers: &'a [ProductLayers<'_, F>], depth: usize) -> Self {
         let states = layers
             .iter()
-            .map(|layers| {
-                RadixFourState::new(IdentityPrefix {
-                    values: layers.layers[depth].values.clone(),
-                })
-            })
+            .map(|layers| RadixFourState::new(IdentityPrefix::new(&*layers.layers[depth].values)))
             .collect();
         Self { states }
     }
 
     /// Consumes one retained level per tree, reading it in place.
-    pub(super) fn new_consuming(layers: &mut [ProductLayers<F>], depth: usize) -> Self {
+    pub(super) fn new_consuming(layers: &mut [ProductLayers<'a, F>], depth: usize) -> Self {
         let states = layers
             .iter_mut()
             .map(|layers| RadixFourState::new(layers.take_layer(depth)))
@@ -867,6 +884,14 @@ mod tests {
             .iter()
             .map(|&pair| interpolate_pair(pair, challenge))
             .collect();
+    }
+
+    /// The capacity an owned level holds, zero for a borrowed one.
+    fn reserved<F: Clone>(prefix: &IdentityPrefix<'_, F>) -> usize {
+        match &prefix.values {
+            Cow::Borrowed(_) => 0,
+            Cow::Owned(values) => values.capacity(),
+        }
     }
 
     /// Splits an interleaved level into four dense child tables of `logical_len` rows.
@@ -1019,6 +1044,28 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_leaves_are_read_in_place_until_the_first_fold() {
+        // The prover only reads the leaves, so a borrowed input is never copied.
+        //
+        // Fixture state: 2^6 leaves, two trailing ones the trim drops without copying.
+        let mut leaves = vec![Poly192::interpolation_node(2); 64];
+        leaves[62] = Poly192::ONE;
+        leaves[63] = Poly192::ONE;
+        let mut layers = ProductLayers::new(&leaves, 6);
+        let taken = layers.take_layer(0);
+        assert!(
+            matches!(taken.values, Cow::Borrowed(values) if values.as_ptr() == leaves.as_ptr())
+        );
+        assert_eq!(taken.values.len(), 62);
+
+        // The first fold writes owned rows and leaves the borrowed source untouched.
+        let mut state = RadixFourState::new(taken);
+        let _ = state.fold_two::<Poly64>([Poly192::ZERO, Poly192::ONE], None);
+        assert!(matches!(state.values.values, Cow::Owned(_)));
+        assert!(state.spare.is_empty());
+    }
+
+    #[test]
     fn consuming_layers_preserves_children_and_releases_only_the_source() {
         let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0007);
         for log_height in [2usize, 3, 6, 7] {
@@ -1038,7 +1085,7 @@ mod tests {
                     let before = layers
                         .layers
                         .iter()
-                        .map(|layer| (layer.values.clone(), layer.values.capacity()))
+                        .map(|layer| (layer.values.clone(), reserved(layer)))
                         .collect::<Vec<_>>();
                     if arity == 2 {
                         let expected = layers.binary_children(depth);
@@ -1047,15 +1094,15 @@ mod tests {
                         // The taken level is the retained allocation itself, not a copy.
                         let taken = layers.take_layer(depth);
                         assert_eq!(taken.values, before[depth].0);
-                        assert_eq!(taken.values.capacity(), before[depth].1);
+                        assert_eq!(reserved(&taken), before[depth].1);
                     }
-                    for (index, (values, reserved)) in before.iter().enumerate() {
+                    for (index, (values, capacity)) in before.iter().enumerate() {
                         if index == depth {
                             assert!(layers.layers[index].values.is_empty());
-                            assert_eq!(layers.layers[index].values.capacity(), 0);
+                            assert_eq!(reserved(&layers.layers[index]), 0);
                         } else {
                             assert_eq!(&layers.layers[index].values, values);
-                            assert_eq!(layers.layers[index].values.capacity(), *reserved);
+                            assert_eq!(reserved(&layers.layers[index]), *capacity);
                         }
                     }
                     product_depth = depth;
