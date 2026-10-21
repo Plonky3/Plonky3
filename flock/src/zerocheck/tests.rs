@@ -362,3 +362,26 @@ fn too_small_a_batch_is_refused() {
     );
     assert!(Batch::new(&c, log_n + 1).is_ok());
 }
+
+#[test]
+fn a_batch_past_the_address_space_is_refused() {
+    let c = small_circuit(0, 0);
+    let k_log = c.k_log();
+    let too_many = |log_instances| BatchError::TooManyVariables {
+        k_log,
+        log_instances,
+    };
+    // Mutation: the variable count wraps around `usize`.
+    assert_eq!(
+        Batch::new(&c, usize::MAX).unwrap_err(),
+        too_many(usize::MAX)
+    );
+    // Mutation: the bit count no longer fits a `usize` index.
+    let largest = usize::BITS as usize - 1 - k_log;
+    assert_eq!(
+        Batch::new(&c, largest + 1).unwrap_err(),
+        too_many(largest + 1)
+    );
+    // The largest representable batch is accepted.
+    assert!(Batch::new(&c, largest).is_ok());
+}

@@ -19,9 +19,19 @@ impl<'a> Batch<'a> {
     ///
     /// # Errors
     ///
-    /// The witness has fewer variables than the zerocheck needs.
+    /// The witness has fewer variables than the zerocheck needs, or more bits than a `usize` indexes.
     pub const fn new(circuit: &'a Circuit, log_instances: usize) -> Result<Self, BatchError> {
-        let log_n = circuit.k_log() + log_instances;
+        let k_log = circuit.k_log();
+        // Every witness bit has a `usize` index, so `2^log_n` must be representable.
+        let log_n = match k_log.checked_add(log_instances) {
+            Some(log_n) if log_n < usize::BITS as usize => log_n,
+            _ => {
+                return Err(BatchError::TooManyVariables {
+                    k_log,
+                    log_instances,
+                });
+            }
+        };
         if log_n < MIN_LOG_N {
             return Err(BatchError::TooFewVariables { log_n });
         }
@@ -59,5 +69,13 @@ pub enum BatchError {
     TooFewVariables {
         /// The batch's witness variables.
         log_n: usize,
+    },
+    /// The witness has more bits than a `usize` indexes.
+    #[error("2^{k_log} bits on 2^{log_instances} instances exceed the address space")]
+    TooManyVariables {
+        /// Bits per instance, as a power of two.
+        k_log: usize,
+        /// Instances, as a power of two.
+        log_instances: usize,
     },
 }
