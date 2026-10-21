@@ -86,44 +86,53 @@ jobs:
         with:
           fetch-depth: 0
 
-      # A run whose exact content already passed has nothing left to check, so every job skips.
+      # A pull request run whose exact context already passed has nothing left to check, so every job skips.
       #
-      # The key is the tree that was checked out.
-      # For a pull request, that is the head merged into its current base.
-      # A pass on another branch, or against an older base, tested other content and does not count.
-      - name: Detect a passed run of this tree
+      # The context is the pair of base and head commits.
+      # Together they fix both the merge under test and the jobs the plan selects.
+      #
+      # A marker's name proves nothing, since any run can upload any name.
+      # Only a successful run of this workflow, on this branch and head commit, is trusted.
+      - name: Detect a passed run of this context
         id: duplicate
+        if: github.event_name == 'pull_request'
         # Should the API fail, the output stays unset and every job runs.
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO_ID: ${{ github.event.pull_request.head.repo.id }}
         run: |
-          tree=$(git rev-parse 'HEAD^{tree}')
-          echo "$tree" > "$RUNNER_TEMP/ci-tree"
-          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          echo "$BASE_SHA $HEAD_SHA" > "$RUNNER_TEMP/ci-context"
+          workflow=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
           passed=false
-          for run in $(gh api "repos/$GH_REPO/actions/artifacts?name=ci-tree-$tree&per_page=100" \
+          for run in $(gh api "repos/$GH_REPO/actions/artifacts?name=ci-context-$BASE_SHA-$HEAD_SHA&per_page=100" \
             --jq ".artifacts[].workflow_run.id | select(. != $GITHUB_RUN_ID)"); do
-            if [[ "$(gh api "repos/$GH_REPO/actions/runs/$run" --jq .conclusion)" == success ]]; then
+            trusted=$(gh api "repos/$GH_REPO/actions/runs/$run" --jq "
+              .conclusion == \"success\"
+              and .event == \"pull_request\"
+              and .workflow_id == $workflow
+              and .head_sha == \"$HEAD_SHA\"
+              and .head_branch == \"$HEAD_REF\"
+              and .head_repository.id == $HEAD_REPO_ID")
+            if [[ "$trusted" == true ]]; then
               passed=true
               break
             fi
           done
           echo "duplicate=$passed" >> "$GITHUB_OUTPUT"
 
-      # Tag this run with the tree it tests, so a later run of the same tree finds its result.
-      #
-      # A run skipped by its commit message tests nothing, so it is never tagged.
-      - name: Record the tested tree
-        if: >-
-          steps.duplicate.outputs.tree != '' &&
-          !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
+      # Tag this run with the context it tests, so a later run of the same context finds its result.
+      - name: Record the tested context
+        if: github.event_name == 'pull_request'
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: ci-tree-${{ steps.duplicate.outputs.tree }}
-          path: ${{ runner.temp }}/ci-tree
+          name: ci-context-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/ci-context
           retention-days: 30
 
       - uses: dtolnay/rust-toolchain@stable
