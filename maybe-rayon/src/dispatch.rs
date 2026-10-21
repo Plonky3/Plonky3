@@ -13,6 +13,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::Any;
+use core::ops::Range;
 use core::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 use std::panic::AssertUnwindSafe;
 use std::sync::Mutex;
@@ -26,33 +27,62 @@ use rayon::iter::plumbing::{Producer, ProducerCallback};
 /// Enough for a straggler to be rebalanced, few enough that cutting stays cheap.
 const PIECES_PER_WORKER: usize = 4;
 
-/// A loop cut into pieces of `piece` items, the last possibly shorter.
+/// A loop cut into pieces whose sizes differ by at most one item.
+///
+/// The longer pieces come first.
 struct Pieces<P> {
     /// Each piece, taken once by whoever claims its index.
     slots: Vec<Mutex<Option<P>>>,
     /// The next unclaimed index.
     next: AtomicUsize,
-    /// Items per piece.
-    piece: usize,
+    /// Items in a short piece.
+    short: usize,
+    /// How many pieces hold one extra item.
+    long: usize,
+}
+
+impl<P> Pieces<P> {
+    /// The item range of one piece.
+    fn range(&self, i: usize) -> Range<usize> {
+        let start = i * self.short + i.min(self.long);
+        start..start + self.short + usize::from(i < self.long)
+    }
 }
 
 impl<P: Producer> Pieces<P> {
     /// Cuts a loop of `len` items into pieces.
     ///
+    /// Every piece honours the producer's split limits:
+    /// - at least its minimum length,
+    /// - at most its maximum length, unless that conflicts with the minimum.
+    ///
     /// Hands the producer back when the loop should stay whole.
     fn cut(producer: P, len: usize) -> Result<Self, P> {
         let workers = current_num_threads();
-        // A piece never goes below the producer's floor (`with_min_len`).
-        let floor = producer.min_len().max(1);
-        if workers <= 1 || len <= floor {
+        let min = producer.min_len().max(1);
+        let max = producer.max_len().max(1);
+
+        // Sizes differ by at most one item, so the piece count alone sets both bounds:
+        //
+        //     count >= ceil(len / max)  =>  longest piece  <= max
+        //     count <= floor(len / min) =>  shortest piece >= min
+        //
+        // The minimum wins a conflict, as it does in Rayon's own splitter.
+        let wanted = if workers <= 1 {
+            1
+        } else {
+            workers * PIECES_PER_WORKER
+        };
+        let count = wanted.max(len.div_ceil(max)).min(len / min);
+        if count <= 1 {
             return Err(producer);
         }
-        let piece = len.div_ceil(workers * PIECES_PER_WORKER).max(floor);
-        let count = len.div_ceil(piece);
+
+        let (short, long) = (len / count, len % count);
         let mut slots = Vec::with_capacity(count);
         let mut rest = producer;
-        for _ in 1..count {
-            let (head, tail) = rest.split_at(piece);
+        for i in 1..count {
+            let (head, tail) = rest.split_at(short + usize::from(i <= long));
             slots.push(Mutex::new(Some(head)));
             rest = tail;
         }
@@ -60,7 +90,8 @@ impl<P: Producer> Pieces<P> {
         Ok(Self {
             slots,
             next: AtomicUsize::new(0),
-            piece,
+            short,
+            long,
         })
     }
 
@@ -229,6 +260,46 @@ where
         }
     }
 
+    /// Publishes how many slots a piece wrote, even when the piece unwinds.
+    struct Count<'a>(&'a AtomicUsize, usize);
+
+    impl Drop for Count<'_> {
+        fn drop(&mut self) {
+            self.0.store(self.1, Ordering::Relaxed);
+        }
+    }
+
+    /// The output slots written so far, dropped if the loop unwinds.
+    ///
+    /// The output's length stays zero until every piece succeeds.
+    ///
+    /// Without this guard, a panic would leak every item already written.
+    struct Written<'a, B, P> {
+        /// The output's base pointer.
+        base: &'a Out<B>,
+        /// The pieces, which give each range's start.
+        pieces: &'a Pieces<P>,
+        /// Slots written per piece, cleared once the output owns them.
+        counts: Vec<AtomicUsize>,
+    }
+
+    impl<B, P> Drop for Written<'_, B, P> {
+        fn drop(&mut self) {
+            for (i, count) in self.counts.iter().enumerate() {
+                let start = self.pieces.range(i).start;
+                let slots = core::ptr::slice_from_raw_parts_mut(
+                    self.base.at(start),
+                    count.load(Ordering::Relaxed),
+                );
+                // SAFETY:
+                // - the dispatch joined every participant, so no piece still writes,
+                // - each piece wrote exactly the first slots it counted,
+                // - nothing else owns those slots.
+                unsafe { core::ptr::drop_in_place(slots) };
+            }
+        }
+    }
+
     impl<T, B: Send, F: Fn(T) -> B + Sync> ProducerCallback<T> for Callback<F> {
         type Output = Vec<B>;
 
@@ -239,23 +310,27 @@ where
                 Ok(pieces) => {
                     let mut out: Vec<B> = Vec::with_capacity(len);
                     let base = Out(out.as_mut_ptr());
+                    let mut written = Written {
+                        base: &base,
+                        pieces: &pieces,
+                        counts: (0..pieces.slots.len())
+                            .map(|_| AtomicUsize::new(0))
+                            .collect(),
+                    };
                     pieces.run(|i, piece| {
-                        let start = i * pieces.piece;
                         // A producer is a safe trait, so its item count is checked, not trusted.
-                        //
-                        // Piece `i` owns slots `start..start + expected`, all below `len`.
-                        let expected = pieces.piece.min(len - start);
+                        let range = pieces.range(i);
+                        let mut count = Count(&written.counts[i], 0);
                         let mut items = piece.into_iter();
-                        let mut written = 0;
-                        for item in items.by_ref().take(expected) {
-                            // SAFETY: `written < expected`, so the slot is in piece `i`'s own range.
-                            // A panic leaks the slots written so far.
-                            unsafe { base.at(start + written).write(map_op(item)) };
-                            written += 1;
+                        for item in items.by_ref().take(range.len()) {
+                            // SAFETY: the write count stays below the range length, so the slot is in this piece's own range.
+                            unsafe { base.at(range.start + count.1).write(map_op(item)) };
+                            count.1 += 1;
                         }
                         // A miscounted piece panics here, before `set_len` runs.
                         assert_eq!(
-                            written, expected,
+                            count.1,
+                            range.len(),
                             "producer yielded fewer items than its length"
                         );
                         assert!(
@@ -263,6 +338,8 @@ where
                             "producer yielded more items than its length"
                         );
                     });
+                    // Every piece filled its range, so the output now owns every item.
+                    written.counts = Vec::new();
                     // SAFETY: the pieces tile `0..len`, and each checked it wrote every slot of its range.
                     unsafe { out.set_len(len) };
                     out
@@ -324,8 +401,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use alloc::vec::Vec;
+    use alloc::{format, vec};
     use core::ops::Range;
     use core::sync::atomic::{AtomicUsize, Ordering};
     use std::panic::AssertUnwindSafe;
@@ -378,6 +455,103 @@ mod tests {
             );
             assert_eq!(got, (0..n).collect::<Vec<_>>(), "n = {n}");
         }
+    }
+
+    /// The size of every piece a fold ran over, in item order.
+    fn piece_sizes(iter: impl IndexedParallelIterator) -> Vec<usize> {
+        fold_reduce(
+            iter,
+            || vec![0],
+            |mut sizes, _| {
+                sizes[0] += 1;
+                sizes
+            },
+            |mut a, mut b| {
+                a.append(&mut b);
+                a
+            },
+        )
+    }
+
+    #[test]
+    fn pieces_honour_both_split_limits() {
+        for threads in [1, 4] {
+            let pool = ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            for len in [1, 2, 7, 10, 31, 100, 1000] {
+                for min in [1, 2, 3, 6, 50] {
+                    for max in [1, 2, 3, 5, 64, usize::MAX] {
+                        let sizes = pool.install(|| {
+                            piece_sizes(
+                                (0..len).into_par_iter().with_min_len(min).with_max_len(max),
+                            )
+                        });
+                        let case =
+                            format!("threads={threads} len={len} min={min} max={max}: {sizes:?}");
+
+                        // The pieces tile the loop.
+                        assert_eq!(sizes.iter().sum::<usize>(), len, "{case}");
+
+                        // Invariant: a split never cuts below the minimum.
+                        if sizes.len() > 1 {
+                            assert!(sizes.iter().all(|&s| s >= min), "{case}");
+                        }
+
+                        // Invariant: no piece exceeds the maximum, whenever the minimum allows it.
+                        if len.div_ceil(max) <= len / min {
+                            assert!(sizes.iter().all(|&s| s <= max), "{case}");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fixture state: four workers, so an unlimited loop is cut into sixteen pieces.
+        let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+
+        // Two pieces of at least six would need twelve items, so ten stay whole.
+        let sizes = pool.install(|| piece_sizes((0..10).into_par_iter().with_min_len(6)));
+        assert_eq!(sizes, [10]);
+
+        // A maximum of three needs thirty-four pieces, more than the sixteen wanted.
+        let sizes = pool.install(|| piece_sizes((0..100).into_par_iter().with_max_len(3)));
+        assert_eq!(sizes, [[3; 32].as_slice(), &[2; 2]].concat());
+    }
+
+    #[test]
+    fn map_collect_drops_written_outputs_on_panic() {
+        /// Counts its own drops.
+        struct Tracked<'a>(&'a AtomicUsize);
+
+        impl Drop for Tracked<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        // Fixture state: four workers, so the loop is cut into pieces.
+        let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        let created = AtomicUsize::new(0);
+        let dropped = AtomicUsize::new(0);
+
+        // One item in the middle panics after other pieces have written their outputs.
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            pool.install(|| {
+                map_collect((0..10_000).into_par_iter(), |i| {
+                    assert_ne!(i, 5_000, "boom");
+                    created.fetch_add(1, Ordering::Relaxed);
+                    Tracked(&dropped)
+                })
+            })
+        }));
+        assert!(result.is_err());
+
+        // Invariant: every output written before the panic is dropped exactly once.
+        let created = created.load(Ordering::Relaxed);
+        assert!(created > 0);
+        assert_eq!(dropped.load(Ordering::Relaxed), created);
     }
 
     /// A safe iterator that claims `claimed` items but yields `actual`.
