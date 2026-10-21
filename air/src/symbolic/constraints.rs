@@ -67,13 +67,118 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicConstraints<F, EF> {
     }
 }
 
+/// Number of assertions in each emission stream.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConstraintCounts {
+    /// Number of base-field assertions, including zero and duplicate assertions.
+    pub base: usize,
+    /// Number of extension-field assertions, including zero and duplicate assertions.
+    pub extension: usize,
+}
+
+/// Conservative maximum degrees for the two assertion streams.
+///
+/// The method returning this value determines the degree units.
+/// An empty stream has degree zero.
+/// Bounds do not account for algebraic cancellation.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConstraintDegrees {
+    /// Maximum degree of a base-field assertion.
+    pub base: usize,
+    /// Maximum degree of an extension-field assertion.
+    pub extension: usize,
+}
+
+impl<F: Field, EF: ExtensionField<F>> SymbolicConstraints<F, EF> {
+    /// Count each stream without traversing expressions.
+    pub const fn constraint_counts(&self) -> ConstraintCounts {
+        ConstraintCounts {
+            base: self.base_constraints.len(),
+            extension: self.extension_constraints.len(),
+        }
+    }
+
+    /// Maximum cached degree multiples, with transition selectors weighted zero.
+    ///
+    /// Trace, periodic, and boundary-selector leaves have weight one; constants, public values, and challenges have weight zero.
+    /// These conservative multiples are trace-size independent, rather than raw polynomial degree bounds.
+    pub fn max_constraint_degrees(&self) -> ConstraintDegrees {
+        self.max_constraint_degrees_with_transition(0)
+    }
+
+    /// Maximum degree multiples with a caller-selected transition-selector weight.
+    ///
+    /// Uses [`super::SymbolicExpr::degree_multiple_with_transition`] for each root.
+    /// A zero weight reuses cached degrees; other weights traverse expressions.
+    pub fn max_constraint_degrees_with_transition(
+        &self,
+        transition_degree: usize,
+    ) -> ConstraintDegrees {
+        max_constraint_degrees(
+            &self.base_constraints,
+            &self.extension_constraints,
+            transition_degree,
+        )
+    }
+
+    /// Maximum raw polynomial degree bounds for a trace and its periodic columns.
+    ///
+    /// Uses [`super::SymbolicExpr::poly_degree`]: trace and boundary-selector leaves have degree `trace_len - 1` (saturating), transition selectors have degree one, and periodic columns use their supplied periods.
+    /// Missing periodic entries use the conservative full-trace period, as in the expression API.
+    ///
+    /// These are polynomial bounds before vanishing-polynomial division, rather than protocol quotient sizing.
+    /// Callers choose their domain-specific sizing policy, such as [`super::constraint_degree_from_poly_degree`].
+    pub fn max_constraint_poly_degrees(
+        &self,
+        trace_len: usize,
+        periodic_periods: &[usize],
+    ) -> ConstraintDegrees {
+        max_constraint_poly_degrees(
+            &self.base_constraints,
+            &self.extension_constraints,
+            trace_len,
+            periodic_periods,
+        )
+    }
+}
+
+// Borrowing the streams lets degree inference reuse summaries without collecting a layout.
+pub(super) fn max_constraint_degrees<F: Field, EF: ExtensionField<F>>(
+    base: &[SymbolicExpression<F>],
+    extension: &[SymbolicExpressionExt<F, EF>],
+    transition_degree: usize,
+) -> ConstraintDegrees {
+    ConstraintDegrees {
+        base: max_degree(base, |c| {
+            c.degree_multiple_with_transition(transition_degree)
+        }),
+        extension: max_degree(extension, |c| {
+            c.degree_multiple_with_transition(transition_degree)
+        }),
+    }
+}
+
+pub(super) fn max_constraint_poly_degrees<F: Field, EF: ExtensionField<F>>(
+    base: &[SymbolicExpression<F>],
+    extension: &[SymbolicExpressionExt<F, EF>],
+    trace_len: usize,
+    periodic_periods: &[usize],
+) -> ConstraintDegrees {
+    ConstraintDegrees {
+        base: max_degree(base, |c| c.poly_degree(trace_len, periodic_periods)),
+        extension: max_degree(extension, |c| c.poly_degree(trace_len, periodic_periods)),
+    }
+}
+
+fn max_degree<T>(constraints: &[T], degree: impl Fn(&T) -> usize) -> usize {
+    constraints.iter().map(degree).max().unwrap_or(0)
+}
+
 /// Evaluate a closure once and take ownership of its symbolic constraints.
 ///
 /// The closure does not need to implement [`crate::Air`] or [`crate::BaseAir`].
 /// The caller must supply an [`AirLayout`] matching every input the closure reads.
-///
 /// No AIR metadata is available to validate the layout automatically.
-///
 /// When calling an existing AIR, use [`AirLayout::validate_against_air`] if validation is needed.
 ///
 /// ```
