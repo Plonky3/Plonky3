@@ -14,24 +14,26 @@ use crate::{
 /// Both rows remain accessible when the width is zero.
 #[derive(Clone, Debug)]
 pub struct ConstraintLayoutWindow<T> {
-    values: Arc<[T]>,
+    values: Option<Arc<[T]>>,
 }
 
 impl<T: Clone> ConstraintLayoutWindow<T> {
     fn new(width: usize, zero: T) -> Self {
         Self {
-            values: core::iter::repeat_n(zero, 2 * width).collect(),
+            values: (width != 0).then(|| core::iter::repeat_n(zero, 2 * width).collect()),
         }
     }
 }
 
 impl<T> WindowAccess<T> for ConstraintLayoutWindow<T> {
     fn current_slice(&self) -> &[T] {
-        &self.values[..self.values.len() / 2]
+        let values = self.values.as_deref().unwrap_or_default();
+        &values[..values.len() / 2]
     }
 
     fn next_slice(&self) -> &[T] {
-        &self.values[self.values.len() / 2..]
+        let values = self.values.as_deref().unwrap_or_default();
+        &values[values.len() / 2..]
     }
 }
 
