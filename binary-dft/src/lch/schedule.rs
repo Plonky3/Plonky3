@@ -14,6 +14,7 @@ use p3_util::{log2_ceil_usize, log2_floor_usize};
 
 use super::twiddles::Twiddles;
 use crate::butterfly::ButterflyField;
+use crate::cache::CacheBudget;
 use crate::staging::{
     Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
 };
@@ -25,32 +26,23 @@ use crate::staging::{
 /// - A few nanoseconds per butterfly makes a task microseconds of work, well above a thread handoff.
 pub(crate) const BUTTERFLY_GRAIN: usize = 1 << 10;
 
-/// Bytes of one contiguous row tile.
+/// Bytes of a matrix small enough to run as plain passes.
 ///
-/// A worker holds one tile for every stage it is closed under, so it must fit a private L2.
-pub(super) const DEEP_TILE_BYTES: usize = 128 * 1024;
-
-/// Bytes of one staging tile.
-///
-/// Each worker holds one per group, and deeper tiles stop paying past this size.
-const STAGING_TILE_BYTES: usize = 64 * 1024;
+/// It stays in cache throughout, so blocking would only add bookkeeping.
+pub(super) const CACHED_MATRIX_BYTES: usize = 128 * 1024;
 
 /// The fewest stages a staging tile must fuse to beat plain passes.
 ///
 /// One stage gathered and scattered moves what one plain pass moves, plus two copies.
 pub(super) const MIN_FUSED_STAGES: usize = 2;
 
-/// Workers a transform needs before staging pays.
+/// The fewest bytes one staged run covers.
 ///
-/// - Staging trades a pass per stage for a strided gather and scatter.
-/// - Few workers leave memory idle, so the traversals it removes were cheap.
-/// - A `no_std` crate cannot read the cache sizes, so the worker count is the signal.
-pub(super) const STAGED_WORKERS: usize = 16;
-
-/// The smallest cache line among the supported targets, in bytes.
-///
-/// A staged row shorter than a line wastes the rest of it, so short rows are staged in runs.
-const CACHE_LINE_BYTES: usize = 64;
+/// - A gather pulls whole cache lines, so a run shorter than a line wastes the rest of it.
+/// - The narrowest stage of a staging tile pairs single runs, so a run is also its shortest butterfly.
+/// - A butterfly this long reaches the vector kernels of every target, NEON's byte kernel included.
+/// - Each doubling of the run costs one fused stage, which a budget of many runs can spare.
+const STAGED_RUN_BYTES: usize = 256;
 
 /// The tile shapes of one matrix, as base-two logarithms.
 #[derive(Copy, Clone, Debug)]
@@ -64,31 +56,84 @@ pub(super) struct Schedule {
 }
 
 impl Schedule {
-    /// The tile shapes a matrix gets on the current thread pool.
+    /// The tile shapes a matrix gets on the current thread pool and machine.
     pub(super) fn new<F>(width: usize, log_n: usize) -> Self {
-        Self::for_workers::<F>(width, log_n, current_num_threads())
+        Self::for_budget::<F>(width, log_n, current_num_threads(), CacheBudget::host())
     }
 
-    /// The tile shapes a matrix gets from its byte budgets and a worker count.
+    /// The tile shapes a matrix gets from a cache budget and a worker count.
     ///
-    /// A tile is also a task, so it is cut back until every worker has one.
-    pub(super) fn for_workers<F>(width: usize, log_n: usize, workers: usize) -> Self {
+    /// # Algorithm
+    ///
+    /// A large transform is bound by memory, so its cost is its number of sweeps.
+    ///
+    /// ```text
+    ///     stages:  0 ......... tile ............................ log_n
+    ///              |-- tile --|-- group --|-- group --| ... |-- group --|
+    /// ```
+    ///
+    /// - A staging tile fills the private budget, which fixes the stages one group fuses.
+    /// - A contiguous tile fills the private budget too.
+    /// - It fills the shared budget instead only where that saves a whole sweep.
+    /// - A tile is also a task, so it is cut back until every worker has one.
+    /// - A lone worker over a matrix the last-level cache holds runs plain passes, which sweep no memory.
+    pub(super) fn for_budget<F>(
+        width: usize,
+        log_n: usize,
+        workers: usize,
+        budget: CacheBudget,
+    ) -> Self {
         let row_bytes = size_of::<F>() * width;
 
-        // At least one row per tile, even where a single row overruns the budget.
-        let capacity = log2_floor_usize((DEEP_TILE_BYTES / row_bytes).max(1));
-        let log_tile_rows = capacity.min(log_n.saturating_sub(log2_ceil_usize(workers)));
+        // Rows one budget holds, as a log, and at least one row where a single row overruns it.
+        let fit = |bytes: usize, row: usize| log2_floor_usize((bytes / row).max(1));
 
-        // A row shorter than a cache line is staged in runs, so a gather uses every byte it fetches.
-        let log_slab_rows =
-            log2_ceil_usize(CACHE_LINE_BYTES.div_ceil(row_bytes)).min(log_tile_rows);
+        // The deepest tile that still leaves one per worker.
+        let parallel = log_n.saturating_sub(log2_ceil_usize(workers));
 
-        // The staging budget divides by the run, since a staged row is a whole run.
-        let slab_bytes = row_bytes << log_slab_rows;
-        let log_staged_rows = if workers >= STAGED_WORKERS {
-            log2_floor_usize((STAGING_TILE_BYTES / slab_bytes).max(1))
+        // A row shorter than a run is staged in runs, which a tile of `tile` stages may not exceed.
+        let run_rows = log2_ceil_usize(STAGED_RUN_BYTES.div_ceil(row_bytes));
+        let staged = |tile: usize| {
+            let slab = run_rows.min(tile);
+            (slab, fit(budget.private, row_bytes << slab))
+        };
+
+        // Sweeps the stages above a tile of `tile` stages take, a plain pass each where no group fuses.
+        let sweeps = |tile: usize| {
+            let above = log_n - tile;
+            let (_, depth) = staged(tile);
+            if depth >= MIN_FUSED_STAGES {
+                above.div_ceil(depth)
+            } else {
+                above
+            }
+        };
+
+        // A tile past the private cache spills into the shared one, which only pays for a sweep saved.
+        //
+        //     512-byte rows, 2^21 rows, 2^10 rows private, 2^12 rows shared:
+        //       private tile:  10 stages, then 2 groups (10 + 1 stages)
+        //       shared tile:   12 stages, then 1 group  (9 stages)   <- one sweep fewer
+        let near = fit(budget.private, row_bytes).min(parallel);
+        let far = fit(budget.shared, row_bytes).min(parallel);
+        let log_tile_rows = if sweeps(far) < sweeps(near) {
+            far
         } else {
+            near
+        };
+
+        let (log_slab_rows, staged_rows) = staged(log_tile_rows);
+
+        // A plain pass over a matrix half the last-level cache holds moves no memory, only cache.
+        //
+        //     one worker:      the plain passes stream from that cache, and staging only adds copies
+        //     several workers: each plain pass is a dispatch and a barrier, which staging removes
+        let resident =
+            budget.last_level / 2 >= row_bytes && log_n <= fit(budget.last_level / 2, row_bytes);
+        let log_staged_rows = if workers == 1 && resident {
             0
+        } else {
+            staged_rows
         };
 
         Self {

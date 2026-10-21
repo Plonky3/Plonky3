@@ -6,6 +6,7 @@ extern crate alloc;
 mod basis;
 mod butterfly;
 mod byte_lde;
+mod cache;
 mod domain;
 mod encoder;
 mod lch;
