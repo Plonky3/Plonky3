@@ -212,6 +212,14 @@ pub enum CommitmentError {
         /// Supplied.
         actual: usize,
     },
+    /// An opening batches more claims than the security bound was certified for.
+    #[error("{actual} claims exceed the {maximum} the commitment was certified for")]
+    TooManyClaims {
+        /// Claims the commitment was certified for.
+        maximum: usize,
+        /// Supplied.
+        actual: usize,
+    },
     /// A claim's point does not name the committed variables.
     #[error("a claim names {actual} kept coordinates, expected {expected}")]
     PointArity {

@@ -46,7 +46,20 @@ impl WitnessPcs {
     ///
     /// The witness is narrower than one element, the parameters admit no schedule, or no target reaches the bound.
     pub fn new(num_variables: usize, params: &PcsParams) -> Result<Self, OpeningError> {
-        preset::keccak64::witness_commitment(num_variables, params, 1).map(Self)
+        Self::with_claims(num_variables, params, 1)
+    }
+
+    /// The bit commitment for a witness of `2^num_variables` bits, one opening batching up to `claims` claims.
+    ///
+    /// # Errors
+    ///
+    /// The witness is narrower than one element, the parameters admit no schedule, or no target reaches the bound.
+    pub fn with_claims(
+        num_variables: usize,
+        params: &PcsParams,
+        claims: usize,
+    ) -> Result<Self, OpeningError> {
+        preset::keccak64::witness_commitment(num_variables, params, claims).map(Self)
     }
 
     /// Commit to a witness's packed words, taking them over, and observe the commitment.

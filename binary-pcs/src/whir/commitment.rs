@@ -67,6 +67,8 @@ impl Default for CommitmentParams {
 pub struct BitCommitment<F: Field, EF: ExtensionField<F>, MT, Ch> {
     /// The WHIR commitment to the packed bits.
     inner: BooleanWhirPcs<F, EF, BinaryWhirDomain<F>, MT, Ch>,
+    /// The most claims one opening batches, the count the security bound was certified for.
+    max_claims: usize,
 }
 
 impl<F, EF, MT, Ch> BitCommitment<F, EF, MT, Ch>
@@ -104,10 +106,12 @@ where
         };
         for term_bits in params.security_bits..=params.security_bits + MAX_TERM_SLACK {
             // Grinding can cover a whole term, leaving no query; a higher target may still need some.
-            let commitment = match Self::with_term_bits(num_variables, params, term_bits, &mmcs) {
+            let mut commitment = match Self::with_term_bits(num_variables, params, term_bits, &mmcs)
+            {
                 Err(CommitmentError::Profile(ProfileError::ZeroQueries)) => continue,
                 commitment => commitment?,
             };
+            commitment.max_claims = claims;
             let composed = commitment
                 .inner
                 .readings_security(claims, false)
@@ -151,6 +155,7 @@ where
                 BooleanWhirProver::new(config, domain, mmcs),
                 num_variables,
             )?,
+            max_claims: 0,
         })
     }
 
@@ -158,6 +163,14 @@ where
     #[must_use]
     pub const fn num_variables(&self) -> usize {
         self.inner.num_variables()
+    }
+
+    /// The most claims one opening batches.
+    ///
+    /// A larger batch would fall below the certified security bound, so it is refused.
+    #[must_use]
+    pub const fn max_claims(&self) -> usize {
+        self.max_claims
     }
 
     /// Variables the first WHIR fold binds, the packing's trailing ones.
@@ -304,8 +317,14 @@ where
             .verify_weighted_deferred(commitment, claims, proof, challenger)?)
     }
 
-    /// Refuse a claim whose point does not name the kept coordinates, before the transcript moves.
+    /// Refuse more claims than were certified, or a point that does not name the kept coordinates, before the transcript moves.
     fn check_arity(&self, claims: &[WeightedClaim<EF>]) -> Result<(), CommitmentError> {
+        if claims.len() > self.max_claims {
+            return Err(CommitmentError::TooManyClaims {
+                maximum: self.max_claims,
+                actual: claims.len(),
+            });
+        }
         let expected = self.num_variables() - BitRingSwitch::<F, EF>::ABSORBED;
         claims
             .iter()
@@ -545,6 +564,33 @@ mod tests {
             Err(CommitmentError::PointArity {
                 expected: 8,
                 actual: 7
+            })
+        ));
+    }
+
+    #[test]
+    fn an_opening_past_the_certified_claim_count_is_refused() {
+        // Certified for 2 claims: a batch of 3 would compose below the bound, so neither side accepts it.
+        let r = run(11, &[Kind::Mle, Kind::Mle]);
+        assert_eq!(r.commitment.max_claims(), 2);
+        let mut claims = r.claims.clone();
+        claims.push(claims[0].clone());
+        assert!(matches!(
+            r.verify(&claims, &r.proof),
+            Err(CommitmentError::TooManyClaims {
+                maximum: 2,
+                actual: 3
+            })
+        ));
+        let mut rng = SmallRng::seed_from_u64(11);
+        let words: Vec<u64> = (0..1 << (N - 6)).map(|_| rng.next_u64()).collect();
+        let mut challenger = sponge();
+        let (_, data) = r.commitment.commit(words, &mut challenger).unwrap();
+        assert!(matches!(
+            r.commitment.open(data, &claims, &[], &mut challenger),
+            Err(CommitmentError::TooManyClaims {
+                maximum: 2,
+                actual: 3
             })
         ));
     }

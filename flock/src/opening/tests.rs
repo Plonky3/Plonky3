@@ -55,7 +55,8 @@ fn run(
     });
     let k_log = circuit.k_log();
     let m = k_log + log_instances;
-    let pcs = WitnessPcs::new(m, &PcsParams::default()).unwrap();
+    // One opening carries the lincheck claim and the zerocheck's c-claim.
+    let pcs = WitnessPcs::with_claims(m, &PcsParams::default(), 2).unwrap();
 
     // Commit, then draw the zerocheck point after the commitment.
     let mut sponge = challenger();
