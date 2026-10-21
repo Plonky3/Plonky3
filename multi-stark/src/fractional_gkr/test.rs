@@ -3,7 +3,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_binary_field::{BinaryChallenger, BinaryField32, BinaryField128, TowerLevel};
+use p3_binary_field::{
+    BinaryChallenger, BinaryField32, BinaryField128, Poly64, Poly192, TowerLevel,
+};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{DuplexChallenger, FieldChallenger, HashChallenger};
 use p3_field::extension::BinomialExtensionField;
@@ -639,4 +641,167 @@ fn a_packed_extension_numerator_preserves_the_transcript() {
             denom.eval_ext::<F>(&scalar_output.point)
         );
     }
+}
+
+/// Table heights of each run, the tables of one run proven back to back on one challenger.
+///
+/// The single heights cover odd and even round counts, below and above the lane count.
+///
+/// The longer runs mix heights, so one challenger carries tables of several shapes.
+const RUN_HEIGHTS: &[&[usize]] = &[
+    &[1],
+    &[2],
+    &[3],
+    &[4],
+    &[5],
+    &[6],
+    &[7],
+    &[8],
+    &[9],
+    &[10],
+    &[11],
+    &[12],
+    &[6, 9],
+    &[11, 3, 8],
+    &[2, 12, 5],
+];
+
+/// Digest every run's proofs, openings and next challenge, over the scalar storage.
+///
+/// Each run is proven again in every other storage the machine offers.
+///
+/// Those runs must match the scalar run exactly, so the digest pins them too.
+fn digest_runs<F, EF, C>(seed: u64, challenger: impl Fn() -> C) -> String
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: FieldChallenger<F>,
+    StandardUniform: Distribution<F> + Distribution<EF>,
+{
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let lanes = log2_strict_usize(<F as Field>::Packing::WIDTH);
+    let mut transcript = Vec::new();
+
+    for &heights in RUN_HEIGHTS {
+        // A base numerator and a genuinely extension-valued one for every height.
+        let base = heights
+            .iter()
+            .map(|&n| zero_sum::<F, EF>(&mut rng, n))
+            .collect::<Vec<_>>();
+        let ext = heights
+            .iter()
+            .map(|&n| zero_sum::<EF, EF>(&mut rng, n))
+            .collect::<Vec<_>>();
+
+        // Packing needs a cube wide enough to address the lanes.
+        let packs = lanes > 0 && heights.iter().all(|&n| n >= lanes);
+        let storage = |table: &Poly<EF>, packed: bool| {
+            if packed {
+                PolyMaybePacked::Packed(table.pack::<F, EF>())
+            } else {
+                PolyMaybePacked::Scalar(table.clone())
+            }
+        };
+
+        // One run proves its tables back to back on one challenger.
+        let run = |numerators: Vec<LeafNumerator<'_, F, EF>>,
+                   denominators: &[PolyMaybePacked<F, EF>]| {
+            let mut challenger = challenger();
+            let mut bytes = Vec::new();
+            for (n, d) in numerators.into_iter().zip(denominators) {
+                let (proof, output) = prove_fractional_gkr(Fraction { n, d }, &mut challenger);
+                bytes.extend(postcard::to_allocvec(&proof).expect("a proof serializes"));
+                bytes.extend(
+                    postcard::to_allocvec(&output.point.as_slice()).expect("a point serializes"),
+                );
+                bytes.extend(
+                    postcard::to_allocvec(&(&output.numerator, &output.denominator))
+                        .expect("an opening serializes"),
+                );
+            }
+            let next = challenger.sample_algebra_element::<EF>();
+            bytes.extend(postcard::to_allocvec(&next).expect("a challenge serializes"));
+            bytes
+        };
+
+        // Base numerators: the scalar run feeds the digest, the packed run must equal it.
+        let scalar = base
+            .iter()
+            .map(|(_, d)| storage(d, false))
+            .collect::<Vec<_>>();
+        let reference = run(
+            base.iter().map(|(n, _)| LeafNumerator::Base(n)).collect(),
+            &scalar,
+        );
+        if packs {
+            let packed = base
+                .iter()
+                .map(|(_, d)| storage(d, true))
+                .collect::<Vec<_>>();
+            let numerators = base.iter().map(|(n, _)| LeafNumerator::Base(n)).collect();
+            assert_eq!(run(numerators, &packed), reference, "heights {heights:?}");
+        }
+        transcript.extend(reference);
+
+        // Extension numerators: the same, with the numerator stored like its denominator.
+        let scalar = ext
+            .iter()
+            .map(|(_, d)| storage(d, false))
+            .collect::<Vec<_>>();
+        let numerators = ext
+            .iter()
+            .map(|(n, _)| storage(n, false))
+            .collect::<Vec<_>>();
+        let reference = run(numerators.iter().map(LeafNumerator::Ext).collect(), &scalar);
+        if packs {
+            let packed = ext
+                .iter()
+                .map(|(_, d)| storage(d, true))
+                .collect::<Vec<_>>();
+            let numerators = ext
+                .iter()
+                .map(|(n, _)| storage(n, true))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                run(numerators.iter().map(LeafNumerator::Ext).collect(), &packed),
+                reference,
+                "heights {heights:?}"
+            );
+        }
+        transcript.extend(reference);
+    }
+
+    Keccak256Hash
+        .hash_iter(transcript)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[test]
+fn every_shape_and_storage_keeps_its_prime_field_transcript() {
+    // A failure means the transcript changed.
+    //
+    // The new digest is right exactly when that change was intended.
+    assert_eq!(
+        digest_runs::<F, EF, _>(0x5AFE_0001, fresh_challenger),
+        "c904b0605e2af420049bf9ed2923046c5700d1316dbca8617e6f407f4ec1a208"
+    );
+}
+
+#[test]
+fn every_shape_and_storage_keeps_its_binary_field_transcript() {
+    // The binary tower names its interpolation nodes by bit pattern.
+    //
+    // That is the arm whose second node is a factor rather than a doubling.
+    let challenger = || {
+        BinaryChallenger::<Poly64, HashChallenger<u8, Keccak256Hash, 32>>::from_hasher(
+            b"p3-fraction-gkr-digest".to_vec(),
+            Keccak256Hash,
+        )
+    };
+    assert_eq!(
+        digest_runs::<Poly64, Poly192, _>(0x5AFE_0002, challenger),
+        "a7fa5a7de48978c6f207a856c0ce0749c449349e457a4367337e628d8f055add"
+    );
 }

@@ -82,5 +82,9 @@ harness = false
 name = "lookup_proof"
 harness = false
 
+[[bench]]
+name = "fractional_gkr"
+harness = false
+
 [lints]
 workspace = true
