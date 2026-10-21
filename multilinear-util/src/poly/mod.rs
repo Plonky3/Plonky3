@@ -287,7 +287,12 @@ impl<EF: Field> Poly<EF> {
         let (high_point, low_point) = split_low(point, log_width);
 
         // A table no wider than the low factor is doubled packed, then unpacked once.
+        //
+        // One lane has nothing to unpack, so the doubled table is already the result.
         if high_point.is_empty() {
+            if F::Packing::WIDTH == 1 {
+                return Self(eq_doubled(point, scale), PhantomData);
+            }
             let low = Poly::<EF::ExtensionPacking>(
                 packed_eq_serial::<F, EF>(low_point, scale),
                 PhantomData,

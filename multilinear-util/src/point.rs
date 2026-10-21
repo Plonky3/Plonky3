@@ -5,12 +5,12 @@ use core::ops::{Index, RangeBounds};
 use core::slice::SliceIndex;
 
 use itertools::Itertools;
-use p3_field::{ExtensionField, Field, PackedValue};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_maybe_rayon::prelude::*;
-use p3_util::log2_ceil_usize;
 use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform};
+
+use crate::poly::Poly;
 
 /// A point `(x_1, ..., x_n)` in `F^n` for some field `F`.
 ///
@@ -121,12 +121,14 @@ where
     /// out[x] = prod_i (x_i * p_i + (1 - x_i) * (1 - p_i)),   x = x_0 x_1 ... x_{n-1} in binary
     /// ```
     ///
+    /// The table is built as one parallel tensor product, each entry written once.
+    ///
     /// # Panics
     ///
     /// Panics if `2^n` overflows `usize`.
     #[must_use]
     pub fn equality_weights_msb(&self) -> Vec<F> {
-        self.equality_table(BitOrder::Msb)
+        Poly::new_from_point(self.as_slice(), F::ONE).into_evals()
     }
 
     /// Materialize the equality table whose coordinate zero binds the least significant index bit.
@@ -136,12 +138,14 @@ where
     /// lsb[x] = msb[reverse_bits(x)]
     /// ```
     ///
+    /// So this is the big-endian table of the reversed point.
+    ///
     /// # Panics
     ///
     /// Panics if `2^n` overflows `usize`.
     #[must_use]
     pub fn equality_weights_lsb(&self) -> Vec<F> {
-        self.equality_table(BitOrder::Lsb)
+        self.reversed().equality_weights_msb()
     }
 
     /// Evaluate the equality polynomial `eq(self, vertex)` at one Boolean vertex.
@@ -180,113 +184,6 @@ where
                 })
                 .product(),
         )
-    }
-
-    /// Build the equality table of this point under the given bit order.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `2^n` overflows `usize`.
-    fn equality_table(&self, order: BitOrder) -> Vec<F> {
-        let len = u32::try_from(self.num_variables())
-            .ok()
-            .and_then(|shift| 1usize.checked_shl(shift))
-            .expect("Point length too large: 2^n overflows usize.");
-
-        let mut table = F::zero_vec(len);
-        self.fill_equality_table(&mut table, order, F::ONE);
-        table
-    }
-
-    /// Fill `out` with `scale * eq(self, x)` for every `x`, splitting across threads once.
-    ///
-    /// The index splits into high bits `h` and low bits `l`, and the weight factors along them:
-    /// ```text
-    /// out[h | l] = eq_high(h) * eq_low(l)
-    /// ```
-    ///
-    /// So the table is `2^t` contiguous chunks, one per high vertex:
-    /// - a serial pass builds the `2^t` seeds `scale * eq_high(h)`,
-    /// - each task then expands its seed over the low coordinates, on its own chunk.
-    ///
-    /// One parallel region covers the whole table, and every task stays in its own cache lines.
-    fn fill_equality_table(&self, out: &mut [F], order: BitOrder, scale: F) {
-        // Why: a packed step is bound by memory, so extra threads do not speed it up.
-        //
-        //     packed field    ->  one thread
-        //     unpacked field  ->  one multiplication per entry, split by the cost model
-        //
-        // The cost model charges the one element each entry writes.
-        let task_len = if F::Packing::WIDTH > 1 {
-            out.len()
-        } else {
-            min_task_len(out.len(), size_of::<F>())
-        };
-        let low_variables = log2_ceil_usize(task_len).min(self.num_variables());
-        self.fill_equality_table_in_chunks(out, order, scale, low_variables);
-    }
-
-    /// Fill `out` as `2^(n - low_variables)` chunks of `2^low_variables` entries, one task each.
-    ///
-    /// Every split yields the same table, which is what lets the host decide it.
-    fn fill_equality_table_in_chunks(
-        &self,
-        out: &mut [F],
-        order: BitOrder,
-        scale: F,
-        low_variables: usize,
-    ) {
-        let high_variables = self.num_variables() - low_variables;
-        if high_variables == 0 {
-            self.fill_equality_table_serial(out, order, scale);
-            return;
-        }
-
-        // The high bits of an index are bound by the coordinates at the high-bit end of the point.
-        let (high, low) = match order {
-            BitOrder::Msb => self.as_slice().split_at(high_variables),
-            BitOrder::Lsb => {
-                let (low, high) = self.as_slice().split_at(low_variables);
-                (high, low)
-            }
-        };
-        let (high, low) = (Point::new(high), Point::new(low));
-
-        let mut seeds = F::zero_vec(1 << high_variables);
-        high.fill_equality_table_serial(&mut seeds, order, scale);
-
-        out.par_chunks_mut(1 << low_variables)
-            .zip(seeds.par_iter())
-            .for_each(|(chunk, &seed)| low.fill_equality_table_serial(chunk, order, seed));
-    }
-
-    /// Single-threaded body of [`Self::fill_equality_table`].
-    ///
-    /// Each coordinate `c` doubles the filled prefix in place, as a new high bit:
-    /// ```text
-    /// [ t ]  ->  [ t * (1 - c) | t * c ]
-    ///              bit = 0       bit = 1
-    /// ```
-    ///
-    /// The bit-0 coordinate enters first, so it ends up binding the lowest bit.
-    ///
-    /// Both halves are contiguous, so every step streams through packed lanes.
-    ///
-    /// The cost is `2^n - 1` multiplications and `2^n - 1` subtractions.
-    fn fill_equality_table_serial(&self, out: &mut [F], order: BitOrder, scale: F) {
-        let num_variables = self.num_variables();
-        debug_assert_eq!(out.len(), 1 << num_variables);
-
-        // Invariant: after k steps, out[..2^k] holds the table of the first k entering coordinates.
-        out[0] = scale;
-        for k in 0..num_variables {
-            let coordinate = match order {
-                BitOrder::Msb => self[num_variables - 1 - k],
-                BitOrder::Lsb => self[k],
-            };
-            let (low, high) = out[..2 << k].split_at_mut(1 << k);
-            split_by_coordinate(low, high, coordinate);
-        }
     }
 }
 
@@ -467,42 +364,6 @@ where
     }
 }
 
-/// Which end of a point binds bit 0 of a table index.
-#[derive(Clone, Copy)]
-enum BitOrder {
-    /// Coordinate zero binds the most significant bit.
-    Msb,
-    /// Coordinate zero binds the least significant bit.
-    Lsb,
-}
-
-/// Split every weight of `low` into its bit-0 share, kept in `low`, and its bit-1 share, in `high`.
-///
-/// ```text
-/// high[i] = low[i] * c
-/// low[i]  = low[i] - high[i]    = low[i] * (1 - c)
-/// ```
-///
-/// One multiplication per entry: the bit-0 share is recovered by a subtraction.
-#[inline]
-fn split_by_coordinate<F: Field>(low: &mut [F], high: &mut [F], coordinate: F) {
-    let (low_packed, low_tail) = F::Packing::pack_slice_with_suffix_mut(low);
-    let (high_packed, high_tail) = F::Packing::pack_slice_with_suffix_mut(high);
-
-    // Full lanes: one broadcast coordinate against WIDTH weights at a time.
-    let packed_coordinate = F::Packing::from(coordinate);
-    for (low, high) in low_packed.iter_mut().zip(high_packed) {
-        *high = *low * packed_coordinate;
-        *low -= *high;
-    }
-
-    // Tail: halves shorter than one vector, which covers the first log2(WIDTH) steps.
-    for (low, high) in low_tail.iter_mut().zip(high_tail) {
-        *high = *low * coordinate;
-        *low -= *high;
-    }
-}
-
 impl<F> Point<F>
 where
     StandardUniform: Distribution<F>,
@@ -542,6 +403,7 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
+    use p3_binary_field::Poly192;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_util::reverse_bits_len;
@@ -561,9 +423,38 @@ mod tests {
 
     /// Strategy for a random point of up to 12 coordinates.
     ///
-    /// 12 variables cross the kernel's scalar, packed and threaded cutoffs.
+    /// 12 variables cross the builder's scalar, packed and tensor cutoffs.
     fn arb_point() -> impl Strategy<Value = Point<F>> {
         prop::collection::vec(any::<u32>().prop_map(F::from_u32), 0..=12).prop_map(Point::new)
+    }
+
+    /// Check both tables of a random point against the dense product definition.
+    fn check_equality_weights_against_dense<F>(
+        num_variables: usize,
+        seed: u64,
+    ) -> Result<(), TestCaseError>
+    where
+        F: Field,
+        StandardUniform: Distribution<F>,
+    {
+        let point = Point::<F>::rand(&mut SmallRng::seed_from_u64(seed), num_variables);
+        let msb = point.equality_weights_msb();
+        let lsb = point.equality_weights_lsb();
+
+        // Both orders hold one weight per vertex of {0,1}^n.
+        prop_assert_eq!(msb.len(), 1 << num_variables);
+        prop_assert_eq!(lsb.len(), 1 << num_variables);
+
+        // MSB: entry v is eq(point, big-endian bits of v).
+        // LSB: entry v reads the bits of v reversed.
+        //
+        //     n = 3, v = 0b001  ->  msb: x = (0, 0, 1),  lsb: x = (1, 0, 0)
+        for vertex in 0..1 << num_variables {
+            let reversed = reverse_bits_len(vertex, num_variables);
+            prop_assert_eq!(msb[vertex], reference_msb(point.as_slice(), vertex));
+            prop_assert_eq!(lsb[vertex], reference_msb(point.as_slice(), reversed));
+        }
+        Ok(())
     }
 
     #[test]
@@ -602,41 +493,6 @@ mod tests {
                 a * b,
             ]
         );
-    }
-
-    #[test]
-    fn equality_weights_over_extension_field_match_reference() {
-        // Bus fingerprints live in the extension field, whose packing width is one.
-        let mut rng = SmallRng::seed_from_u64(7);
-        for num_variables in 0..=10 {
-            let point = Point::<EF>::rand(&mut rng, num_variables);
-            let msb = point.equality_weights_msb();
-            let lsb = point.equality_weights_lsb();
-            for (vertex, &weight) in msb.iter().enumerate() {
-                assert_eq!(weight, reference_msb(point.as_slice(), vertex));
-                assert_eq!(lsb[reverse_bits_len(vertex, num_variables)], weight);
-            }
-        }
-    }
-
-    #[test]
-    fn equality_table_is_independent_of_the_split() {
-        // Invariant: every chunking of the table agrees with the one-task fill, in both bit orders.
-        let mut rng = SmallRng::seed_from_u64(11);
-        for num_variables in 0..=8 {
-            let point = Point::<EF>::rand(&mut rng, num_variables);
-            let scale: EF = rng.random();
-            for order in [BitOrder::Msb, BitOrder::Lsb] {
-                let mut serial = EF::zero_vec(1 << num_variables);
-                point.fill_equality_table_serial(&mut serial, order, scale);
-
-                for low_variables in 0..=num_variables {
-                    let mut chunked = EF::zero_vec(1 << num_variables);
-                    point.fill_equality_table_in_chunks(&mut chunked, order, scale, low_variables);
-                    assert_eq!(chunked, serial);
-                }
-            }
-        }
     }
 
     #[test]
@@ -686,27 +542,16 @@ mod tests {
 
     proptest! {
         #[test]
-        fn proptest_equality_weights_msb_matches_reference(point in arb_point()) {
-            // Invariant: entry v of the table is eq(point, big-endian bits of v).
-            let weights = point.equality_weights_msb();
-
-            prop_assert_eq!(weights.len(), 1 << point.num_variables());
-            for (vertex, &weight) in weights.iter().enumerate() {
-                prop_assert_eq!(weight, reference_msb(point.as_slice(), vertex));
-            }
-        }
-
-        #[test]
-        fn proptest_equality_weights_lsb_is_the_bit_reversed_msb_table(point in arb_point()) {
-            // Invariant: lsb[v] = msb[reverse_bits(v)] over n bits.
-            let n = point.num_variables();
-            let msb = point.equality_weights_msb();
-            let lsb = point.equality_weights_lsb();
-
-            prop_assert_eq!(lsb.len(), msb.len());
-            for (vertex, &weight) in lsb.iter().enumerate() {
-                prop_assert_eq!(weight, msb[reverse_bits_len(vertex, n)]);
-            }
+        fn proptest_equality_weights_match_the_dense_definition(
+            num_variables in 0usize..=12,
+            seed in any::<u64>(),
+        ) {
+            // A prime base field: packed lanes, sixteen wide on AVX-512.
+            check_equality_weights_against_dense::<F>(num_variables, seed)?;
+            // Its quartic extension: packed over the base field's lanes.
+            check_equality_weights_against_dense::<EF>(num_variables, seed)?;
+            // A binary extension field: GF(2^192).
+            check_equality_weights_against_dense::<Poly192>(num_variables, seed)?;
         }
 
         #[test]
