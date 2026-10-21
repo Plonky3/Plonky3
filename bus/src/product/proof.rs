@@ -68,7 +68,10 @@ pub(crate) struct PreparedProductGkr<'a, EF: Clone> {
 
 impl<'a, EF: Field> PreparedProductGkr<'a, EF> {
     /// Prepare layers without asserting the shared-root relation or touching a transcript.
-    pub(crate) fn new(inputs: &[&'a [EF]], shape: ProductGkrShape) -> Self {
+    pub(crate) fn new<F: Field>(inputs: &[&'a [EF]], shape: ProductGkrShape) -> Self
+    where
+        EF: ExtensionField<F>,
+    {
         Self::validate_lengths(inputs.iter().map(|input| input.len()), shape);
 
         // Keep only explicit prefixes at every product level.
@@ -83,13 +86,16 @@ impl<'a, EF: Field> PreparedProductGkr<'a, EF> {
         let all_layers = inputs
             .par_iter()
             .map_collect_min_task_bytes(tree_bytes, |input| {
-                ProductLayers::new(input, shape.log_height)
+                ProductLayers::new::<F>(input, shape.log_height)
             });
         Self::from_layers(shape, all_layers)
     }
 
     /// Consume the bus's owned leaves without copying their explicit prefixes.
-    pub(crate) fn new_owned(mut inputs: [Vec<EF>; 2], shape: ProductGkrShape) -> Self {
+    pub(crate) fn new_owned<F: Field>(mut inputs: [Vec<EF>; 2], shape: ProductGkrShape) -> Self
+    where
+        EF: ExtensionField<F>,
+    {
         Self::validate_lengths(inputs.iter().map(Vec::len), shape);
         // No leaf copy is needed; only the retained levels move field values.
         let tree_bytes = inputs
@@ -101,7 +107,7 @@ impl<'a, EF: Field> PreparedProductGkr<'a, EF> {
         let all_layers = inputs
             .par_iter_mut()
             .map_collect_min_task_bytes(tree_bytes, |input| {
-                ProductLayers::new_owned(core::mem::take(input), shape.log_height)
+                ProductLayers::new_owned::<F>(core::mem::take(input), shape.log_height)
             });
         Self::from_layers(shape, all_layers)
     }
@@ -187,7 +193,7 @@ impl<EF> ProductGkrProof<EF> {
             has_distinct_round_nodes::<EF>(),
             "product GKR requires six distinct challenge-field interpolation nodes"
         );
-        Self::prove_inner::<F, Challenger>(PreparedProductGkr::new(inputs, shape), challenger)
+        Self::prove_inner::<F, Challenger>(PreparedProductGkr::new::<F>(inputs, shape), challenger)
     }
 
     /// Run the transcript after the statement and product layers have been checked.

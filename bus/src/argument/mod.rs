@@ -100,7 +100,7 @@ impl BusPlan {
         }
 
         // Reuse the product layers' roots for the shared-root witness check.
-        let prepared = PreparedProductGkr::new_owned([pushes, pulls], self.product_shape());
+        let prepared = PreparedProductGkr::new_owned::<F>([pushes, pulls], self.product_shape());
         if prepared.roots()[0] != prepared.roots()[1] {
             transcript.abort();
             return Err(BusArgumentError::UnbalancedProducts);

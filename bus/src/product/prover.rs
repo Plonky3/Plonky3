@@ -37,15 +37,36 @@ impl<'a, F: Field> IdentityPrefix<'a, F> {
     }
 
     /// Multiplies fixed-size groups into the next retained product layer.
-    fn reduce(&self, arity: usize) -> IdentityPrefix<'static, F> {
-        // A partial final group is completed by implicit identity factors.
-        let values = self
-            .values
-            .par_chunks(arity)
-            .map_collect_min_task_bytes((arity + 1) * size_of::<F>(), |chunk| {
-                chunk.iter().copied().product()
+    ///
+    /// A partial final group is completed by implicit identity factors.
+    fn reduce<Base: Field>(&self, arity: usize) -> IdentityPrefix<'static, F>
+    where
+        F: ExtensionField<Base>,
+    {
+        let values = &self.values;
+        let lanes = Base::Packing::WIDTH;
+        if arity != 4 || !(2..=MAX_LANES).contains(&lanes) {
+            return IdentityPrefix::new(
+                values
+                    .par_chunks(arity)
+                    .map_collect_min_task_bytes((arity + 1) * size_of::<F>(), |chunk| {
+                        chunk.iter().copied().product()
+                    }),
+            );
+        }
+
+        // Rows of four multiply in tasks, each writing its own window of the next level.
+        let rows = values.len().div_ceil(4);
+        let mut next = Vec::with_capacity(rows);
+        next.spare_capacity_mut()[..rows]
+            .par_chunks_mut(TASK_BLOCKS * BLOCK)
+            .zip(values.par_chunks(4 * TASK_BLOCKS * BLOCK))
+            .for_each_min_task_bytes(5 * TASK_BLOCKS * BLOCK * size_of::<F>(), |(out, chunk)| {
+                multiply_rows::<Base, F>(chunk, out);
             });
-        IdentityPrefix::new(values)
+        // SAFETY: the tasks' windows cover the first `rows` slots, and each task wrote all of its own.
+        unsafe { next.set_len(rows) };
+        IdentityPrefix::new(next)
     }
 
     /// Restores the canonical shortest representation.
@@ -71,17 +92,26 @@ pub(super) struct ProductLayers<'a, F: Clone> {
 
 impl<'a, F: Field> ProductLayers<'a, F> {
     /// Builds every product level needed by the radix-four descent, borrowing the leaves.
-    pub(super) fn new(leaves: &'a [F], log_height: usize) -> Self {
-        Self::from_leaves(IdentityPrefix::new(leaves), log_height)
+    pub(super) fn new<Base: Field>(leaves: &'a [F], log_height: usize) -> Self
+    where
+        F: ExtensionField<Base>,
+    {
+        Self::from_leaves::<Base>(IdentityPrefix::new(leaves), log_height)
     }
 
     /// Builds the retained levels while taking ownership of the leaf allocation.
-    pub(super) fn new_owned(leaves: Vec<F>, log_height: usize) -> Self {
-        Self::from_leaves(IdentityPrefix::new(leaves), log_height)
+    pub(super) fn new_owned<Base: Field>(leaves: Vec<F>, log_height: usize) -> Self
+    where
+        F: ExtensionField<Base>,
+    {
+        Self::from_leaves::<Base>(IdentityPrefix::new(leaves), log_height)
     }
 
     /// Builds every retained level above the given leaves.
-    fn from_leaves(leaves: IdentityPrefix<'a, F>, log_height: usize) -> Self {
+    fn from_leaves<Base: Field>(leaves: IdentityPrefix<'a, F>, log_height: usize) -> Self
+    where
+        F: ExtensionField<Base>,
+    {
         // Unvisited depths remain empty constant-one prefixes.
         let mut layers = (0..=log_height)
             .map(|_| IdentityPrefix::new(Vec::new()))
@@ -91,11 +121,11 @@ impl<'a, F: Field> ProductLayers<'a, F> {
         // Two multiplication levels are retained per radix-four layer.
         let mut depth = 0;
         while depth + 2 <= log_height {
-            layers[depth + 2] = layers[depth].reduce(4);
+            layers[depth + 2] = layers[depth].reduce::<Base>(4);
             depth += 2;
         }
         if depth < log_height {
-            layers[log_height] = layers[depth].reduce(2);
+            layers[log_height] = layers[depth].reduce::<Base>(2);
         }
 
         Self { layers }
@@ -336,6 +366,33 @@ fn fold_blocks<Base: Field, F: ExtensionField<Base>>(
     }
     if !short.is_empty() {
         fold(&padded_block(short), &mut rows[blocks.len()]);
+    }
+}
+
+/// Writes the product of each row of four of `source` into `out`.
+///
+/// Whole groups of rows go through the packed extension, row `l` of a group in lane `l`.
+/// A short last row is completed by implicit identities.
+#[inline]
+fn multiply_rows<Base: Field, F: ExtensionField<Base>>(source: &[F], out: &mut [MaybeUninit<F>]) {
+    let lanes = Base::Packing::WIDTH;
+    let (rows, short) = source.as_chunks::<4>();
+    let mut products = [F::ZERO; MAX_LANES];
+    for (group, slots) in rows.chunks_exact(lanes).zip(out.chunks_exact_mut(lanes)) {
+        let child = |c: usize| F::ExtensionPacking::from_ext_fn(|lane| group[lane][c]);
+        ((child(0) * child(1)) * (child(2) * child(3))).to_ext_slice(&mut products[..lanes]);
+        for (slot, &product) in slots.iter_mut().zip(&products) {
+            slot.write(product);
+        }
+    }
+
+    // The rows short of a group go one at a time.
+    let packed = rows.len() / lanes * lanes;
+    for (row, slot) in rows[packed..].iter().zip(&mut out[packed..]) {
+        slot.write((row[0] * row[1]) * (row[2] * row[3]));
+    }
+    if !short.is_empty() {
+        out[rows.len()].write(short.iter().copied().product());
     }
 }
 
@@ -986,7 +1043,7 @@ mod tests {
     {
         let layers = inputs
             .iter()
-            .map(|input| ProductLayers::new(input, log_height))
+            .map(|input| ProductLayers::new::<Base>(input, log_height))
             .collect::<Vec<_>>();
 
         // Every retained even depth with at least one parent variable is a child level.
@@ -1059,6 +1116,37 @@ mod tests {
         check_lines::<BabyBearQuartic>(&mut rng, [false, false, true, true, true]);
     }
 
+    fn check_levels<Base: Field, F: ExtensionField<Base>>(rng: &mut Xoroshiro128Plus)
+    where
+        StandardUniform: Distribution<F>,
+    {
+        // Lengths around a lane group, a task and a partial row of four.
+        for len in [0, 1, 3, 4, 5, 63, 64, 65, 1023, 4093, 4096, 4097, 8192] {
+            let leaves = (0..len).map(|_| rng.random::<F>()).collect::<Vec<_>>();
+            let layers = ProductLayers::new::<Base>(&leaves, 13);
+
+            // Every retained even level is the naive product of rows of four below it.
+            let mut level = leaves.clone();
+            for depth in (2..=12).step_by(2) {
+                level = level
+                    .chunks(4)
+                    .map(|row| row.iter().copied().product())
+                    .collect();
+                let expected = IdentityPrefix::new(level.clone());
+                assert_eq!(layers.layers[depth].values, expected.values, "len={len}");
+            }
+            assert_eq!(layers.root(), leaves.iter().copied().product(), "len={len}");
+        }
+    }
+
+    #[test]
+    fn product_levels_match_a_naive_tree() {
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0009);
+        check_levels::<Poly64, Poly192>(&mut rng);
+        check_levels::<BabyBear, BabyBearQuartic>(&mut rng);
+        check_levels::<BinaryField128, BinaryField128>(&mut rng);
+    }
+
     #[test]
     fn borrowed_leaves_are_read_in_place_until_the_first_fold() {
         // The prover only reads the leaves, so a borrowed input is never copied.
@@ -1067,7 +1155,7 @@ mod tests {
         let mut leaves = vec![Poly192::interpolation_node(2); 64];
         leaves[62] = Poly192::ONE;
         leaves[63] = Poly192::ONE;
-        let mut layers = ProductLayers::new(&leaves, 6);
+        let mut layers = ProductLayers::new::<Poly64>(&leaves, 6);
         let taken = layers.take_layer(0);
         assert!(
             matches!(taken.values, Cow::Borrowed(values) if values.as_ptr() == leaves.as_ptr())
@@ -1093,7 +1181,7 @@ mod tests {
                     1 => BinaryField128::ZERO,
                     _ => rng.random::<BinaryField128>(),
                 }));
-                let mut layers = ProductLayers::new_owned(input, log_height);
+                let mut layers = ProductLayers::new_owned::<BinaryField128>(input, log_height);
                 let mut product_depth = log_height;
                 while product_depth > 0 {
                     let arity: usize = if product_depth % 2 == 1 { 2 } else { 4 };
