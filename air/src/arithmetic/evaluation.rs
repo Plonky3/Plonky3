@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 
 use super::expression::BinaryOperation::{self, Add, Mul, Sub};
-use super::expression::evaluate_graph;
+use super::expression::{RECURSION_LIMIT, evaluate_graph};
 use super::{
     ArithmeticExpression, ArithmeticExpressionExt, ArithmeticExtLeaf, ArithmeticNode, BaseOperand,
     ExtOperand,
@@ -118,12 +118,13 @@ fn shared_base<F: Field, AB: AirBuilder<F = F>>(
     e: &Arc<ArithmeticExpression<F>>,
     b: &AB,
     memo: &mut BTreeMap<usize, AB::Expr>,
+    depth: usize,
 ) -> AB::Expr {
     let key = Arc::as_ptr(e) as usize;
     if let Some(v) = memo.get(&key) {
         return v.clone();
     }
-    let value = e.resolve_inner(b, memo);
+    let value = e.resolve_inner(b, memo, depth);
     memo.insert(key, value.clone());
     value
 }
@@ -131,10 +132,11 @@ fn base_operand<F: Field, AB: AirBuilder<F = F>>(
     o: &BaseOperand<F>,
     b: &AB,
     memo: &mut BTreeMap<usize, AB::Expr>,
+    depth: usize,
 ) -> BaseValue<F, AB::Expr> {
     match o {
         BaseOperand::Scalar(c) => BaseValue::Scalar(*c),
-        BaseOperand::Expr(e) => BaseValue::Expr(shared_base(e, b, memo)),
+        BaseOperand::Expr(e) => BaseValue::Expr(shared_base(e, b, memo, depth)),
     }
 }
 impl<F: Field> ArithmeticExpression<F> {
@@ -144,24 +146,32 @@ impl<F: Field> ArithmeticExpression<F> {
     /// Other arities use generic arithmetic; scalar mixed dots use the target algebra's batched helper.
     /// Expression coefficients replay through same-type `dot_product`.
     /// Public nodes allow native emitters to recover exact const arities for all sizes.
-    /// Shared operands are memoized and traversal uses an explicit stack.
+    /// Shared operands are memoized; recursion is bounded and deeper graphs use an explicit traversal stack.
     /// Destroying a deeply nested source or result graph still uses recursive `Arc` drops.
     pub fn resolve<AB: AirBuilder<F = F>>(&self, builder: &AB) -> AB::Expr {
-        self.resolve_inner(builder, &mut BTreeMap::new())
+        self.resolve_inner(builder, &mut BTreeMap::new(), 0)
     }
     fn resolve_inner<AB: AirBuilder<F = F>>(
         &self,
         b: &AB,
         memo: &mut BTreeMap<usize, AB::Expr>,
+        depth: usize,
     ) -> AB::Expr {
-        evaluate_graph(self, memo, |e, memo| e.resolve_node(b, memo))
+        if depth < RECURSION_LIMIT {
+            self.resolve_node(b, memo, depth)
+        } else {
+            evaluate_graph(self, memo, false, |e, memo| e.resolve_node(b, memo, depth))
+        }
     }
     fn resolve_node<AB: AirBuilder<F = F>>(
         &self,
         b: &AB,
         memo: &mut BTreeMap<usize, AB::Expr>,
+        depth: usize,
     ) -> AB::Expr {
-        let operand = |o: &BaseOperand<F>, m: &mut BTreeMap<usize, AB::Expr>| base_operand(o, b, m);
+        let operand = |o: &BaseOperand<F>, m: &mut BTreeMap<usize, AB::Expr>| {
+            base_operand(o, b, m, depth + 1)
+        };
         match self.node() {
             ArithmeticNode::Leaf(l) => SymbolicExpr::Leaf(l.clone()).resolve(b),
             ArithmeticNode::Add(a, c) => {
@@ -311,6 +321,7 @@ fn shared_ext<F: Field, EF: ExtensionField<F>, AB>(
     b: &AB,
     base: &mut BTreeMap<usize, AB::Expr>,
     ext: &mut BTreeMap<usize, AB::ExprEF>,
+    depth: usize,
 ) -> AB::ExprEF
 where
     AB: PermutationAirBuilder<F = F, EF = EF>,
@@ -320,7 +331,7 @@ where
     if let Some(v) = ext.get(&key) {
         return v.clone();
     }
-    let v = e.resolve_inner(b, base, ext);
+    let v = e.resolve_inner(b, base, ext, depth);
     ext.insert(key, v.clone());
     v
 }
@@ -329,6 +340,7 @@ fn ext_operand<F: Field, EF: ExtensionField<F>, AB>(
     b: &AB,
     base: &mut BTreeMap<usize, AB::Expr>,
     ext: &mut BTreeMap<usize, AB::ExprEF>,
+    depth: usize,
 ) -> ExtValue<F, AB::Expr, EF, AB::ExprEF>
 where
     AB: PermutationAirBuilder<F = F, EF = EF>,
@@ -337,13 +349,13 @@ where
     match o {
         ExtOperand::BaseScalar(c) => ExtValue::Base(BaseValue::Scalar(*c)),
         ExtOperand::ExtensionScalar(c) => ExtValue::Scalar(*c),
-        ExtOperand::Base(e) => ExtValue::Base(BaseValue::Expr(shared_base(e, b, base))),
-        ExtOperand::Extension(e) => ExtValue::Expr(shared_ext(e, b, base, ext)),
+        ExtOperand::Base(e) => ExtValue::Base(BaseValue::Expr(shared_base(e, b, base, depth))),
+        ExtOperand::Extension(e) => ExtValue::Expr(shared_ext(e, b, base, ext, depth)),
     }
 }
 impl<F: Field, EF: ExtensionField<F>> ArithmeticExpressionExt<F, EF> {
     /// Evaluate with base/scalar arithmetic retained until extension arithmetic is needed.
-    /// Uses the same bounded hook dispatch and explicit traversal stack as [`ArithmeticExpression::resolve`].
+    /// Uses the same bounded hook dispatch and bounded recursion with iterative fallback as [`ArithmeticExpression::resolve`].
     /// Base expression coefficients use the target's base mixed hook; extension expression coefficients replay through same-type `dot_product`.
     /// Destroying a deeply nested source or result graph still uses recursive `Arc` drops.
     pub fn resolve<AB>(&self, builder: &AB) -> AB::ExprEF
@@ -351,25 +363,33 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticExpressionExt<F, EF> {
         AB: PermutationAirBuilder<F = F, EF = EF>,
         AB::ExprEF: Algebra<F>,
     {
-        self.resolve_inner(builder, &mut BTreeMap::new(), &mut BTreeMap::new())
+        self.resolve_inner(builder, &mut BTreeMap::new(), &mut BTreeMap::new(), 0)
     }
     fn resolve_inner<AB>(
         &self,
         b: &AB,
         base: &mut BTreeMap<usize, AB::Expr>,
         ext: &mut BTreeMap<usize, AB::ExprEF>,
+        depth: usize,
     ) -> AB::ExprEF
     where
         AB: PermutationAirBuilder<F = F, EF = EF>,
         AB::ExprEF: Algebra<F>,
     {
-        evaluate_graph(self, ext, |e, ext| e.resolve_node(b, base, ext))
+        if depth < RECURSION_LIMIT {
+            self.resolve_node(b, base, ext, depth)
+        } else {
+            evaluate_graph(self, ext, false, |e, ext| {
+                e.resolve_node(b, base, ext, depth)
+            })
+        }
     }
     fn resolve_node<AB>(
         &self,
         b: &AB,
         base: &mut BTreeMap<usize, AB::Expr>,
         ext: &mut BTreeMap<usize, AB::ExprEF>,
+        depth: usize,
     ) -> AB::ExprEF
     where
         AB: PermutationAirBuilder<F = F, EF = EF>,
@@ -377,7 +397,7 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticExpressionExt<F, EF> {
     {
         match self.node() {
             ArithmeticNode::Leaf(l) => match l {
-                ArithmeticExtLeaf::Base(e) => e.resolve_inner(b, base).into(),
+                ArithmeticExtLeaf::Base(e) => e.resolve_inner(b, base, depth + 1).into(),
                 ArithmeticExtLeaf::Constant(c) => (*c).into(),
                 ArithmeticExtLeaf::Variable(v) => match v.entry {
                     ExtEntry::Permutation { offset } => {
@@ -395,33 +415,35 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticExpressionExt<F, EF> {
                 },
             },
             ArithmeticNode::Add(a, c) => ext_binary(
-                ext_operand(a, b, base, ext),
-                ext_operand(c, b, base, ext),
+                ext_operand(a, b, base, ext, depth + 1),
+                ext_operand(c, b, base, ext, depth + 1),
                 Add,
             )
             .into_expr(),
             ArithmeticNode::Sub(a, c) => ext_binary(
-                ext_operand(a, b, base, ext),
-                ext_operand(c, b, base, ext),
+                ext_operand(a, b, base, ext, depth + 1),
+                ext_operand(c, b, base, ext, depth + 1),
                 Sub,
             )
             .into_expr(),
             ArithmeticNode::Mul(a, c) => ext_binary(
-                ext_operand(a, b, base, ext),
-                ext_operand(c, b, base, ext),
+                ext_operand(a, b, base, ext, depth + 1),
+                ext_operand(c, b, base, ext, depth + 1),
                 Mul,
             )
             .into_expr(),
-            ArithmeticNode::Neg(a) => -ext_operand(a, b, base, ext).into_expr(),
-            ArithmeticNode::Square(a) => ext_operand(a, b, base, ext).into_expr().square(),
+            ArithmeticNode::Neg(a) => -ext_operand(a, b, base, ext, depth + 1).into_expr(),
+            ArithmeticNode::Square(a) => {
+                ext_operand(a, b, base, ext, depth + 1).into_expr().square()
+            }
             ArithmeticNode::Sum(a) => sum(&a
                 .iter()
-                .map(|a| ext_operand(a, b, base, ext).into_expr())
+                .map(|a| ext_operand(a, b, base, ext, depth + 1).into_expr())
                 .collect::<Vec<_>>()),
             ArithmeticNode::Dot(p) | ArithmeticNode::MixedDot(p) => {
                 let a: Vec<_> = p
                     .iter()
-                    .map(|(a, _)| ext_operand(a, b, base, ext).into_expr())
+                    .map(|(a, _)| ext_operand(a, b, base, ext, depth + 1).into_expr())
                     .collect();
                 if matches!(self.node(), ArithmeticNode::MixedDot(_)) {
                     if p.iter()
@@ -452,7 +474,7 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticExpressionExt<F, EF> {
                         let c: Vec<_> = p
                             .iter()
                             .map(|(_, c)| match c {
-                                ExtOperand::Base(e) => shared_base(e, b, base),
+                                ExtOperand::Base(e) => shared_base(e, b, base, depth + 1),
                                 _ => unreachable!(),
                             })
                             .collect();
@@ -461,7 +483,7 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticExpressionExt<F, EF> {
                 }
                 let c: Vec<_> = p
                     .iter()
-                    .map(|(_, c)| ext_operand(c, b, base, ext).into_expr())
+                    .map(|(_, c)| ext_operand(c, b, base, ext, depth + 1).into_expr())
                     .collect();
                 dot(&a, &c)
             }

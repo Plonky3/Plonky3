@@ -52,7 +52,7 @@ pub enum ExtOperand<F: Field, EF: ExtensionField<F>> {
 impl<F: Field> ArithmeticLeaf for BaseLeaf<F> {
     type LegacyLeaf = Self;
     type LowerBase = ();
-    fn lower_leaf(&self, _: &mut Self::LowerBase) -> Self::LegacyLeaf {
+    fn lower_leaf(&self, _: &mut Self::LowerBase, _: usize) -> Self::LegacyLeaf {
         self.clone()
     }
     type Value = F;
@@ -67,7 +67,7 @@ impl<F: Field> ArithmeticLeaf for BaseLeaf<F> {
     fn from_constant(v: F) -> Self {
         Self::Constant(v)
     }
-    fn degree(&self, trace: Option<(usize, &[usize])>, transition: usize) -> usize {
+    fn degree(&self, trace: Option<(usize, &[usize])>, transition: usize, _depth: usize) -> usize {
         match trace {
             Some((n, p)) => self.poly_degree(n, p),
             None => self.degree_multiple_with_transition(transition),
@@ -77,9 +77,9 @@ impl<F: Field> ArithmeticLeaf for BaseLeaf<F> {
 impl<F: Field, EF: ExtensionField<F>> ArithmeticLeaf for ArithmeticExtLeaf<F, EF> {
     type LegacyLeaf = crate::ExtLeaf<F, EF>;
     type LowerBase = BTreeMap<usize, Arc<crate::SymbolicExpression<F>>>;
-    fn lower_leaf(&self, base: &mut Self::LowerBase) -> Self::LegacyLeaf {
+    fn lower_leaf(&self, base: &mut Self::LowerBase, depth: usize) -> Self::LegacyLeaf {
         match self {
-            Self::Base(e) => crate::ExtLeaf::Base(e.lower_inner(base, &mut ())),
+            Self::Base(e) => crate::ExtLeaf::Base(e.lower_inner(base, &mut (), depth)),
             Self::Variable(v) => crate::ExtLeaf::ExtVariable(*v),
             Self::Constant(c) => crate::ExtLeaf::ExtConstant(*c),
         }
@@ -100,12 +100,9 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticLeaf for ArithmeticExtLeaf<F, EF
     fn from_constant(v: EF) -> Self {
         Self::Constant(v)
     }
-    fn degree(&self, trace: Option<(usize, &[usize])>, transition: usize) -> usize {
+    fn degree(&self, trace: Option<(usize, &[usize])>, transition: usize, depth: usize) -> usize {
         match self {
-            Self::Base(e) => match trace {
-                Some((n, p)) => e.poly_degree(n, p),
-                None => e.degree_multiple_with_transition(transition),
-            },
+            Self::Base(e) => e.degree_inner(trace, transition, &mut BTreeMap::new(), depth),
             Self::Variable(v) => {
                 trace.map_or_else(|| v.degree_multiple(), |(n, _)| v.poly_degree(n))
             }
@@ -118,6 +115,7 @@ fn shared_degree<L: ArithmeticLeaf>(
     trace: Option<(usize, &[usize])>,
     transition: usize,
     memo: &mut BTreeMap<usize, usize>,
+    depth: usize,
 ) -> usize {
     if trace.is_none() && transition == 0 {
         return e.degree_multiple();
@@ -126,7 +124,7 @@ fn shared_degree<L: ArithmeticLeaf>(
     if let Some(d) = memo.get(&key) {
         return *d;
     }
-    let d = e.degree_inner(trace, transition, memo);
+    let d = e.degree_inner(trace, transition, memo, depth);
     memo.insert(key, d);
     d
 }
@@ -142,10 +140,22 @@ impl<F: Field> ArithmeticOperand for BaseOperand<F> {
         &self,
         memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpression<F>>>,
         base: &mut (),
+        depth: usize,
     ) -> Arc<crate::SymbolicExpression<F>> {
         match self {
             Self::Scalar(c) => Arc::new((*c).into()),
-            Self::Expr(e) => lower_shared(e, memo, base),
+            Self::Expr(e) => lower_shared(e, memo, base, depth),
+        }
+    }
+    fn lower_value(
+        &self,
+        memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpression<F>>>,
+        base: &mut (),
+        depth: usize,
+    ) -> crate::SymbolicExpression<F> {
+        match self {
+            Self::Scalar(c) => (*c).into(),
+            Self::Expr(e) => lower_shared_value(e, memo, base, depth),
         }
     }
     fn expression(self) -> ArithmeticExpression<F> {
@@ -168,10 +178,11 @@ impl<F: Field> ArithmeticOperand for BaseOperand<F> {
         t: Option<(usize, &[usize])>,
         s: usize,
         m: &mut BTreeMap<usize, usize>,
+        depth: usize,
     ) -> usize {
         match self {
             Self::Scalar(_) => 0,
-            Self::Expr(e) => shared_degree(e, t, s, m),
+            Self::Expr(e) => shared_degree(e, t, s, m, depth),
         }
     }
 }
@@ -187,14 +198,28 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticOperand for ExtOperand<F, EF> {
         &self,
         memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpressionExt<F, EF>>>,
         base: &mut BTreeMap<usize, Arc<crate::SymbolicExpression<F>>>,
+        depth: usize,
     ) -> Arc<crate::SymbolicExpressionExt<F, EF>> {
         match self {
             Self::BaseScalar(c) => Arc::new((*c).into()),
             Self::ExtensionScalar(c) => {
                 Arc::new(crate::SymbolicExpr::Leaf(crate::ExtLeaf::ExtConstant(*c)))
             }
-            Self::Base(e) => Arc::new((*lower_shared(e, base, &mut ())).clone().into()),
-            Self::Extension(e) => lower_shared(e, memo, base),
+            Self::Base(e) => Arc::new((*lower_shared(e, base, &mut (), depth)).clone().into()),
+            Self::Extension(e) => lower_shared(e, memo, base, depth),
+        }
+    }
+    fn lower_value(
+        &self,
+        memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpressionExt<F, EF>>>,
+        base: &mut BTreeMap<usize, Arc<crate::SymbolicExpression<F>>>,
+        depth: usize,
+    ) -> crate::SymbolicExpressionExt<F, EF> {
+        match self {
+            Self::BaseScalar(c) => (*c).into(),
+            Self::ExtensionScalar(c) => crate::SymbolicExpr::Leaf(crate::ExtLeaf::ExtConstant(*c)),
+            Self::Base(e) => lower_shared_value(e, base, &mut (), depth).into(),
+            Self::Extension(e) => lower_shared_value(e, memo, base, depth),
         }
     }
     fn expression(self) -> ArithmeticExpressionExt<F, EF> {
@@ -221,11 +246,12 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticOperand for ExtOperand<F, EF> {
         t: Option<(usize, &[usize])>,
         s: usize,
         m: &mut BTreeMap<usize, usize>,
+        depth: usize,
     ) -> usize {
         match self {
             Self::BaseScalar(_) | Self::ExtensionScalar(_) => 0,
-            Self::Base(e) => shared_degree(e, t, s, m),
-            Self::Extension(e) => shared_degree(e, t, s, m),
+            Self::Base(e) => shared_degree(e, t, s, m, depth),
+            Self::Extension(e) => shared_degree(e, t, s, m, depth),
         }
     }
 }
@@ -620,16 +646,30 @@ where
     }
 }
 
+fn lower_shared_value<L: ArithmeticLeaf>(
+    e: &Arc<ArithmeticExpr<L>>,
+    memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpr<L::LegacyLeaf>>>,
+    base: &mut L::LowerBase,
+    depth: usize,
+) -> crate::SymbolicExpr<L::LegacyLeaf> {
+    if matches!(e.node(), ArithmeticNode::Leaf(_)) {
+        e.lower_inner(memo, base, depth)
+    } else {
+        (*lower_shared(e, memo, base, depth)).clone()
+    }
+}
+
 fn lower_shared<L: ArithmeticLeaf>(
     e: &Arc<ArithmeticExpr<L>>,
     memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpr<L::LegacyLeaf>>>,
     base: &mut L::LowerBase,
+    depth: usize,
 ) -> Arc<crate::SymbolicExpr<L::LegacyLeaf>> {
     let key = Arc::as_ptr(e) as usize;
     if let Some(v) = memo.get(&key) {
         return v.clone();
     }
-    let value = e.lower_inner(memo, base);
+    let value = e.lower_inner(memo, base, depth);
     memo.entry(key).or_insert_with(|| Arc::new(value)).clone()
 }
 

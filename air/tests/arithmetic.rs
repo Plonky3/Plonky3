@@ -1021,3 +1021,40 @@ fn seeded_random_programs_match_legacy_values_and_degree_bounds() {
         }
     }
 }
+
+#[test]
+fn zero_coefficient_degree_terms_remain_skipped_in_deep_fallback() {
+    let b = ArithmeticAirBuilder::<F, EF>::new(layout());
+    let x = E::from(b.main().values[0]);
+    let z = EE::from(b.permutation().values[0]);
+    let mut high_base = x.clone();
+    let mut high_ext = z.clone();
+    for _ in 0..(usize::BITS - 15) {
+        high_base = high_base.square();
+        high_ext = high_ext.square();
+    }
+    let mut base = E::mixed_dot_product(&[x.clone(), high_base], &[F::ONE, F::ZERO]);
+    let mut ext = <EE as Algebra<F>>::mixed_dot_product(&[z.clone(), high_ext], &[F::ONE, F::ZERO]);
+    for _ in 0..40 {
+        base += x.clone();
+        ext += z.clone();
+    }
+    // The discarded terms fit cached degree arithmetic but would overflow this
+    // polynomial-degree calculation if the iterative fallback visited them.
+    assert_eq!(base.poly_degree(1 << 16, &[]), (1 << 16) - 1);
+    assert_eq!(ext.poly_degree(1 << 16, &[]), (1 << 16) - 1);
+
+    let mut transition = b.is_transition();
+    for _ in 0..(usize::BITS - 15) {
+        transition = transition.square();
+    }
+    let mut base = E::mixed_dot_product(&[x.clone(), transition.clone()], &[F::ONE, F::ZERO]);
+    let mut ext =
+        <EE as Algebra<F>>::mixed_dot_product(&[z.clone(), transition.into()], &[F::ONE, F::ZERO]);
+    for _ in 0..40 {
+        base += x.clone();
+        ext += z.clone();
+    }
+    assert_eq!(base.degree_multiple_with_transition(1 << 16), 1);
+    assert_eq!(ext.degree_multiple_with_transition(1 << 16), 1);
+}
