@@ -11,6 +11,13 @@
 //! These bounds cover only the product reduction.
 //! The caller must also authenticate the returned leaf evaluations.
 
+#![no_std]
+
+extern crate alloc;
+
+#[cfg(test)]
+extern crate std;
+
 mod error;
 mod math;
 mod proof;
@@ -19,8 +26,9 @@ mod shape;
 mod transcript;
 
 pub use error::{ProductGkrError, ProductGkrShapeError};
-pub(crate) use proof::{PreparedProductGkr, ROUND_POLY_LEN};
-pub use proof::{ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof};
+pub use proof::{
+    PreparedProductGkr, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ROUND_POLY_LEN,
+};
 pub use shape::{ProductGkrRootShape, ProductGkrShape};
 
 #[cfg(test)]

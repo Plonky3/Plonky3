@@ -65,6 +65,7 @@ pub mod ldt;
 pub mod binary;
 pub mod bus;
 pub mod fri;
+pub mod gkr;
 pub mod whir;
 pub mod word;
 

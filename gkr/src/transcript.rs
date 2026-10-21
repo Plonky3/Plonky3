@@ -17,7 +17,7 @@ use p3_challenger::fs::{
 use p3_challenger::{CanObserve, CanSample};
 use p3_field::ExtensionField;
 
-use crate::product::{ProductGkrShape, ROUND_POLY_LEN};
+use crate::{ProductGkrShape, ROUND_POLY_LEN};
 
 /// Version byte bound into the protocol seed.
 const VERSION: u8 = 1;
@@ -128,8 +128,8 @@ impl ProductGkrShape {
         separator.instance(&(self.log_height() as u64).to_le_bytes());
         separator.instance(&(self.num_trees() as u64).to_le_bytes());
         separator.instance(&[match self.root_shape() {
-            crate::product::ProductGkrRootShape::Distinct => 0,
-            crate::product::ProductGkrRootShape::FirstTwoShared => 1,
+            crate::ProductGkrRootShape::Distinct => 0,
+            crate::ProductGkrRootShape::FirstTwoShared => 1,
         }]);
         separator
     }
