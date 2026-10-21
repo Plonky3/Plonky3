@@ -82,6 +82,7 @@ impl BoundaryPublic {
 /// Each variant is a statement about the declaration alone.
 /// No trace is involved.
 #[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BoundaryIoError {
     /// A declared cell names a column the AIR does not have.
     #[error("boundary-IO column {column} is out of range for main width {width}")]

@@ -10,6 +10,7 @@ use crate::{BatchOpening, BatchOpeningRef, HidingMmcs, Mmcs, MmcsProofGeometry};
 
 /// Errors encountered while verifying an extension-field MMCS opening.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ExtensionMmcsError<E> {
     /// A claimed extension width cannot be represented in base-field coordinates.
     #[error("extension width {width} for matrix {matrix} overflows in base-field coordinates")]

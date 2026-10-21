@@ -6,6 +6,7 @@ use crate::SumcheckError;
 
 /// A malformed sparse layout.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum JaggedLayoutError {
     /// The layout has no column to address.
     #[error("a jagged layout needs at least one column")]
@@ -54,6 +55,7 @@ pub enum JaggedLayoutError {
 
 /// A malformed prover input or rejected jagged proof.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum JaggedError {
     /// The row point does not match the public row bound.
     #[error("the row point has {actual} coordinates, expected {expected}")]
@@ -92,6 +94,7 @@ pub enum JaggedError {
 
 /// A trace a jagged geometry cannot read.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum JaggedIngestError {
     /// The producer supplies a different number of columns than the geometry has.
     #[error("the trace has {actual} columns, expected {expected}")]
@@ -149,6 +152,7 @@ pub enum JaggedIngestError {
 
 /// A sparse claim the dense commitment did not authenticate.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum JaggedOpeningError<E> {
     /// The sparse-to-dense reduction failed.
     #[error(transparent)]

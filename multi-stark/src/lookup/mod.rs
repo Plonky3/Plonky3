@@ -649,6 +649,7 @@ impl<EF: Field> ActiveLookupRuntime<EF> {
 
 /// Reasons the lookup phase rejects a proof.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LookupError {
     /// Distinct bus identifiers must remain distinct in the prime subfield.
     #[error("lookup bus identifiers wrap around the characteristic")]

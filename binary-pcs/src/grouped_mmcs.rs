@@ -172,6 +172,7 @@ pub struct GroupedCodewordProof<F, P> {
 
 /// A malformed grouped opening or a failure of the underlying commitment check.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum GroupedCodewordError<E> {
     /// This adapter accepts only one nonempty power-of-two-height column.
     #[error("expected one width-1 codeword of power-of-two length")]

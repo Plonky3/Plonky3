@@ -52,6 +52,7 @@ impl Display for GrindStage {
 /// `expected` is the value the verifier derived.
 /// `got` is what the proof carried.
 #[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProofShapeError {
     /// The PCS requires one batching witness exactly when batching grinding is enabled.
     #[error("batching proof-of-work witness presence: expected {expected}, got {got}")]
@@ -241,6 +242,7 @@ pub enum ProofShapeError {
 ///
 /// The source is a closure, so these report a caller bug rather than a malformed proof.
 #[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExternalSourceError {
     /// A batch takes one fiber source per instance.
     #[error("expected {expected} fiber sources, got {got}")]
@@ -267,6 +269,7 @@ pub enum ExternalSourceError {
 
 /// Errors returned by [`crate::verifier::verify_stir`].
 #[derive(Debug, Error, PartialEq)]
+#[non_exhaustive]
 pub enum StirError<MmcsError, InputError = ()> {
     /// The PCS opening-batching witness failed its configured difficulty.
     #[error("batching proof-of-work witness clears fewer than {bits} bits")]

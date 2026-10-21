@@ -230,6 +230,7 @@ impl ZerocheckShape {
 
 /// Reasons the transcript replay rejects a proof.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ZerocheckTranscriptError {
     /// A message carries a different number of values than described.
     #[error("{label} length mismatch: expected {expected}, got {actual}")]

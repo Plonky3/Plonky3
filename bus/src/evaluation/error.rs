@@ -2,6 +2,7 @@ use thiserror::Error;
 
 /// A planned expression references a value absent from its evaluation view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum BusEvaluationError {
     /// A main-trace expression reads a row other than the opened row.
     #[error("binary-bus main column {column} uses unsupported row offset {offset}")]

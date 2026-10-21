@@ -11,6 +11,7 @@ pub enum Segment {
 
 /// An error returned when a word position cannot be represented.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum IndexError {
     /// The position exceeds the compact 32-bit representation.
     #[error("word position {position} exceeds u32::MAX")]

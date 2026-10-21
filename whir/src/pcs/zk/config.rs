@@ -19,6 +19,7 @@ use crate::parameters::{
 
 /// Reasons ZK parameters cannot extend a WHIR configuration.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ZkConfigError {
     /// The underlying WHIR configuration is invalid.
     #[error(transparent)]

@@ -64,6 +64,7 @@ const FAMILIES: usize = 3;
 
 /// A gadget body whose interface does not describe its public segment.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum ComponentError {
     /// The declared interface and the body's public segment disagree.
     #[error(
@@ -89,6 +90,7 @@ pub enum ComponentError {
 
 /// A composition that cannot be laid out, or a lookup that names nothing.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum CompositionError {
     /// A composed segment exceeds the compact address space.
     #[error("the composed {segment:?} segment would hold {len} words, which exceeds u32::MAX")]

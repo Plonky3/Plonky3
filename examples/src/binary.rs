@@ -572,6 +572,7 @@ impl fmt::Display for BinaryProofReport {
 /// but neither commitment's error type depends on the Merkle arity or the hash, so the same
 /// variant covers every supported combination.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum BinaryProofError {
     /// The requested PCS parameters do not describe a usable binary-PCS schedule.
     #[error("binary PCS configuration failed: {0}")]
@@ -631,6 +632,7 @@ pub type BinaryWhirBudgetError = p3_binary_pcs::whir::BudgetError;
 
 /// The WHIR proving error projected through the two supported hash instantiations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum BooleanWhirProveError {
     #[error("Keccak-256: {0}")]
     Keccak(ProvingError<PcsProverError<BooleanWhirStarkConfig<Keccak256Hash>>>),
@@ -640,6 +642,7 @@ pub enum BooleanWhirProveError {
 
 /// The WHIR verification error projected through the two supported hash instantiations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum BooleanWhirVerifyError {
     #[error("Keccak-256: {0}")]
     Keccak(VerificationError<PcsError<BooleanWhirStarkConfig<Keccak256Hash>>>),

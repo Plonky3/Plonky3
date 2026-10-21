@@ -325,6 +325,7 @@ impl OpeningProtocol {
 
 /// Why a list of opening points does not fit an opening protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum OpeningPointMismatch {
     /// One point per opening batch is required.
     #[error("{actual} points against {expected} opening batches")]

@@ -120,6 +120,7 @@ impl PartialEq<BusName<'_>> for str {
 
 /// Reason one channel name left the alphabet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum BusNameError {
     /// The name holds no bytes.
     #[error("a bus name is not empty")]

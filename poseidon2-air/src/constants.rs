@@ -6,6 +6,7 @@ use rand::{Rng, RngExt};
 /// Error returned by [`RoundConstants::try_from_layers`] when the supplied constants
 /// don't match this AIR's `WIDTH`/`HALF_FULL_ROUNDS`/`PARTIAL_ROUNDS` shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum RoundConstantsShapeError {
     /// The number of initial full-round constant rows didn't match `HALF_FULL_ROUNDS`.
     #[error("expected {expected} initial full-round constant rows, got {got}")]

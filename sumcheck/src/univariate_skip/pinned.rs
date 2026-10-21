@@ -12,6 +12,7 @@ use super::lde::{CHUNK_BITS, TABLE_ROWS};
 
 /// Reasons a set of pinned coordinates cannot be used.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PinnedEqError {
     /// The pinned coordinates would need more equality weights than the field can keep independent.
     ///

@@ -268,6 +268,7 @@ impl<A> CubicAir for A where
 
 /// The proving error at this field pair, through the two supported hashes.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CubicProveError {
     /// Through Keccak-256.
     #[error("Keccak-256: {0}")]
@@ -279,6 +280,7 @@ pub enum CubicProveError {
 
 /// The verification error at this field pair, through the two supported hashes.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CubicVerifyError {
     /// Through Keccak-256.
     #[error("Keccak-256: {0}")]

@@ -63,6 +63,7 @@ pub enum OperandRole {
 
 /// An invalid word-level constraint system.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum SystemError {
     /// A segment length exceeds the compact address space.
     #[error("{segment:?} segment length {len} exceeds u32::MAX")]
@@ -155,6 +156,7 @@ impl<'a, W: Word> ConstraintTerm<'a, W> {
 
 /// A failed scalar reference verification.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum VerificationError {
     /// The public input length differs from the declared shape.
     #[error("expected {expected} public words, received {actual}")]

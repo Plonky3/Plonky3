@@ -74,6 +74,7 @@ impl ShiftKind {
 
 /// An invalid shift description.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum ShiftError {
     /// A lane operation was requested for a word without two 32-bit lanes.
     #[error("32-bit lane shifts require a 64-bit word")]
@@ -189,6 +190,7 @@ impl<W: Word> Shift<W> {
 
 /// An invalid two-shift representation.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum ShiftSequenceError {
     /// The pair is equivalent to one shift.
     #[error("the shift pair has a canonical single-shift representation")]

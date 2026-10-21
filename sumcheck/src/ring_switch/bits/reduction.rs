@@ -1411,6 +1411,7 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchBatch<'
 
 /// Reasons a bit-alphabet reduction cannot be set up or run.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BitRingSwitchError {
     /// The evaluation point does not cover the coordinates one element absorbs.
     #[error("the evaluation point names {actual} variables, at least {needed} are needed")]

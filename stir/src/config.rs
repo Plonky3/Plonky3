@@ -316,6 +316,7 @@ impl core::fmt::Display for Stage {
 /// LDE-height bucket) can reject cleanly via [`StirConfig::try_new`] instead of aborting the
 /// process.
 #[derive(Clone, Copy, Debug, PartialEq, Error)]
+#[non_exhaustive]
 pub enum StirConfigError {
     /// A quotient batch claims a native degree larger than the bucket's degree.
     #[error(

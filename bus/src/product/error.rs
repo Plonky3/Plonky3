@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Invalid dimensions rejected before a transcript is created.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ProductGkrShapeError {
     /// A batch without trees has no statement.
     #[error("product GKR received {num_trees} trees, minimum is {minimum}")]
@@ -41,6 +42,7 @@ pub enum ProductGkrShapeError {
 
 /// Invalid inputs or proofs rejected by the product reduction.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ProductGkrError {
     /// Degree-five interpolation needs six distinct challenge-field elements.
     #[error("product GKR requires six distinct challenge-field interpolation nodes")]

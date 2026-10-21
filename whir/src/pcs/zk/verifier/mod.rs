@@ -34,6 +34,7 @@ use crate::transcript::zk::{ZkWhirShape, ZkWhirVerifierTranscript};
 
 /// Failure modes of the HVZK-WHIR verifier.
 #[derive(Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ZkVerifierError {
     /// The initial alpha batch cannot reach the requested security level.
     #[error(

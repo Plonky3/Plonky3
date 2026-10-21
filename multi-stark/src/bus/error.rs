@@ -3,6 +3,7 @@ use thiserror::Error;
 
 /// Failure to plan, evaluate, or authenticate a bus statement.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum BusBindingError {
     /// AIR metadata and public trace heights describe different instance counts.
     #[error("binary-bus received {airs} AIRs but {heights} trace heights")]

@@ -8,6 +8,7 @@ use crate::{BusNameError, ReadOnlyMemoryError};
 
 /// Invalid handles or plans for the timestamped read-write memory.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum TimestampedMemoryError {
     /// A channel name leaves the alphabet the bus separator binds.
     #[error("timestamped memory channel {name} is not a well-formed name: {error}")]

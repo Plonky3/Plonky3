@@ -735,6 +735,7 @@ where
 
 /// Reasons the opening reduction's transcript replay rejects a proof.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SkipOpeningTranscriptError {
     /// The proof carries a different number of claims than described.
     ///
@@ -750,6 +751,7 @@ pub enum SkipOpeningTranscriptError {
 
 /// Reasons the transcript replay rejects a proof.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UnivariateSkipTranscriptError {
     /// The round message carries a different number of values than described.
     #[error("round message length mismatch: expected {expected}, got {actual}")]

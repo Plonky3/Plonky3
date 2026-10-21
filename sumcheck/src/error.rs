@@ -2,6 +2,7 @@ use thiserror::Error;
 
 /// Errors from sumcheck protocol verification.
 #[derive(Error, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SumcheckError {
     /// The proof contains a different number of rounds than expected.
     #[error("Sumcheck round count mismatch: expected {expected}, got {actual}")]

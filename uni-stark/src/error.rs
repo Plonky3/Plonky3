@@ -10,6 +10,7 @@ use crate::StarkTranscriptFailure;
 
 /// A recoverable PCS configuration or budget failure during proof generation.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ProvingError<E> {
     /// The backend error, annotated with the failing proving phase.
     #[error("PCS {phase} failed: {source:?}")]
@@ -153,6 +154,7 @@ pub enum InvalidProofShapeError {
 
 /// Top-level verification error.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum VerificationError<PcsErr>
 where
     PcsErr: core::fmt::Debug,

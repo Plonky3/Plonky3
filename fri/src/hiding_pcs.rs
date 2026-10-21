@@ -28,6 +28,7 @@ use crate::{BatchMultiOpening, FriParameters, FriProof, FriProverError, TwoAdicF
 
 /// A hiding commitment cannot safely support the requested disclosure budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum HidingFriProverError {
     /// The inner FRI parameters cannot fold every committed input.
     #[error(transparent)]

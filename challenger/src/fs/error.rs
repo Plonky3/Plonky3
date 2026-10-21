@@ -14,6 +14,7 @@ use crate::fs::pattern::Interaction;
 /// programming bug, not malformed input, so it panics with a diff instead of
 /// landing here.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TranscriptError {
     /// An end marker was found with no matching opener in the sequence.
     #[error(transparent)]

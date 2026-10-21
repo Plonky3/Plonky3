@@ -4,6 +4,7 @@ use crate::{BusDirection, ProductGkrError};
 
 /// Failure to construct or verify a planned bus reduction.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum BusArgumentError {
     /// One materialized side has a statement-inconsistent leaf count.
     #[error("binary-bus {direction:?} leaf count is {actual}, expected {expected}")]

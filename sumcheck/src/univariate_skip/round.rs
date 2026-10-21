@@ -23,6 +23,7 @@ pub struct MessageLenMismatch {
 
 /// Reasons a skip round cannot be set up.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SkipRoundError {
     /// The domain the round would run over is not realisable.
     #[error(transparent)]

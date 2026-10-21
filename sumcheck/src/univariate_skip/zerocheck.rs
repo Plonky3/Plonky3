@@ -104,6 +104,7 @@ impl<EF: Field> ZerocheckClaim<EF> {
 
 /// Reasons a binary zerocheck rejects.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ZerocheckError {
     /// The transcript replay refused the proof's shape.
     #[error(transparent)]

@@ -7,6 +7,7 @@ use thiserror::Error;
 
 /// Reasons a skip domain cannot be built.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SkipDomainError {
     /// The extension is not strictly larger than the subspace it extends.
     ///

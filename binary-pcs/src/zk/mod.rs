@@ -68,6 +68,7 @@ pub use transcript::{Challenger, challenger};
 
 /// Errors from the reference protocol.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ZkError {
     #[error("invalid configuration: {0}")]
     InvalidConfig(&'static str),
