@@ -10,7 +10,7 @@ use p3_keccak::Keccak256Hash;
 use rand::{RngExt, SeedableRng};
 use rand_xoshiro::Xoroshiro128Plus;
 
-use crate::product::{
+use crate::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrProof, ProductGkrRootShape, ProductGkrShape,
 };
 

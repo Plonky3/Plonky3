@@ -451,7 +451,7 @@ mod tests {
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
-    use crate::product::math::{fold_dense, sum_adjacent};
+    use crate::math::{fold_dense, sum_adjacent};
 
     type BabyBearQuartic = BinomialExtensionField<BabyBear, 4>;
 
