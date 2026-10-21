@@ -7,7 +7,8 @@ use core::ops;
 use BinaryOperation::{Add, Mul, Sub};
 use p3_field::{Dup, Field, PrimeCharacteristicRing};
 
-/// Read-only arithmetic structure. Mixed dots retain the coefficient operand class.
+/// Read-only arithmetic structure.
+/// Mixed dots retain the coefficient operand class.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum ArithmeticNode<L, O> {
@@ -36,7 +37,8 @@ pub enum ArithmeticNode<L, O> {
 pub trait ArithmeticLeaf: sealed::Leaf + Clone + core::fmt::Debug {
     type Value: Field;
     type LegacyLeaf: crate::SymLeaf;
-    fn lower_leaf(&self) -> Self::LegacyLeaf;
+    type LowerBase: Default;
+    fn lower_leaf(&self, base: &mut Self::LowerBase) -> Self::LegacyLeaf;
     type Operand: ArithmeticOperand<Leaf = Self>;
     const ZERO: Self;
     const ONE: Self;
@@ -54,10 +56,15 @@ pub trait ArithmeticOperand:
 {
     type Leaf: ArithmeticLeaf<Operand = Self>;
     fn expression(self) -> ArithmeticExpr<Self::Leaf>;
+    fn shared_expression(&self) -> Option<&Arc<ArithmeticExpr<Self::Leaf>>>;
     fn lower(
         &self,
-        memo: &mut BTreeMap<usize, crate::SymbolicExpr<<Self::Leaf as ArithmeticLeaf>::LegacyLeaf>>,
-    ) -> crate::SymbolicExpr<<Self::Leaf as ArithmeticLeaf>::LegacyLeaf>;
+        memo: &mut BTreeMap<
+            usize,
+            Arc<crate::SymbolicExpr<<Self::Leaf as ArithmeticLeaf>::LegacyLeaf>>,
+        >,
+        base: &mut <Self::Leaf as ArithmeticLeaf>::LowerBase,
+    ) -> Arc<crate::SymbolicExpr<<Self::Leaf as ArithmeticLeaf>::LegacyLeaf>>;
     fn from_expression(value: ArithmeticExpr<Self::Leaf>) -> Self;
     fn constant(&self) -> Option<<Self::Leaf as ArithmeticLeaf>::Value>;
     fn degree(
@@ -70,8 +77,8 @@ pub trait ArithmeticOperand:
 
 /// Immutable arithmetic expression with conservative cached degree.
 ///
-/// Constructors are private, so cached metadata cannot be invalidated. Degree
-/// arithmetic panics on overflow instead of silently underestimating a bound.
+/// Constructors are private, so cached metadata cannot be invalidated.
+/// Degree arithmetic panics on overflow instead of silently underestimating a bound.
 #[derive(Clone, Debug)]
 pub struct ArithmeticExpr<L: ArithmeticLeaf> {
     node: ArithmeticNode<L, L::Operand>,
@@ -80,6 +87,56 @@ pub struct ArithmeticExpr<L: ArithmeticLeaf> {
 
 pub(crate) const fn add_degree(a: usize, b: usize) -> usize {
     a.checked_add(b).expect("arithmetic degree overflow")
+}
+
+// Complete children before evaluating their parent, keeping traversal frames on the heap.
+// Keys refer to stable expressions borrowed from the source graph for the entire walk.
+pub(super) fn evaluate_graph<'a, L: ArithmeticLeaf, V: Clone>(
+    root: &'a ArithmeticExpr<L>,
+    memo: &mut BTreeMap<usize, V>,
+    mut evaluate: impl FnMut(&ArithmeticExpr<L>, &mut BTreeMap<usize, V>) -> V,
+) -> V {
+    let root_key = core::ptr::from_ref(root) as usize;
+    if let Some(value) = memo.get(&root_key) {
+        return value.clone();
+    }
+    if matches!(root.node(), ArithmeticNode::Leaf(_)) {
+        return evaluate(root, memo);
+    }
+    let mut pending = Vec::new();
+    pending.push((root, false));
+    while let Some((expression, ready)) = pending.pop() {
+        let key = core::ptr::from_ref(expression) as usize;
+        if ready {
+            let value = evaluate(expression, memo);
+            memo.insert(key, value);
+        } else if !memo.contains_key(&key) {
+            pending.push((expression, true));
+            let mut push = |operand: &'a L::Operand| {
+                if let Some(child) = operand.shared_expression() {
+                    pending.push((child.as_ref(), false));
+                }
+            };
+            match expression.node() {
+                ArithmeticNode::Leaf(_) => {}
+                ArithmeticNode::Add(a, b)
+                | ArithmeticNode::Sub(a, b)
+                | ArithmeticNode::Mul(a, b) => {
+                    push(b);
+                    push(a);
+                }
+                ArithmeticNode::Neg(a) | ArithmeticNode::Square(a) => push(a),
+                ArithmeticNode::Sum(a) => a.iter().rev().for_each(push),
+                ArithmeticNode::Dot(p) | ArithmeticNode::MixedDot(p) => {
+                    for (a, b) in p.iter().rev() {
+                        push(b);
+                        push(a);
+                    }
+                }
+            }
+        }
+    }
+    memo[&root_key].clone()
 }
 
 impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
@@ -106,6 +163,17 @@ impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
         self.degree_inner(Some((trace_len, periodic_periods)), 0, &mut BTreeMap::new())
     }
     pub(crate) fn degree_inner(
+        &self,
+        trace: Option<(usize, &[usize])>,
+        transition: usize,
+        memo: &mut BTreeMap<usize, usize>,
+    ) -> usize {
+        if trace.is_none() && transition == 0 {
+            return self.degree_node(trace, transition, memo);
+        }
+        evaluate_graph(self, memo, |e, memo| e.degree_node(trace, transition, memo))
+    }
+    fn degree_node(
         &self,
         trace: Option<(usize, &[usize])>,
         transition: usize,
@@ -318,34 +386,92 @@ impl<L: ArithmeticLeaf, T: Into<L::Operand>> Product<T> for ArithmeticExpr<L> {
 impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
     /// Lower to primitive symbolic operations, preserving arithmetic values.
     ///
-    /// Sum grouping and sharing can differ from legacy capture; this is not a
-    /// serialization or protocol-commitment compatibility guarantee.
+    /// Sum grouping and sharing can differ from legacy capture; this is not a serialization or protocol-commitment compatibility guarantee.
+    /// Traversal uses an explicit stack, but destroying a deeply nested source or result graph still uses recursive `Arc` drops.
     pub fn lower(&self) -> crate::SymbolicExpr<L::LegacyLeaf> {
-        self.lower_inner(&mut BTreeMap::new())
+        self.lower_inner(&mut BTreeMap::new(), &mut L::LowerBase::default())
     }
     pub(crate) fn lower_inner(
         &self,
-        memo: &mut BTreeMap<usize, crate::SymbolicExpr<L::LegacyLeaf>>,
+        memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpr<L::LegacyLeaf>>>,
+        base: &mut L::LowerBase,
+    ) -> crate::SymbolicExpr<L::LegacyLeaf> {
+        if matches!(self.node, ArithmeticNode::Leaf(_)) {
+            return self.lower_node(memo, base);
+        }
+        (*evaluate_graph(self, memo, |e, memo| Arc::new(e.lower_node(memo, base)))).clone()
+    }
+    fn lower_node(
+        &self,
+        memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpr<L::LegacyLeaf>>>,
+        base: &mut L::LowerBase,
     ) -> crate::SymbolicExpr<L::LegacyLeaf> {
         use crate::SymbolicExpr as S;
+        let constant = |v: &crate::SymbolicExpr<L::LegacyLeaf>| match v {
+            S::Leaf(l) => crate::SymLeaf::as_const(l).copied(),
+            _ => None,
+        };
         match &self.node {
-            ArithmeticNode::Leaf(l) => S::Leaf(l.lower_leaf()),
-            ArithmeticNode::Add(a, b) => a.lower(memo) + b.lower(memo),
-            ArithmeticNode::Sub(a, b) => a.lower(memo) - b.lower(memo),
-            ArithmeticNode::Mul(a, b) => a.lower(memo) * b.lower(memo),
-            ArithmeticNode::Neg(a) => -a.lower(memo),
-            ArithmeticNode::Square(a) => {
-                let v = Arc::new(a.lower(memo));
-                S::Mul {
-                    x: v.clone(),
-                    y: v,
-                    degree_multiple: self.degree,
+            ArithmeticNode::Leaf(l) => S::Leaf(l.lower_leaf(base)),
+            ArithmeticNode::Add(a, b) | ArithmeticNode::Sub(a, b) | ArithmeticNode::Mul(a, b) => {
+                let x = a.lower(memo, base);
+                let y = b.lower(memo, base);
+                // Keep legacy constant folding and identities without rewrapping shared children.
+                let special = |v: &crate::SymbolicExpr<L::LegacyLeaf>| {
+                    constant(v).is_some_and(|c| c.is_zero() || c.is_one())
+                };
+                if special(&x) || special(&y) || (constant(&x).is_some() && constant(&y).is_some())
+                {
+                    return match self.node {
+                        ArithmeticNode::Add(..) => (*x).clone() + (*y).clone(),
+                        ArithmeticNode::Sub(..) => (*x).clone() - (*y).clone(),
+                        _ => (*x).clone() * (*y).clone(),
+                    };
+                }
+                let degree_multiple = if matches!(self.node, ArithmeticNode::Mul(..)) {
+                    add_degree(x.degree_multiple(), y.degree_multiple())
+                } else {
+                    x.degree_multiple().max(y.degree_multiple())
+                };
+                match self.node {
+                    ArithmeticNode::Add(..) => S::Add {
+                        x,
+                        y,
+                        degree_multiple,
+                    },
+                    ArithmeticNode::Sub(..) => S::Sub {
+                        x,
+                        y,
+                        degree_multiple,
+                    },
+                    _ => S::Mul {
+                        x,
+                        y,
+                        degree_multiple,
+                    },
                 }
             }
-            ArithmeticNode::Sum(a) => a.iter().map(|a| a.lower(memo)).sum(),
-            ArithmeticNode::Dot(a) | ArithmeticNode::MixedDot(a) => {
-                a.iter().map(|(a, b)| a.lower(memo) * b.lower(memo)).sum()
+            ArithmeticNode::Neg(a) => {
+                let x = a.lower(memo, base);
+                if constant(&x).is_some() {
+                    return -(*x).clone();
+                }
+                let degree_multiple = x.degree_multiple();
+                S::Neg { x, degree_multiple }
             }
+            ArithmeticNode::Square(a) => {
+                let v = a.lower(memo, base);
+                S::Mul {
+                    degree_multiple: self.degree,
+                    x: v.clone(),
+                    y: v,
+                }
+            }
+            ArithmeticNode::Sum(a) => a.iter().map(|a| (*a.lower(memo, base)).clone()).sum(),
+            ArithmeticNode::Dot(a) | ArithmeticNode::MixedDot(a) => a
+                .iter()
+                .map(|(a, b)| (*a.lower(memo, base)).clone() * (*b.lower(memo, base)).clone())
+                .sum(),
         }
     }
 }

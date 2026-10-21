@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 
 use super::expression::BinaryOperation::{self, Add, Mul, Sub};
+use super::expression::evaluate_graph;
 use super::{
     ArithmeticExpression, ArithmeticExpressionExt, ArithmeticExtLeaf, ArithmeticNode, BaseOperand,
     ExtOperand,
@@ -139,14 +140,23 @@ fn base_operand<F: Field, AB: AirBuilder<F = F>>(
 impl<F: Field> ArithmeticExpression<F> {
     /// Evaluate using the target builder's arithmetic hooks and scalar operations.
     ///
-    /// Sum/dot arities 0 through 8, 16, 32 and 64 dispatch to exact const
-    /// specializations. Other arities use generic arithmetic; mixed dots use
-    /// the target algebra's batched helper. Public nodes allow native emitters
-    /// to recover exact const arities for all sizes. Shared operands are memoized.
+    /// Sum/dot arities 0 through 8, 16, 32 and 64 dispatch to exact const specializations.
+    /// Other arities use generic arithmetic; scalar mixed dots use the target algebra's batched helper.
+    /// Expression coefficients replay through same-type `dot_product`.
+    /// Public nodes allow native emitters to recover exact const arities for all sizes.
+    /// Shared operands are memoized and traversal uses an explicit stack.
+    /// Destroying a deeply nested source or result graph still uses recursive `Arc` drops.
     pub fn resolve<AB: AirBuilder<F = F>>(&self, builder: &AB) -> AB::Expr {
         self.resolve_inner(builder, &mut BTreeMap::new())
     }
     fn resolve_inner<AB: AirBuilder<F = F>>(
+        &self,
+        b: &AB,
+        memo: &mut BTreeMap<usize, AB::Expr>,
+    ) -> AB::Expr {
+        evaluate_graph(self, memo, |e, memo| e.resolve_node(b, memo))
+    }
+    fn resolve_node<AB: AirBuilder<F = F>>(
         &self,
         b: &AB,
         memo: &mut BTreeMap<usize, AB::Expr>,
@@ -333,7 +343,9 @@ where
 }
 impl<F: Field, EF: ExtensionField<F>> ArithmeticExpressionExt<F, EF> {
     /// Evaluate with base/scalar arithmetic retained until extension arithmetic is needed.
-    /// Uses the same bounded hook dispatch as [`ArithmeticExpression::resolve`].
+    /// Uses the same bounded hook dispatch and explicit traversal stack as [`ArithmeticExpression::resolve`].
+    /// Base expression coefficients use the target's base mixed hook; extension expression coefficients replay through same-type `dot_product`.
+    /// Destroying a deeply nested source or result graph still uses recursive `Arc` drops.
     pub fn resolve<AB>(&self, builder: &AB) -> AB::ExprEF
     where
         AB: PermutationAirBuilder<F = F, EF = EF>,
@@ -342,6 +354,18 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticExpressionExt<F, EF> {
         self.resolve_inner(builder, &mut BTreeMap::new(), &mut BTreeMap::new())
     }
     fn resolve_inner<AB>(
+        &self,
+        b: &AB,
+        base: &mut BTreeMap<usize, AB::Expr>,
+        ext: &mut BTreeMap<usize, AB::ExprEF>,
+    ) -> AB::ExprEF
+    where
+        AB: PermutationAirBuilder<F = F, EF = EF>,
+        AB::ExprEF: Algebra<F>,
+    {
+        evaluate_graph(self, ext, |e, ext| e.resolve_node(b, base, ext))
+    }
+    fn resolve_node<AB>(
         &self,
         b: &AB,
         base: &mut BTreeMap<usize, AB::Expr>,

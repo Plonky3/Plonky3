@@ -1,6 +1,16 @@
-use p3_air::{ArithmeticExpression, ArithmeticNode, ArithmeticVariable, BaseEntry, BaseOperand};
+use p3_air::arithmetic::{
+    ArithmeticExpression, ArithmeticExpressionExt, ArithmeticExtLeaf, ArithmeticNode,
+    ArithmeticVariable, ArithmeticVariableExt, BaseOperand, ExtOperand,
+};
+use p3_air::{
+    AirBuilder, AirLayout, ArithmeticAirBuilder, BaseEntry, ExtEntry, ExtLeaf, ExtensionBuilder,
+    PermutationAirBuilder, SymbolicExpr, SymbolicExpressionExt, WindowAccess,
+};
 use p3_baby_bear::BabyBear as F;
-use p3_field::{Algebra, PrimeCharacteristicRing};
+use p3_field::extension::BinomialExtensionField;
+use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_mersenne_31::{Mersenne31, QM31};
 
 #[test]
 fn captures_square_sum_dot_and_scalar_coefficients() {
@@ -51,14 +61,6 @@ fn replay_calls_square_on_target_expression() {
     ));
 }
 
-use p3_air::{
-    AirBuilder, AirLayout, ArithmeticAirBuilder, ArithmeticExpressionExt, ArithmeticExtLeaf,
-    ExtEntry, ExtLeaf, ExtOperand, ExtensionBuilder, PermutationAirBuilder, SymbolicExpr,
-    SymbolicExpressionExt,
-};
-use p3_field::BasedVectorSpace;
-use p3_field::extension::BinomialExtensionField;
-use p3_matrix::dense::RowMajorMatrix;
 type EF = BinomialExtensionField<F, 4>;
 type E = ArithmeticExpression<F>;
 type EE = ArithmeticExpressionExt<F, EF>;
@@ -600,7 +602,7 @@ fn ordinary_variable_operators_keep_operand_classes() {
         (x * F::TWO).node(),
         ArithmeticNode::Mul(_, BaseOperand::Scalar(_))
     ));
-    let z = p3_air::ArithmeticVariableExt::<F, EF>::new(ExtEntry::Permutation { offset: 0 }, 0);
+    let z = ArithmeticVariableExt::<F, EF>::new(ExtEntry::Permutation { offset: 0 }, 0);
     assert!(matches!((z + z).node(), ArithmeticNode::Add(_, _)));
     assert!(matches!(
         (z * F::TWO).node(),
@@ -630,10 +632,9 @@ fn same_type_dot_runtime_fallbacks_are_exact() {
 }
 #[test]
 fn complex_tower_constants_and_mixed_coefficients_are_supported() {
-    use p3_mersenne_31::{Mersenne31, QM31};
     type Tower = ArithmeticExpressionExt<Mersenne31, QM31>;
     let c = QM31::from_basis_coefficients_fn(|i| Mersenne31::new(i as u32 + 1));
-    let z = p3_air::ArithmeticVariableExt::<Mersenne31, QM31>::new(ExtEntry::Challenge, 0);
+    let z = ArithmeticVariableExt::<Mersenne31, QM31>::new(ExtEntry::Challenge, 0);
     let e = <Tower as Algebra<QM31>>::mixed_dot_product(&[z.into()], &[c]);
     assert!(
         matches!(e.node(),ArithmeticNode::MixedDot(p) if matches!(p[0].1,ExtOperand::ExtensionScalar(v) if v==c))
@@ -641,4 +642,382 @@ fn complex_tower_constants_and_mixed_coefficients_are_supported() {
     assert!(
         matches!(Tower::from(c).node(),ArithmeticNode::Leaf(ArithmeticExtLeaf::Constant(v)) if *v==c)
     );
+}
+
+#[test]
+fn lowering_reuses_shared_base_graph_across_extension_references() {
+    struct SharedBaseAir;
+    impl p3_air::BaseAir<F> for SharedBaseAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+    impl<AB> p3_air::Air<AB> for SharedBaseAir
+    where
+        AB: PermutationAirBuilder<F = F, EF = EF>,
+        AB::ExprEF: Algebra<F>,
+    {
+        fn eval(&self, b: &mut AB) {
+            let x = b.main().current(0).unwrap();
+            let y = b.main().next(0).unwrap();
+            let z = b.permutation().current(0).unwrap();
+            let mut base = AB::Expr::from(x);
+            for _ in 0..32 {
+                base = base * y + x;
+            }
+            let mut ext: AB::ExprEF = z.into();
+            for _ in 0..64 {
+                // Exercise both a base operand and a lifted base leaf.
+                let lifted: AB::ExprEF = base.clone().into();
+                ext = ext * base.clone() + lifted;
+            }
+            b.assert_zero_ext(ext);
+        }
+    }
+    fn base_nodes(e: &SymbolicExpressionExt<F, EF>) -> usize {
+        fn visit<L>(
+            e: &SymbolicExpr<L>,
+            seen: &mut std::collections::BTreeSet<usize>,
+            leaf: &mut impl FnMut(&L),
+        ) where
+            L: p3_air::SymLeaf,
+        {
+            match e {
+                SymbolicExpr::Leaf(l) => leaf(l),
+                SymbolicExpr::Add { x, y, .. }
+                | SymbolicExpr::Sub { x, y, .. }
+                | SymbolicExpr::Mul { x, y, .. } => {
+                    for child in [x, y] {
+                        if seen.insert(std::sync::Arc::as_ptr(child) as usize) {
+                            visit(child, seen, leaf);
+                        }
+                    }
+                }
+                SymbolicExpr::Neg { x, .. } => {
+                    if seen.insert(std::sync::Arc::as_ptr(x) as usize) {
+                        visit(x, seen, leaf);
+                    }
+                }
+            }
+        }
+        let mut base = std::collections::BTreeSet::new();
+        visit(e, &mut std::collections::BTreeSet::new(), &mut |leaf| {
+            if let ExtLeaf::Base(e) = leaf {
+                visit(e, &mut base, &mut |_| {});
+            }
+        });
+        base.len()
+    }
+    let l = AirLayout {
+        main_width: 1,
+        permutation_width: 1,
+        ..Default::default()
+    };
+    let arithmetic =
+        p3_air::capture_arithmetic::<F, EF>(l, |b| p3_air::Air::eval(&SharedBaseAir, b));
+    let legacy = p3_air::get_symbolic_constraints_extension::<F, EF, _>(&SharedBaseAir, l);
+    let lowered_nodes = base_nodes(&arithmetic.extension[0].lower());
+    let legacy_nodes = base_nodes(&legacy[0]);
+    assert!(
+        lowered_nodes <= legacy_nodes,
+        "lowered {lowered_nodes}, legacy {legacy_nodes}"
+    );
+}
+
+#[test]
+fn deep_horner_traversals_fit_on_one_mib_stack() {
+    let graphs = std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            let b = ArithmeticAirBuilder::<F, EF>::new(layout());
+            let x = b.main().values[0];
+            let y = b.main().values[1];
+            let z = b.permutation().values[0];
+            let mut base = E::from(x);
+            let mut ext = EE::from(z);
+            let concrete = Concrete::new(3);
+            let mut base_value = concrete.main.values[0];
+            let mut ext_value = concrete.perm.values[0];
+            for _ in 0..3000 {
+                base = base * y + x;
+                ext = ext * y + z;
+                base_value = base_value * concrete.main.values[1] + concrete.main.values[0];
+                ext_value = ext_value * concrete.main.values[1] + concrete.perm.values[0];
+            }
+            assert_eq!(base.resolve(&concrete), base_value);
+            assert_eq!(ext.resolve(&concrete), ext_value);
+            assert_eq!(base.degree_multiple_with_transition(1), 3001);
+            assert_eq!(ext.degree_multiple_with_transition(1), 3001);
+            assert_eq!(base.poly_degree(8, &[2]), 3001 * 7);
+            assert_eq!(ext.poly_degree(8, &[2]), 3001 * 7);
+            let lowered_base = base.lower();
+            let lowered_ext = ext.lower();
+            assert_eq!(lowered_base.degree_multiple(), 3001);
+            assert_eq!(lowered_ext.degree_multiple(), 3001);
+            (base, ext, lowered_base, lowered_ext)
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    // Arc graph destruction is recursive independently of the traversal APIs.
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || drop(graphs))
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+// Reusing a seeded program across three builders gives independent field-value
+// expectations and legacy degree bounds for every arithmetic operand domain.
+fn random_program<AB>(b: &AB, mut state: u64) -> (AB::Expr, AB::ExprEF)
+where
+    AB: PermutationAirBuilder<F = F, EF = EF>,
+    AB::ExprEF: Algebra<F> + Algebra<AB::Var> + Algebra<AB::VarEF>,
+{
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let x = b.main().current(0).unwrap();
+    let y = b.main().next(0).unwrap();
+    let z = b.permutation().current(0).unwrap();
+    let base = vec![
+        x.into(),
+        y.into(),
+        b.preprocessed().current(0).unwrap().into(),
+        b.preprocessed().next(0).unwrap().into(),
+        b.public_values()[0].into(),
+        b.periodic_values()[0].into(),
+        b.is_first_row(),
+        b.is_last_row(),
+        b.is_transition(),
+        AB::Expr::ZERO,
+        AB::Expr::ONE,
+    ];
+    let extension: Vec<AB::ExprEF> = vec![
+        z.into(),
+        b.permutation().next(0).unwrap().into(),
+        b.permutation_randomness()[0].into(),
+        b.permutation_values()[0].clone().into(),
+        EF::from_basis_coefficients_fn(|i| F::from_usize(i + 1)).into(),
+    ];
+    let mut a = base[0].clone();
+    let mut e = extension[0].clone();
+    for step in 0..60 {
+        let rhs = &base[next() as usize % base.len()];
+        let erhs = &extension[next() as usize % extension.len()];
+        let c = F::from_usize(next() as usize % 5);
+        let ec = EF::from_basis_coefficients_fn(|i| c + F::from_usize(i));
+        // Include all three runtime fallbacks even for an unlucky random seed.
+        let op = if step >= 57 {
+            12 + step - 57
+        } else {
+            next() as usize % 15
+        };
+        match op {
+            0 => {
+                a += rhs.clone();
+                e += erhs.clone();
+            }
+            1 => {
+                a -= rhs.clone();
+                e -= erhs.clone();
+            }
+            2 => {
+                a *= rhs.clone();
+                e *= erhs.clone();
+            }
+            3 => {
+                a = -a;
+                e = -e;
+            }
+            4 => {
+                a = a.square();
+                e = e.square();
+            }
+            5 => {
+                a += c;
+                e += c;
+            }
+            6 => {
+                a *= c;
+                e *= ec;
+            }
+            7 => {
+                a += x;
+                e *= rhs.clone();
+            }
+            8 => {
+                a = a * y - c;
+                e += AB::ExprEF::from(ec);
+            }
+            9 => {
+                a = <AB::Expr as Algebra<AB::Var>>::mixed_dot_product(&[a], &[x]);
+                e = <AB::ExprEF as Algebra<AB::Var>>::mixed_dot_product(&[e], &[y]);
+            }
+            10 => {
+                a = <AB::Expr as Algebra<F>>::mixed_dot_product(&[a], &[c]);
+                e = <AB::ExprEF as Algebra<AB::VarEF>>::mixed_dot_product(&[e], &[z]);
+            }
+            11 => {
+                a += rhs.clone();
+                let lifted: AB::ExprEF = a.clone().into();
+                e -= lifted;
+            }
+            _ => {
+                fn batch<const N: usize, AB>(
+                    a: &AB::Expr,
+                    e: &AB::ExprEF,
+                    rhs: &AB::Expr,
+                    erhs: &AB::ExprEF,
+                    c: F,
+                    ec: EF,
+                    kind: usize,
+                ) -> (AB::Expr, AB::ExprEF)
+                where
+                    AB: PermutationAirBuilder<F = F, EF = EF>,
+                    AB::ExprEF: Algebra<F>,
+                {
+                    let aa = core::array::from_fn::<_, N, _>(|i| {
+                        if i == 0 { a.clone() } else { rhs.clone() }
+                    });
+                    let ee = core::array::from_fn::<_, N, _>(|i| {
+                        if i == 0 { e.clone() } else { erhs.clone() }
+                    });
+                    let bb = core::array::from_fn::<_, N, _>(|_| rhs.clone());
+                    let eb = core::array::from_fn::<_, N, _>(|_| erhs.clone());
+                    match kind {
+                        0 => (
+                            AB::Expr::sum_array::<N>(&aa),
+                            AB::ExprEF::sum_array::<N>(&ee),
+                        ),
+                        1 => (
+                            AB::Expr::dot_product(&aa, &bb),
+                            AB::ExprEF::dot_product(&ee, &eb),
+                        ),
+                        2 => (
+                            <AB::Expr as Algebra<F>>::mixed_dot_product(&aa, &[c; N]),
+                            <AB::ExprEF as Algebra<F>>::mixed_dot_product(&ee, &[c; N]),
+                        ),
+                        3 => (
+                            <AB::Expr as Algebra<F>>::mixed_dot_product(&aa, &[c; N]),
+                            <AB::ExprEF as Algebra<EF>>::mixed_dot_product(&ee, &[ec; N]),
+                        ),
+                        _ => (
+                            AB::Expr::dot_product(&aa, &bb),
+                            <AB::ExprEF as Algebra<AB::Expr>>::mixed_dot_product(&ee, &bb),
+                        ),
+                    }
+                }
+                let kind = next() as usize % 5;
+                (a, e) = match op {
+                    12 => batch::<9, AB>(&a, &e, rhs, erhs, c, ec, kind),
+                    13 => batch::<17, AB>(&a, &e, rhs, erhs, c, ec, kind),
+                    _ => batch::<33, AB>(&a, &e, rhs, erhs, c, ec, kind),
+                };
+            }
+        }
+    }
+    (a, e)
+}
+
+#[test]
+fn seeded_random_programs_match_legacy_values_and_degree_bounds() {
+    fn symbolic_value<L: p3_air::SymLeaf, V: PrimeCharacteristicRing>(
+        e: &SymbolicExpr<L>,
+        memo: &mut std::collections::BTreeMap<usize, V>,
+        leaf: &mut impl FnMut(&L) -> V,
+    ) -> V {
+        let key = core::ptr::from_ref(e) as usize;
+        if let Some(value) = memo.get(&key) {
+            return value.clone();
+        }
+        let value = match e {
+            SymbolicExpr::Leaf(l) => leaf(l),
+            SymbolicExpr::Add { x, y, .. } => {
+                symbolic_value(x, memo, leaf) + symbolic_value(y, memo, leaf)
+            }
+            SymbolicExpr::Sub { x, y, .. } => {
+                symbolic_value(x, memo, leaf) - symbolic_value(y, memo, leaf)
+            }
+            SymbolicExpr::Mul { x, y, .. } => {
+                symbolic_value(x, memo, leaf) * symbolic_value(y, memo, leaf)
+            }
+            SymbolicExpr::Neg { x, .. } => -symbolic_value(x, memo, leaf),
+        };
+        memo.insert(key, value.clone());
+        value
+    }
+    let arithmetic = ArithmeticAirBuilder::<F, EF>::new(layout());
+    let legacy = p3_air::SymbolicAirBuilder::<F, EF>::new(layout());
+    for seed in 1..=3000 {
+        let concrete = Concrete::new(seed);
+        let (base, ext) = random_program(&arithmetic, u64::from(seed));
+        let (old_base, old_ext) = random_program(&legacy, u64::from(seed));
+        let (base_value, ext_value) = random_program(&concrete, u64::from(seed));
+        let lowered_base = base.lower();
+        let lowered_ext = ext.lower();
+        assert_eq!(base.resolve(&concrete), base_value, "base seed {seed}");
+        assert_eq!(ext.resolve(&concrete), ext_value, "extension seed {seed}");
+        for e in [&old_base, &lowered_base] {
+            let value = symbolic_value(e, &mut Default::default(), &mut |l| {
+                SymbolicExpr::Leaf(l.clone()).resolve(&concrete)
+            });
+            assert_eq!(value, base_value, "base seed {seed}");
+        }
+        for e in [&old_ext, &lowered_ext] {
+            let mut base_memo = Default::default();
+            let value = symbolic_value(e, &mut Default::default(), &mut |l| match l {
+                ExtLeaf::Base(b) => symbolic_value(b, &mut base_memo, &mut |l| {
+                    SymbolicExpr::Leaf(l.clone()).resolve(&concrete)
+                })
+                .into(),
+                _ => eval_legacy(&SymbolicExpr::Leaf(l.clone()), &concrete),
+            });
+            assert_eq!(value, ext_value, "extension seed {seed}");
+        }
+        let check = |lowered: usize, arithmetic: usize, legacy: usize| {
+            assert!(
+                lowered <= arithmetic && arithmetic <= legacy,
+                "seed {seed}: lowered {lowered}, arithmetic {arithmetic}, legacy {legacy}"
+            );
+        };
+        check(
+            lowered_base.degree_multiple(),
+            base.degree_multiple(),
+            old_base.degree_multiple(),
+        );
+        check(
+            lowered_ext.degree_multiple(),
+            ext.degree_multiple(),
+            old_ext.degree_multiple(),
+        );
+        for transition in [1, 3] {
+            check(
+                lowered_base.degree_multiple_with_transition(transition),
+                base.degree_multiple_with_transition(transition),
+                old_base.degree_multiple_with_transition(transition),
+            );
+            check(
+                lowered_ext.degree_multiple_with_transition(transition),
+                ext.degree_multiple_with_transition(transition),
+                old_ext.degree_multiple_with_transition(transition),
+            );
+        }
+        for (trace_len, periods) in [(8, &[2][..]), (32, &[4][..])] {
+            check(
+                lowered_base.poly_degree(trace_len, periods),
+                base.poly_degree(trace_len, periods),
+                old_base.poly_degree(trace_len, periods),
+            );
+            check(
+                lowered_ext.poly_degree(trace_len, periods),
+                ext.poly_degree(trace_len, periods),
+                old_ext.poly_degree(trace_len, periods),
+            );
+        }
+    }
 }

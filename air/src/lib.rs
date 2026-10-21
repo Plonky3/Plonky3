@@ -17,7 +17,7 @@ mod virtual_column;
 mod window;
 
 pub use air::*;
-pub use arithmetic::*;
+pub use arithmetic::{ArithmeticAirBuilder, CapturedArithmeticConstraints, capture_arithmetic};
 pub use boundary::{BoundaryEnd, BoundaryIoError, BoundaryPublic};
 pub use builder::*;
 pub use check_constraints::*;

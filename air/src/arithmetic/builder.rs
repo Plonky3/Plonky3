@@ -25,6 +25,7 @@ pub struct ArithmeticAirBuilder<F: Field, EF: ExtensionField<F> = F> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> ArithmeticAirBuilder<F, EF> {
+    /// Construct a recording builder with the supplied input dimensions.
     pub fn new(layout: AirLayout) -> Self {
         let AirLayout {
             preprocessed_width,
@@ -101,10 +102,12 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticAirBuilder<F, EF> {
         }
     }
 
+    /// Clone extension constraints in emission order, including zero and duplicate assertions.
     pub fn extension_constraints(&self) -> Vec<ArithmeticExpressionExt<F, EF>> {
         self.extension_constraints.clone()
     }
 
+    /// Clone base constraints in emission order, including zero and duplicate assertions.
     pub fn base_constraints(&self) -> Vec<ArithmeticExpression<F>> {
         self.base_constraints.clone()
     }
@@ -201,8 +204,11 @@ enum ConstraintType {
 /// Owned arithmetic roots and their global assertion order.
 #[derive(Debug)]
 pub struct CapturedArithmeticConstraints<F: Field, EF: ExtensionField<F> = F> {
+    /// Constraints emitted through [`AirBuilder::assert_zero`], in emission order.
     pub base: Vec<ArithmeticExpression<F>>,
+    /// Constraints emitted through [`ExtensionBuilder::assert_zero_ext`], in emission order.
     pub extension: Vec<ArithmeticExpressionExt<F, EF>>,
+    /// Global assertion indices for the base and extension streams.
     pub layout: ConstraintLayout,
 }
 impl<F: Field, EF: ExtensionField<F>> ArithmeticAirBuilder<F, EF> {

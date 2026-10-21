@@ -51,7 +51,8 @@ pub enum ExtOperand<F: Field, EF: ExtensionField<F>> {
 }
 impl<F: Field> ArithmeticLeaf for BaseLeaf<F> {
     type LegacyLeaf = Self;
-    fn lower_leaf(&self) -> Self::LegacyLeaf {
+    type LowerBase = ();
+    fn lower_leaf(&self, _: &mut Self::LowerBase) -> Self::LegacyLeaf {
         self.clone()
     }
     type Value = F;
@@ -75,9 +76,10 @@ impl<F: Field> ArithmeticLeaf for BaseLeaf<F> {
 }
 impl<F: Field, EF: ExtensionField<F>> ArithmeticLeaf for ArithmeticExtLeaf<F, EF> {
     type LegacyLeaf = crate::ExtLeaf<F, EF>;
-    fn lower_leaf(&self) -> Self::LegacyLeaf {
+    type LowerBase = BTreeMap<usize, Arc<crate::SymbolicExpression<F>>>;
+    fn lower_leaf(&self, base: &mut Self::LowerBase) -> Self::LegacyLeaf {
         match self {
-            Self::Base(e) => crate::ExtLeaf::Base(e.lower()),
+            Self::Base(e) => crate::ExtLeaf::Base(e.lower_inner(base, &mut ())),
             Self::Variable(v) => crate::ExtLeaf::ExtVariable(*v),
             Self::Constant(c) => crate::ExtLeaf::ExtConstant(*c),
         }
@@ -130,13 +132,20 @@ fn shared_degree<L: ArithmeticLeaf>(
 }
 impl<F: Field> ArithmeticOperand for BaseOperand<F> {
     type Leaf = BaseLeaf<F>;
+    fn shared_expression(&self) -> Option<&Arc<ArithmeticExpression<F>>> {
+        match self {
+            Self::Expr(e) => Some(e),
+            Self::Scalar(_) => None,
+        }
+    }
     fn lower(
         &self,
-        memo: &mut BTreeMap<usize, crate::SymbolicExpression<F>>,
-    ) -> crate::SymbolicExpression<F> {
+        memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpression<F>>>,
+        base: &mut (),
+    ) -> Arc<crate::SymbolicExpression<F>> {
         match self {
-            Self::Scalar(c) => (*c).into(),
-            Self::Expr(e) => lower_shared(e, memo),
+            Self::Scalar(c) => Arc::new((*c).into()),
+            Self::Expr(e) => lower_shared(e, memo, base),
         }
     }
     fn expression(self) -> ArithmeticExpression<F> {
@@ -168,15 +177,24 @@ impl<F: Field> ArithmeticOperand for BaseOperand<F> {
 }
 impl<F: Field, EF: ExtensionField<F>> ArithmeticOperand for ExtOperand<F, EF> {
     type Leaf = ArithmeticExtLeaf<F, EF>;
+    fn shared_expression(&self) -> Option<&Arc<ArithmeticExpressionExt<F, EF>>> {
+        match self {
+            Self::Extension(e) => Some(e),
+            _ => None,
+        }
+    }
     fn lower(
         &self,
-        memo: &mut BTreeMap<usize, crate::SymbolicExpressionExt<F, EF>>,
-    ) -> crate::SymbolicExpressionExt<F, EF> {
+        memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpressionExt<F, EF>>>,
+        base: &mut BTreeMap<usize, Arc<crate::SymbolicExpression<F>>>,
+    ) -> Arc<crate::SymbolicExpressionExt<F, EF>> {
         match self {
-            Self::BaseScalar(c) => (*c).into(),
-            Self::ExtensionScalar(c) => crate::SymbolicExpr::Leaf(crate::ExtLeaf::ExtConstant(*c)),
-            Self::Base(e) => e.lower().into(),
-            Self::Extension(e) => lower_shared(e, memo),
+            Self::BaseScalar(c) => Arc::new((*c).into()),
+            Self::ExtensionScalar(c) => {
+                Arc::new(crate::SymbolicExpr::Leaf(crate::ExtLeaf::ExtConstant(*c)))
+            }
+            Self::Base(e) => Arc::new((*lower_shared(e, base, &mut ())).clone().into()),
+            Self::Extension(e) => lower_shared(e, memo, base),
         }
     }
     fn expression(self) -> ArithmeticExpressionExt<F, EF> {
@@ -298,6 +316,7 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticExpressionExt<F, EF> {
 #[derive(Clone, Copy, Debug)]
 pub struct ArithmeticVariable<F>(pub SymbolicVariable<F>);
 impl<F> ArithmeticVariable<F> {
+    /// Construct a base variable at the given entry and column index.
     pub const fn new(entry: BaseEntry, index: usize) -> Self {
         Self(SymbolicVariable::new(entry, index))
     }
@@ -306,6 +325,7 @@ impl<F> ArithmeticVariable<F> {
 #[derive(Clone, Copy, Debug)]
 pub struct ArithmeticVariableExt<F, EF>(pub SymbolicVariableExt<F, EF>);
 impl<F, EF> ArithmeticVariableExt<F, EF> {
+    /// Construct an extension variable at the given entry and column index.
     pub const fn new(entry: ExtEntry, index: usize) -> Self {
         Self(SymbolicVariableExt::new(entry, index))
     }
@@ -602,15 +622,15 @@ where
 
 fn lower_shared<L: ArithmeticLeaf>(
     e: &Arc<ArithmeticExpr<L>>,
-    memo: &mut BTreeMap<usize, crate::SymbolicExpr<L::LegacyLeaf>>,
-) -> crate::SymbolicExpr<L::LegacyLeaf> {
+    memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpr<L::LegacyLeaf>>>,
+    base: &mut L::LowerBase,
+) -> Arc<crate::SymbolicExpr<L::LegacyLeaf>> {
     let key = Arc::as_ptr(e) as usize;
     if let Some(v) = memo.get(&key) {
         return v.clone();
     }
-    let v = e.lower_inner(memo);
-    memo.insert(key, v.clone());
-    v
+    let value = e.lower_inner(memo, base);
+    memo.entry(key).or_insert_with(|| Arc::new(value)).clone()
 }
 
 impl<F: Field> super::expression::sealed::Leaf for BaseLeaf<F> {}
