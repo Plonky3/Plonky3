@@ -18,6 +18,8 @@
 //! Phase 1 treats every word alike, so it sweeps a run of rows flat, at the vector width.
 //!
 //! Only square, only a power of two, one row per lane, and in place.
+//!
+//! With AVX-512 VBMI and GFNI, 64-bit words take a byte-shuffle form instead.
 
 use core::slice;
 
@@ -92,6 +94,200 @@ pub const fn transpose_8x8(mut value: u64) -> u64 {
     value ^ exchange ^ (exchange << 28)
 }
 
+/// The transpose of 64-bit words by byte shuffles and affine maps over `GF(2)`.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx512f",
+    target_feature = "avx512vbmi",
+    target_feature = "gfni"
+))]
+mod gfni {
+    use core::any::Any;
+    use core::arch::x86_64::*;
+
+    use super::super::packing::PackedGf2;
+    use super::super::underlier::{Underlier, Word};
+    use super::words_of;
+
+    /// Transpose a square matrix of 64-bit words, whatever a row's word count.
+    ///
+    /// With `n` words a row, the matrix is an `n x n` grid of 64 x 64 blocks.
+    /// Block `(i, j)` is word `j` of rows `64*i ..`.
+    /// Transposing the whole is transposing each block and swapping block `(i, j)` with `(j, i)`.
+    ///
+    /// Not inlined, so the generic transpose stays small for every other word width.
+    #[inline(never)]
+    pub(super) fn transpose<U: Underlier>(rows: &mut [PackedGf2<U>]) {
+        // A constant once the underlier is known, so every index below folds.
+        let n = U::WORDS;
+        let words = words_of(rows);
+        assert_eq!(
+            words.len(),
+            64 * n * n,
+            "a bit transpose needs one row per lane"
+        );
+
+        // A one-word row is a single block, transposed where it lies.
+        if n == 1 {
+            transpose_words(words.try_into().expect("one block of 64 words"));
+            return;
+        }
+
+        // Row group `i` is rows `64*i ..`; its column `j` of words is block `(i, j)`.
+        for i in 0..n {
+            let (upper, lower) = words[64 * n * i..].split_at_mut(64 * n);
+
+            // A diagonal block stays where it is.
+            let mut diagonal = column(upper, n, i);
+            transpose_words(&mut diagonal);
+            set_column(upper, n, i, &diagonal);
+
+            for (j, lower) in ((i + 1)..n).zip(lower.chunks_exact_mut(64 * n)) {
+                let mut above = column(upper, n, j);
+                let mut below = column(lower, n, i);
+                transpose_words(&mut above);
+                transpose_words(&mut below);
+
+                // Each transposed block lands in the other's place.
+                set_column(upper, n, j, &below);
+                set_column(lower, n, i, &above);
+            }
+        }
+    }
+
+    /// Word `j` of each of the 64 rows of `n` words in `group`.
+    #[inline(always)]
+    fn column<T: Word>(group: &[T], n: usize, j: usize) -> [T; 64] {
+        let mut out = [T::ZERO; 64];
+        for (word, row) in out.iter_mut().zip(group.chunks_exact(n)) {
+            *word = row[j];
+        }
+        out
+    }
+
+    /// Overwrite word `j` of each of the 64 rows of `n` words in `group`.
+    #[inline(always)]
+    fn set_column<T: Word>(group: &mut [T], n: usize, j: usize, column: &[T; 64]) {
+        for (row, &word) in group.chunks_exact_mut(n).zip(column) {
+            row[j] = word;
+        }
+    }
+
+    /// Transpose a block of 64-bit words, which are `u64`s seen through the word trait.
+    #[inline]
+    fn transpose_words<T: Word>(block: &mut [T; 64]) {
+        let block = (block as &mut dyn Any)
+            .downcast_mut::<[u64; 64]>()
+            .expect("a 64-bit word is a u64");
+        transpose_block(block);
+    }
+
+    /// Transpose the 64 x 64 block whose row `r` is word `r`.
+    ///
+    /// Write bit `(r, c)` with `r = 8R + r'` and `c = 8C + c'`.
+    /// Register `R` holds rows `8R ..`, so the bit is at register `R`, word `r'`, byte `C`, bit `c'`.
+    /// The transpose moves it to register `C`, word `c'`, byte `R`, bit `r'`:
+    ///
+    /// ```text
+    ///     (R; r', C, c')
+    ///       -> (R; C, c', r')    a byte permute and an affine map, per register
+    ///       -> (C; R, c', r')    an 8 x 8 transpose of words across the registers
+    ///       -> (C; c', R, r')    a byte permute, per register
+    /// ```
+    ///
+    /// `vgf2p8affineqb` with the constant `0x8040201008040201` computes, per word `A`:
+    ///
+    /// ```text
+    ///     result byte j bit i  =  bit j of A's byte 7 - i
+    /// ```
+    ///
+    /// So the first permute also reverses the rows, and the map undoes it.
+    ///
+    /// The word transpose pairs words inside each 128-bit lane first.
+    /// Only its last two rounds cross lanes, one 128-bit lane or 256-bit half at a time.
+    #[inline]
+    fn transpose_block(block: &mut [u64; 64]) {
+        /// Byte `8C + c'` takes byte `C` of word `7 - c'`, rows reversed for the affine map.
+        const GATHER: [u8; 64] = {
+            let mut idx = [0u8; 64];
+            let mut i = 0;
+            while i < 64 {
+                idx[i] = ((7 - i % 8) * 8 + i / 8) as u8;
+                i += 1;
+            }
+            idx
+        };
+
+        /// Byte `8c' + R` takes byte `8R + c'`: an 8 x 8 byte transpose.
+        const SCATTER: [u8; 64] = {
+            let mut idx = [0u8; 64];
+            let mut i = 0;
+            while i < 64 {
+                idx[i] = ((i % 8) * 8 + i / 8) as u8;
+                i += 1;
+            }
+            idx
+        };
+
+        /// The low 128-bit lane of each 256-bit half of `a`, then of `b`.
+        const LOW_LANES: [u64; 8] = [0, 1, 8, 9, 4, 5, 12, 13];
+
+        /// The high 128-bit lane of each 256-bit half of `a`, then of `b`.
+        const HIGH_LANES: [u64; 8] = [2, 3, 10, 11, 6, 7, 14, 15];
+
+        // SAFETY: every load and store is 64 bytes inside the block or a constant table.
+        unsafe {
+            let gather = _mm512_loadu_si512(GATHER.as_ptr().cast());
+            let scatter = _mm512_loadu_si512(SCATTER.as_ptr().cast());
+            let low_lanes = _mm512_loadu_si512(LOW_LANES.as_ptr().cast());
+            let high_lanes = _mm512_loadu_si512(HIGH_LANES.as_ptr().cast());
+            let unit = _mm512_set1_epi64(0x8040_2010_0804_0201_u64 as i64);
+
+            // Phase 1: word `C` byte `c'` of register `R` becomes column `8C + c'` of its rows.
+            let y: [__m512i; 8] = core::array::from_fn(|r| {
+                let rows = _mm512_loadu_si512(block.as_ptr().add(8 * r).cast());
+                _mm512_gf2p8affine_epi64_epi8::<0>(unit, _mm512_permutexvar_epi8(gather, rows))
+            });
+
+            // Phase 2: word `C` of register `R` moves to word `R` of register `C`.
+            //
+            //     distance 1   unpack, inside each 128-bit lane
+            //     distance 2   two-source permute of 128-bit lanes
+            //     distance 4   shuffle of 256-bit halves
+            let t: [__m512i; 8] = core::array::from_fn(|i| {
+                let (a, b) = (y[i & !1], y[i | 1]);
+                if i & 1 == 0 {
+                    _mm512_unpacklo_epi64(a, b)
+                } else {
+                    _mm512_unpackhi_epi64(a, b)
+                }
+            });
+            let u: [__m512i; 8] = core::array::from_fn(|i| {
+                let (a, b) = (t[i & !2], t[i | 2]);
+                if i & 2 == 0 {
+                    _mm512_permutex2var_epi64(a, low_lanes, b)
+                } else {
+                    _mm512_permutex2var_epi64(a, high_lanes, b)
+                }
+            });
+            let w: [__m512i; 8] = core::array::from_fn(|i| {
+                let (a, b) = (u[i & !4], u[i | 4]);
+                if i & 4 == 0 {
+                    _mm512_shuffle_i64x2::<0b01_00_01_00>(a, b)
+                } else {
+                    _mm512_shuffle_i64x2::<0b11_10_11_10>(a, b)
+                }
+            });
+
+            // Phase 3: word `R` byte `c'` of register `C` becomes byte `R` of row `8C + c'`.
+            for (c, w) in w.into_iter().enumerate() {
+                let rows = _mm512_permutexvar_epi8(scatter, w);
+                _mm512_storeu_si512(block.as_mut_ptr().add(8 * c).cast(), rows);
+            }
+        }
+    }
+}
+
 impl<U: Underlier> PackedGf2<U> {
     /// Replace the square bit matrix whose row `i` is `rows[i]` by its transpose.
     ///
@@ -105,6 +301,19 @@ impl<U: Underlier> PackedGf2<U> {
             Self::WIDTH,
             "a bit transpose needs one row per lane"
         );
+
+        // 64-bit words have a byte-shuffle form of the whole transpose where the build allows it.
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "avx512f",
+            target_feature = "avx512vbmi",
+            target_feature = "gfni"
+        ))]
+        if Self::WORD_BITS == 64 {
+            gfni::transpose(rows);
+            return;
+        }
+
         let block = Self::WORD_BITS;
 
         // Phase 1, a row-group at a time; a pass wider than the word is skipped inside it.
@@ -137,10 +346,82 @@ impl<U: Underlier> PackedGf2<U> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
+    use rand::{Rng, RngExt};
 
+    use super::super::packing::PackedGf2;
+    use super::super::underlier::Underlier;
     use crate::{Gf2, PackedGf2x8, PackedGf2x64, PackedGf2x128, transpose_8x8};
+
+    /// A block of `N` 64-bit words, for word counts no packing of the crate has.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+    #[repr(transparent)]
+    struct Words<const N: usize>([u64; N]);
+
+    impl<const N: usize> Default for Words<N> {
+        fn default() -> Self {
+            Self([0; N])
+        }
+    }
+
+    // SAFETY: a transparent array of `N` words has their size and alignment.
+    unsafe impl<const N: usize> Underlier for Words<N> {
+        type Word = u64;
+
+        const WORDS: usize = N;
+        const ZERO: Self = Self([0; N]);
+        const ONES: Self = Self([u64::MAX; N]);
+
+        fn words(&self) -> &[u64] {
+            &self.0
+        }
+
+        fn words_mut(&mut self) -> &mut [u64] {
+            &mut self.0
+        }
+
+        fn from_words_fn(f: impl FnMut(usize) -> u64) -> Self {
+            Self(core::array::from_fn(f))
+        }
+
+        fn random<R: Rng + ?Sized>(rng: &mut R) -> Self {
+            Self(core::array::from_fn(|_| rng.random()))
+        }
+    }
+
+    /// Transpose a random `64N x 64N` matrix and compare every entry with its mirror.
+    fn check_any_word_count<const N: usize>() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let original: Vec<PackedGf2<Words<N>>> = (0..64 * N)
+            .map(|_| {
+                PackedGf2::new(Words(core::array::from_fn(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    state
+                })))
+            })
+            .collect();
+
+        let mut rows = original.clone();
+        PackedGf2::transpose(&mut rows);
+
+        for (r, row) in rows.iter().enumerate() {
+            for (c, column) in original.iter().enumerate() {
+                assert_eq!(row.get(c), column.get(r), "entry ({r}, {c})");
+            }
+        }
+    }
+
+    #[test]
+    fn every_word_count_the_underlier_contract_allows_transposes() {
+        // Invariant: no valid underlier panics, powers of two or not.
+        check_any_word_count::<3>();
+        check_any_word_count::<16>();
+    }
 
     proptest! {
         #[test]
@@ -331,8 +612,10 @@ mod tests {
         //
         //     before:  row r, lane c
         //     after:   row c, lane r, and nothing else
-        for r in [0usize, 1, 31, 62, 63] {
-            for c in [0usize, 1, 32, 63] {
+        //
+        // Every one of the 4096 entries, so each route through a shuffle network is pinned.
+        for r in 0..64 {
+            for c in 0..64 {
                 let mut rows = [PackedGf2x64::ZERO; 64];
                 rows[r].set(c, Gf2::ONE);
 
