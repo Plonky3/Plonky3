@@ -20,7 +20,8 @@ use super::sha256::Sha256Compress;
 use crate::tests::satisfies;
 use crate::zerocheck::MIN_LOG_N;
 use crate::{
-    Batch, Circuit, FlockChallenger, FlockConfig, Port, PublicPorts, Witness, prove, verify,
+    Batch, Builder, Circuit, FlockChallenger, FlockConfig, Port, PublicPorts, Witness, prove,
+    verify,
 };
 
 /// Instances per batch: two full 64-lane walks.
@@ -878,4 +879,67 @@ proptest! {
         let n_rows = ((1usize << log_n) as f64 * fill) as usize;
         check_generators(seed, log_n, n_rows);
     }
+}
+
+/// A circuit with `G`'s shape but unrelated gates: one chain of products.
+fn impostor<G: Gadget>() -> Circuit {
+    let canonical = G::circuit();
+    let outputs = canonical.const_pos() / 64 - canonical.n_input_words();
+    let products = canonical.useful_bits() - canonical.const_pos() - 1;
+    let mut c = Builder::new(&vec![64; G::INPUT_WORDS], &vec![64; outputs]);
+    let x = c.input(0).to_vec();
+    let mut acc = x[0];
+    for i in 0..products {
+        acc = c.and(acc, x[1 + i % 63]);
+    }
+    c.output(0, 0, acc);
+    let impostor = c.finish();
+    // The impostor passes every dimension check, only its gates differ.
+    assert_eq!(
+        (
+            impostor.k_log(),
+            impostor.const_pos(),
+            impostor.useful_bits()
+        ),
+        (
+            canonical.k_log(),
+            canonical.const_pos(),
+            canonical.useful_bits()
+        )
+    );
+    assert_ne!(impostor.digest(), canonical.digest());
+    impostor
+}
+
+#[test]
+#[should_panic(expected = "the circuit is not this gadget's")]
+fn the_blake3_generator_refuses_a_same_shape_circuit() {
+    Blake3Compress::witness(
+        &impostor::<Blake3Compress>(),
+        LOG_N,
+        &[],
+        &Blake3Compress::default(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "the circuit is not this gadget's")]
+fn the_blake2s_generator_refuses_a_same_shape_circuit() {
+    Blake2sCompress::witness(
+        &impostor::<Blake2sCompress>(),
+        LOG_N,
+        &[],
+        &Blake2sCompress::default(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "the circuit is not this gadget's")]
+fn the_keccak_generator_refuses_a_same_shape_circuit() {
+    KeccakF1600::witness(
+        &impostor::<KeccakF1600>(),
+        LOG_N,
+        &[],
+        &KeccakF1600::default(),
+    );
 }

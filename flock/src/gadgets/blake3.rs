@@ -1,8 +1,10 @@
 //! The BLAKE3 compression function (BLAKE3 specification, Section 2.2): seven rounds of eight G's, 184 products per G.
 
+use hex_literal::hex;
+
 use super::arx::{G_LANES, IV, g, g_rows};
 use super::rows::Rows;
-use super::{Gadget, assert_shape, pack_u32s, unpack_u32s};
+use super::{Gadget, pack_u32s, unpack_u32s};
 use crate::Witness;
 use crate::circuit::{Builder, Circuit, Word};
 
@@ -16,8 +18,9 @@ const ROUNDS: usize = 7;
 /// Slot of the constant: after 14 input and 8 output words.
 const CONST_POS: usize = 64 * 22;
 
-/// Committed bits: the ports, the constant and seven rounds of products.
-const USEFUL_BITS: usize = CONST_POS + 1 + 10_298;
+/// Digest of the circuit, so the word-level generator refuses any other.
+const CIRCUIT_DIGEST: [u8; 32] =
+    hex!("0aaec33420c391e22858a6d2151938788105388524dc602b260d0ad03d856ffe");
 
 /// One compression: `compress(cv, block, counter, block_len, flags)`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -93,7 +96,11 @@ impl Gadget for Blake3Compress {
     }
 
     fn witness(circuit: &Circuit, log_instances: usize, rows: &[Self], padding: &Self) -> Witness {
-        assert_shape(circuit, 14, CONST_POS, USEFUL_BITS);
+        assert_eq!(
+            circuit.digest(),
+            &CIRCUIT_DIGEST,
+            "the circuit is not this gadget's"
+        );
         Witness::by_instance(14, log_instances, rows, padding, Self::rows)
     }
 }

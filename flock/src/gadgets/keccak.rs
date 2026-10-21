@@ -1,7 +1,9 @@
 //! The Keccak-f\[1600\] permutation (FIPS 202, Sections 3.3 and 3.4): 24 rounds, chi's 1600 products each the only nonlinear step.
 
+use hex_literal::hex;
+
+use super::Gadget;
 use super::rows::Rows;
-use super::{Gadget, assert_shape};
 use crate::Witness;
 use crate::circuit::{Builder, Circuit, Word};
 
@@ -41,8 +43,9 @@ pub(crate) const RHO: [usize; 25] = [
 /// Slot of the constant: after 25 input and 25 output words.
 const CONST_POS: usize = 64 * 50;
 
-/// Committed bits: the ports, the constant and 24 rounds of chi.
-const USEFUL_BITS: usize = CONST_POS + 1 + 24 * 1600;
+/// Digest of the circuit, so the word-level generator refuses any other.
+const CIRCUIT_DIGEST: [u8; 32] =
+    hex!("73303598c49f7c4cec25734ba48ecab457848a7f1b376eed15981f8acbd592c9");
 
 /// One permutation of a state of 25 lanes, lane `x + 5 y` at index `x + 5 y`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -115,7 +118,11 @@ impl Gadget for KeccakF1600 {
     }
 
     fn witness(circuit: &Circuit, log_instances: usize, rows: &[Self], padding: &Self) -> Witness {
-        assert_shape(circuit, 16, CONST_POS, USEFUL_BITS);
+        assert_eq!(
+            circuit.digest(),
+            &CIRCUIT_DIGEST,
+            "the circuit is not this gadget's"
+        );
         Witness::by_instance(16, log_instances, rows, padding, Self::rows)
     }
 }
