@@ -3,7 +3,7 @@
 /// The byte moves the sliced kernels are written against.
 ///
 /// An index register picks bytes or quadwords by position; a matrix register holds one `8 x 8` block per quadword.
-pub(crate) trait SliceRegister: Copy {
+pub trait SliceRegister: Copy {
     /// The all-zero register.
     fn zero() -> Self;
 

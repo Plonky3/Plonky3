@@ -4,11 +4,11 @@ use super::lanes::SliceRegister;
 
 /// One register of bytes, held in a plain array.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Model([u8; 64]);
+pub struct Model([u8; 64]);
 
 impl Model {
     /// Quadword `i`, little-endian.
-    fn qword(&self, i: usize) -> u64 {
+    const fn qword(&self, i: usize) -> u64 {
         u64::from_le_bytes(self.0.as_chunks::<8>().0[i])
     }
 

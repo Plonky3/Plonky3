@@ -2,12 +2,12 @@
 
 use alloc::vec::Vec;
 
+use p3_binary_field::fold_rows;
 use p3_field::PrimeCharacteristicRing;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
 
 use crate::Challenge;
-use crate::lincheck::partial_fold;
 use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
 
 /// A point: `skip` on the skip domain for the six low bits, `rest` multilinear, most significant first.
@@ -44,7 +44,7 @@ impl QuirkyPoint {
         assert!(m >= k_log, "a hypercube of whole instances");
         assert_eq!(self.rest.len() + K_SKIP, m, "one coordinate per variable");
         let outer = Poly::new_from_point(&self.rest[..m - k_log], Challenge::ONE);
-        let folded = partial_fold(bits, k_log, 1 << k_log, outer.as_slice());
+        let folded = fold_rows(bits, k_log, 1 << k_log, outer.as_slice());
         self.eq_weights(k_log - K_SKIP)
             .iter()
             .zip(&folded)

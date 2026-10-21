@@ -11,7 +11,6 @@ extern crate alloc;
 extern crate std;
 
 mod batch;
-mod byteslice;
 mod circuit;
 mod config;
 mod error;

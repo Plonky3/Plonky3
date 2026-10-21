@@ -4,11 +4,10 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_binary_field::Poly192;
-use p3_util::log2_strict_usize;
-
-use crate::byteslice::{
+use p3_binary_field::byteslice::{
     BLOCK, IDENTITY, OUT_BYTES, SliceRegister, Stage, store_f192, weight_matrices,
 };
+use p3_util::log2_strict_usize;
 
 /// Byte offset `(o0, o1, p2, p3, p4, o2)` to quad planes.
 const TO_QUADS: [u8; 64] = {
@@ -175,13 +174,13 @@ impl<R: SliceRegister> Fold<R> {
 
 #[cfg(test)]
 mod tests {
+    use p3_binary_field::byteslice::Model;
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::byteslice::Model;
     use crate::zerocheck::fold::portable::Tables;
 
     /// Full blocks then a short one, the model's fold against the portable tables.
