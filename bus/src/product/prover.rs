@@ -139,13 +139,10 @@ const BLOCK: usize = 16;
 /// A fused fold writes a quarter of them, which stays in the first-level cache for its sums.
 const TASK_BLOCKS: usize = 64;
 
-/// Most lanes a packed extension may have for the packed block sums.
+/// Most lanes a packed extension may have for the packed kernels.
 ///
-/// It sizes the stack buffer of one group's weights.
+/// It sizes the stack buffer a packed group's results go through.
 const MAX_LANES: usize = 16;
-
-/// Blocks whose products one dot product sums.
-const DOT_BLOCKS: usize = 4;
 
 /// Most low variables of the split block weights.
 ///
@@ -223,7 +220,7 @@ impl<'a, F: Field> RadixFourState<'a, F> {
             .zip(source.par_chunks(TASK_BLOCKS * BLOCK))
             .enumerate()
             .map_collect_min_task_bytes(Self::task_bytes(), |(task, (out, chunk))| {
-                fold_blocks(chunk, out, challenges);
+                fold_blocks::<Base, F>(chunk, out, challenges);
                 // SAFETY: the fold wrote every slot of `out`, and `MaybeUninit<F>` has `F`'s layout.
                 let rows =
                     unsafe { core::slice::from_raw_parts(out.as_ptr().cast::<F>(), out.len()) };
@@ -286,7 +283,11 @@ impl<'a, F: Field> RadixFourState<'a, F> {
 ///
 /// A short last block is completed by implicit identities.
 #[inline]
-fn fold_blocks<F: Field>(source: &[F], out: &mut [MaybeUninit<F>], [low, high]: [F; 2]) {
+fn fold_blocks<Base: Field, F: ExtensionField<Base>>(
+    source: &[F],
+    out: &mut [MaybeUninit<F>],
+    [low, high]: [F; 2],
+) {
     // Row `2 b_2 + b_1` of a block is its corner at `(Y_1, Y_2) = (b_1, b_2)`.
     //
     //     lower  = e_0 + r_0 (e_1 - e_0)
@@ -301,8 +302,36 @@ fn fold_blocks<F: Field>(source: &[F], out: &mut [MaybeUninit<F>], [low, high]: 
         }
     };
     let (blocks, short) = source.as_chunks::<BLOCK>();
+
+    // Whole groups go through the packed extension, lane `4 b + c` holding child `c` of block `b`.
+    // Those lanes are the group's output rows in order.
+    let lanes = Base::Packing::WIDTH;
+    let packed = if lanes % 4 == 0 && (4..=MAX_LANES).contains(&lanes) {
+        let group_blocks = lanes / 4;
+        let mut folded = [F::ZERO; MAX_LANES];
+        for (group, slots) in blocks
+            .chunks_exact(group_blocks)
+            .zip(out.chunks_exact_mut(lanes))
+        {
+            let corner = |index: usize| {
+                F::ExtensionPacking::from_ext_fn(|lane| group[lane / 4][4 * index + lane % 4])
+            };
+            let (e0, e1, e2, e3) = (corner(0), corner(1), corner(2), corner(3));
+            let lower = e0 + (e1 - e0) * low;
+            let upper = e2 + (e3 - e2) * low;
+            (lower + (upper - lower) * high).to_ext_slice(&mut folded[..lanes]);
+            for (slot, &value) in slots.iter_mut().zip(&folded) {
+                slot.write(value);
+            }
+        }
+        blocks.len() / group_blocks * group_blocks
+    } else {
+        0
+    };
+
+    // The blocks short of a group go one at a time.
     let (rows, _) = out.as_chunks_mut::<4>();
-    for (block, row) in blocks.iter().zip(&mut *rows) {
+    for (block, row) in blocks[packed..].iter().zip(&mut rows[packed..]) {
         fold(block, row);
     }
     if !short.is_empty() {
@@ -349,6 +378,23 @@ impl<F: Field> BlockWeights<F> {
     #[inline]
     fn at(&self, block: usize) -> F {
         self.low[block & (self.low.len() - 1)] * self.high[block >> self.low_vars]
+    }
+
+    /// The weights of the blocks from `start`, one per lane of the packed extension.
+    #[inline]
+    fn packed_at<Base: Field>(&self, start: usize) -> F::ExtensionPacking
+    where
+        F: ExtensionField<Base>,
+    {
+        let lanes = Base::Packing::WIDTH;
+        if self.low.len().is_multiple_of(lanes) && start.is_multiple_of(lanes) {
+            // The lanes share one high weight, since the low table is a whole number of groups.
+            let low = start & (self.low.len() - 1);
+            F::ExtensionPacking::from_ext_slice(&self.low[low..low + lanes])
+                * self.high[start >> self.low_vars]
+        } else {
+            F::ExtensionPacking::from_ext_fn(|lane| self.at(start + lane))
+        }
     }
 }
 
@@ -419,27 +465,21 @@ impl<F: Field> GridSums<F> {
     {
         let lanes = Base::Packing::WIDTH;
         let mut terms = [[F::ExtensionPacking::ZERO; 6]; 6];
-        let mut lane_weights = [F::ZERO; MAX_LANES];
+        let mut weight_sum = F::ExtensionPacking::ZERO;
         for (index, group) in blocks.chunks_exact(lanes).enumerate() {
             // Lane `l` carries block `first + lanes * index + l` and its weight.
-            let start = first + index * lanes;
-            for (lane, weight) in lane_weights[..lanes].iter_mut().enumerate() {
-                *weight = weights.at(start + lane);
-                self.weight += *weight;
-            }
+            let weight = weights.packed_at::<Base>(first + index * lanes);
+            weight_sum += weight;
             let corners: [F::ExtensionPacking; BLOCK] = core::array::from_fn(|corner| {
                 F::ExtensionPacking::from_ext_fn(|lane| group[lane][corner])
             });
-            let weight = F::ExtensionPacking::from_ext_fn(|lane| lane_weights[lane]);
 
             // Each lane's term sums its own blocks.
-            let operands = block_operands(&corners, weight);
-            for (sum, (x, y)) in terms.as_flattened_mut().iter_mut().zip(operands) {
-                *sum += x * y;
-            }
+            accumulate_block(&mut terms, &corners, weight);
         }
 
         // The lanes' sums add into the scalar sums once per call.
+        self.weight += F::ExtensionPacking::to_ext_iter([weight_sum]).sum::<F>();
         for (sum, packed) in self
             .terms
             .as_flattened_mut()
@@ -456,46 +496,19 @@ impl<F: Field> GridSums<F> {
     #[inline]
     fn add_scalar(&mut self, values: &[F], first: usize, weights: &BlockWeights<F>) {
         let (blocks, short) = values.as_chunks::<BLOCK>();
-        let (groups, rest) = blocks.as_chunks::<DOT_BLOCKS>();
-        for (index, group) in groups.iter().enumerate() {
-            let start = first + index * DOT_BLOCKS;
-            self.add_group(
-                group,
-                core::array::from_fn(|block| weights.at(start + block)),
-            );
+        for (index, block) in blocks.iter().enumerate() {
+            self.add_block(block, weights.at(first + index));
         }
-
-        // The blocks short of a whole group, the last one possibly short of rows.
-        // Missing blocks are all ones with weight zero, so they add nothing.
-        if !rest.is_empty() || !short.is_empty() {
-            let start = first + groups.len() * DOT_BLOCKS;
-            let mut group = [[F::ONE; BLOCK]; DOT_BLOCKS];
-            let mut group_weights = [F::ZERO; DOT_BLOCKS];
-            group[..rest.len()].copy_from_slice(rest);
-            let used = rest.len() + usize::from(!short.is_empty());
-            if !short.is_empty() {
-                group[rest.len()] = padded_block(short);
-            }
-            for (block, weight) in group_weights[..used].iter_mut().enumerate() {
-                *weight = weights.at(start + block);
-            }
-            self.add_group(&group, group_weights);
+        if !short.is_empty() {
+            self.add_block(&padded_block(short), weights.at(first + blocks.len()));
         }
     }
 
-    /// Adds a group of block products, each scaled by its weight.
-    ///
-    /// Each term sums over the group with one dot product, which a field may reduce once.
+    /// Adds one block's product, scaled by its weight.
     #[inline]
-    fn add_group(&mut self, group: &[[F; BLOCK]; DOT_BLOCKS], weights: [F; DOT_BLOCKS]) {
-        let operands: [[(F, F); 36]; DOT_BLOCKS] =
-            core::array::from_fn(|block| block_operands(&group[block], weights[block]));
-        for (term, sum) in self.terms.as_flattened_mut().iter_mut().enumerate() {
-            let left = core::array::from_fn(|block| operands[block][term].0);
-            let right = core::array::from_fn(|block| operands[block][term].1);
-            *sum += F::dot_product::<DOT_BLOCKS>(&left, &right);
-        }
-        self.weight += weights.into_iter().sum::<F>();
+    fn add_block(&mut self, block: &[F; BLOCK], weight: F) {
+        accumulate_block(&mut self.terms, block, weight);
+        self.weight += weight;
     }
 
     /// Combines the terms into the bivariate polynomial, adding the identity tail.
@@ -510,12 +523,15 @@ impl<F: Field> GridSums<F> {
     }
 }
 
-/// The operand pairs of one block's product terms, its weight carried by the first child.
+/// Adds one block's product terms into their sums, its weight carried by the first child.
+///
+/// Each term is multiplied as soon as its operands exist, so no operand waits in memory.
 #[inline(always)]
-fn block_operands<R: PrimeCharacteristicRing + Copy>(
+fn accumulate_block<R: PrimeCharacteristicRing + Copy>(
+    terms: &mut [[R; 6]; 6],
     block: &[R; BLOCK],
     weight: R,
-) -> [(R, R); 36] {
+) {
     // Child `c` as a bilinear polynomial, coefficients indexed `[Y_2 power][Y_1 power]`.
     //
     //     V_c = e_0 + Y_1 (e_1 - e_0) + Y_2 (e_2 - e_0) + Y_1 Y_2 (e_3 - e_2 - e_1 + e_0)
@@ -538,11 +554,11 @@ fn block_operands<R: PrimeCharacteristicRing + Copy>(
 
     // Their product's Karatsuba terms: six in `Y_2`, each six in `Y_1`.
     let outer = karatsuba_three_operands(left, right, add_coefficients);
-    let mut operands = [(R::ZERO, R::ZERO); 36];
-    for (terms, (u, w)) in operands.as_chunks_mut::<6>().0.iter_mut().zip(outer) {
-        *terms = karatsuba_three_operands(u, w, R::add);
+    for (sums, (u, w)) in terms.iter_mut().zip(outer) {
+        for (sum, (x, y)) in sums.iter_mut().zip(karatsuba_three_operands(u, w, R::add)) {
+            *sum += x * y;
+        }
     }
-    operands
 }
 
 /// Adds two coefficient vectors.
