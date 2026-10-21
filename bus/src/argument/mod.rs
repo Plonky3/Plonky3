@@ -11,9 +11,9 @@ mod error;
 mod transcript;
 
 pub use error::BusArgumentError;
+use p3_gkr::PreparedProductGkr;
 
 use self::transcript::{BusProverTranscript, BusVerifierTranscript};
-use crate::product::PreparedProductGkr;
 use crate::{BusDirection, BusPlan, ProductGkrOutput, ProductGkrProof};
 
 /// Verifier challenges defining every bus leaf factor.
