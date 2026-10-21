@@ -65,8 +65,11 @@ pub fn fold_symbolic_expressions<'a, A: 'a, V: SymbolicExprVisitor<'a, A>>(
     roots: &[&'a SymbolicExpr<A>],
     visitor: &mut V,
 ) -> Vec<V::Output> {
-    let mut cache = HashMap::new();
-    let mut stack = Vec::new();
+    if roots.is_empty() {
+        return Vec::new();
+    }
+    let mut cache = HashMap::with_capacity(16);
+    let mut stack = Vec::with_capacity(16);
     roots
         .iter()
         .map(|root| fold_symbolic_expression_cached(root, visitor, &mut cache, &mut stack))
