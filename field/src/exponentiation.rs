@@ -209,6 +209,10 @@ impl<F: Field> FixedBase<F> {
     /// Panics if the exponent is at least `2^max_bits`.
     #[must_use]
     pub fn pow<const L: usize>(&self, exponent: &[u64; L]) -> F {
+        // An exponent without limbs is zero.
+        if L == 0 {
+            return F::ONE;
+        }
         let rows = self.rows_for(exponent);
         let w = self.window_bits;
         let row_len = 1 << w;
@@ -242,6 +246,11 @@ impl<F: Field> FixedBase<F> {
         F: ExtensionField<B>,
     {
         assert_eq!(exponents.len(), out.len(), "one output per exponent");
+        // Exponents without limbs are all zero.
+        if L == 0 {
+            out.fill(F::ONE);
+            return;
+        }
         let group = LOCKSTEP_CHAINS * B::Packing::WIDTH;
         // Every exponent in a group reads one table entry per row and writes one element.
         let item_bytes = group * (self.rows() + 1) * size_of::<F>();

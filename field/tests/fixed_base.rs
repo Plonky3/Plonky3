@@ -45,6 +45,19 @@ fn an_empty_range_holds_only_the_zero_exponent() {
 }
 
 #[test]
+fn an_exponent_without_limbs_is_zero() {
+    // Zero limbs encode the exponent 0 for every bound, including the empty range.
+    for max_bits in [0, 70] {
+        let table = FixedBase::new(EF4::GENERATOR, max_bits);
+        assert_eq!(table.pow(&[]), EF4::ONE);
+        // A full lockstep group and a ragged tail take the same shortcut.
+        let mut out = vec![EF4::ZERO; 4099];
+        table.pow_into::<BabyBear, 0>(&[[]; 4099], &mut out);
+        assert!(out.iter().all(|&x| x == EF4::ONE));
+    }
+}
+
+#[test]
 #[should_panic(expected = "exceeds")]
 fn pow_rejects_an_exponent_past_the_bound() {
     let table = FixedBase::with_window(EF4::GENERATOR, 70, 8);
