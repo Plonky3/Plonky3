@@ -4,9 +4,11 @@
 
 use alloc::vec::Vec;
 
+use hex_literal::hex;
+
 use super::arx::{G_LANES, IV, g, g_rows};
 use super::rows::Rows;
-use super::{Gadget, assert_shape, pack_u32s, unpack_u32s};
+use super::{Gadget, pack_u32s, unpack_u32s};
 use crate::Witness;
 use crate::circuit::{Builder, Circuit, Word};
 
@@ -30,8 +32,9 @@ const INPUT_BITS: [usize; 14] = [64, 32, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
 /// Slot of the constant: after 14 input and 4 output words.
 const CONST_POS: usize = 64 * 18;
 
-/// Committed bits: the ports, the constant and ten rounds of products.
-const USEFUL_BITS: usize = CONST_POS + 1 + 14_714;
+/// Digest of the circuit, so the word-level generator refuses any other.
+const CIRCUIT_DIGEST: [u8; 32] =
+    hex!("79114245a5dae2eb5a1fbcd2cc6e85e587ea433303b9baacad32ea0cff0755dc");
 
 /// One compression `compress(h, m, t, f0)`, with the last-node flag `f1` zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -108,7 +111,11 @@ impl Gadget for Blake2sCompress {
     }
 
     fn witness(circuit: &Circuit, log_instances: usize, rows: &[Self], padding: &Self) -> Witness {
-        assert_shape(circuit, 14, CONST_POS, USEFUL_BITS);
+        assert_eq!(
+            circuit.digest(),
+            &CIRCUIT_DIGEST,
+            "the circuit is not this gadget's"
+        );
         Witness::by_instance(14, log_instances, rows, padding, Self::rows)
     }
 }

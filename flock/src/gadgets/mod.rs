@@ -61,19 +61,6 @@ pub trait Gadget {
     }
 }
 
-/// Check that `circuit` has the shape a word-level generator writes.
-///
-/// # Panics
-///
-/// - The circuit is not the generator's.
-fn assert_shape(circuit: &Circuit, k_log: usize, const_pos: usize, useful_bits: usize) {
-    assert_eq!(
-        (circuit.k_log(), circuit.const_pos(), circuit.useful_bits()),
-        (k_log, const_pos, useful_bits),
-        "the circuit is not this gadget's"
-    );
-}
-
 /// Pack 32-bit words two per 64-bit word, low half first.
 fn pack_u32s(words: &[u32], out: &mut [u64]) {
     for (o, pair) in out.iter_mut().zip(words.chunks(2)) {
