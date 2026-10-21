@@ -1,5 +1,6 @@
 //! Proof construction and verification for batched product-tree GKR.
 
+use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::math::{
     combine, has_distinct_round_nodes, interpolate_pair, interpolate_quad, sum_adjacent,
 };
-use super::prover::{ProductLayers, RadixFourBatch};
+use super::prover::{LayerRounds, ProductLayers, RadixFourBatch};
 use super::transcript::{ProductGkrProverTranscript, ProductGkrVerifierTranscript};
 use super::{ProductGkrError, ProductGkrShape};
 
@@ -36,6 +37,55 @@ pub enum ProductGkrLayerProof<EF> {
         /// Four child evaluations for every batched tree.
         children: Vec<[EF; 4]>,
     },
+    /// A root-most binary layer of a batched table, summed over the batch coordinates.
+    BinarySumcheck {
+        /// Sumcheck messages in binding order, of degree three within the degree-five format.
+        round_polys: Vec<[EF; ROUND_POLY_LEN]>,
+        /// Two child evaluations.
+        children: Vec<[EF; 2]>,
+    },
+}
+
+/// Leaves of a batched table whose bottom radix-four layers the caller proves itself.
+///
+/// Those layers must return what the dense layers over the same leaves return, so proofs and transcripts are unchanged.
+pub trait ProductLeaves<EF: Clone> {
+    /// The rounds of one bottom layer.
+    type Layer<'a>: LayerRounds<EF, 4>
+    where
+        Self: 'a;
+
+    /// Bottom radix-four layers proved through `layer`.
+    fn own_layers(&self) -> usize;
+
+    /// The flat level `2 * own_layers()` above the leaves, batch index most significant, identity suffix optional.
+    fn materialize(&self) -> Cow<'_, [EF]>;
+
+    /// The rounds of bottom layer `j`, whose children are `2 * j` levels above the leaves, over `logical_len` parent rows.
+    fn layer(&self, j: usize, logical_len: usize) -> Self::Layer<'_>;
+}
+
+/// Leaves given by their values, proving no layer of their own.
+#[derive(Clone, Debug)]
+pub struct DenseLeaves<EF>(pub Vec<EF>);
+
+impl<EF: Field> ProductLeaves<EF> for DenseLeaves<EF> {
+    type Layer<'a>
+        = RadixFourBatch<EF, 4>
+    where
+        Self: 'a;
+
+    fn own_layers(&self) -> usize {
+        0
+    }
+
+    fn materialize(&self) -> Cow<'_, [EF]> {
+        Cow::Borrowed(&self.0)
+    }
+
+    fn layer(&self, _: usize, _: usize) -> Self::Layer<'_> {
+        unreachable!("dense leaves prove no layer of their own")
+    }
 }
 
 /// Proof of several identity-padded product trees reduced at one point.
@@ -64,6 +114,8 @@ pub struct PreparedProductGkr<EF> {
     shape: ProductGkrShape,
     all_layers: Vec<ProductLayers<EF>>,
     roots: Vec<EF>,
+    /// Product levels below the retained ones, proved by the caller's leaves.
+    own_levels: usize,
 }
 
 impl<EF: Field> PreparedProductGkr<EF> {
@@ -108,6 +160,10 @@ impl<EF: Field> PreparedProductGkr<EF> {
 
     fn validate_lengths(lengths: impl ExactSizeIterator<Item = usize>, shape: ProductGkrShape) {
         assert_eq!(
+            shape.batch_variables, 0,
+            "a batched table is proved through prove_batched"
+        );
+        assert_eq!(
             lengths.len(),
             shape.num_trees,
             "product GKR tree count mismatch"
@@ -130,6 +186,29 @@ impl<EF: Field> PreparedProductGkr<EF> {
             shape,
             all_layers,
             roots,
+            own_levels: 0,
+        }
+    }
+
+    /// Prepare a batched table from the level its leaves materialize above their own layers.
+    fn batched<L: ProductLeaves<EF>>(leaves: &L, shape: ProductGkrShape) -> Self {
+        let own_levels = 2 * leaves.own_layers();
+        assert!(
+            own_levels <= shape.log_height,
+            "the leaves prove more levels than the tree has"
+        );
+        let level = leaves.materialize().into_owned();
+        let height = shape.log_height - own_levels;
+        assert!(
+            level.len() <= 1usize << (shape.batch_variables + height),
+            "the materialized level exceeds its logical table"
+        );
+        let layers = ProductLayers::new_owned(level, height);
+        Self {
+            shape,
+            roots: layers.roots(1 << shape.batch_variables),
+            all_layers: alloc::vec![layers],
+            own_levels,
         }
     }
 
@@ -158,7 +237,7 @@ impl<EF: Field> PreparedProductGkr<EF> {
             has_distinct_round_nodes::<EF>(),
             "product GKR requires six distinct challenge-field interpolation nodes"
         );
-        ProductGkrProof::prove_inner::<F, Challenger>(self, challenger)
+        ProductGkrProof::prove_inner::<F, Challenger, DenseLeaves<EF>>(self, None, challenger)
     }
 }
 
@@ -192,23 +271,63 @@ impl<EF> ProductGkrProof<EF> {
             has_distinct_round_nodes::<EF>(),
             "product GKR requires six distinct challenge-field interpolation nodes"
         );
-        Self::prove_inner::<F, Challenger>(PreparedProductGkr::new(inputs, shape), challenger)
+        Self::prove_inner::<F, Challenger, DenseLeaves<EF>>(
+            PreparedProductGkr::new(inputs, shape),
+            None,
+            challenger,
+        )
     }
 
-    /// Run the transcript after the statement and product layers have been checked.
-    fn prove_inner<F, Challenger>(
-        prepared: PreparedProductGkr<EF>,
+    /// Proves a batched table of trees, the bottom layers through the caller's leaves.
+    ///
+    /// The output carries every root, the point over the batch and tree coordinates, and the one leaf evaluation there.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the shape is not batched, the challenge field has fewer than six interpolation nodes, or the leaves disagree with the shape.
+    pub fn prove_batched<F, Challenger, L>(
+        leaves: &L,
+        shape: ProductGkrShape,
         challenger: &mut Challenger,
     ) -> (Self, ProductGkrOutput<EF>)
     where
         F: TranscriptField,
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F>,
+        L: ProductLeaves<EF>,
+    {
+        assert!(
+            shape.batch_variables > 0,
+            "separate trees are proved through prove"
+        );
+        assert!(
+            has_distinct_round_nodes::<EF>(),
+            "product GKR requires six distinct challenge-field interpolation nodes"
+        );
+        Self::prove_inner::<F, Challenger, L>(
+            PreparedProductGkr::batched(leaves, shape),
+            Some(leaves),
+            challenger,
+        )
+    }
+
+    /// Run the transcript after the statement and product layers have been checked.
+    fn prove_inner<F, Challenger, L>(
+        prepared: PreparedProductGkr<EF>,
+        leaves: Option<&L>,
+        challenger: &mut Challenger,
+    ) -> (Self, ProductGkrOutput<EF>)
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F>,
+        L: ProductLeaves<EF>,
     {
         let PreparedProductGkr {
             shape,
             mut all_layers,
             roots,
+            own_levels,
         } = prepared;
         let root_messages = shape
             .root_shape
@@ -218,8 +337,20 @@ impl<EF> ProductGkrProof<EF> {
         // The typed transcript binds both the dimensions and every prover message.
         let mut transcript =
             ProductGkrProverTranscript::<Challenger, F, EF>::new(challenger, shape, &root_messages);
-        let mut point = Vec::with_capacity(shape.log_height);
-        let mut values = roots.clone();
+        let mut point = transcript.batch_point(shape.batch_variables);
+        let mut values = if point.is_empty() {
+            roots.clone()
+        } else {
+            // A batched table compares its roots at the batch point, the first coordinate least significant.
+            alloc::vec![
+                Point::new(point.as_slice())
+                    .equality_weights_lsb()
+                    .iter()
+                    .zip(&roots)
+                    .map(|(&weight, &root)| weight * root)
+                    .sum()
+            ]
+        };
         let mut layer_proofs = Vec::with_capacity(shape.layers().len());
         let mut product_depth = shape.log_height;
 
@@ -227,12 +358,13 @@ impl<EF> ProductGkrProof<EF> {
             let batching = transcript.begin_layer();
             debug_assert_eq!(round_count, point.len());
             let child_depth = product_depth - arity.trailing_zeros() as usize;
+            let logical_len = 1usize << round_count;
 
-            if arity == 2 {
+            if arity == 2 && round_count == 0 {
                 // The root-most binary layer has no parent variables to sum over.
                 let children = all_layers
                     .iter_mut()
-                    .map(|layers| layers.take_binary_children(child_depth))
+                    .map(|layers| layers.take_binary_children(child_depth - own_levels))
                     .collect::<Vec<_>>();
                 let branches = transcript.end_binary_layer(&children);
                 values = children
@@ -241,39 +373,47 @@ impl<EF> ProductGkrProof<EF> {
                     .collect();
                 point = vec![branches[0]];
                 layer_proofs.push(ProductGkrLayerProof::Binary { children });
+            } else if arity == 2 {
+                // A batched table sums its root-most binary layer over the batch coordinates.
+                let mut batch = RadixFourBatch::<EF, 2>::new_consuming(
+                    &mut all_layers,
+                    child_depth - own_levels,
+                    logical_len,
+                );
+                let (round_polys, round_point) =
+                    Self::layer_rounds(&mut batch, &point, batching, &mut transcript);
+                let children = batch.children();
+                let branches = transcript.end_binary_layer(&children);
+                values = children
+                    .iter()
+                    .map(|children| interpolate_pair(*children, branches[0]))
+                    .collect();
+                point = vec![branches[0]];
+                point.extend(round_point);
+                layer_proofs.push(ProductGkrLayerProof::BinarySumcheck {
+                    round_polys,
+                    children,
+                });
             } else {
                 // Four child tables share one eq-weighted degree-five sumcheck.
-                let mut batch = RadixFourBatch::new_consuming(
-                    &mut all_layers,
-                    child_depth,
-                    1usize << round_count,
-                );
-                // The current coordinate factors out of the row sum. Keep only its
-                // normalized suffix table; the root-most layer can have no coordinates.
-                let mut equality = Point::new(point.get(1..).unwrap_or(&[])).equality_weights_lsb();
-                let mut equality_prefix = EF::ONE;
-                let mut logical_len = 1usize << round_count;
-                let mut round_point = Vec::with_capacity(round_count);
-                let mut round_polys = Vec::with_capacity(round_count);
-
-                for &anchor in &point {
-                    let one = equality_prefix * anchor;
-                    let equality_pair = [equality_prefix - one, one];
-                    let round_poly = batch.round(&equality, equality_pair, logical_len, batching);
-                    let challenge = transcript.round(&round_poly);
-                    batch.fold(challenge, logical_len);
-                    equality_prefix = interpolate_pair(equality_pair, challenge);
-                    logical_len /= 2;
-                    if logical_len > 1 {
-                        // Product GKR binds adjacent pairs (LSB-first), unlike Poly's
-                        // leading-variable convention. No division by a prefix is needed.
-                        sum_adjacent(&mut equality);
+                let (round_polys, round_point, children) = match leaves {
+                    Some(leaves) if child_depth < own_levels => {
+                        let mut layer = leaves.layer(child_depth / 2, logical_len);
+                        let (polys, round_point) =
+                            Self::layer_rounds(&mut layer, &point, batching, &mut transcript);
+                        (polys, round_point, layer.children())
                     }
-                    round_point.push(challenge);
-                    round_polys.push(round_poly);
-                }
-
-                let children = batch.children();
+                    _ => {
+                        let mut batch = RadixFourBatch::<EF, 4>::new_consuming(
+                            &mut all_layers,
+                            child_depth - own_levels,
+                            logical_len,
+                        );
+                        let (polys, round_point) =
+                            Self::layer_rounds(&mut batch, &point, batching, &mut transcript);
+                        (polys, round_point, batch.children())
+                    }
+                };
                 let branches = transcript.end_radix_four_layer(&children);
                 values = children
                     .iter()
@@ -309,6 +449,46 @@ impl<EF> ProductGkrProof<EF> {
         )
     }
 
+    /// Play one layer's sumcheck at parent point `point`, the first coordinate bound first.
+    fn layer_rounds<F, Challenger, R, const N: usize>(
+        layer: &mut R,
+        point: &[EF],
+        batching: EF,
+        transcript: &mut ProductGkrProverTranscript<'_, Challenger, F, EF>,
+    ) -> (Vec<[EF; ROUND_POLY_LEN]>, Vec<EF>)
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F>,
+        R: LayerRounds<EF, N>,
+    {
+        // The current coordinate factors out of the row sum. Keep only its
+        // normalized suffix table; the root-most layer can have no coordinates.
+        let mut equality = Point::new(point.get(1..).unwrap_or(&[])).equality_weights_lsb();
+        let mut equality_prefix = EF::ONE;
+        let mut logical_len = 1usize << point.len();
+        let mut round_point = Vec::with_capacity(point.len());
+        let mut round_polys = Vec::with_capacity(point.len());
+
+        for &anchor in point {
+            let one = equality_prefix * anchor;
+            let equality_pair = [equality_prefix - one, one];
+            let round_poly = layer.round(&equality, equality_pair, logical_len, batching);
+            let challenge = transcript.round(&round_poly);
+            layer.fold(challenge, logical_len);
+            equality_prefix = interpolate_pair(equality_pair, challenge);
+            logical_len /= 2;
+            if logical_len > 1 {
+                // Product GKR binds adjacent pairs (LSB-first), unlike Poly's
+                // leading-variable convention. No division by a prefix is needed.
+                sum_adjacent(&mut equality);
+            }
+            round_point.push(challenge);
+            round_polys.push(round_poly);
+        }
+        (round_polys, round_point)
+    }
+
     /// Verifies the internal consistency of several product trees.
     ///
     /// All counts come from the supplied statement shape.
@@ -342,8 +522,20 @@ impl<EF> ProductGkrProof<EF> {
         let roots = shape.root_shape.decode(&self.roots);
         let mut transcript =
             ProductGkrVerifierTranscript::<Challenger, F, EF>::new(challenger, shape, &self.roots);
-        let mut values = roots.clone();
-        let mut point = Vec::with_capacity(shape.log_height);
+        let mut point = transcript.batch_point(shape.batch_variables);
+        let mut values = if point.is_empty() {
+            roots.clone()
+        } else {
+            // A batched table compares its roots at the batch point, the first coordinate least significant.
+            vec![
+                Point::new(point.as_slice())
+                    .equality_weights_lsb()
+                    .iter()
+                    .zip(&roots)
+                    .map(|(&weight, &root)| weight * root)
+                    .sum(),
+            ]
+        };
         let mut inconsistent_layer = None;
         let interpolator = RoundPolyInterpolator::new(5);
 
@@ -372,6 +564,36 @@ impl<EF> ProductGkrProof<EF> {
                         .map(|children| interpolate_pair(*children, branches[0]))
                         .collect();
                     point = vec![branches[0]];
+                }
+                ProductGkrLayerProof::BinarySumcheck {
+                    round_polys,
+                    children,
+                } => {
+                    debug_assert_eq!(arity, 2);
+                    let mut round_point = Vec::with_capacity(round_polys.len());
+                    for round_poly in round_polys {
+                        let challenge = transcript.round(round_poly);
+                        running_sum = interpolator.eval(round_poly, running_sum, challenge);
+                        round_point.push(challenge);
+                    }
+                    let expected = Point::eval_eq(&point, &round_point)
+                        * combine(
+                            &children
+                                .iter()
+                                .map(|children| children[0] * children[1])
+                                .collect::<Vec<_>>(),
+                            batching,
+                        );
+                    if running_sum != expected {
+                        inconsistent_layer.get_or_insert(layer_index);
+                    }
+                    let branches = transcript.end_binary_layer(children);
+                    values = children
+                        .iter()
+                        .map(|children| interpolate_pair(*children, branches[0]))
+                        .collect();
+                    point = vec![branches[0]];
+                    point.extend(round_point);
                 }
                 ProductGkrLayerProof::RadixFour {
                     round_polys,
@@ -441,7 +663,18 @@ impl<EF> ProductGkrProof<EF> {
 
         for (layer_index, ((arity, rounds), layer)) in layers.iter().zip(&self.layers).enumerate() {
             let valid = match (arity, layer) {
-                (2, ProductGkrLayerProof::Binary { children }) => children.len() == shape.num_trees,
+                (2, ProductGkrLayerProof::Binary { children }) => {
+                    *rounds == 0 && children.len() == shape.num_trees
+                }
+                (
+                    2,
+                    ProductGkrLayerProof::BinarySumcheck {
+                        round_polys,
+                        children,
+                    },
+                ) => {
+                    *rounds > 0 && round_polys.len() == *rounds && children.len() == shape.num_trees
+                }
                 (
                     4,
                     ProductGkrLayerProof::RadixFour {

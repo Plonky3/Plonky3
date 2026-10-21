@@ -110,6 +110,15 @@ impl<F: Field> ProductLayers<F> {
             .get(0)
     }
 
+    /// Returns the first `count` values of the root level, a batch of roots.
+    pub(super) fn roots(&self, count: usize) -> Vec<F> {
+        let top = self
+            .layers
+            .last()
+            .expect("every product tree retains its root layer");
+        (0..count).map(|index| top.get(index)).collect()
+    }
+
     /// Reads the two children of a root-most binary layer.
     #[inline]
     pub(super) fn binary_children(&self, depth: usize) -> [F; 2] {
@@ -124,7 +133,11 @@ impl<F: Field> ProductLayers<F> {
     }
 
     /// Splits a retained level, releasing its source after the child gathers finish.
-    fn take_radix_four_state(&mut self, depth: usize, logical_len: usize) -> RadixFourState<F> {
+    fn take_radix_four_state<const N: usize>(
+        &mut self,
+        depth: usize,
+        logical_len: usize,
+    ) -> RadixFourState<F, N> {
         let source = IdentityPrefix {
             values: core::mem::take(&mut self.layers[depth].values),
         };
@@ -133,30 +146,36 @@ impl<F: Field> ProductLayers<F> {
 
     /// Splits one retained level into four low-bit child prefixes.
     #[cfg(test)]
-    fn radix_four_state(&self, depth: usize, logical_len: usize) -> RadixFourState<F> {
+    fn radix_four_state<const N: usize>(
+        &self,
+        depth: usize,
+        logical_len: usize,
+    ) -> RadixFourState<F, N> {
         RadixFourState::new(&self.layers[depth], logical_len)
     }
 }
 
-/// Four child multilinears represented as arbitrary prefixes of constant-one tables.
-struct RadixFourState<F> {
+/// `N` child multilinears represented as arbitrary prefixes of constant-one tables.
+///
+/// A radix-four layer has four children; a binary layer whose parent point has coordinates has two.
+struct RadixFourState<F, const N: usize> {
     /// One prefix per low-bit child slot.
-    children: [IdentityPrefix<F>; 4],
+    children: [IdentityPrefix<F>; N],
 }
 
-impl<F: Field> RadixFourState<F> {
-    /// Splits an interleaved product level into four child tables.
+impl<F: Field, const N: usize> RadixFourState<F, N> {
+    /// Splits an interleaved product level into `N` child tables.
     fn new(values: &IdentityPrefix<F>, logical_len: usize) -> Self {
         let values = &values.values;
-        debug_assert!(values.len().div_ceil(4) <= logical_len);
+        debug_assert!(values.len().div_ceil(N) <= logical_len);
 
-        // Slot `s` gathers explicit entries `s, s + 4, s + 8, ...`, reading and writing each once.
+        // Slot `s` gathers explicit entries `s, s + N, s + 2N, ...`, reading and writing each once.
         let children = core::array::from_fn(|slot| {
-            let rows = (values.len() + 3 - slot) / 4;
+            let rows = (values.len() + N - 1 - slot) / N;
             IdentityPrefix::new(
                 (0..rows)
                     .into_par_iter()
-                    .map_collect_min_task_bytes(2 * size_of::<F>(), |row| values[4 * row + slot]),
+                    .map_collect_min_task_bytes(2 * size_of::<F>(), |row| values[N * row + slot]),
             )
         });
         Self { children }
@@ -181,25 +200,25 @@ impl<F: Field> RadixFourState<F> {
     fn fold(&mut self, challenge: F, logical_len: usize) {
         // Each child is charged the average, so the gate sees the whole fold, and still splits its
         // own rows when they pay.
-        let child_bytes = self.fold_bytes() / 4;
+        let child_bytes = self.fold_bytes() / N;
         self.children
             .par_iter_mut()
             .for_each_min_task_bytes(child_bytes, |child| child.fold(logical_len, challenge));
     }
 
-    /// Reads the four terminal child claims after every parent variable is bound.
-    fn children(&self) -> [F; 4] {
+    /// Reads the terminal child claims after every parent variable is bound.
+    fn children(&self) -> [F; N] {
         core::array::from_fn(|slot| self.children[slot].get(0))
     }
 }
 
-/// Per-tree states reduced by one shared radix-four sumcheck.
-pub(super) struct RadixFourBatch<F> {
+/// Per-tree states reduced by one shared sumcheck over `N` children.
+pub struct RadixFourBatch<F, const N: usize> {
     /// One folding state for each product tree.
-    states: Vec<RadixFourState<F>>,
+    states: Vec<RadixFourState<F, N>>,
 }
 
-impl<F: Field> RadixFourBatch<F> {
+impl<F: Field, const N: usize> RadixFourBatch<F, N> {
     /// Creates the batched states from one retained level per tree.
     #[cfg(test)]
     pub(super) fn new(layers: &[ProductLayers<F>], depth: usize, logical_len: usize) -> Self {
@@ -297,7 +316,7 @@ impl<F: Field> RadixFourBatch<F> {
 
     /// Reduces a nonempty tree group through its last nonidentity endpoint pair.
     fn reduce_trees(
-        states: &[RadixFourState<F>],
+        states: &[RadixFourState<F, N>],
         powers: &[F],
         nodes: &RoundNodes<F>,
         equality: &[F],
@@ -306,8 +325,11 @@ impl<F: Field> RadixFourBatch<F> {
         let (first_tree, other_trees) = states.split_first().expect("nonempty product tree group");
         debug_assert_eq!(powers.len(), other_trees.len());
         let accumulate = |evaluations: &mut [F; ROUND_POLY_LEN], row: usize| {
-            let tree_product = |state: &RadixFourState<F>| {
-                let [first, rest @ ..] = &state.children;
+            let tree_product = |state: &RadixFourState<F, N>| {
+                let (first, rest) = state
+                    .children
+                    .split_first()
+                    .expect("a layer has at least two children");
                 let mut product = nodes.line(first.get(2 * row), first.get(2 * row + 1));
                 for child in rest {
                     let values = nodes.line(child.get(2 * row), child.get(2 * row + 1));
@@ -330,8 +352,8 @@ impl<F: Field> RadixFourBatch<F> {
         };
 
         debug_assert!(rows <= equality.len());
-        // An active row reads one equality weight and eight child values per tree.
-        let row_bytes = ROUND_POLY_LEN * (1 + 8 * states.len()) * size_of::<F>();
+        // An active row reads one equality weight and two values per child and tree.
+        let row_bytes = ROUND_POLY_LEN * (1 + 2 * N * states.len()) * size_of::<F>();
 
         // Each task sums one run of rows, so only its partial message crosses threads.
         let task_rows = min_task_len(rows, row_bytes);
@@ -396,8 +418,48 @@ impl<F: Field> RadixFourBatch<F> {
     }
 
     /// Collects the terminal child claims in tree order.
-    pub(super) fn children(&self) -> Vec<[F; 4]> {
+    pub(super) fn children(&self) -> Vec<[F; N]> {
         self.states.iter().map(RadixFourState::children).collect()
+    }
+}
+
+/// The sumcheck of one layer with `N` children per tree, as the product prover plays it.
+///
+/// An implementation over a cheaper leaf representation must return what the dense batch returns, so the transcript is unchanged.
+pub trait LayerRounds<F, const N: usize> {
+    /// The round message from the normalized equality suffix, the bound coordinate's eq endpoints, the live parent rows and the tree-batching challenge.
+    fn round(
+        &self,
+        equality: &[F],
+        equality_pair: [F; 2],
+        logical_len: usize,
+        batching: F,
+    ) -> [F; ROUND_POLY_LEN];
+
+    /// Binds the lowest parent variable to `challenge`.
+    fn fold(&mut self, challenge: F, logical_len: usize);
+
+    /// The terminal child claims of every tree once all parent variables are bound.
+    fn children(&self) -> Vec<[F; N]>;
+}
+
+impl<F: Field, const N: usize> LayerRounds<F, N> for RadixFourBatch<F, N> {
+    fn round(
+        &self,
+        equality: &[F],
+        equality_pair: [F; 2],
+        logical_len: usize,
+        batching: F,
+    ) -> [F; ROUND_POLY_LEN] {
+        Self::round(self, equality, equality_pair, logical_len, batching)
+    }
+
+    fn fold(&mut self, challenge: F, logical_len: usize) {
+        Self::fold(self, challenge, logical_len);
+    }
+
+    fn children(&self) -> Vec<[F; N]> {
+        Self::children(self)
     }
 }
 
@@ -457,7 +519,7 @@ mod tests {
 
     /// Interpolates every line separately at every node, as an obvious reference.
     fn per_node_round<F: Field>(
-        batch: &RadixFourBatch<F>,
+        batch: &RadixFourBatch<F, 4>,
         equality: &[F],
         logical_len: usize,
         batching: F,
@@ -623,8 +685,8 @@ mod tests {
                         assert_eq!(layers.take_binary_children(depth), expected);
                     } else {
                         let logical_len = capacity >> (depth + 2);
-                        let expected = layers.radix_four_state(depth, logical_len);
-                        let actual = layers.take_radix_four_state(depth, logical_len);
+                        let expected = layers.radix_four_state::<4>(depth, logical_len);
+                        let actual = layers.take_radix_four_state::<4>(depth, logical_len);
                         for (actual, expected) in actual.children.iter().zip(&expected.children) {
                             assert_eq!(actual.values, expected.values);
                             for row in 0..logical_len {
@@ -662,7 +724,8 @@ mod tests {
                     }
                 })
                 .collect::<Vec<_>>();
-            let state = RadixFourState::new(&IdentityPrefix::new(values.clone()), len.div_ceil(4));
+            let state =
+                RadixFourState::<_, 4>::new(&IdentityPrefix::new(values.clone()), len.div_ceil(4));
 
             let mut expected: [Vec<BabyBear>; 4] = Default::default();
             for (index, &value) in values.iter().enumerate() {

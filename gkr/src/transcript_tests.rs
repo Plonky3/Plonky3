@@ -15,6 +15,10 @@ fn transcript_seed_binds_every_shape_dimension() {
         ProductGkrShape::new(5, 2, ProductGkrRootShape::Distinct).unwrap(),
         ProductGkrShape::new(4, 3, ProductGkrRootShape::Distinct).unwrap(),
         ProductGkrShape::new(4, 2, ProductGkrRootShape::FirstTwoShared).unwrap(),
+        ProductGkrShape::batched(4, 1).unwrap(),
+        ProductGkrShape::batched(4, 2).unwrap(),
+        ProductGkrShape::batched(5, 1).unwrap(),
+        ProductGkrShape::batched(0, 2).unwrap(),
     ];
     let seeds = shapes
         .iter()

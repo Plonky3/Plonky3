@@ -28,6 +28,9 @@ const NAME: &[u8] = b"p3-bus-product-gkr";
 /// Label of the encoded root claims.
 const ROOTS: &str = "roots";
 
+/// Label of the point comparing a batched root table.
+const BATCH_POINT: &str = "batch_point";
+
 /// Label of one reduction-layer container.
 const LAYER: &str = "layer";
 
@@ -67,6 +70,14 @@ impl ProductGkrShape {
             ROOTS,
             Length::Fixed(self.root_message_len()),
         ));
+        if self.batch_variables() > 0 {
+            steps.push(Interaction::algebra::<F, EF>(
+                Hierarchy::Atomic,
+                Kind::Challenge,
+                BATCH_POINT,
+                Length::Fixed(self.batch_variables()),
+            ));
+        }
 
         for (arity, rounds) in self.layers() {
             steps.push(Interaction::marker::<ReductionLayer>(
@@ -131,6 +142,10 @@ impl ProductGkrShape {
             crate::ProductGkrRootShape::Distinct => 0,
             crate::ProductGkrRootShape::FirstTwoShared => 1,
         }]);
+        // Separate trees bind nothing more, so their seeds predate the batched shape.
+        if self.batch_variables() > 0 {
+            separator.instance(&(self.batch_variables() as u64).to_le_bytes());
+        }
         separator
     }
 }
@@ -158,6 +173,18 @@ where
             state,
             _ef: PhantomData,
         }
+    }
+
+    /// Draw the point comparing a batched root table, empty for separate trees.
+    pub(crate) fn batch_point(&mut self, batch_variables: usize) -> Vec<EF> {
+        if batch_variables == 0 {
+            return Vec::new();
+        }
+        self.state
+            .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(BATCH_POINT, batch_variables)
+            .into_iter()
+            .map(|value| value.into_inner())
+            .collect()
     }
 
     /// Begin one layer and sample its tree-batching challenge.
@@ -241,6 +268,18 @@ where
             state,
             _ef: PhantomData,
         }
+    }
+
+    /// Draw the point comparing a batched root table, empty for separate trees.
+    pub(crate) fn batch_point(&mut self, batch_variables: usize) -> Vec<EF> {
+        if batch_variables == 0 {
+            return Vec::new();
+        }
+        self.state
+            .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(BATCH_POINT, batch_variables)
+            .into_iter()
+            .map(|value| value.into_inner())
+            .collect()
     }
 
     /// Begin one layer and redraw its tree-batching challenge.
