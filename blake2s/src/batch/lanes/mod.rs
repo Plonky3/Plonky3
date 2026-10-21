@@ -42,10 +42,16 @@ const WIDTH: usize = backend::WIDTH;
 /// the target, so each backend carries its own count and the reason for it.
 pub(super) const GROUPS: usize = backend::GROUPS;
 
+/// Advance every lane of every group by one block, with this target's compression.
+pub(super) use backend::compress;
+
 /// Messages one batched compression advances at once.
 pub(crate) const LANES: usize = WIDTH * GROUPS;
 
 /// The arithmetic the compression function needs, on every lane at once.
+///
+/// The AVX-512 kernel is assembly, so there the driver needs only splats and masks.
+#[cfg_attr(target_feature = "avx512f", allow(dead_code))]
 pub(super) trait Word: Copy {
     /// The same word in every lane.
     fn splat(value: u32) -> Self;

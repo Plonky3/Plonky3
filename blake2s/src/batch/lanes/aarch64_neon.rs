@@ -21,6 +21,9 @@ pub(super) const WIDTH: usize = 4;
 /// and 7% at 1 KiB, and eight added nothing.
 pub(super) const GROUPS: usize = 4;
 
+/// The generic rounds of the compression.
+pub(in crate::batch) use crate::batch::compress::compress;
+
 /// Byte indices that rotate every 32-bit word right by 8 bits.
 const ROTR_8: [u8; 16] = [1, 2, 3, 0, 5, 6, 7, 4, 9, 10, 11, 8, 13, 14, 15, 12];
 

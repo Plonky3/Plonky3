@@ -7,11 +7,9 @@
 mod compress;
 mod lanes;
 
-use self::compress::{
-    BLOCK_BYTES, BLOCK_WORDS, PARAM_BLOCK_0, STATE_WORDS, compress, initial_state,
-};
+use self::compress::{BLOCK_BYTES, BLOCK_WORDS, PARAM_BLOCK_0, STATE_WORDS, initial_state};
 pub(crate) use self::lanes::LANES;
-use self::lanes::{GROUPS, Vector, Word, load_block, store_digests};
+use self::lanes::{GROUPS, Vector, Word, compress, load_block, store_digests};
 use crate::DIGEST_BYTES;
 
 /// Neoverse V3 measurements favor scalar hashing over one 16-lane NEON batch for tails of up to six messages.
@@ -38,13 +36,11 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; DIGEST_BYTES]]) {
     );
     let len = input.len() / out.len();
 
-    // Each lane reads from its message start to the end of the input.
-    //
-    // The final block may then be read in place, past the message end, and masked.
+    // Group g holds messages g * LANES to (g + 1) * LANES, one per lane.
     let (groups, rest) = out.as_chunks_mut::<LANES>();
-    for (index, digests) in groups.iter_mut().enumerate() {
-        let lanes = core::array::from_fn(|lane| &input[(index * LANES + lane) * len..]);
-        hash_group(initial_state(PARAM_BLOCK_0), &lanes, len, digests);
+    for (group, digests) in groups.iter_mut().enumerate() {
+        let starts = core::array::from_fn(|lane| (group * LANES + lane) * len);
+        hash_group(initial_state(PARAM_BLOCK_0), input, &starts, len, digests);
     }
 
     // Very short NEON tails avoid advancing four vector groups mostly filled with duplicate messages.
@@ -63,19 +59,24 @@ pub(crate) fn hash_many(input: &[u8], out: &mut [[u8; DIGEST_BYTES]]) {
     // Those lanes compute digests that are never written out.
     if !rest.is_empty() {
         let first = groups.len() * LANES;
-        let lanes = core::array::from_fn(|lane| &input[(first + lane % rest.len()) * len..]);
+        let starts = core::array::from_fn(|lane| (first + lane % rest.len()) * len);
         let mut digests = [[0u8; DIGEST_BYTES]; LANES];
-        hash_group(initial_state(PARAM_BLOCK_0), &lanes, len, &mut digests);
+        hash_group(
+            initial_state(PARAM_BLOCK_0),
+            input,
+            &starts,
+            len,
+            &mut digests,
+        );
         rest.copy_from_slice(&digests[..rest.len()]);
     }
 }
 
-/// Hash `len` bytes from the start of every lane, from a given chaining value.
-///
-/// Each lane slice must hold at least `len` bytes.
+/// Hash the `len`-byte message at each start in the input, from a given chaining value.
 fn hash_group(
     mut state: [[Vector; STATE_WORDS]; GROUPS],
-    lanes: &[&[u8]; LANES],
+    input: &[u8],
+    starts: &[usize; LANES],
     len: usize,
     out: &mut [[u8; DIGEST_BYTES]; LANES],
 ) {
@@ -86,33 +87,68 @@ fn hash_group(
     //     len = 0:    [ ]               one final block of no bytes at all
     let plain_blocks = len.saturating_sub(1) / BLOCK_BYTES;
     for index in 0..plain_blocks {
-        let offset = index * BLOCK_BYTES;
-        let rows = lanes.map(|lane| lane[offset..][..BLOCK_BYTES].try_into().unwrap());
-
         // The counter is the byte count up to and including this block.
-        let counter = (offset + BLOCK_BYTES) as u64;
-        compress(&mut state, &load_block(&rows), counter, false);
+        let counter = ((index + 1) * BLOCK_BYTES) as u64;
+        compress(&mut state, &load(input, starts, index, len), counter, false);
     }
 
-    // The final block holds up to 64 message bytes, zero padded.
-    let offset = plain_blocks * BLOCK_BYTES;
-    let tail = len - offset;
+    // The final counter is the full message length.
+    let block = load(input, starts, plain_blocks, len);
+    compress(&mut state, &block, len as u64, true);
+    store_digests(&state, out);
+}
 
-    // Read 64 bytes in place wherever the input reaches that far.
+/// Block `index` of the `len`-byte message at each start, the final block zero padded.
+///
+/// # Panics
+///
+/// Panics if a message runs past the end of the input.
+#[inline(always)]
+fn load(
+    input: &[u8],
+    starts: &[usize; LANES],
+    index: usize,
+    len: usize,
+) -> [[Vector; BLOCK_WORDS]; GROUPS] {
+    // Every message ends inside the input, the furthest one included.
+    let furthest = starts.iter().fold(0, |max, &start| max.max(start));
+    assert!(
+        furthest + len <= input.len(),
+        "a message runs past the input"
+    );
+    let offset = index * BLOCK_BYTES;
+
+    // The block at `offset` of every message, read in place.
     //
-    // Only lanes near the very end of the input fall back to a zero-padded copy.
-    let mut spill = [[0u8; BLOCK_BYTES]; LANES];
-    for (lane, spill) in lanes.iter().zip(&mut spill) {
-        if lane.len() < offset + BLOCK_BYTES {
-            spill[..tail].copy_from_slice(&lane[offset..len]);
-        }
+    // SAFETY: each use below first checks that the furthest row ends inside the input.
+    let in_place = || {
+        load_block(&starts.map(|start| unsafe {
+            &*input
+                .as_ptr()
+                .add(start + offset)
+                .cast::<[u8; BLOCK_BYTES]>()
+        }))
+    };
+
+    // A plain block lies wholly inside every message.
+    if offset + BLOCK_BYTES < len {
+        return in_place();
     }
-    let rows = core::array::from_fn(|l| {
-        lanes[l]
-            .get(offset..offset + BLOCK_BYTES)
-            .map_or(&spill[l], |row| row.try_into().unwrap())
-    });
-    let mut block = load_block(&rows);
+
+    // The final block holds up to 64 message bytes.
+    //
+    // Read 64 bytes in place, past the message end, wherever the input reaches that far.
+    // Only messages near the very end of the input fall back to a zero-padded copy.
+    let tail = len - offset;
+    let mut block = if furthest + offset + BLOCK_BYTES <= input.len() {
+        in_place()
+    } else {
+        let mut spill = [[0u8; BLOCK_BYTES]; LANES];
+        for (&start, spill) in starts.iter().zip(&mut spill) {
+            spill[..tail].copy_from_slice(&input[start + offset..start + len]);
+        }
+        load_block(&core::array::from_fn(|l| &spill[l]))
+    };
 
     // Zero every byte past the message end.
     //
@@ -128,10 +164,7 @@ fn hash_group(
             }
         }
     }
-
-    // The final counter is the full message length.
-    compress(&mut state, &block, len as u64, true);
-    store_digests(&state, out);
+    block
 }
 
 #[cfg(test)]
@@ -176,9 +209,15 @@ mod tests {
         // From the low byte up: digest length, key length, fanout 1, depth 1.
         let param_0 = 0x0101_0000 | (key.len() as u32) << 8 | out_len as u32;
 
+        // Every lane reads the one input from its start.
         let mut digests = [[0u8; DIGEST_BYTES]; LANES];
-        let lanes = [input.as_slice(); LANES];
-        hash_group(initial_state(param_0), &lanes, input.len(), &mut digests);
+        hash_group(
+            initial_state(param_0),
+            &input,
+            &[0; LANES],
+            input.len(),
+            &mut digests,
+        );
         assert!(digests.iter().all(|d| d == &digests[0]), "lanes disagree");
 
         // A shorter digest is a prefix of the chaining value.
