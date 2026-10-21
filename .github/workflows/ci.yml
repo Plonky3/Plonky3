@@ -56,24 +56,13 @@ jobs:
       lint: ${{ steps.impact.outputs.lint }}
 
     steps:
-      # A run of a commit that already passed has nothing left to check, so every job skips.
-      - name: Detect a passed run of this commit
-        id: duplicate
-        # Should the API fail, the output stays unset and every job runs.
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          passed=$(gh run list --workflow "$GITHUB_WORKFLOW" --commit "$HEAD_SHA" \
-            --json databaseId,conclusion \
-            --jq "[.[] | select(.databaseId != $GITHUB_RUN_ID and .conclusion == \"success\")] | length")
-          echo "duplicate=$([[ "$passed" -gt 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-
       # Runs of older commits of this pull request are stale once a new commit arrives.
       #
-      # Only runs attached to this pull request are cancelled; a fork's token cannot cancel, so those finish.
+      # Only older runs are cancelled.
+      # A slow plan of an old commit must never cancel the run of a newer one.
+      #
+      # Only runs attached to this pull request are cancelled.
+      # A fork's token cannot cancel, so those runs finish.
       - name: Cancel runs of superseded commits
         if: github.event_name == 'pull_request'
         continue-on-error: true
@@ -83,9 +72,11 @@ jobs:
           BRANCH: ${{ github.head_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR: ${{ github.event.pull_request.number }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?event=pull_request&branch=$BRANCH&per_page=100" \
             --jq ".workflow_runs[]
+              | select(.run_number < $RUN_NUMBER)
               | select(.head_sha != \"$HEAD_SHA\" and .status != \"completed\")
               | select(any(.pull_requests[]; .number == $PR))
               | .id" \
@@ -94,6 +85,46 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      # A run whose exact content already passed has nothing left to check, so every job skips.
+      #
+      # The key is the tree that was checked out.
+      # For a pull request, that is the head merged into its current base.
+      # A pass on another branch, or against an older base, tested other content and does not count.
+      - name: Detect a passed run of this tree
+        id: duplicate
+        # Should the API fail, the output stays unset and every job runs.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          echo "$tree" > "$RUNNER_TEMP/ci-tree"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          passed=false
+          for run in $(gh api "repos/$GH_REPO/actions/artifacts?name=ci-tree-$tree&per_page=100" \
+            --jq ".artifacts[].workflow_run.id | select(. != $GITHUB_RUN_ID)"); do
+            if [[ "$(gh api "repos/$GH_REPO/actions/runs/$run" --jq .conclusion)" == success ]]; then
+              passed=true
+              break
+            fi
+          done
+          echo "duplicate=$passed" >> "$GITHUB_OUTPUT"
+
+      # Tag this run with the tree it tests, so a later run of the same tree finds its result.
+      #
+      # A run skipped by its commit message tests nothing, so it is never tagged.
+      - name: Record the tested tree
+        if: >-
+          steps.duplicate.outputs.tree != '' &&
+          !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-tree-${{ steps.duplicate.outputs.tree }}
+          path: ${{ runner.temp }}/ci-tree
+          retention-days: 30
 
       - uses: dtolnay/rust-toolchain@stable
 
