@@ -8,6 +8,7 @@ mod wire;
 use alloc::vec::Vec;
 
 pub use builder::Builder;
+use p3_field::Field;
 use p3_keccak::Keccak256Hash;
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicHasher;
@@ -214,6 +215,87 @@ impl Circuit {
                 }
             };
             wires.push(v);
+        }
+    }
+
+    /// Every committed row's `(A_0 w, B_0 w)` entries over a characteristic-two field, by one forward walk.
+    ///
+    /// Rows no gate commits are zero on both sides and are not visited.
+    ///
+    /// # Panics
+    ///
+    /// - The vector has the wrong length.
+    pub(crate) fn walk_rows<V: Field>(&self, w: &[V], mut row: impl FnMut(usize, V, V)) {
+        assert_eq!(w.len(), 1 << self.k_log, "one entry per slot");
+        // B reads the constant on port and copy rows.
+        let wc = w[self.const_pos];
+
+        // Each wire carries its column combination; a committed wire is its own column.
+        let mut wires: Vec<V> = Vec::with_capacity(self.gates.len());
+        for &gate in &self.gates {
+            let v = match gate {
+                Gate::Free(s) => {
+                    let s = s as usize;
+                    row(s, w[s], wc);
+                    w[s]
+                }
+                Gate::Xor(x, y) => wires[x as usize] + wires[y as usize],
+                Gate::And(x, y, s) => {
+                    let s = s as usize;
+                    row(s, wires[x as usize], wires[y as usize]);
+                    w[s]
+                }
+                Gate::Copy(x, s) => {
+                    let s = s as usize;
+                    row(s, wires[x as usize], wc);
+                    w[s]
+                }
+            };
+            wires.push(v);
+        }
+    }
+
+    /// Add `(a A_0 + b B_0)^T u` into the output, by one backward walk.
+    ///
+    /// # Panics
+    ///
+    /// - The vector or the output has the wrong length.
+    pub(crate) fn add_fold_transpose<V: Field>(&self, a: V, b: V, u: &[V], m: &mut [V]) {
+        assert_eq!(u.len(), 1 << self.k_log, "one weight per row");
+        assert_eq!(m.len(), u.len(), "one output per slot");
+        let c = self.const_pos;
+
+        // Each wire's adjoint: the row weight its consumers handed back.
+        let mut adj = V::zero_vec(self.gates.len());
+        for (i, &gate) in self.gates.iter().enumerate().rev() {
+            let g = adj[i];
+            match gate {
+                // A reads the slot, B the constant.
+                Gate::Free(s) => {
+                    let s = s as usize;
+                    m[s] += g + a * u[s];
+                    m[c] += b * u[s];
+                }
+                // An XOR passes its adjoint to both operands.
+                Gate::Xor(x, y) => {
+                    adj[x as usize] += g;
+                    adj[y as usize] += g;
+                }
+                // A reads x, B reads y; the slot collects its consumers' adjoint.
+                Gate::And(x, y, s) => {
+                    let s = s as usize;
+                    m[s] += g;
+                    adj[x as usize] += a * u[s];
+                    adj[y as usize] += b * u[s];
+                }
+                // A reads x, B the constant.
+                Gate::Copy(x, s) => {
+                    let s = s as usize;
+                    m[s] += g;
+                    adj[x as usize] += a * u[s];
+                    m[c] += b * u[s];
+                }
+            }
         }
     }
 }

@@ -87,6 +87,19 @@ pub(crate) fn lagrange_weights(z: Poly192, n: usize) -> Vec<Poly192> {
     weights
 }
 
+/// `sum_j L_j(z) values_j`: the interpolant of values on the subspace `phi8(0..n)` at `z`.
+///
+/// # Panics
+///
+/// - There is not a power of two of at most 128 values.
+pub(crate) fn interpolate(z: Poly192, values: &[Poly192]) -> Poly192 {
+    lagrange_weights(z, values.len())
+        .into_iter()
+        .zip(values)
+        .map(|(w, &v)| w * v)
+        .sum()
+}
+
 /// The round-1 message at `z`: known on `Lambda`, zero on `S`, so one polynomial on the 128-point window.
 pub(crate) fn round1_at(z: Poly192, message: &[Poly192]) -> Poly192 {
     assert_eq!(message.len(), SKIP_SIZE, "one value per coset point");

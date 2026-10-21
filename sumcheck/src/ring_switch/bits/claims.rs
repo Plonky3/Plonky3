@@ -500,6 +500,7 @@ where
             .zip(claims)
             .map(|(reduction, claim)| ClaimStatement {
                 point: reduction.point(),
+                low_weights: reduction.low_weights(),
                 rows: claim.tensor.rows(),
                 successor: claim
                     .successor
@@ -1291,6 +1292,130 @@ mod tests {
                     "claim {index}"
                 );
             }
+        }
+    }
+
+    /// `sum_v weights[v] * t(high, v)`, bit by bit from the definition.
+    fn weighted_reference(witness: &[u8], high: &Point<EF>, weights: &[EF]) -> EF {
+        let eq_high = Poly::<EF>::new_from_point(high.as_slice(), EF::ONE);
+        let low = (1usize << ABSORBED) - 1;
+        (0..witness.len() * 8)
+            .filter(|&cell| (witness[cell / 8] >> (cell % 8)) & 1 == 1)
+            .map(|cell| eq_high.as_slice()[cell >> ABSORBED] * weights[cell & low])
+            .sum()
+    }
+
+    /// Random weights, one per absorbed bit pattern.
+    fn random_weights(rng: &mut SmallRng) -> Vec<EF> {
+        (0..1 << ABSORBED).map(|_| rng.random()).collect()
+    }
+
+    #[test]
+    fn a_weighted_claim_reads_the_slow_reference() {
+        // Invariant: the column reading under explicit weights is the weighted sum of the bit planes.
+        let witness = bits(0xE1, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0xE2);
+        for _ in 0..4 {
+            let high = Point::<EF>::rand(&mut rng, 9 - ABSORBED);
+            let weights = random_weights(&mut rng);
+            let reduction = BitRingSwitch::<EF>::with_low_weights(&high, &weights).unwrap();
+            let tensor = reduction.tensor(&packing).unwrap();
+            assert_eq!(
+                reduction.incoming_claim(&tensor),
+                weighted_reference(&witness, &high, &weights)
+            );
+
+            // Equality weights of a low point are the plain claim at the joined point.
+            let low = Point::<EF>::rand(&mut rng, ABSORBED);
+            let eq_low = Poly::<EF>::new_from_point(low.as_slice(), EF::ONE).into_evals();
+            let weighted = BitRingSwitch::<EF>::with_low_weights(&high, &eq_low).unwrap();
+            let mut joined = high.clone();
+            joined.extend(&low);
+            assert_eq!(
+                weighted.incoming_claim(&tensor),
+                embedded(&witness).eval_base(&joined)
+            );
+        }
+    }
+
+    #[test]
+    fn a_weighted_claim_needs_one_weight_per_pattern() {
+        let high = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xE3), 5);
+        let short = vec![EF::ONE; (1 << ABSORBED) - 1];
+        assert_eq!(
+            BitRingSwitch::<EF>::with_low_weights(&high, &short).unwrap_err(),
+            BitRingSwitchError::LowWeights {
+                expected: 1 << ABSORBED,
+                actual: (1 << ABSORBED) - 1
+            }
+        );
+    }
+
+    #[test]
+    fn weighted_and_point_claims_batch_together() {
+        // Fixture state: one weighted claim alone, then beside a point claim and a successor claim.
+        let witness = bits(0xE4, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let cells = embedded(&witness);
+        let mut rng = SmallRng::seed_from_u64(0xE5);
+        let high = Point::<EF>::rand(&mut rng, 9 - ABSORBED);
+        let weights = random_weights(&mut rng);
+        let weighted = BitRingSwitch::<EF>::with_low_weights(&high, &weights).unwrap();
+        let reading = weighted_reference(&witness, &high, &weights);
+        let point = Point::<EF>::rand(&mut rng, 9);
+        let next = Point::<EF>::rand(&mut rng, 9);
+        let batches = [
+            (vec![weighted.clone()], vec![(Some(reading), None)]),
+            (
+                vec![
+                    BitRingSwitch::<EF>::new(&point).unwrap(),
+                    weighted,
+                    BitRingSwitch::<EF>::with_successor(&next, 7).unwrap(),
+                ],
+                vec![
+                    (Some(cells.eval_base(&point)), None),
+                    (Some(reading), None),
+                    (
+                        Some(cells.eval_base(&next)),
+                        Some(dense_successor(&witness, &next, 7)),
+                    ),
+                ],
+            ),
+        ];
+        for (reductions, readings) in batches {
+            let index = readings.iter().position(|r| r.0 == Some(reading)).unwrap();
+            let setup = BitRingSwitchClaims::new(reductions).unwrap();
+            let (proof, point_p, value_p) = setup.prove::<EF, _, _>(&packing, &mut challenger());
+            let (point, value) = setup
+                .verify_readings(&proof, &readings, &mut challenger())
+                .unwrap();
+            assert_eq!((&point, value), (&point_p, value_p));
+            assert_eq!(value, packing.poly().eval_base(&point));
+
+            // A wrong weighted reading is refused.
+            let mut wrong = readings.clone();
+            wrong[index].0 = Some(reading + EF::ONE);
+            assert!(
+                setup
+                    .verify_readings(&proof, &wrong, &mut challenger())
+                    .is_err()
+            );
+
+            // A verifier holding other weights binds another statement and refuses.
+            let mut moved = weights.clone();
+            moved[3] += EF::ONE;
+            let other = BitRingSwitch::<EF>::with_low_weights(&high, &moved).unwrap();
+            let mut reductions = setup.reductions().to_vec();
+            reductions[index] = other;
+            let mut readings = readings.clone();
+            readings[index].0 = Some(weighted_reference(&witness, &high, &moved));
+            assert!(
+                BitRingSwitchClaims::new(reductions)
+                    .unwrap()
+                    .verify_readings(&proof, &readings, &mut challenger())
+                    .is_err()
+            );
         }
     }
 }

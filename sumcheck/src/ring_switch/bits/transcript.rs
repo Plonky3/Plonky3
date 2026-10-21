@@ -29,14 +29,13 @@
 //!
 //! No grinding step is described, so every challenge here is resampleable.
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::fs::{
     DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction, InteractionPattern,
-    Kind, Length, ProverState, TranscriptBound, TranscriptField, VerifierState,
+    Kind, Length, ProverState, SymmetricSteps, TranscriptBound, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample};
 use p3_field::ExtensionField;
@@ -53,6 +52,9 @@ pub(crate) const NAME: &[u8] = b"p3-sumcheck-bit-ring-switch";
 
 /// Step label of the point the incoming evaluation claim is stated at.
 const EVALUATION_POINT: &str = "evaluation_point";
+
+/// Step label of the weights a weighted claim puts on the absorbed bit patterns.
+const LOW_WEIGHTS: &str = "low_weights";
 
 /// Step label of the rows of the shared tensor element.
 const TENSOR_ROWS: &str = "tensor_rows";
@@ -84,18 +86,33 @@ type Alphabet<EF> = FieldUnit<EF>;
 /// Type-level name of the sub-protocol the reduction delegates its rounds to.
 struct BatchedSumcheck;
 
+/// What one claim binds beside the coordinates it names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimForm {
+    /// A point over every coordinate.
+    Point,
+    /// A point over every coordinate, and the two successor elements of a view stepping within trailing rows.
+    ///
+    /// Only a view with more row coordinates than one element absorbs sends them.
+    ///
+    /// A successor view inside one element is a column reading, and plays the plain run.
+    Successor {
+        /// Row coordinates of the successor view.
+        rows: usize,
+    },
+    /// The kept coordinates, and explicit weights on the absorbed bit patterns.
+    Weighted,
+}
+
 /// Numbers that fix the transcript of one bit-alphabet reduction.
 ///
 /// Both sides build this from their own configuration, never from a proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BitRingSwitchShape {
-    /// Coordinates the incoming evaluation point names.
+    /// Coordinates of the witness the claim is about.
     pub num_variables: usize,
-    /// Row coordinates of a successor view whose rows outrun one element.
-    ///
-    /// Set only when the reduction sends the two successor elements.
-    /// A successor view inside one element is a column reading, and plays the plain run.
-    pub successor_rows: Option<usize>,
+    /// What the claim binds beside its coordinates.
+    pub form: ClaimForm,
 }
 
 impl BitRingSwitchShape {
@@ -104,7 +121,18 @@ impl BitRingSwitchShape {
     pub const fn new(num_variables: usize) -> Self {
         Self {
             num_variables,
-            successor_rows: None,
+            form: ClaimForm::Point,
+        }
+    }
+
+    /// Describe a reduction of a claim weighing the absorbed bit patterns itself.
+    ///
+    /// The witness has `num_variables` coordinates; the claim binds the kept ones and the weights.
+    #[must_use]
+    pub const fn with_low_weights(num_variables: usize) -> Self {
+        Self {
+            num_variables,
+            form: ClaimForm::Weighted,
         }
     }
 
@@ -116,8 +144,43 @@ impl BitRingSwitchShape {
     pub const fn with_successor_rows(num_variables: usize, row_variables: usize) -> Self {
         Self {
             num_variables,
-            successor_rows: Some(row_variables),
+            form: ClaimForm::Successor {
+                rows: row_variables,
+            },
         }
+    }
+
+    /// Coordinates the bound point names: all of them, or the kept ones of a weighted claim.
+    const fn point_len<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>>(&self) -> usize {
+        match self.form {
+            ClaimForm::Weighted => self
+                .num_variables
+                .saturating_sub(BitRingSwitch::<F, EF>::ABSORBED),
+            ClaimForm::Point | ClaimForm::Successor { .. } => self.num_variables,
+        }
+    }
+
+    /// The steps binding the claim: its point, then the weights of a weighted claim.
+    fn claim_steps<F, EF>(&self) -> Vec<Interaction>
+    where
+        F: TranscriptField + TowerLevel,
+        EF: BitCoordinates + ExtensionField<F>,
+    {
+        let point = Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            EVALUATION_POINT,
+            Length::Fixed(self.point_len::<F, EF>()),
+        );
+        let weights = (self.form == ClaimForm::Weighted).then(|| {
+            Interaction::algebra::<F, EF>(
+                Hierarchy::Atomic,
+                Kind::Message,
+                LOW_WEIGHTS,
+                Length::Fixed(1 << BitRingSwitch::<F, EF>::ABSORBED),
+            )
+        });
+        core::iter::once(point).chain(weights).collect()
     }
 
     /// Maximum delegated rounds for this point width.
@@ -152,20 +215,13 @@ impl BitRingSwitchShape {
                 Length::Fixed(Coefficients::<EF>::DIMENSION),
             )
         };
-        let successor = self.successor_rows.is_some();
+        let successor = matches!(self.form, ClaimForm::Successor { .. });
 
-        let mut steps = vec![
-            // The point comes first, so no later draw is chosen before the claim is placed.
-            Interaction::algebra::<F, EF>(
-                Hierarchy::Atomic,
-                Kind::Message,
-                EVALUATION_POINT,
-                Length::Fixed(self.num_variables),
-            ),
-            // The rows are the whole element, one bit per entry.
-            // Binding them therefore binds both readings of it.
-            rows(TENSOR_ROWS),
-        ];
+        // The point comes first, so no later draw is chosen before the claim is placed.
+        let mut steps = self.claim_steps::<F, EF>();
+        // The rows are the whole element, one bit per entry.
+        // Binding them therefore binds both readings of it.
+        steps.push(rows(TENSOR_ROWS));
         // The successor elements are bound beside the tensor, before any draw.
         if successor {
             steps.extend([rows(CARRY_ROWS), rows(LAST_ROWS)]);
@@ -222,7 +278,7 @@ impl BitRingSwitchShape {
         EF: BitCoordinates + ExtensionField<F>,
     {
         let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
-        if let Some(rows) = self.successor_rows {
+        if let ClaimForm::Successor { rows } = self.form {
             separator.instance(&(rows as u64).to_be_bytes());
         }
         separator
@@ -281,8 +337,13 @@ where
     ) -> (Point<EF>, Option<EF>) {
         assert_eq!(
             successor.is_some(),
-            self.shape.successor_rows.is_some(),
+            matches!(self.shape.form, ClaimForm::Successor { .. }),
             "the successor elements are sent exactly when the shape describes them",
+        );
+        assert_ne!(
+            self.shape.form,
+            ClaimForm::Weighted,
+            "a weighted claim binds its weights through the weighted statement"
         );
 
         // The point is bound first, so the element cannot be chosen to suit it.
@@ -298,22 +359,38 @@ where
         }
 
         // Only now are the batching challenges drawn, so no message above them knew them.
-        let batching_point = Point::new(
-            self.state
-                .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(
-                    BATCHING_POINT,
-                    BitRingSwitch::<F, EF>::BATCHED,
-                )
-                .into_iter()
-                .map(TranscriptBound::into_inner)
-                .collect(),
-        );
+        let batching_point = play_batching_point::<F, EF, _>(&mut self.state);
         let alpha = successor.map(|_| {
             self.state
                 .challenge_extension::<F, EF, FieldToFieldCodec<F>>(TENSOR_BATCHING)
                 .into_inner()
         });
         (batching_point, alpha)
+    }
+
+    /// Bind a weighted claim's kept coordinates, its low weights and its tensor rows, then draw the batching point.
+    ///
+    /// # Panics
+    ///
+    /// - When the shape does not describe a weighted claim.
+    pub fn weighted_statement(
+        &mut self,
+        high: &Point<EF>,
+        low_weights: &[EF],
+        rows: &[F],
+    ) -> Point<EF> {
+        assert_eq!(
+            self.shape.form,
+            ClaimForm::Weighted,
+            "the shape describes a weighted claim"
+        );
+        self.state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(EVALUATION_POINT, high.as_slice());
+        self.state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(LOW_WEIGHTS, low_weights);
+        self.state
+            .observe_extensions::<F, F, FieldToFieldCodec<F>>(TENSOR_ROWS, rows);
+        play_batching_point::<F, EF, _>(&mut self.state)
     }
 
     /// Hand the sponge to the delegated sumcheck rounds.
@@ -383,7 +460,7 @@ where
         rows: &[F],
         successor: Option<(&[F], &[F])>,
     ) -> Result<(Point<EF>, Option<EF>), TranscriptWidth> {
-        if let Err(error) = self.check_widths(point, rows, successor) {
+        if let Err(error) = check_statement_widths(&self.shape, point, None, rows, successor) {
             self.state.abort();
             return Err(error);
         }
@@ -403,16 +480,7 @@ where
                 .observe_extensions::<F, F, FieldToFieldCodec<F>>(LAST_ROWS, last);
         }
 
-        let batching_point = Point::new(
-            self.state
-                .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(
-                    BATCHING_POINT,
-                    BitRingSwitch::<F, EF>::BATCHED,
-                )
-                .into_iter()
-                .map(TranscriptBound::into_inner)
-                .collect(),
-        );
+        let batching_point = play_batching_point::<F, EF, _>(&mut self.state);
         let alpha = successor.map(|_| {
             self.state
                 .challenge_extension::<F, EF, FieldToFieldCodec<F>>(TENSOR_BATCHING)
@@ -421,14 +489,32 @@ where
         Ok((batching_point, alpha))
     }
 
-    /// Check every list of the statement against the description, absorbing nothing.
-    fn check_widths(
-        &self,
-        point: &Point<EF>,
+    /// Replay a weighted claim's statement, then redraw the batching point.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, releasing the driver, before anything is absorbed, when a list is not the described width.
+    pub fn weighted_statement(
+        &mut self,
+        high: &Point<EF>,
+        low_weights: &[EF],
         rows: &[F],
-        successor: Option<(&[F], &[F])>,
-    ) -> Result<(), TranscriptWidth> {
-        check_statement_widths(&self.shape, point, rows, successor)
+    ) -> Result<Point<EF>, TranscriptWidth> {
+        if let Err(error) = check_statement_widths(&self.shape, high, Some(low_weights), rows, None)
+        {
+            self.state.abort();
+            return Err(error);
+        }
+        let _ = self
+            .state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(EVALUATION_POINT, high.as_slice());
+        let _ = self
+            .state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(LOW_WEIGHTS, low_weights);
+        let _ = self
+            .state
+            .observe_extensions::<F, F, FieldToFieldCodec<F>>(TENSOR_ROWS, rows);
+        Ok(play_batching_point::<F, EF, _>(&mut self.state))
     }
 
     /// Hand the sponge to the delegated sumcheck replay.
@@ -460,17 +546,30 @@ where
 }
 
 /// Check one claim's statement against the shape it was described with, absorbing nothing.
-fn check_statement_widths<F, EF: BitCoordinates>(
+fn check_statement_widths<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>>(
     shape: &BitRingSwitchShape,
     point: &Point<EF>,
+    low_weights: Option<&[EF]>,
     rows: &[F],
     successor: Option<(&[F], &[F])>,
 ) -> Result<(), TranscriptWidth> {
-    if point.num_variables() != shape.num_variables {
+    let expected = shape.point_len::<F, EF>();
+    if point.num_variables() != expected {
         return Err(TranscriptWidth::Point {
-            expected: shape.num_variables,
+            expected,
             actual: point.num_variables(),
         });
+    }
+    // A weighted claim weighs every absorbed bit pattern; a point claim sends no weights.
+    let weighted = shape.form == ClaimForm::Weighted;
+    let expected = if weighted {
+        1 << BitRingSwitch::<F, EF>::ABSORBED
+    } else {
+        0
+    };
+    let actual = low_weights.map_or(0, <[EF]>::len);
+    if actual != expected || low_weights.is_some() != weighted {
+        return Err(TranscriptWidth::LowWeights { expected, actual });
     }
     // Every element is a square bit matrix, so every row list has the level's dimension.
     let successor_rows = successor
@@ -486,7 +585,7 @@ fn check_statement_widths<F, EF: BitCoordinates>(
         });
     }
 
-    let expected = shape.successor_rows.is_some();
+    let expected = matches!(shape.form, ClaimForm::Successor { .. });
     if successor.is_some() == expected {
         Ok(())
     } else {
@@ -495,6 +594,28 @@ fn check_statement_widths<F, EF: BitCoordinates>(
             successor.is_some(),
         ))
     }
+}
+
+/// Draw the batching point, one challenge per absorbed coordinate, on either side.
+fn play_batching_point<F, EF, S>(state: &mut S) -> Point<EF>
+where
+    F: TranscriptField + TowerLevel,
+    EF: BitCoordinates + ExtensionField<F>,
+    S: SymmetricSteps,
+    S::Challenger: CanObserve<F> + CanSample<F>,
+{
+    // Accepting every candidate draws exactly the plain list.
+    Point::new(
+        state
+            .challenge_extensions_rejecting::<F, EF, FieldToFieldCodec<F>>(
+                BATCHING_POINT,
+                BitRingSwitch::<F, EF>::BATCHED,
+                |_, _| true,
+            )
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect(),
+    )
 }
 
 /// Protocol name of a batch of claims, distinct from the one-claim run's.
@@ -506,8 +627,10 @@ const CLAIM_BATCHING: &str = "claim_batching";
 /// What one claim of a batch binds before any batching draw.
 #[derive(Clone, Copy, Debug)]
 pub struct ClaimStatement<'a, F, EF = F> {
-    /// The evaluation point of the claim.
+    /// The evaluation point of the claim, its kept coordinates alone when it is weighted.
     pub point: &'a Point<EF>,
+    /// The weights a weighted claim puts on the absorbed bit patterns.
+    pub low_weights: Option<&'a [EF]>,
     /// The rows of its tensor element.
     pub rows: &'a [F],
     /// The rows of its carry and last elements, when its shape has successor rows.
@@ -546,7 +669,7 @@ impl BitRingSwitchClaimsShape {
     pub fn sends_successor(&self) -> bool {
         self.claims
             .iter()
-            .any(|claim| claim.successor_rows.is_some())
+            .any(|claim| matches!(claim.form, ClaimForm::Successor { .. }))
     }
 
     /// Describe every step of one batched run, which one matched bracket always validates.
@@ -571,14 +694,9 @@ impl BitRingSwitchClaimsShape {
         let mut steps = Vec::new();
         // Every claim is bound whole before any draw, which is what the batching bound needs.
         for claim in &self.claims {
-            steps.push(Interaction::algebra::<F, EF>(
-                Hierarchy::Atomic,
-                Kind::Message,
-                EVALUATION_POINT,
-                Length::Fixed(claim.num_variables),
-            ));
+            steps.extend(claim.claim_steps::<F, EF>());
             steps.push(rows(TENSOR_ROWS));
-            if claim.successor_rows.is_some() {
+            if matches!(claim.form, ClaimForm::Successor { .. }) {
                 steps.extend([rows(CARRY_ROWS), rows(LAST_ROWS)]);
             }
         }
@@ -629,9 +747,9 @@ impl BitRingSwitchClaimsShape {
         let mut separator = DomainSeparator::new(VERSION, CLAIMS_NAME, self.pattern::<F, EF>());
         separator.instance(&(self.claims.len() as u64).to_be_bytes());
         for claim in &self.claims {
-            match claim.successor_rows {
-                Some(rows) => separator.instance(&(rows as u64).to_be_bytes()),
-                None => separator.instance(&[]),
+            match claim.form {
+                ClaimForm::Successor { rows } => separator.instance(&(rows as u64).to_be_bytes()),
+                ClaimForm::Point | ClaimForm::Weighted => separator.instance(&[]),
             };
         }
         separator
@@ -678,7 +796,7 @@ where
         for (claim, shape) in claims.iter().zip(&self.shape.claims) {
             assert_eq!(
                 claim.successor.is_some(),
-                shape.successor_rows.is_some(),
+                matches!(shape.form, ClaimForm::Successor { .. }),
                 "the successor elements are sent exactly when the shape describes them",
             );
             self.state
@@ -686,6 +804,10 @@ where
                     EVALUATION_POINT,
                     claim.point.as_slice(),
                 );
+            if let Some(weights) = claim.low_weights {
+                self.state
+                    .observe_extensions::<F, EF, FieldToFieldCodec<F>>(LOW_WEIGHTS, weights);
+            }
             self.state
                 .observe_extensions::<F, F, FieldToFieldCodec<F>>(TENSOR_ROWS, claim.rows);
             if let Some((carry, last)) = claim.successor {
@@ -696,16 +818,7 @@ where
             }
         }
         // Only now are the batching challenges drawn, so no message above them knew them.
-        let batching_point = Point::new(
-            self.state
-                .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(
-                    BATCHING_POINT,
-                    BitRingSwitch::<F, EF>::BATCHED,
-                )
-                .into_iter()
-                .map(TranscriptBound::into_inner)
-                .collect(),
-        );
+        let batching_point = play_batching_point::<F, EF, _>(&mut self.state);
         let alpha = self.shape.sends_successor().then(|| {
             self.state
                 .challenge_extension::<F, EF, FieldToFieldCodec<F>>(TENSOR_BATCHING)
@@ -791,7 +904,13 @@ where
                 .iter()
                 .zip(&self.shape.claims)
                 .try_for_each(|(claim, shape)| {
-                    check_statement_widths(shape, claim.point, claim.rows, claim.successor)
+                    check_statement_widths(
+                        shape,
+                        claim.point,
+                        claim.low_weights,
+                        claim.rows,
+                        claim.successor,
+                    )
                 })
         } else {
             Err(TranscriptWidth::Claims {
@@ -811,6 +930,11 @@ where
                     EVALUATION_POINT,
                     claim.point.as_slice(),
                 );
+            if let Some(weights) = claim.low_weights {
+                let _ = self
+                    .state
+                    .observe_extensions::<F, EF, FieldToFieldCodec<F>>(LOW_WEIGHTS, weights);
+            }
             let _ = self
                 .state
                 .observe_extensions::<F, F, FieldToFieldCodec<F>>(TENSOR_ROWS, claim.rows);
@@ -824,16 +948,7 @@ where
             }
         }
         // Only now are the batching challenges drawn, so no message above them knew them.
-        let batching_point = Point::new(
-            self.state
-                .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(
-                    BATCHING_POINT,
-                    BitRingSwitch::<F, EF>::BATCHED,
-                )
-                .into_iter()
-                .map(TranscriptBound::into_inner)
-                .collect(),
-        );
+        let batching_point = play_batching_point::<F, EF, _>(&mut self.state);
         let alpha = self.shape.sends_successor().then(|| {
             self.state
                 .challenge_extension::<F, EF, FieldToFieldCodec<F>>(TENSOR_BATCHING)
@@ -898,6 +1013,14 @@ pub enum TranscriptWidth {
         /// Rows supplied.
         actual: usize,
     },
+    /// A weighted claim's low weights disagree with the description.
+    #[error("the statement carries {actual} low weights, expected {expected}")]
+    LowWeights {
+        /// Weights the description fixes, zero for a point claim.
+        expected: usize,
+        /// Weights supplied.
+        actual: usize,
+    },
     /// A batch binds a different number of claims than its description.
     #[error("the batch binds {actual} claims, expected {expected}")]
     Claims {
@@ -934,6 +1057,7 @@ impl TranscriptWidth {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_binary_field::{BinaryChallenger, BinaryField16};
@@ -989,7 +1113,7 @@ mod tests {
         // Exhaustiveness check: every field named, none elided by a rest pattern.
         let BitRingSwitchShape {
             num_variables: _,
-            successor_rows: _,
+            form: _,
         } = base_shape();
 
         // One more coordinate widens the step that binds the point.
@@ -1004,6 +1128,10 @@ mod tests {
             (
                 "successor_rows_count",
                 BitRingSwitchShape::with_successor_rows(NUM_VARIABLES, SUCCESSOR_ROWS + 1),
+            ),
+            (
+                "low_weights",
+                BitRingSwitchShape::with_low_weights(NUM_VARIABLES)
             ),
         ]
     }
@@ -1607,6 +1735,7 @@ mod tests {
         let rows = rows_of(1);
         let claim = ClaimStatement {
             point: &point,
+            low_weights: None,
             rows: &rows,
             successor: None,
         };
