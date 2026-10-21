@@ -34,6 +34,14 @@ const SEGMENT: usize = TILE / NBR_SEGMENTS;
 /// At this size a leaf sub-matrix fits in L2, so further splitting only adds overhead.
 const RECURSIVE_LIMIT: usize = 128;
 
+/// Bytes in a base memory page, the reach of one TLB entry.
+const PAGE_BYTES: usize = 4096;
+
+/// Source rows per band of a right-edge strip copied by scalar code.
+///
+/// A band of a few columns then stays in L1 while each of its columns is copied out.
+const STRIP_BAND: usize = 256;
+
 /// Minimum element count before the parallel band path is used.
 ///
 /// Smaller matrices are dominated by thread fan-out and cache-coherency traffic.
@@ -42,15 +50,14 @@ const PARALLEL_THRESHOLD: usize = 4 << 20;
 
 /// Whether whole tiles of this element type move through register tiles.
 ///
-/// Only the 16-lane AVX-512 tile beats the compiler's own vectorization of the scalar tile.
+/// The AVX-512 tiles, for 4-byte and 8-byte words, beat the compiler's own vectorization of the scalar tile.
 ///
-/// Narrower tiles lose to it on cache-resident matrices, so they keep the scalar kernels here.
+/// Narrower AVX2 tiles lose to it on cache-resident matrices, so they keep the scalar kernels here.
 ///
 /// Every input is a constant, so the check folds away per element type.
 const fn word_tiles<T>() -> bool {
     cfg!(all(target_arch = "x86_64", target_feature = "avx512f"))
-        && size_of::<T>() == 4
-        && align_of::<T>() == 4
+        && matches!((size_of::<T>(), align_of::<T>()), (4, 4) | (8, 8))
 }
 
 /// Transpose one block through the register-tile kernel.
@@ -90,6 +97,44 @@ unsafe fn transpose_block_tiled<T: Copy>(
     // SAFETY: the word engine caller guarantees integer-word-compatible elements.
     unsafe {
         super::rows::transpose_rows_strided_words(block_height, block_width, row, dst, total_rows);
+    };
+}
+
+/// Transpose one clipped edge block through the register-tile kernel.
+///
+/// Edge shapes are only known at run time, so one shared copy of the masked kernel serves them all.
+///
+/// Keeping it out of line keeps the whole-tile loops small.
+///
+/// # Safety
+///
+/// Same contract as the block kernel.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn transpose_edge_tiled<T: Copy>(
+    input: &[T],
+    output: &mut [T],
+    total_cols: usize,
+    total_rows: usize,
+    start_x: usize,
+    start_y: usize,
+    out_col_start: usize,
+    block_width: usize,
+    block_height: usize,
+) {
+    // SAFETY: forwarded block contract.
+    unsafe {
+        transpose_block_tiled(
+            input,
+            output,
+            total_cols,
+            total_rows,
+            start_x,
+            start_y,
+            out_col_start,
+            block_width,
+            block_height,
+        );
     };
 }
 
@@ -349,27 +394,66 @@ unsafe fn transpose_region<const SEGMENTED: bool, const WORDS: bool, T: Copy>(
     let out_col_start = col_start - col_out_base;
 
     if WORDS && word_tiles::<T>() {
-        // Register tiles: walk column stripes, so each output row is written front to back.
+        // One register tile spans one cache line of elements, in both directions.
+        let side = 64 / size_of::<T>();
+
+        // Whole tiles end here.
         //
-        // Row stripes would scatter every tile's stores across the whole output instead.
-        for x_tile in 0..x_tiles {
-            for y_tile in 0..y_tiles {
-                // SAFETY: WORDS forwards the representation guarantee; each tile lies in the region.
+        // Past these bounds lie the clipped right and bottom strips.
+        let x_end = nbr_cols - nbr_cols % side;
+        let y_end = nbr_rows - nbr_rows % side;
+
+        // Copy the block at a region offset through one of the kernels.
+        macro_rules! block {
+            ($kernel:ident, $x:expr, $y:expr, $width:expr, $height:expr) => {
+                // SAFETY: WORDS forwards the representation guarantee; each block lies in the region.
                 unsafe {
-                    transpose_block_tiled(
+                    $kernel(
                         input,
                         output,
                         total_cols,
                         total_rows,
-                        col_start + x_tile * TILE,
-                        row_start + y_tile * TILE,
-                        out_col_start + x_tile * TILE,
-                        TILE,
-                        TILE,
-                    );
-                };
+                        col_start + $x,
+                        row_start + $y,
+                        out_col_start + $x,
+                        $width,
+                        $height,
+                    )
+                }
+            };
+        }
+
+        // Column stripes: every output row is written front to back.
+        for x in 0..x_end / side {
+            for y in 0..y_end / side {
+                block!(transpose_block_tiled, x * side, y * side, side, side);
             }
         }
+
+        // Right strip, then bottom strip.
+        //
+        // Source rows a page apart cost a TLB lookup per element on a scalar column walk.
+        //
+        // The masked kernel reads each such row once instead.
+        let right = nbr_cols - x_end;
+        if right > 0 && total_cols * size_of::<T>() >= PAGE_BYTES {
+            block!(transpose_edge_tiled, x_end, 0, right, nbr_rows);
+        } else if right > 0 {
+            // Bands of rows keep the strip's source lines in L1 across its few columns.
+            for y in (0..nbr_rows).step_by(STRIP_BAND) {
+                block!(
+                    transpose_block,
+                    x_end,
+                    y,
+                    right,
+                    STRIP_BAND.min(nbr_rows - y)
+                );
+            }
+        }
+        if y_end < nbr_rows {
+            block!(transpose_edge_tiled, 0, y_end, x_end, nbr_rows - y_end);
+        }
+        return;
     } else {
         // SAFETY: every whole tile lies inside the region, which the caller bounds.
         unsafe {
