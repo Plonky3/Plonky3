@@ -129,6 +129,7 @@ impl<F: PrimeField64> Bitz<F> {
             words,
             shape: self.shape,
             images: &images,
+            base: PhantomData::<Val>,
         };
         let (gkr, out) = info_span!("bitz gkr")
             .in_scope(|| ProductGkrProof::prove_batched::<Val, _, _>(&leaves, shape, challenger));
