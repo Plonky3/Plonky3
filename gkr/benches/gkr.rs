@@ -1,6 +1,8 @@
-//! Product GKR over one tree of `2^n` leaves.
+//! Product GKR over one tree of `2^n` leaves, and over a batched table of `2^n` leaves.
 //!
 //! `GF(2^192)` packs over `GF(2^64)`; the tower field `GF(2^128)` of the bus stays scalar.
+//!
+//! A batched table takes `n - h` batch variables with `h = ceil(0.6 n) - 1`, the split of the BitZ benchmarks.
 //!
 //! Run once with `RAYON_NUM_THREADS=1` for the single-thread numbers.
 
@@ -9,7 +11,7 @@ use p3_binary_field::{BinaryChallenger, BinaryField128, Poly64, Poly192};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, HashChallenger};
 use p3_field::ExtensionField;
-use p3_gkr::{ProductGkrProof, ProductGkrRootShape, ProductGkrShape};
+use p3_gkr::{DenseLeaves, ProductGkrProof, ProductGkrRootShape, ProductGkrShape};
 use p3_keccak::Keccak256Hash;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{RngExt, SeedableRng};
@@ -52,7 +54,35 @@ where
     group.finish();
 }
 
+/// Proves and verifies a batched `GF(2^192)` table of every size in `sizes`.
+fn bench_batched(c: &mut Criterion, sizes: &[usize]) {
+    let mut group = c.benchmark_group("gkr_batched");
+    group.sample_size(10);
+    let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+    for &n in sizes {
+        let height = (3 * n).div_ceil(5) - 1;
+        let shape = ProductGkrShape::batched(height, n - height).expect("a word-sized table");
+        let leaves = DenseLeaves((0..1usize << n).map(|_| rng.random::<Poly192>()).collect());
+        group.bench_function(BenchmarkId::new("prove", n), |b| {
+            b.iter(|| {
+                ProductGkrProof::prove_batched::<Poly64, _, _>(
+                    &leaves,
+                    shape,
+                    &mut fresh::<Poly64>(),
+                )
+            });
+        });
+        let (proof, _) =
+            ProductGkrProof::prove_batched::<Poly64, _, _>(&leaves, shape, &mut fresh::<Poly64>());
+        group.bench_function(BenchmarkId::new("verify", n), |b| {
+            b.iter(|| proof.verify::<Poly64, _>(shape, &mut fresh::<Poly64>()));
+        });
+    }
+    group.finish();
+}
+
 fn bench_gkr(c: &mut Criterion) {
+    bench_batched(c, &[16, 18, 20, 22, 24]);
     bench_field::<Poly64, Poly192>(c, "poly192", &[16, 20, 24]);
     bench_field::<BinaryField128, BinaryField128>(c, "binary128", &[16, 20, 22]);
 }

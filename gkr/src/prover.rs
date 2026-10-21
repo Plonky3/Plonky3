@@ -93,7 +93,7 @@ pub(super) struct ProductLayers<'a, F: Clone> {
 
 impl<'a, F: Field> ProductLayers<'a, F> {
     /// Builds every product level needed by the radix-four descent, borrowing the leaves.
-    pub(super) fn new<Base: Field>(leaves: &'a [F], log_height: usize) -> Self
+    pub(super) fn new<Base: Field>(leaves: impl Into<Cow<'a, [F]>>, log_height: usize) -> Self
     where
         F: ExtensionField<Base>,
     {
@@ -139,6 +139,15 @@ impl<'a, F: Field> ProductLayers<'a, F> {
             .last()
             .expect("every product tree retains its root layer")
             .get(0)
+    }
+
+    /// Returns the first `count` values of the root level, a batch of roots.
+    pub(super) fn roots(&self, count: usize) -> Vec<F> {
+        let top = self
+            .layers
+            .last()
+            .expect("every product tree retains its root layer");
+        (0..count).map(|index| top.get(index)).collect()
     }
 
     /// Reads the two children of a root-most binary layer.
@@ -284,13 +293,13 @@ impl<'a, F: Field> RadixFourState<'a, F> {
     fn fold_chunks<C: ChunkFold<F>>(&mut self, fold: &C) -> Vec<C::Sums> {
         let chunks = self.chunks();
         let width = C::WIDTH;
-        let live = self.live / (width / 4);
-        let output = |chunk: usize| 4 * self.live_of(chunk).div_ceil(width);
+        let live = self.live / (width / C::ROW);
+        let output = |chunk: usize| C::ROW * self.live_of(chunk).div_ceil(width);
         let len = (0..chunks).map(output).sum::<usize>();
         let run = if chunks > 1 { output(0) } else { len.max(1) };
         let task_bytes = self.task_bytes();
 
-        // A short last chunk can write up to three values past its input, which spare capacity holds.
+        // A short last chunk can write up to a row past its input, which spare capacity holds.
         let end = chunks.saturating_sub(1) * self.stride + chunks.checked_sub(1).map_or(0, output);
         if live >= MIN_LIVE
             && let Cow::Owned(values) = &mut self.values
@@ -369,14 +378,17 @@ impl<'a, F: Field> RadixFourState<'a, F> {
         })
     }
 
-    /// Sums the polynomial of the next round over every pair of rows.
-    fn line<Base: Field>(&self, weights: &BlockWeights<F>) -> PairSums<F>
+    /// Sums the polynomial of the next round over every pair of rows of `N` children.
+    fn line<Base: Field, const N: usize>(
+        &self,
+        weights: &(impl PairWeights<F> + ?Sized),
+    ) -> PairSums<F>
     where
         F: ExtensionField<Base>,
     {
         self.sum_chunks(|values, first| {
             let mut sums = PairSums::new();
-            sums.add_pairs::<Base>(values, first / PAIR, weights);
+            sums.add_pairs::<Base, N>(values, first / (2 * N), weights);
             sums
         })
         .into_iter()
@@ -386,15 +398,15 @@ impl<'a, F: Field> RadixFourState<'a, F> {
     /// Binds the next variable to `challenge`.
     ///
     /// Given pair weights, it also sums the next round's polynomial from the rows it writes.
-    fn fold_one<Base: Field>(
+    fn fold_one<Base: Field, const N: usize, W: PairWeights<F> + ?Sized>(
         &mut self,
         challenge: F,
-        weights: Option<&BlockWeights<F>>,
+        weights: Option<&W>,
     ) -> Option<PairSums<F>>
     where
         F: ExtensionField<Base>,
     {
-        let partials = self.fold_chunks(&FoldOne::<Base, F> {
+        let partials = self.fold_chunks(&FoldOne::<Base, F, W, N> {
             challenge,
             weights,
             base: PhantomData,
@@ -427,8 +439,8 @@ impl<'a, F: Field> RadixFourState<'a, F> {
         product
     }
 
-    /// Reads the four terminal child claims after every parent variable is bound.
-    fn children(&self) -> [F; 4] {
+    /// Reads the `N` terminal child claims after every parent variable is bound.
+    fn children<const N: usize>(&self) -> [F; N] {
         core::array::from_fn(|child| self.get(child))
     }
 }
@@ -440,6 +452,9 @@ trait ChunkFold<F>: Sync {
 
     /// Input values that fold into one row.
     const WIDTH: usize;
+
+    /// Values in one row.
+    const ROW: usize;
 
     /// Folds `input` values through `io`, its first output being value `first` of the folded level.
     fn fold(&self, io: &mut impl FoldIo<F>, input: usize, first: usize) -> Self::Sums;
@@ -460,6 +475,8 @@ impl<Base: Field, F: ExtensionField<Base>> ChunkFold<F> for FoldTwo<'_, Base, F>
 
     const WIDTH: usize = BLOCK;
 
+    const ROW: usize = 4;
+
     #[inline]
     fn fold(&self, io: &mut impl FoldIo<F>, input: usize, first: usize) -> Self::Sums {
         let rows = fold_blocks::<Base, F>(io, input, self.challenges);
@@ -474,28 +491,32 @@ impl<Base: Field, F: ExtensionField<Base>> ChunkFold<F> for FoldTwo<'_, Base, F>
 }
 
 /// Binds one variable, summing the next round when given its pair weights.
-struct FoldOne<'w, Base, F> {
+struct FoldOne<'w, Base, F, W: ?Sized, const N: usize> {
     /// The challenge.
     challenge: F,
     /// The next round's pair weights.
-    weights: Option<&'w BlockWeights<F>>,
+    weights: Option<&'w W>,
     /// The field the extension packs over.
     base: PhantomData<fn() -> Base>,
 }
 
-impl<Base: Field, F: ExtensionField<Base>> ChunkFold<F> for FoldOne<'_, Base, F> {
+impl<Base: Field, F: ExtensionField<Base>, W: PairWeights<F> + ?Sized, const N: usize> ChunkFold<F>
+    for FoldOne<'_, Base, F, W, N>
+{
     type Sums = Option<PairSums<F>>;
 
-    const WIDTH: usize = PAIR;
+    const WIDTH: usize = 2 * N;
+
+    const ROW: usize = N;
 
     #[inline]
     fn fold(&self, io: &mut impl FoldIo<F>, input: usize, first: usize) -> Self::Sums {
-        let rows = fold_pairs::<Base, F>(io, input, self.challenge);
+        let rows = fold_pairs::<Base, F, N>(io, input, self.challenge);
 
         // The rows just written are still in cache, so the next round reads no memory.
         self.weights.map(|weights| {
             let mut sums = PairSums::new();
-            sums.add_pairs::<Base>(io.output(rows), first / PAIR, weights);
+            sums.add_pairs::<Base, N>(io.output(rows), first / (2 * N), weights);
             sums
         })
     }
@@ -631,24 +652,25 @@ fn fold_blocks<Base: Field, F: ExtensionField<Base>>(
 /// A short last pair is completed by implicit identities.
 /// Returns the output values written.
 #[inline]
-fn fold_pairs<Base: Field, F: ExtensionField<Base>>(
+fn fold_pairs<Base: Field, F: ExtensionField<Base>, const N: usize>(
     io: &mut impl FoldIo<F>,
     len: usize,
     challenge: F,
 ) -> usize {
-    let pairs = len / PAIR;
+    let width = 2 * N;
+    let pairs = len / width;
 
-    // Whole groups go through the packed extension, lane `4 p + c` holding child `c` of pair `p`.
+    // Whole groups go through the packed extension, lane `N p + c` holding child `c` of pair `p`.
     // Those lanes are the group's output rows in order.
     let lanes = Base::Packing::WIDTH;
-    let packed = if lanes % 4 == 0 && (4..=MAX_LANES).contains(&lanes) {
-        let group_pairs = lanes / 4;
+    let packed = if lanes % N == 0 && (N..=MAX_LANES).contains(&lanes) {
+        let group_pairs = lanes / N;
         let mut folded = [F::ZERO; MAX_LANES];
         for group in 0..pairs / group_pairs {
-            let start = group * group_pairs * PAIR;
+            let start = group * group_pairs * width;
             let row = |index: usize| {
                 F::ExtensionPacking::from_ext_fn(|lane| {
-                    io.input(start + PAIR * (lane / 4) + 4 * index + lane % 4)
+                    io.input(start + width * (lane / N) + N * index + lane % N)
                 })
             };
             let (lower, upper) = (row(0), row(1));
@@ -663,8 +685,8 @@ fn fold_pairs<Base: Field, F: ExtensionField<Base>>(
     };
 
     // The pairs short of a group go one at a time, the last one completed by identities.
-    for pair in packed..len.div_ceil(PAIR) {
-        let start = pair * PAIR;
+    for pair in packed..len.div_ceil(width) {
+        let start = pair * width;
         let value = |index: usize| {
             if start + index < len {
                 io.input(start + index)
@@ -672,14 +694,14 @@ fn fold_pairs<Base: Field, F: ExtensionField<Base>>(
                 F::ONE
             }
         };
-        let row: [F; 4] = core::array::from_fn(|child| {
-            interpolate_pair([value(child), value(4 + child)], challenge)
+        let row: [F; N] = core::array::from_fn(|child| {
+            interpolate_pair([value(child), value(N + child)], challenge)
         });
         for (child, value) in row.into_iter().enumerate() {
-            io.write(4 * pair + child, value);
+            io.write(N * pair + child, value);
         }
     }
-    4 * len.div_ceil(PAIR)
+    N * len.div_ceil(width)
 }
 
 /// Writes the product of each row of four of `source` into `out`.
@@ -715,6 +737,48 @@ fn padded_block<F: Field>(short: &[F]) -> [F; BLOCK] {
     let mut block = [F::ONE; BLOCK];
     block[..short.len()].copy_from_slice(short);
     block
+}
+
+/// The equality weight of every pair of rows in one round.
+trait PairWeights<F: Field>: Sync {
+    /// The weight of pair `pair`.
+    fn at(&self, pair: usize) -> F;
+
+    /// The weights of the pairs from `start`, one per lane of the packed extension.
+    fn packed_at<Base: Field>(&self, start: usize) -> F::ExtensionPacking
+    where
+        F: ExtensionField<Base>;
+}
+
+impl<F: Field> PairWeights<F> for BlockWeights<F> {
+    #[inline]
+    fn at(&self, pair: usize) -> F {
+        Self::at(self, pair)
+    }
+
+    #[inline]
+    fn packed_at<Base: Field>(&self, start: usize) -> F::ExtensionPacking
+    where
+        F: ExtensionField<Base>,
+    {
+        Self::packed_at::<Base>(self, start)
+    }
+}
+
+/// A flat table of pair weights.
+impl<F: Field> PairWeights<F> for [F] {
+    #[inline]
+    fn at(&self, pair: usize) -> F {
+        self[pair]
+    }
+
+    #[inline]
+    fn packed_at<Base: Field>(&self, start: usize) -> F::ExtensionPacking
+    where
+        F: ExtensionField<Base>,
+    {
+        F::ExtensionPacking::from_ext_slice(&self[start..start + Base::Packing::WIDTH])
+    }
 }
 
 /// The equality weight of every block, factored into two short tables.
@@ -929,40 +993,50 @@ impl<F: Field> PairSums<F> {
     /// Whole groups of pairs go through the packed extension, pair `l` of a group in lane `l`.
     /// The pairs short of a group, the last one possibly short of rows, go one at a time.
     #[inline]
-    fn add_pairs<Base: Field>(&mut self, values: &[F], first: usize, weights: &BlockWeights<F>)
-    where
+    fn add_pairs<Base: Field, const N: usize>(
+        &mut self,
+        values: &[F],
+        first: usize,
+        weights: &(impl PairWeights<F> + ?Sized),
+    ) where
         F: ExtensionField<Base>,
     {
+        let width = 2 * N;
         let lanes = Base::Packing::WIDTH;
-        let (pairs, short) = values.as_chunks::<PAIR>();
+        let pairs = values.len() / width;
         let packed = if (2..=MAX_LANES).contains(&lanes) {
-            pairs.len() / lanes * lanes
+            pairs / lanes * lanes
         } else {
             0
         };
 
         if packed > 0 {
             let mut terms = PairTerms::<F::ExtensionPacking>::new();
-            for (index, group) in pairs[..packed].chunks_exact(lanes).enumerate() {
+            for (index, group) in values[..packed * width]
+                .chunks_exact(lanes * width)
+                .enumerate()
+            {
                 // Lane `l` carries pair `first + lanes * index + l` and its weight.
                 let weight = weights.packed_at::<Base>(first + index * lanes);
-                let corners: [F::ExtensionPacking; PAIR] = core::array::from_fn(|corner| {
-                    F::ExtensionPacking::from_ext_fn(|lane| group[lane][corner])
-                });
-                terms.add(&corners, weight);
+                let mut corners = [F::ExtensionPacking::ZERO; PAIR];
+                for (corner, packed) in corners[..width].iter_mut().enumerate() {
+                    *packed = F::ExtensionPacking::from_ext_fn(|lane| group[lane * width + corner]);
+                }
+                terms.add::<N>(&corners, weight);
             }
 
             self.add_lanes::<Base>(terms);
         }
 
         let mut terms = PairTerms::<F>::new();
-        for (index, pair) in pairs.iter().enumerate().skip(packed) {
-            terms.add(pair, weights.at(first + index));
-        }
-        if !short.is_empty() {
-            let mut pair = [F::ONE; PAIR];
-            pair[..short.len()].copy_from_slice(short);
-            terms.add(&pair, weights.at(first + pairs.len()));
+        for (index, pair) in values[packed * width..]
+            .chunks(width)
+            .enumerate()
+            .map(|(index, pair)| (packed + index, pair))
+        {
+            let mut padded = [F::ONE; PAIR];
+            padded[..pair.len()].copy_from_slice(pair);
+            terms.add::<N>(&padded, weights.at(first + index));
         }
         let (sums, weight) = terms.finish();
         self.weight += weight;
@@ -988,10 +1062,16 @@ impl<F: Field> PairSums<F> {
     ///
     /// Pairs never summed are all ones, so each contributes its weight to the constant.
     /// The weights of all pairs sum to one, so those pairs contribute one minus the summed weight.
-    fn batch(sums: Vec<Self>, batching: F) -> [F; 5] {
+    fn batch<const N: usize>(sums: Vec<Self>, batching: F) -> [F; 5] {
         let mut product = [F::ZERO; 5];
         for (sums, power) in sums.into_iter().zip(batching.powers()) {
-            let mut coefficients = karatsuba_three_combine(sums.terms);
+            let mut coefficients = if N == 2 {
+                // Two lines multiply into a quadratic, whose terms are `c_0`, `c_1` and `d_01`.
+                let [c0, c1, d01, ..] = sums.terms;
+                [c0, d01 - c0 - c1, c1, F::ZERO, F::ZERO]
+            } else {
+                karatsuba_three_combine(sums.terms)
+            };
             coefficients[0] += F::ONE - sums.weight;
             for (total, coefficient) in product.iter_mut().zip(coefficients) {
                 *total += power * coefficient;
@@ -1027,18 +1107,20 @@ impl<R: PrimeCharacteristicRing + Copy> PairTerms<R> {
         }
     }
 
-    /// Buffers one pair's factors, its weight carried by the first child.
+    /// Buffers the factors of one pair of rows of `N` children, its weight carried by the first child.
+    ///
+    /// The pair's values are the first `2 N` of `pair`.
     #[inline(always)]
-    fn add(&mut self, pair: &[R; PAIR], weight: R) {
+    fn add<const N: usize>(&mut self, pair: &[R; PAIR], weight: R) {
         self.weight += weight;
-        let [left, right] = pair_factors(pair, weight);
+        let [left, right] = pair_factors::<R, N>(pair, weight);
         for term in 0..6 {
             self.left[term][self.len] = left[term];
             self.right[term][self.len] = right[term];
         }
         self.len += 1;
         if self.len == DOT_PAIRS {
-            for term in 0..6 {
+            for term in 0..if N == 2 { 3 } else { 6 } {
                 self.sums[term] += R::dot_product(&self.left[term], &self.right[term]);
             }
             self.len = 0;
@@ -1057,14 +1139,26 @@ impl<R: PrimeCharacteristicRing + Copy> PairTerms<R> {
     }
 }
 
-/// The factors of the six products whose sums give the coefficients of `w c_0 c_1 c_2 c_3` along a pair.
+/// The factors of the products whose sums give the coefficients of `w c_0 ... c_(N-1)` along a pair.
 ///
-/// Child `c` is the line through rows zero and one; the first two lines and the last two multiply into quadratics.
-/// Their product's Karatsuba terms pair up as `left[t] * right[t]`.
+/// Child `c` is the line through rows zero and one.
+/// Four lines multiply in two quadratics, whose product's Karatsuba terms pair up as `left[t] * right[t]`.
+/// Two lines give the three Karatsuba terms of their own product.
 #[inline(always)]
-fn pair_factors<R: PrimeCharacteristicRing + Copy>(pair: &[R; PAIR], weight: R) -> [[R; 6]; 2] {
-    let line = |child: usize| [pair[child], pair[4 + child] - pair[child]];
+fn pair_factors<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    pair: &[R; PAIR],
+    weight: R,
+) -> [[R; 6]; 2] {
+    let line = |child: usize| [pair[child], pair[N + child] - pair[child]];
     let [a, b] = line(0);
+    if N == 2 {
+        let [c, d] = line(1);
+        let (a, b) = (a * weight, b * weight);
+        return [
+            [a, b, a + b, R::ZERO, R::ZERO, R::ZERO],
+            [c, d, c + d, R::ZERO, R::ZERO, R::ZERO],
+        ];
+    }
     let left = line_product([a * weight, b * weight], line(1));
     let right = line_product(line(2), line(3));
     let spread = |q: [R; 3]| [q[0], q[1], q[2], q[0] + q[1], q[0] + q[2], q[1] + q[2]];
@@ -1294,13 +1388,28 @@ fn fuses_rounds<Base: Field>() -> bool {
     lanes > 1 && (lanes > SINGLE_MAX_LANES || current_num_threads() > SINGLE_MAX_WORKERS)
 }
 
-/// Per-tree states reduced by one shared radix-four sumcheck.
-pub(super) struct RadixFourBatch<'a, F: Clone> {
+/// Per-tree states reduced by one shared sumcheck over `N` children, packed over `B`.
+///
+/// A radix-four layer has four children; a binary layer whose parent point has coordinates has two.
+pub struct RadixFourBatch<'a, B, F: Clone, const N: usize> {
     /// One folding state for each product tree.
     states: Vec<RadixFourState<'a, F>>,
+    /// A bound challenge whose fold waits for the next round's pass, when rounds are played one by one.
+    pending: Option<F>,
+    /// The field the extension packs over.
+    base: PhantomData<fn() -> B>,
 }
 
-impl<'a, F: Field> RadixFourBatch<'a, F> {
+impl<'a, B: Field, F: ExtensionField<B>, const N: usize> RadixFourBatch<'a, B, F, N> {
+    /// Wraps one state per tree.
+    const fn from_states(states: Vec<RadixFourState<'a, F>>) -> Self {
+        Self {
+            states,
+            pending: None,
+            base: PhantomData,
+        }
+    }
+
     /// Creates the batched states from one retained level per tree, borrowing each.
     #[cfg(test)]
     pub(super) fn new(layers: &'a [ProductLayers<'_, F>], depth: usize) -> Self {
@@ -1308,7 +1417,7 @@ impl<'a, F: Field> RadixFourBatch<'a, F> {
             .iter()
             .map(|layers| RadixFourState::new(IdentityPrefix::new(&*layers.layers[depth].values)))
             .collect();
-        Self { states }
+        Self::from_states(states)
     }
 
     /// Consumes one retained level per tree, reading it in place.
@@ -1317,7 +1426,7 @@ impl<'a, F: Field> RadixFourBatch<'a, F> {
             .iter_mut()
             .map(|layers| RadixFourState::new(layers.take_layer(depth)))
             .collect();
-        Self { states }
+        Self::from_states(states)
     }
 
     /// Runs every sumcheck round of the layer.
@@ -1326,32 +1435,26 @@ impl<'a, F: Field> RadixFourBatch<'a, F> {
     /// Its rows are weighed by `eq(point[j + 1..], .)`, and the line `eq(point[j], X)` scales its message.
     ///
     /// `send` takes each round's message and returns its challenge.
-    pub(super) fn prove_rounds<Base: Field>(
+    pub(super) fn prove_rounds(
         &mut self,
         point: &[F],
         batching: F,
         send: impl FnMut([F; ROUND_POLY_LEN]) -> F,
-    ) -> Vec<F>
-    where
-        F: ExtensionField<Base>,
-    {
-        if fuses_rounds::<Base>() {
-            self.prove_pairs::<Base>(point, batching, send)
+    ) -> Vec<F> {
+        if N == 4 && fuses_rounds::<B>() {
+            self.prove_pairs(point, batching, send)
         } else {
-            self.prove_singles::<Base>(point, batching, send)
+            self.prove_singles(point, batching, send)
         }
     }
 
     /// Runs the rounds one at a time, one pass over the rows each.
-    fn prove_singles<Base: Field>(
+    fn prove_singles(
         &mut self,
         point: &[F],
         batching: F,
         mut send: impl FnMut([F; ROUND_POLY_LEN]) -> F,
-    ) -> Vec<F>
-    where
-        F: ExtensionField<Base>,
-    {
+    ) -> Vec<F> {
         let rounds = point.len();
         let nodes = RoundNodes::<F>::new();
         let mut challenges = Vec::with_capacity(rounds);
@@ -1363,12 +1466,12 @@ impl<'a, F: Field> RadixFourBatch<'a, F> {
             let weights = BlockWeights::new(&point[1..]);
             self.states
                 .iter()
-                .map(|state| state.line::<Base>(&weights))
+                .map(|state| state.line::<B, N>(&weights))
                 .collect::<Vec<_>>()
         });
         while let Some(trees) = sums {
             let j = challenges.len();
-            let inner = nodes.evaluate(&PairSums::batch(trees, batching));
+            let inner = nodes.evaluate(&PairSums::batch::<N>(trees, batching));
             let challenge = eq.round(&nodes, point[j], inner, &mut send);
             challenges.push(challenge);
 
@@ -1377,7 +1480,7 @@ impl<'a, F: Field> RadixFourBatch<'a, F> {
             let next = self
                 .states
                 .iter_mut()
-                .map(|state| state.fold_one::<Base>(challenge, weights.as_ref()))
+                .map(|state| state.fold_one::<B, N, _>(challenge, weights.as_ref()))
                 .collect::<Vec<_>>();
             sums = next.into_iter().collect();
         }
@@ -1387,15 +1490,12 @@ impl<'a, F: Field> RadixFourBatch<'a, F> {
     /// Runs the rounds in pairs, one pass over the rows per pair.
     ///
     /// An odd count leaves one round, over two rows.
-    fn prove_pairs<Base: Field>(
+    fn prove_pairs(
         &mut self,
         point: &[F],
         batching: F,
         mut send: impl FnMut([F; ROUND_POLY_LEN]) -> F,
-    ) -> Vec<F>
-    where
-        F: ExtensionField<Base>,
-    {
+    ) -> Vec<F> {
         let rounds = point.len();
         let nodes = RoundNodes::<F>::new();
         let mut challenges = Vec::with_capacity(rounds);
@@ -1408,7 +1508,7 @@ impl<'a, F: Field> RadixFourBatch<'a, F> {
             let weights = BlockWeights::new(&point[2..]);
             self.states
                 .iter()
-                .map(|state| state.grid::<Base>(&weights))
+                .map(|state| state.grid::<B>(&weights))
                 .collect::<Vec<_>>()
         });
         while let Some(sums) = grids {
@@ -1425,7 +1525,7 @@ impl<'a, F: Field> RadixFourBatch<'a, F> {
             let next = self
                 .states
                 .iter_mut()
-                .map(|state| state.fold_two::<Base>([low, high], weights.as_ref()))
+                .map(|state| state.fold_two::<B>([low, high], weights.as_ref()))
                 .collect::<Vec<_>>();
             grids = next.into_iter().collect();
         }
@@ -1448,8 +1548,79 @@ impl<'a, F: Field> RadixFourBatch<'a, F> {
     }
 
     /// Collects the terminal child claims in tree order.
-    pub(super) fn children(&self) -> Vec<[F; 4]> {
-        self.states.iter().map(RadixFourState::children).collect()
+    pub(super) fn children(&self) -> Vec<[F; N]> {
+        debug_assert!(self.pending.is_none());
+        self.states
+            .iter()
+            .map(RadixFourState::children::<N>)
+            .collect()
+    }
+}
+
+/// The sumcheck of one layer with `N` children per tree, as the product prover plays it.
+///
+/// An implementation over a cheaper leaf representation must return what the dense batch returns, so the transcript is unchanged.
+pub trait LayerRounds<F, const N: usize> {
+    /// The round message from the normalized equality suffix, the bound coordinate's eq endpoints, the live parent rows and the tree-batching challenge.
+    fn round(
+        &mut self,
+        equality: &[F],
+        equality_pair: [F; 2],
+        logical_len: usize,
+        batching: F,
+    ) -> [F; ROUND_POLY_LEN];
+
+    /// Binds the lowest parent variable to `challenge`.
+    fn fold(&mut self, challenge: F, logical_len: usize);
+
+    /// The terminal child claims of every tree once all parent variables are bound.
+    fn children(&self) -> Vec<[F; N]>;
+}
+
+/// The dense batch played one round at a time, each fold deferred into the next round's pass.
+impl<B: Field, F: ExtensionField<B>, const N: usize> LayerRounds<F, N>
+    for RadixFourBatch<'_, B, F, N>
+{
+    fn round(
+        &mut self,
+        equality: &[F],
+        equality_pair: [F; 2],
+        logical_len: usize,
+        batching: F,
+    ) -> [F; ROUND_POLY_LEN] {
+        debug_assert!(logical_len >= 2);
+        debug_assert_eq!(equality.len(), logical_len / 2);
+        let pending = self.pending.take();
+        let trees = self
+            .states
+            .iter_mut()
+            .map(|state| match pending {
+                Some(challenge) => state
+                    .fold_one::<B, N, [F]>(challenge, Some(equality))
+                    .expect("a fold sums when weights are given"),
+                None => state.line::<B, N>(equality),
+            })
+            .collect();
+        let nodes = RoundNodes::<F>::new();
+        let inner = nodes.evaluate(&PairSums::batch::<N>(trees, batching));
+        let eq_values = nodes.line(equality_pair[0], equality_pair[1]);
+        core::array::from_fn(|index| eq_values[index] * inner[index])
+    }
+
+    fn fold(&mut self, challenge: F, logical_len: usize) {
+        debug_assert!(self.pending.is_none());
+        if logical_len > 2 {
+            self.pending = Some(challenge);
+            return;
+        }
+        // The last fold leaves the terminal claims, so it runs now.
+        for state in &mut self.states {
+            state.fold_one::<B, N, [F]>(challenge, None);
+        }
+    }
+
+    fn children(&self) -> Vec<[F; N]> {
+        Self::children(self)
     }
 }
 
@@ -1656,9 +1827,9 @@ mod tests {
                             challenge
                         };
                         let challenges = if pairs {
-                            batch.prove_pairs::<Base>(&anchor, batching, send)
+                            batch.prove_pairs(&anchor, batching, send)
                         } else {
-                            batch.prove_singles::<Base>(&anchor, batching, send)
+                            batch.prove_singles(&anchor, batching, send)
                         };
                         assert_eq!(challenges.len(), variables);
 
