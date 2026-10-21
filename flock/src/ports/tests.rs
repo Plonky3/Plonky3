@@ -9,6 +9,7 @@ use rand::rngs::SmallRng;
 use super::{PortsError, PublicPorts};
 use crate::lincheck::LincheckError;
 use crate::opening::WitnessPcs;
+use crate::piop::PiopProof;
 use crate::proof::FlockProof;
 use crate::tests::{random_circuit, random_rows};
 use crate::zerocheck::MIN_LOG_N;
@@ -147,8 +148,10 @@ fn a_prover_whose_witness_breaks_the_statement_is_rejected() {
     let opening = pcs.open(data, &[claim], &[], &mut ch).unwrap();
     let forged = FlockProof {
         commitment,
-        zerocheck,
-        lincheck,
+        piop: PiopProof {
+            zerocheck,
+            lincheck,
+        },
         opening,
     };
     assert!(matches!(

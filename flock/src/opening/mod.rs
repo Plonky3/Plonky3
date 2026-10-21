@@ -8,12 +8,10 @@ mod tests;
 use alloc::vec::Vec;
 
 use p3_binary_pcs::whir::preset::keccak64::{self, WitnessCommitment};
-use p3_binary_pcs::whir::{CommitmentError, SuffixTensors, WeightedClaim, WeightedOpening, preset};
-use p3_multilinear_util::point::Point;
+use p3_binary_pcs::whir::{CommitmentError, SuffixTensors, WeightedClaim, preset};
 
 use crate::config::{FlockChallenger, PcsParams};
 use crate::point::{QuirkyClaim, QuirkyPoint};
-use crate::skip::{SKIP_SIZE, lagrange_weights};
 use crate::{Challenge, Val};
 
 /// Merkle commitment to committed elements.
@@ -126,16 +124,10 @@ impl WitnessPcs {
     }
 }
 
-/// Quirky claims as weighted claims: Lagrange weights at the skip coordinate on the absorbed bits.
+/// Quirky claims as weighted claims.
 fn weighted(claims: &[QuirkyClaim]) -> Vec<WeightedClaim<Challenge>> {
     claims
         .iter()
-        .map(|claim| WeightedClaim {
-            opening: WeightedOpening {
-                high: Point::new(claim.point.rest.clone()),
-                low_weights: lagrange_weights(claim.point.skip, SKIP_SIZE),
-            },
-            value: claim.value,
-        })
+        .map(|claim| claim.clone().into_weighted())
         .collect()
 }

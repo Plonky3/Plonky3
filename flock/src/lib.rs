@@ -17,6 +17,7 @@ mod error;
 pub mod gadgets;
 pub mod lincheck;
 pub mod opening;
+pub mod piop;
 mod point;
 pub mod ports;
 mod proof;

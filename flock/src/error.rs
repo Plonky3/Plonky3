@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::lincheck::LincheckError;
 use crate::opening::OpeningError;
+use crate::piop::RegionError;
 use crate::ports::PortsError;
 use crate::zerocheck::ZerocheckError;
 
@@ -17,6 +18,9 @@ pub enum ProvingError {
     /// The public words do not fit the batch or the witness.
     #[error(transparent)]
     Ports(#[from] PortsError),
+    /// The placement does not hold the batch.
+    #[error(transparent)]
+    Region(#[from] RegionError),
 }
 
 /// Why a proof is rejected.
@@ -35,4 +39,7 @@ pub enum VerificationError {
     /// The public words or their check failed.
     #[error(transparent)]
     Ports(#[from] PortsError),
+    /// The placement does not hold the batch.
+    #[error(transparent)]
+    Region(#[from] RegionError),
 }
