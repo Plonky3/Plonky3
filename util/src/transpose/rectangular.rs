@@ -2051,6 +2051,8 @@ mod tests {
             (50..=200_usize, 10..=50_usize),
             // Tall rectangle with remainders (medium path)
             (10..=50_usize, 50..=200_usize),
+            // Narrow and taller than one band of edge-strip rows
+            (1..=40_usize, 250..=600_usize),
             // Large path: MEDIUM_LEN ≤ len < PARALLEL_THRESHOLD (recursive)
             //
             // These exercise the cache-oblivious recursive subdivision.

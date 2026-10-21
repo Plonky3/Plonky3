@@ -21,6 +21,8 @@
 //!
 //! The vector kernels cover 4-byte elements, the size of every 31-bit field.
 //!
+//! On x86 they also cover 8-byte elements, the size of a 64-bit field.
+//!
 //! Every other element size, and every target without a kernel, takes the scalar reference.
 
 #[cfg(any(
@@ -195,6 +197,19 @@ pub(crate) unsafe fn transpose_rows_strided_words<'a, T, R>(
         return;
     }
 
+    // The same argument, for 8-byte, 8-byte-aligned elements and 64-bit lanes.
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    if size_of::<T>() == 8 && align_of::<T>() == 8 {
+        // SAFETY: as above, with `u64` in place of `u32`.
+        let dst = unsafe { slice::from_raw_parts_mut(dst.as_mut_ptr().cast(), dst.len()) };
+        let row = |r: usize| -> &'a [u64] {
+            let src: &'a [T] = row(r);
+            unsafe { slice::from_raw_parts(src.as_ptr().cast::<u64>(), src.len()) }
+        };
+        simd::transpose_u64(rows, cols, row, dst, stride);
+        return;
+    }
+
     transpose_rows_scalar(rows, cols, row, dst, stride);
 }
 
@@ -249,7 +264,7 @@ fn for_each_tile<const L: usize>(
     }
 }
 
-/// AVX-512 kernel: one 512-bit register holds one 16-element row of a tile.
+/// AVX-512 kernels: one 512-bit register holds one row of a tile.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 mod simd {
     use core::arch::x86_64::*;
@@ -257,8 +272,11 @@ mod simd {
 
     use super::for_each_tile;
 
-    /// Elements per register, and the widest tile side.
+    /// 32-bit elements per register, and the widest 32-bit tile side.
     const L: usize = 16;
+
+    /// 64-bit elements per register, and the side of a 64-bit tile.
+    const L64: usize = 8;
 
     /// Transpose 32-bit words, with the contract of the strided entry point.
     ///
@@ -396,6 +414,60 @@ mod simd {
         }
     }
 
+    /// Transpose 64-bit words, with the contract of the strided entry point.
+    ///
+    /// Clipped tiles use masked loads and stores, exactly as for 32-bit words.
+    #[inline]
+    pub(super) fn transpose_u64<'a>(
+        rows: usize,
+        cols: usize,
+        row: impl Fn(usize) -> &'a [u64],
+        dst: &mut [u64],
+        stride: usize,
+    ) {
+        for_each_tile::<L64>(rows, cols, |r0, c0, h, w| {
+            let full = h == L64 && w == L64;
+
+            // Phase 1: one register per input row, zero past the tile height.
+            let mask = lane_mask64(w);
+            let mut t: [__m512i; L64] = array::from_fn(|i| {
+                if i >= h {
+                    // SAFETY: this module is compiled only with AVX-512F enabled.
+                    return unsafe { _mm512_setzero_si512() };
+                }
+                // Validate the exact slice this load reads.
+                let src = row(r0 + i)[c0..c0 + w].as_ptr();
+
+                // SAFETY: the load reads at most w words, all inside the checked slice.
+                unsafe {
+                    if full {
+                        _mm512_loadu_si512(src.cast())
+                    } else {
+                        _mm512_maskz_loadu_epi64(mask, src.cast())
+                    }
+                }
+            });
+
+            // Phase 2: transpose inside the registers.
+            transpose_8x8(&mut t);
+
+            // Phase 3: register j now holds input column c0 + j.
+            let mask = lane_mask64(h);
+            for (j, reg) in t.iter().enumerate().take(w) {
+                let out = dst.as_mut_ptr().wrapping_add((c0 + j) * stride + r0);
+
+                // SAFETY: the store writes at most h words of column j, inside the output.
+                unsafe {
+                    if full {
+                        _mm512_storeu_si512(out.cast(), *reg);
+                    } else {
+                        _mm512_mask_storeu_epi64(out.cast(), mask, *reg);
+                    }
+                }
+            }
+        });
+    }
+
     #[cfg(test)]
     #[test]
     fn full_tile_uses_each_callback_result_once() {
@@ -496,9 +568,79 @@ mod simd {
             }
         }
     }
+
+    /// Mask with the low `n` of 8 lanes set.
+    #[inline(always)]
+    const fn lane_mask64(n: usize) -> __mmask8 {
+        // Shifting a 32-bit one keeps n = 8 defined.
+        ((1u32 << n) - 1) as __mmask8
+    }
+
+    /// Transpose an 8 x 8 tile of 64-bit words held one row per register.
+    ///
+    /// A register is four 128-bit blocks, so the tile is a 4 x 4 grid of 2 x 2 blocks.
+    ///
+    /// - Stage 1: 64-bit unpacks transpose every 2 x 2 block.
+    /// - Stages 2 and 3: block shuffles transpose the 4 x 4 grid of blocks.
+    #[inline(always)]
+    fn transpose_8x8(t: &mut [__m512i; L64]) {
+        // SAFETY: AVX-512F is enabled at compile time for this module.
+        unsafe {
+            // Stage 1: rows (g, g + 1) for every even g.
+            //
+            // Afterwards, block k of register g + c holds rows g, g + 1 of column 2k + c.
+            for g in (0..L64).step_by(2) {
+                let (a, b) = (t[g], t[g + 1]);
+                t[g] = _mm512_unpacklo_epi64(a, b);
+                t[g + 1] = _mm512_unpackhi_epi64(a, b);
+            }
+        }
+
+        // Stages 2 and 3: for each c, gather block k of registers c, 2 + c, 4 + c, 6 + c.
+        let s = *t;
+        for c in 0..2 {
+            let cols = transpose_blocks([s[c], s[2 + c], s[4 + c], s[6 + c]]);
+            for (k, col) in cols.into_iter().enumerate() {
+                t[2 * k + c] = col;
+            }
+        }
+    }
+
+    /// Transpose a 4 x 4 grid of 128-bit blocks held one grid row per register.
+    ///
+    /// Output register k collects block k of every input, in input order.
+    ///
+    /// ```text
+    ///     shuffle 0x88 keeps blocks 0, 2 of each source
+    ///     shuffle 0xdd keeps blocks 1, 3 of each source
+    ///
+    ///     x0 = [a_0 a_2 b_0 b_2]    x1 = [a_1 a_3 b_1 b_3]
+    ///     y0 = [c_0 c_2 d_0 d_2]    y1 = [c_1 c_3 d_1 d_3]
+    ///
+    ///     out 0 = [a_0 b_0 c_0 d_0] = 0x88 (x0, y0)
+    ///     out 1 = [a_1 b_1 c_1 d_1] = 0x88 (x1, y1)
+    ///     out 2 = [a_2 b_2 c_2 d_2] = 0xdd (x0, y0)
+    ///     out 3 = [a_3 b_3 c_3 d_3] = 0xdd (x1, y1)
+    /// ```
+    #[inline(always)]
+    fn transpose_blocks([a, b, c, d]: [__m512i; 4]) -> [__m512i; 4] {
+        // SAFETY: AVX-512F is enabled at compile time for this module.
+        unsafe {
+            let x0 = _mm512_shuffle_i64x2::<0x88>(a, b);
+            let x1 = _mm512_shuffle_i64x2::<0xdd>(a, b);
+            let y0 = _mm512_shuffle_i64x2::<0x88>(c, d);
+            let y1 = _mm512_shuffle_i64x2::<0xdd>(c, d);
+            [
+                _mm512_shuffle_i64x2::<0x88>(x0, y0),
+                _mm512_shuffle_i64x2::<0x88>(x1, y1),
+                _mm512_shuffle_i64x2::<0xdd>(x0, y0),
+                _mm512_shuffle_i64x2::<0xdd>(x1, y1),
+            ]
+        }
+    }
 }
 
-/// AVX2 kernel: one 256-bit register holds one 8-element row of a tile.
+/// AVX2 kernels: one 256-bit register holds one row of a tile.
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "avx2",
@@ -556,6 +698,65 @@ mod simd {
                 let out = &mut dst[start..start + L];
 
                 // SAFETY: the slice holds exactly the eight words stored.
+                unsafe { _mm256_storeu_si256(out.as_mut_ptr().cast(), *reg) };
+            }
+        });
+    }
+
+    /// Transpose 64-bit words, with the contract of the strided entry point.
+    ///
+    /// Full 4 x 4 tiles go through registers.
+    ///
+    /// Clipped edge tiles copy element by element.
+    #[inline]
+    pub(super) fn transpose_u64<'a>(
+        rows: usize,
+        cols: usize,
+        row: impl Fn(usize) -> &'a [u64],
+        dst: &mut [u64],
+        stride: usize,
+    ) {
+        for_each_tile::<4>(rows, cols, |r0, c0, h, w| {
+            if h < 4 || w < 4 {
+                // Edge tile: copy element by element with the reference indexing.
+                for i in 0..h {
+                    for (j, &x) in row(r0 + i)[c0..c0 + w].iter().enumerate() {
+                        dst[(c0 + j) * stride + r0 + i] = x;
+                    }
+                }
+                return;
+            }
+
+            // Phase 1: one register per input row.
+            let [a, b, c, d]: [__m256i; 4] = array::from_fn(|i| {
+                let src = &row(r0 + i)[c0..c0 + 4];
+
+                // SAFETY: the slice holds exactly the four words loaded.
+                unsafe { _mm256_loadu_si256(src.as_ptr().cast()) }
+            });
+
+            // Phase 2: unpacks transpose each 2 x 2 block, then 128-bit permutes swap blocks.
+            //
+            //     lo(a, b) = [a_0 b_0 | a_2 b_2]    hi(a, b) = [a_1 b_1 | a_3 b_3]
+            //
+            // SAFETY: AVX2 is enabled at compile time for this module.
+            let cols = unsafe {
+                let (ab0, ab1) = (_mm256_unpacklo_epi64(a, b), _mm256_unpackhi_epi64(a, b));
+                let (cd0, cd1) = (_mm256_unpacklo_epi64(c, d), _mm256_unpackhi_epi64(c, d));
+                [
+                    _mm256_permute2x128_si256::<0x20>(ab0, cd0),
+                    _mm256_permute2x128_si256::<0x20>(ab1, cd1),
+                    _mm256_permute2x128_si256::<0x31>(ab0, cd0),
+                    _mm256_permute2x128_si256::<0x31>(ab1, cd1),
+                ]
+            };
+
+            // Phase 3: register j holds input column c0 + j across the tile rows.
+            for (j, reg) in cols.iter().enumerate() {
+                let start = (c0 + j) * stride + r0;
+                let out = &mut dst[start..start + 4];
+
+                // SAFETY: the slice holds exactly the four words stored.
                 unsafe { _mm256_storeu_si256(out.as_mut_ptr().cast(), *reg) };
             }
         });
@@ -692,6 +893,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::{Packable, PrimeCharacteristicRing};
+    use p3_goldilocks::Goldilocks;
     use proptest::prelude::*;
 
     use super::*;
@@ -822,28 +1024,23 @@ mod tests {
 
     #[test]
     fn field_elements_keep_their_values() {
-        // A 31-bit field element takes the 32-bit kernel through the reinterpretation.
+        // 31-bit and 64-bit field elements take the 32-bit and 64-bit kernels.
         //
-        // Its values must come out unchanged, only moved.
-        let src: Vec<Vec<BabyBear>> = (0..16)
-            .map(|r| (0..9).map(|c| BabyBear::from_usize(r * 9 + c)).collect())
-            .collect();
-        let mut dst = vec![BabyBear::ZERO; 16 * 9];
-        BabyBear::transpose_rows(16, 9, |r| &src[r], &mut dst);
-        for (r, row) in src.iter().enumerate() {
-            for (c, &x) in row.iter().enumerate() {
-                assert_eq!(dst[c * 16 + r], x);
+        // Their values must come out unchanged, only moved.
+        fn check<F: Packable + PrimeCharacteristicRing + core::fmt::Debug>() {
+            let src: Vec<Vec<F>> = (0..16)
+                .map(|r| (0..9).map(|c| F::from_usize(r * 9 + c)).collect())
+                .collect();
+            let mut dst = vec![F::ZERO; 16 * 9];
+            F::transpose_rows(16, 9, |r| &src[r], &mut dst);
+            for (r, row) in src.iter().enumerate() {
+                for (c, &x) in row.iter().enumerate() {
+                    assert_eq!(dst[c * 16 + r], x);
+                }
             }
         }
-    }
-
-    #[test]
-    fn eight_byte_elements_take_the_reference() {
-        // No kernel covers 8-byte words, so the dispatch must still produce the transpose.
-        let rows = [[1u64, 2], [3, 4], [5, 6]];
-        let mut dst = [0u64; 6];
-        transpose_rows(3, 2, |r| &rows[r], &mut dst);
-        assert_eq!(dst, [1, 3, 5, 2, 4, 6]);
+        check::<BabyBear>();
+        check::<Goldilocks>();
     }
 
     #[test]
@@ -870,6 +1067,33 @@ mod tests {
         transpose_rows_strided(2, 2, |r| &rows[r], &mut [0u32; 4], 1);
     }
 
+    /// Compare the word kernels with the scalar reference on one shape.
+    ///
+    /// - Rows carry extra words that must never reach the output.
+    /// - A stride past the row count leaves gaps that must keep their sentinel.
+    fn check_words<T>(
+        rows: usize,
+        cols: usize,
+        slack: usize,
+        gap: usize,
+        value: impl Fn(usize, usize) -> T,
+    ) where
+        T: Copy + PartialEq + core::fmt::Debug + From<u8>,
+    {
+        let src: Vec<Vec<T>> = (0..rows)
+            .map(|r| (0..cols + slack).map(|c| value(r, c)).collect())
+            .collect();
+        let stride = rows + gap;
+        let sentinel = T::from(u8::MAX);
+
+        let mut fast = vec![sentinel; stride * cols];
+        let mut reference = vec![sentinel; stride * cols];
+        // SAFETY: integers have initialized, padding-free, pointer-free representations.
+        unsafe { transpose_rows_strided_words(rows, cols, |r| &src[r], &mut fast, stride) };
+        transpose_rows_scalar(rows, cols, |r| &src[r], &mut reference, stride);
+        assert_eq!(fast, reference);
+    }
+
     proptest! {
         #[test]
         fn vector_kernel_matches_reference(
@@ -877,28 +1101,12 @@ mod tests {
             cols in 0usize..40,
             slack in 0usize..3,
             gap in 0usize..3,
-            seed in any::<u32>(),
+            seed in any::<u64>(),
         ) {
-            // Shapes on both sides of every tile width (4, 8, 16), including clipped edges.
-            //
-            // Rows carry up to two extra words that must never reach the output.
-            //
-            // A stride past the row count leaves gaps that must keep their sentinel.
-            let src: Vec<Vec<u32>> = (0..rows)
-                .map(|r| {
-                    (0..cols + slack)
-                        .map(|c| seed.wrapping_mul(r as u32 + 1).wrapping_add(c as u32 * 7919))
-                        .collect()
-                })
-                .collect();
-            let stride = rows + gap;
-
-            let mut fast = vec![u32::MAX; stride * cols];
-            let mut reference = vec![u32::MAX; stride * cols];
-            // SAFETY: u32 has an initialized, padding-free, pointer-free representation.
-            unsafe { transpose_rows_strided_words(rows, cols, |r| &src[r], &mut fast, stride) };
-            transpose_rows_scalar(rows, cols, |r| &src[r], &mut reference, stride);
-            prop_assert_eq!(fast, reference);
+            // Shapes on both sides of every tile side (4, 8, 16), including clipped edges.
+            let value = |r: usize, c: usize| seed.wrapping_mul(r as u64 + 1).wrapping_add(c as u64 * 7919);
+            check_words(rows, cols, slack, gap, |r, c| value(r, c) as u32);
+            check_words(rows, cols, slack, gap, value);
         }
     }
 }
