@@ -1,8 +1,10 @@
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
+use thiserror::Error;
 
 use super::operands::*;
 use crate::{
@@ -211,6 +213,123 @@ pub struct CapturedArithmeticConstraints<F: Field, EF: ExtensionField<F> = F> {
     /// Global assertion indices for the base and extension streams.
     pub layout: ConstraintLayout,
 }
+/// Reasons a publicly assembled arithmetic capture cannot be lowered.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum ArithmeticLoweringError {
+    /// A constraint stream and its index stream have different lengths.
+    #[error(
+        "arithmetic capture length mismatch: base has {base_constraints} constraints and {base_indices} indices; extension has {extension_constraints} constraints and {extension_indices} indices"
+    )]
+    LengthMismatch {
+        /// Number of base constraints.
+        base_constraints: usize,
+        /// Number of base indices.
+        base_indices: usize,
+        /// Number of extension constraints.
+        extension_constraints: usize,
+        /// Number of extension indices.
+        extension_indices: usize,
+    },
+    /// The next global index does not appear in exactly one stream.
+    #[error(
+        "invalid arithmetic capture index at {expected}: next base index is {base_index:?}, next extension index is {extension_index:?}"
+    )]
+    InvalidIndex {
+        /// Next required global assertion index.
+        expected: usize,
+        /// Next unconsumed base index, if any.
+        base_index: Option<usize>,
+        /// Next unconsumed extension index, if any.
+        extension_index: Option<usize>,
+    },
+}
+
+impl<F: Field, EF: ExtensionField<F>> CapturedArithmeticConstraints<F, EF> {
+    /// Lower every root to primitive symbolic operations, preserving arithmetic values.
+    ///
+    /// Retains stream order, zero and duplicate roots, and global assertion indices.
+    /// Reuses pointer-identity caches across roots and base expressions lifted into
+    /// extension operands. Independently allocated equal expressions need not share.
+    /// Grouping and sharing may differ from legacy capture; serialized structure
+    /// and protocol commitments are not guaranteed to match.
+    ///
+    /// Traversal bounds recursion and uses an explicit stack for deeper graphs.
+    /// Destroying deeply nested source or result graphs still uses recursive `Arc` drops.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before lowering if the stream and layout lengths differ,
+    /// or the index streams fail to form a strictly increasing, disjoint
+    /// partition of all global assertion indices.
+    ///
+    /// ```
+    /// use p3_air::{AirBuilder, AirLayout, capture_arithmetic};
+    /// use p3_baby_bear::BabyBear;
+    ///
+    /// let captured = capture_arithmetic::<BabyBear, BabyBear>(AirLayout::default(), |b| {
+    ///     b.assert_zero(BabyBear::new(0));
+    /// });
+    /// let symbolic = captured.lower().unwrap();
+    /// assert_eq!(symbolic.base_constraints().len(), 1);
+    /// assert_eq!(symbolic.constraint_layout().base_indices, [0]);
+    /// ```
+    pub fn lower(&self) -> Result<crate::SymbolicConstraints<F, EF>, ArithmeticLoweringError> {
+        if self.base.len() != self.layout.base_indices.len()
+            || self.extension.len() != self.layout.ext_indices.len()
+        {
+            return Err(ArithmeticLoweringError::LengthMismatch {
+                base_constraints: self.base.len(),
+                base_indices: self.layout.base_indices.len(),
+                extension_constraints: self.extension.len(),
+                extension_indices: self.layout.ext_indices.len(),
+            });
+        }
+        let mut base_indices = self.layout.base_indices.iter().copied().peekable();
+        let mut extension_indices = self.layout.ext_indices.iter().copied().peekable();
+        for expected in 0..self.base.len() + self.extension.len() {
+            match (
+                base_indices.peek().copied(),
+                extension_indices.peek().copied(),
+            ) {
+                (Some(base), extension) if base == expected && extension != Some(expected) => {
+                    base_indices.next();
+                }
+                (base, Some(extension)) if extension == expected && base != Some(expected) => {
+                    extension_indices.next();
+                }
+                (base_index, extension_index) => {
+                    return Err(ArithmeticLoweringError::InvalidIndex {
+                        expected,
+                        base_index,
+                        extension_index,
+                    });
+                }
+            }
+        }
+
+        let mut base_memo = BTreeMap::new();
+        let mut extension_memo = BTreeMap::new();
+        let base = self
+            .base
+            .iter()
+            .map(|root| root.lower_inner(&mut base_memo, &mut (), 0))
+            .collect();
+        let extension = self
+            .extension
+            .iter()
+            .map(|root| root.lower_inner(&mut extension_memo, &mut base_memo, 0))
+            .collect();
+        Ok(crate::SymbolicConstraints::from_parts(
+            base,
+            extension,
+            ConstraintLayout {
+                base_indices: self.layout.base_indices.clone(),
+                ext_indices: self.layout.ext_indices.clone(),
+            },
+        ))
+    }
+}
+
 impl<F: Field, EF: ExtensionField<F>> ArithmeticAirBuilder<F, EF> {
     /// Move recorded roots out of the builder, retaining zero and duplicate assertions.
     pub fn finish(self) -> CapturedArithmeticConstraints<F, EF> {
