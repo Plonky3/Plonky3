@@ -25,11 +25,9 @@ p3-binary-dft.workspace = true
 p3-binary-field.workspace = true
 p3-binary-pcs.workspace = true
 p3-challenger.workspace = true
-p3-commit.workspace = true
 p3-field.workspace = true
 p3-keccak.workspace = true
 p3-maybe-rayon.workspace = true
-p3-merkle-tree.workspace = true
 p3-multilinear-util.workspace = true
 p3-sumcheck.workspace = true
 p3-symmetric.workspace = true
@@ -40,6 +38,8 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+p3-binary-field = { path = "../binary-field", features = ["test-utils"] }
+
 blake2.workspace = true
 blake3.workspace = true
 postcard = { workspace = true, features = ["alloc"] }

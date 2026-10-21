@@ -38,6 +38,7 @@ use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
 use p3_security::multilinear::{bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term};
 use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::ring_switch::bits::{
@@ -64,6 +65,36 @@ pub struct WeightedOpening<EF> {
     pub high: Point<EF>,
     /// Weight `v` weighs bit `v` of every packed element.
     pub low_weights: Vec<EF>,
+}
+
+impl<EF: Field> WeightedOpening<EF> {
+    /// The multilinear claim at `point`: its last `absorbed` coordinates weigh the bits by their equality table.
+    ///
+    /// # Panics
+    ///
+    /// The point has fewer than `absorbed` coordinates.
+    #[must_use]
+    pub fn at_point(point: &Point<EF>, absorbed: usize) -> Self {
+        let (high, low) = point.split_at(point.num_variables() - absorbed);
+        Self {
+            high,
+            low_weights: Poly::new_from_point(low.as_slice(), EF::ONE).into_evals(),
+        }
+    }
+
+    /// The same claim on the region a Boolean prefix selects, most significant bit first.
+    #[must_use]
+    pub fn within(self, selector: &[bool]) -> Self {
+        let mut high = selector
+            .iter()
+            .map(|&bit| if bit { EF::ONE } else { EF::ZERO })
+            .collect::<Vec<_>>();
+        high.extend_from_slice(self.high.as_slice());
+        Self {
+            high: Point::new(high),
+            low_weights: self.low_weights,
+        }
+    }
 }
 
 /// The value of every weighted opening, in order, and the one proof that opens them all.

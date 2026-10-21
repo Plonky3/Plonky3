@@ -1,6 +1,6 @@
-//! The witness folded over its instances: `out[i] = sum_o eq_outer[o] * z_o[i]`.
+//! Packed bit rows folded under one weight each: `out[i] = sum_o weights[o] * row_o[i]`.
 //!
-//! The bits of instances `8s .. 8s + 8` at position `i` form the stripe byte `(s, i)`.
+//! The bits of rows `8s .. 8s + 8` at position `i` form the stripe byte `(s, i)`.
 //!
 //! The fold is GF(2)-linear in each stripe byte, so every kernel maps stripe bytes through a 256-entry sum table or a GFNI matrix.
 
@@ -32,12 +32,13 @@ mod portable;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_binary_field::PackedGf2x64;
 use p3_field::PrimeCharacteristicRing;
 
-use crate::Challenge;
 use crate::byteslice::transpose_bits;
-use crate::skip::K_SKIP;
+use crate::{PackedGf2x64, Poly192};
+
+/// Bits of one packed word, as a base-two logarithm.
+const LOG_WORD_BITS: usize = 6;
 
 /// The instance-major witness, read as stripes of eight instances.
 #[derive(Clone, Copy, Debug)]
@@ -55,8 +56,8 @@ impl<'a> Stripes<'a> {
     ///
     /// - An instance is not whole words, or the instances do not tile whole stripes.
     pub(crate) fn new(z: &'a [u64], k_log: usize) -> Self {
-        assert!(k_log >= K_SKIP, "an instance is whole words");
-        let words = 1 << (k_log - K_SKIP);
+        assert!(k_log >= LOG_WORD_BITS, "an instance is whole words");
+        let words = 1 << (k_log - LOG_WORD_BITS);
         assert!(
             z.len().is_multiple_of(8 * words),
             "the instances tile whole stripes of eight"
@@ -84,30 +85,31 @@ impl<'a> Stripes<'a> {
     }
 }
 
-/// The eq-weighted sum over instances of every position of the witness.
+/// The weighted sum over rows of every position, each row `2^log_row_bits` bits of whole words.
 ///
-/// Positions from `useful_bits` on are zero in every instance, so they fold to zero unread.
+/// Positions from `useful_bits` on must be zero in every row, so they fold to zero unread.
 ///
 /// # Panics
 ///
-/// - There is not one weight per instance.
-pub(crate) fn partial_fold(
-    z: &[u64],
-    k_log: usize,
+/// - There is not one weight per row, or a row is not whole words.
+#[must_use]
+pub fn fold_rows(
+    words: &[u64],
+    log_row_bits: usize,
     useful_bits: usize,
-    eq_outer: &[Challenge],
-) -> Vec<Challenge> {
+    weights: &[Poly192],
+) -> Vec<Poly192> {
     assert_eq!(
-        z.len() << K_SKIP,
-        eq_outer.len() << k_log,
-        "one weight per instance"
+        words.len() << LOG_WORD_BITS,
+        weights.len() << log_row_bits,
+        "one weight per row"
     );
-    assert!(useful_bits <= 1 << k_log, "useful bits fit an instance");
-    // Fewer than eight instances fill no stripe.
-    if eq_outer.len() < 8 {
-        return fold_bits(z, k_log, eq_outer);
+    assert!(useful_bits <= 1 << log_row_bits, "useful bits fit a row");
+    // Fewer than eight rows fill no stripe.
+    if weights.len() < 8 {
+        return fold_bits(words, log_row_bits, weights);
     }
-    let stripes = Stripes::new(z, k_log);
+    let stripes = Stripes::new(words, log_row_bits);
     // Groups of 64 positions holding a useful bit; a straddling group folds its zeros harmlessly.
     let groups = useful_bits.div_ceil(64);
     #[cfg(all(
@@ -121,18 +123,18 @@ pub(crate) fn partial_fold(
     {
         use crate::byteslice::Native;
         if gfni::fits(&stripes, gfni::WIDE_TILE) {
-            return gfni::partial_fold::<Native, { gfni::WIDE_TILE }>(stripes, groups, eq_outer);
+            return gfni::partial_fold::<Native, { gfni::WIDE_TILE }>(stripes, groups, weights);
         }
         if gfni::fits(&stripes, gfni::NARROW_TILE) {
-            return gfni::partial_fold::<Native, { gfni::NARROW_TILE }>(stripes, groups, eq_outer);
+            return gfni::partial_fold::<Native, { gfni::NARROW_TILE }>(stripes, groups, weights);
         }
     }
-    portable::fold_tables(stripes, groups, eq_outer)
+    portable::fold_tables(stripes, groups, weights)
 }
 
 /// The definition, bit by bit.
-fn fold_bits(z: &[u64], k_log: usize, eq_outer: &[Challenge]) -> Vec<Challenge> {
-    let mut out = vec![Challenge::ZERO; 1 << k_log];
+fn fold_bits(z: &[u64], k_log: usize, eq_outer: &[Poly192]) -> Vec<Poly192> {
+    let mut out = vec![Poly192::ZERO; 1 << k_log];
     for (o, &eq) in eq_outer.iter().enumerate() {
         for (i, out) in out.iter_mut().enumerate() {
             let bit = (o << k_log) + i;
@@ -184,10 +186,10 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(0xF01D);
         for (k_log, n_log, useful) in cases {
             let z = witness(&mut rng, k_log, n_log, useful);
-            let eq: Vec<Challenge> = (0..1 << n_log).map(|_| rng.random()).collect();
+            let eq: Vec<Poly192> = (0..1 << n_log).map(|_| rng.random()).collect();
             let want = fold_bits(&z, k_log, &eq);
             assert_eq!(
-                partial_fold(&z, k_log, useful, &eq),
+                fold_rows(&z, k_log, useful, &eq),
                 want,
                 "dispatch {k_log} {n_log} {useful}"
             );
@@ -239,8 +241,8 @@ mod tests {
             let mut rng = SmallRng::seed_from_u64(seed);
             let useful = rng.random_range(1..=1usize << k_log);
             let z = witness(&mut rng, k_log, n_log, useful);
-            let eq: Vec<Challenge> = (0..1 << n_log).map(|_| rng.random()).collect();
-            prop_assert_eq!(partial_fold(&z, k_log, useful, &eq), fold_bits(&z, k_log, &eq));
+            let eq: Vec<Poly192> = (0..1 << n_log).map(|_| rng.random()).collect();
+            prop_assert_eq!(fold_rows(&z, k_log, useful, &eq), fold_bits(&z, k_log, &eq));
         }
 
         #[test]

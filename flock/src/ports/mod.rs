@@ -16,6 +16,7 @@ mod tests;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_binary_field::fold_rows;
 use p3_challenger::CanObserve;
 use p3_challenger::fs::{DomainSeparator, FieldUnit, InteractionPattern};
 use p3_field::PrimeCharacteristicRing;
@@ -27,7 +28,6 @@ use p3_util::log2_strict_usize;
 use thiserror::Error;
 
 use crate::circuit::Port;
-use crate::lincheck::partial_fold;
 use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
 use crate::{Batch, Challenge, Val, Witness};
 
@@ -288,7 +288,7 @@ impl PublicPorts {
         region: &[Challenge],
     ) -> Challenge {
         let eq_outer = Poly::new_from_point(outer, Challenge::ONE);
-        let folded = partial_fold(
+        let folded = fold_rows(
             &self.values,
             log2_strict_usize(self.stride) + K_SKIP,
             SKIP_SIZE * self.words.len(),
