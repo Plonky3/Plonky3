@@ -15,7 +15,7 @@ use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
-use self::eq_table::{eq_doubled, packed_eq_serial, split_low};
+use self::eq_table::{eq_doubled, eq_table_len, packed_eq_serial, split_low};
 pub(crate) use self::eq_table::{tensor_packed, tensor_unpacked};
 use crate::point::Point;
 use crate::split_eq::SplitEq;
@@ -234,6 +234,7 @@ impl<Packed> Poly<Packed> {
     ///
     /// - Panics if `scale` is zero.
     /// - Panics if the point has fewer than `log2(W)` coordinates.
+    /// - Panics if `2^n` overflows `usize`.
     #[inline]
     pub fn new_packed_from_point<F, EF>(point: &[EF], scale: EF) -> Self
     where
@@ -242,6 +243,8 @@ impl<Packed> Poly<Packed> {
         Packed: PackedFieldExtension<F, EF> + Copy + Send + Sync,
     {
         assert_ne!(scale, EF::ZERO);
+        // Check the whole table's size before any factor is allocated.
+        eq_table_len(point.len());
         let (high_point, low_point) = split_low(point, log2_strict_usize(F::Packing::WIDTH));
 
         // A table no wider than the low factor is doubled directly, with the scale folded in.
@@ -276,6 +279,10 @@ impl<EF: Field> Poly<EF> {
         F: Field,
         EF: ExtensionField<F>,
     {
+        // Check the whole table's size before any factor is allocated.
+        //
+        // The factors fit on their own even when their product wraps.
+        eq_table_len(point.len());
         let log_width = log2_strict_usize(F::Packing::WIDTH);
 
         // Too short to fill a lane group, the table is doubled as scalars.
@@ -1568,6 +1575,31 @@ pub(crate) mod test {
             }
             prop_assert_eq!(out, expected);
         }
+    }
+
+    // A point of usize::BITS coordinates has 2^BITS vertices, which wraps to zero unchecked.
+    //
+    // The factors of the table fit on their own, so only the whole size can be checked.
+
+    #[test]
+    #[should_panic(expected = "2^n overflows usize")]
+    fn new_from_point_rejects_a_table_wider_than_usize() {
+        let point = vec![F::ONE; usize::BITS as usize];
+        let _ = Poly::new_from_point(&point, F::ONE);
+    }
+
+    #[test]
+    #[should_panic(expected = "2^n overflows usize")]
+    fn new_from_point_over_rejects_a_table_wider_than_usize() {
+        let point = vec![EF::ONE; usize::BITS as usize];
+        let _ = Poly::new_from_point_over::<F>(&point, EF::ONE);
+    }
+
+    #[test]
+    #[should_panic(expected = "2^n overflows usize")]
+    fn new_packed_from_point_rejects_a_table_wider_than_usize() {
+        let point = vec![EF::ONE; usize::BITS as usize];
+        let _ = Poly::new_packed_from_point::<F, EF>(&point, EF::ONE);
     }
 
     #[test]

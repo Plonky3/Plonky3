@@ -458,6 +458,19 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "2^n overflows usize")]
+    fn equality_weights_msb_rejects_a_table_wider_than_usize() {
+        // 2^BITS vertices wrap to zero, so the table size is checked before any factor is built.
+        let _ = Point::new(vec![F::ONE; usize::BITS as usize]).equality_weights_msb();
+    }
+
+    #[test]
+    #[should_panic(expected = "2^n overflows usize")]
+    fn equality_weights_lsb_rejects_a_table_wider_than_usize() {
+        let _ = Point::new(vec![F::ONE; usize::BITS as usize]).equality_weights_lsb();
+    }
+
+    #[test]
     fn equality_weights_of_empty_point_is_the_unit_table() {
         // {0,1}^0 has one vertex, and the empty product is one.
         let point = Point::<F>::new(vec![]);
