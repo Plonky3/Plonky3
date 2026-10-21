@@ -2,6 +2,9 @@
 
 mod ghash128;
 pub(crate) mod lanes;
+// Scalar extension elements times weights, read in place where a 512-bit multiply exists.
+#[cfg(target_feature = "avx512f")]
+pub(crate) mod mixed_dot;
 // Sums of products pair their terms where a 512-bit multiply exists.
 #[cfg(all(
     target_feature = "avx512f",
