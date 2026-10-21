@@ -2,13 +2,13 @@
 
 use alloc::vec::Vec;
 
+use p3_binary_field::fold_rows;
 use p3_challenger::{CanObserve, CanSample};
 use p3_field::PrimeCharacteristicRing;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::lagrange::extrapolate_01inf;
 use tracing::{info_span, instrument};
 
-use super::fold::partial_fold;
 use super::sumcheck::ProductSumcheck;
 use super::transcript::{LincheckShape, ProverTranscript};
 use super::{LincheckProof, slice_claim, split_point};
@@ -97,7 +97,7 @@ where
     // Phase 3: the witness folded at the instance coordinates.
     let folded = info_span!("partial fold").in_scope(|| {
         let eq_outer = Poly::new_from_point(outer, Challenge::ONE);
-        partial_fold(
+        fold_rows(
             z,
             circuit.k_log(),
             circuit.useful_bits(),

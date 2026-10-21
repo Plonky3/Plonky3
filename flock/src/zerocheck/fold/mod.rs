@@ -33,9 +33,8 @@ mod portable;
 use alloc::vec::Vec;
 
 use p3_binary_field::Poly192;
+use p3_binary_field::byteslice::BLOCK;
 use p3_multilinear_util::point::Point;
-
-use crate::byteslice::BLOCK;
 
 /// The fold each target runs.
 mod selected {
@@ -48,7 +47,7 @@ mod selected {
         target_feature = "gfni",
         target_feature = "vpclmulqdq"
     ))]
-    pub(super) type Kernel = super::gfni::Fold<crate::byteslice::Native>;
+    pub(super) type Kernel = super::gfni::Fold<p3_binary_field::byteslice::Native>;
 
     /// The subset-sum tables.
     #[cfg(not(all(
@@ -131,7 +130,7 @@ impl BitFold {
     pub(crate) fn fold_quads<const CHUNKS: usize>(
         &self,
         rows: &[[u8; CHUNKS]; BLOCK],
-    ) -> [[crate::byteslice::Native; 8]; 3] {
+    ) -> [[p3_binary_field::byteslice::Native; 8]; 3] {
         self.kernel.fold_quads(rows)
     }
 }
