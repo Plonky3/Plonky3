@@ -22,7 +22,7 @@ use p3_field::{
     Algebra, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing,
 };
-use p3_util::{as_base_slice, flatten_to_base, reconstitute_from_base};
+use p3_util::{as_base_slice, flatten_to_base, reconstitute_from_base, zero_vec_from_base};
 
 use crate::Mersenne31;
 
@@ -224,7 +224,7 @@ impl PrimeCharacteristicRing for PackedQM31 {
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: `Self` is `repr(transparent)` over `[PackedCM31; 2]`.
-        unsafe { reconstitute_from_base(PackedCM31::zero_vec(len * 2)) }
+        unsafe { zero_vec_from_base(len, PackedCM31::zero_vec) }
     }
 }
 

@@ -7,7 +7,7 @@ use core::array;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_util::{flatten_to_base, reconstitute_from_base};
+use p3_util::{flatten_to_base, reconstitute_from_base, zero_vec_from_base};
 use rand::distr::{Distribution, StandardUniform};
 
 use super::quintic_extension::{quintic_square, trinomial_quintic_mul};
@@ -137,7 +137,7 @@ where
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: `Self` is `repr(transparent)` over `[PF; 5]`.
-        unsafe { reconstitute_from_base(PF::zero_vec(len * 5)) }
+        unsafe { zero_vec_from_base(len, PF::zero_vec) }
     }
 }
 
