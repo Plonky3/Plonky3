@@ -3,7 +3,9 @@
 use alloc::vec::Vec;
 
 use p3_binary_field::fold_rows;
+use p3_binary_pcs::whir::{WeightedClaim, WeightedOpening};
 use p3_field::PrimeCharacteristicRing;
+use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
 
@@ -66,4 +68,18 @@ pub struct QuirkyClaim {
     pub point: QuirkyPoint,
     /// The claimed value.
     pub value: Challenge,
+}
+
+impl QuirkyClaim {
+    /// The claim as a weighted one: Lagrange weights at the skip coordinate on the absorbed bits.
+    #[must_use]
+    pub fn into_weighted(self) -> WeightedClaim<Challenge> {
+        WeightedClaim {
+            opening: WeightedOpening {
+                high: Point::new(self.point.rest),
+                low_weights: lagrange_weights(self.point.skip, SKIP_SIZE),
+            },
+            value: self.value,
+        }
+    }
 }

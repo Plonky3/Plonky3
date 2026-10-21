@@ -4,9 +4,8 @@ use core::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::lincheck::LincheckProof;
 use crate::opening::{Commitment, OpeningProof};
-use crate::zerocheck::ZerocheckProof;
+use crate::piop::PiopProof;
 
 /// A proof that a committed witness satisfies every instance of a batch's circuit and holds its public port words.
 ///
@@ -15,10 +14,8 @@ use crate::zerocheck::ZerocheckProof;
 pub struct FlockProof {
     /// Commitment to the packed witness.
     pub commitment: Commitment,
-    /// Zerocheck of `A z o B z = z`.
-    pub zerocheck: ZerocheckProof,
-    /// Reduction of the zerocheck claims and the public words to one witness claim.
-    pub lincheck: LincheckProof,
+    /// The reductions to one witness claim.
+    pub piop: PiopProof,
     /// Opening of that claim.
     pub opening: OpeningProof,
 }
@@ -28,8 +25,7 @@ impl fmt::Debug for FlockProof {
         // The opening proof has no `Debug` form.
         f.debug_struct("FlockProof")
             .field("commitment", &self.commitment)
-            .field("zerocheck", &self.zerocheck)
-            .field("lincheck", &self.lincheck)
+            .field("piop", &self.piop)
             .finish_non_exhaustive()
     }
 }
