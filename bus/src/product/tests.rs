@@ -465,3 +465,55 @@ fn owned_leaves_validate_lengths_before_trimming_identities() {
         shape,
     );
 }
+
+/// Keccak-256 of every proof, output and next challenge over a fixed grid of statements.
+fn proof_digest() -> [u8; 32] {
+    use p3_symmetric::CryptographicHasher;
+
+    let mut bytes = Vec::new();
+    let mut rng = Xoroshiro128Plus::seed_from_u64(0x91AE_0003);
+    for log_height in 0..=7 {
+        for (num_trees, root_shape) in [
+            (1, ProductGkrRootShape::Distinct),
+            (3, ProductGkrRootShape::Distinct),
+            (2, ProductGkrRootShape::FirstTwoShared),
+        ] {
+            let capacity = 1usize << log_height;
+            let mut inputs = (0..num_trees)
+                .map(|tree| {
+                    (0..capacity - tree.min(capacity) / 2)
+                        .map(|_| rng.random::<Binary>())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            if root_shape == ProductGkrRootShape::FirstTwoShared {
+                inputs[1] = inputs[0].iter().rev().copied().collect();
+            }
+            let borrowed = inputs.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            let shape = ProductGkrShape::new(log_height, num_trees, root_shape).unwrap();
+            let mut challenger = binary_challenger();
+            let (proof, output) =
+                ProductGkrProof::prove::<Binary, _>(&borrowed, shape, &mut challenger);
+            bytes.extend(postcard::to_allocvec(&proof).unwrap());
+            bytes.extend(
+                postcard::to_allocvec(&(output.roots, output.point, output.values)).unwrap(),
+            );
+            let next: Binary = p3_challenger::CanSample::sample(&mut challenger);
+            bytes.extend(postcard::to_allocvec(&next).unwrap());
+        }
+    }
+    Keccak256Hash.hash_iter(bytes)
+}
+
+#[test]
+fn proofs_are_pinned_byte_for_byte() {
+    // Computed on the base before the product GKR left the bus; any transcript change moves it.
+    assert_eq!(
+        proof_digest(),
+        [
+            0xc1, 0x09, 0x2d, 0xba, 0x34, 0x5a, 0xcf, 0xe2, 0x90, 0x87, 0x55, 0x4a, 0xd2, 0xb4,
+            0xe5, 0xdb, 0x67, 0x27, 0xfb, 0x4c, 0x96, 0x6f, 0x82, 0x1f, 0x26, 0x16, 0x7c, 0x8a,
+            0x62, 0x2c, 0xb1, 0x4b,
+        ]
+    );
+}
