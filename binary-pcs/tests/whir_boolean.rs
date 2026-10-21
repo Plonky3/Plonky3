@@ -328,9 +328,11 @@ fn the_budget_grades_the_schedule_and_the_proof() {
     // Three variables fold once, so every position opens eight off a tree of one depth.
     assert_eq!(shape.opened_base_elements, shape.stir_queries << FOLDING);
     assert_eq!(shape.opened_extension_elements, 0);
-    assert_eq!(
-        shape.merkle_digests,
-        shape.stir_queries * (LOG_BITS - ABSORBED - FOLDING + LOG_INV_RATE - cap_height)
+    //
+    // Pruned openings share siblings, so the paths never cost more than one full path each.
+    assert!(
+        shape.merkle_digests
+            <= shape.stir_queries * (LOG_BITS - ABSORBED - FOLDING + LOG_INV_RATE - cap_height)
     );
     assert!(shape.grinding_bits <= budget.max_grinding_bits);
 

@@ -52,8 +52,9 @@ target and protocol before opening.
 The `whir` module connects WHIR to the Cantor additive code. Commitments use
 the 64-bit polynomial-basis field. Challenges use its 192-bit cubic extension.
 
-Queries follow a transcript-bound stratified schedule. Use
-`recommended_cap_height` to stop Merkle paths at its deepest stratum.
+Queries follow a transcript-bound stratified schedule. Openings are pruned
+multiproofs, so the levels above its deepest stratum already send no sibling,
+and `recommended_cap_height` commits the bare root.
 
 Unique decoding and the Johnson regime use proven bounds. The capacity regime
 is unsupported because its assumption is refuted for this domain.

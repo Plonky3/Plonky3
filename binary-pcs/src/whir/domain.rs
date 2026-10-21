@@ -7,7 +7,6 @@ use p3_commit::Encoder;
 use p3_field::{BasedVectorSpace, ExtensionField, Field};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_multilinear_util::point::Point;
-use p3_whir::transcript::query_draws;
 use p3_whir::{SecurityAssumption, WhirConfig, WhirDomain, WhirQueryPoint};
 
 /// Widest domain a machine word can index.
@@ -37,47 +36,25 @@ impl BinaryWhirAlphabet for BinaryField128 {
     const DOMAIN_ID: &'static [u8] = b"p3-whir-domain:cantor-tower-128-v1";
 }
 
-/// Returns a Merkle cap height that every round's tree can carry.
+/// Returns the Merkle cap height that minimizes proof bytes: the bare root.
 ///
-/// One cap node covers each deepest stratum, so authentication paths stop at a protocol-fixed layer.
+/// Openings are pruned multiproofs, so a node any query path computes is never sent.
 ///
-/// A round that opens every position draws nothing and fixes no stratum.
+/// The stratified schedule puts one query in each of the `2^c` deepest strata.
 ///
-/// All rounds share one commitment scheme, so the shallowest tree bounds the result.
+/// The top `c` levels are then computed for free, and a cap that deep would only add digests.
+///
+/// Each level deeper costs as many cap digests as it can at best save in siblings.
 #[must_use]
-pub fn recommended_cap_height<EF, F, Challenger>(config: &WhirConfig<EF, F, Challenger>) -> usize
+pub const fn recommended_cap_height<EF, F, Challenger>(
+    _config: &WhirConfig<EF, F, Challenger>,
+) -> usize
 where
     F: Field,
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
-    let mut deepest = 0;
-    let mut shallowest = usize::MAX;
-
-    for (log_folded_domain_size, queries) in config
-        .round_parameters()
-        .iter()
-        .map(|round| (round.log_folded_domain_size, round.num_queries))
-        .chain(core::iter::once((
-            config.final_round_config().log_folded_domain_size,
-            config.terminal().num_queries,
-        )))
-    {
-        shallowest = shallowest.min(log_folded_domain_size);
-
-        // A domain too wide to size as a machine word can never be saturated.
-        let draws = 1usize
-            .checked_shl(log_folded_domain_size as u32)
-            .map_or(queries, |folded_domain_size| {
-                query_draws(folded_domain_size, queries)
-            });
-
-        if draws != 0 {
-            deepest = deepest.max(draws.ilog2() as usize);
-        }
-    }
-
-    deepest.min(shallowest)
+    0
 }
 
 /// WHIR's Reed--Solomon code over nested binary Cantor subspaces.

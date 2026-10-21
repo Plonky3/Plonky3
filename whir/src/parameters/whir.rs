@@ -328,6 +328,11 @@ where
     pub const fn final_folding_pow_bits(&self) -> usize {
         self.final_folding_pow_bits
     }
+
+    /// Whether each query phase draws one index in every stratum of its power-of-two summands.
+    pub const fn stratified_queries(&self) -> bool {
+        self.stratified_queries
+    }
 }
 
 /// Round a real-valued proof-of-work gap up to whole grinding bits.
