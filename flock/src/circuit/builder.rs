@@ -142,11 +142,13 @@ impl Builder {
     }
 
     /// The low `bits` bits of `value` as constant wires, free.
+    ///
+    /// Bits past the 64th are zero.
     #[must_use]
     pub fn literal(&self, value: u64, bits: usize) -> Word {
         (0..bits)
             .map(|i| {
-                if (value >> i) & 1 == 1 {
+                if i < 64 && (value >> i) & 1 == 1 {
                     self.one
                 } else {
                     Wire::ZERO
@@ -386,6 +388,16 @@ mod tests {
         let s = c.wrapping_sum(&[&ws[0], &ws[1], &ws[2]]);
         output_word(&mut c, 0, 0, &s);
         assert_eq!(c.finish().num_ands(), 61);
+    }
+
+    #[test]
+    fn a_wide_literal_is_zero_extended() {
+        let c = Builder::new(&[64], &[64]);
+        let one = c.one();
+        let w = c.literal(u64::MAX, 130);
+        // The 64 low bits are the value's, every bit past them is zero.
+        assert!(w[..64].iter().all(|&b| b == one));
+        assert!(w[64..].iter().all(|&b| b == Wire::ZERO));
     }
 
     #[test]
