@@ -35,8 +35,10 @@ use super::poly64::PackedPoly64;
     not(all(feature = "wide-poly", target_feature = "avx512bw"))
 ))]
 use super::x86_64::pairs;
+use crate::clmul::raw_product_64;
 use crate::clmul::wide::{Lanes64, Wide, cubic_mul, cubic_mul_base, cubic_square};
-use crate::clmul::{poly_dot_192_by_64, raw_product_64, reduce_64};
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+use crate::clmul::{poly_dot_192_by_64, reduce_64};
 use crate::{Gf2, Poly64, Poly192, Poly192Unreduced};
 
 /// Multiply exactly four scalar pairs with the 256-bit coordinate backend.
@@ -44,11 +46,7 @@ use crate::{Gf2, Poly64, Poly192, Poly192Unreduced};
     target_arch = "x86_64",
     target_feature = "vpclmulqdq",
     target_feature = "avx2",
-    not(all(
-        feature = "wide-poly",
-        target_feature = "avx512f",
-        target_feature = "avx512bw"
-    ))
+    not(target_feature = "avx512f")
 ))]
 #[inline]
 pub(crate) fn mul4(a: [Poly192; 4], b: [Poly192; 4]) -> [Poly192; 4] {
@@ -69,13 +67,12 @@ pub(crate) fn mul4(a: [Poly192; 4], b: [Poly192; 4]) -> [Poly192; 4] {
 }
 
 /// Multiply four pairs using one 128-bit polynomial lane per pair.
+///
+/// Selected by the 512-bit multiply alone, whatever width the packings use.
 #[cfg(all(
-    feature = "wide-poly",
     target_arch = "x86_64",
     target_feature = "avx512f",
-    target_feature = "avx512bw",
-    target_feature = "vpclmulqdq",
-    target_feature = "avx2"
+    target_feature = "vpclmulqdq"
 ))]
 #[inline]
 pub(crate) fn mul4(a: [Poly192; 4], b: [Poly192; 4]) -> [Poly192; 4] {
@@ -83,8 +80,11 @@ pub(crate) fn mul4(a: [Poly192; 4], b: [Poly192; 4]) -> [Poly192; 4] {
 
     use crate::clmul::wide::fold_cubic;
 
-    // Each 128-bit lane holds one coefficient in its low half. One carryless
-    // multiplication therefore computes all four products of that coefficient.
+    // Each 128-bit lane holds one coefficient in its low half.
+    // One carryless multiplication therefore computes all four products of that coefficient.
+    //
+    // The lanes are packed from scalars.
+    // A 512-bit load of elements the caller just wrote by value would miss store forwarding.
     let pack = |values: &[Poly192; 4], coordinate| {
         // SAFETY: this function is compiled only with AVX-512F enabled.
         unsafe {
@@ -266,7 +266,16 @@ impl PackedPoly192 {
         PackedPoly192Unreduced(cubic_mul_base(self.to_vectors(), rhs.to_vector()))
     }
 
+    /// Sum scalar extension-by-base products in place on 512-bit multiplies, before reducing.
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    #[inline]
+    pub(crate) fn mixed_dot_scalar(a: &[Poly192], f: &[Poly64]) -> Poly192 {
+        // The packing width plays no part: elements are read as they lie in memory.
+        super::x86_64::mixed_dot::dot(a, f)
+    }
+
     /// Sum scalar extension-by-base products across packed lanes before reducing.
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
     #[inline]
     pub(crate) fn mixed_dot_scalar(a: &[Poly192], f: &[Poly64]) -> Poly192 {
         let mut sums = [Wide::<Reg>::zero(); DEGREE];

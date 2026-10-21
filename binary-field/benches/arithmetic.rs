@@ -1111,6 +1111,62 @@ fn bench_lean_pair(c: &mut Criterion) {
     group.finish();
 }
 
+/// Independent four-pair cubic products, and cubic elements weighted by base-field scalars.
+fn bench_poly192_batches(c: &mut Criterion) {
+    /// Terms of the long weighted sum.
+    const TERMS: usize = 256;
+
+    let mut rng = SmallRng::seed_from_u64(0x192);
+    let quads: Vec<([Poly192; 4], [Poly192; 4])> =
+        (0..REPS).map(|_| (rng.random(), rng.random())).collect();
+    let mut products = vec![[Poly192::ZERO; 4]; REPS];
+    let values: [Poly192; TERMS] = core::array::from_fn(|_| rng.random());
+    let weights: [Poly64; TERMS] = core::array::from_fn(|_| rng.random());
+
+    {
+        let mut group = c.benchmark_group("poly192/mul4");
+        group.throughput(criterion::Throughput::Elements(4 * REPS as u64));
+        group.bench_function("throughput", |b| {
+            b.iter(|| {
+                for (out, (x, y)) in products.iter_mut().zip(black_box(&quads)) {
+                    *out = Poly192::mul4(*x, *y);
+                }
+                black_box(&products);
+            });
+        });
+        group.finish();
+    }
+
+    let mut group = c.benchmark_group("poly192/mixed_dot");
+    group.throughput(criterion::Throughput::Elements(TERMS as u64));
+    group.bench_function("256", |b| {
+        b.iter(|| Poly192::mixed_dot_product(black_box(&values), black_box(&weights)));
+    });
+    group.bench_function("chunks/8", |b| {
+        b.iter(|| {
+            let (values, _) = black_box(&values).as_chunks::<8>();
+            let (weights, _) = black_box(&weights).as_chunks::<8>();
+            values
+                .iter()
+                .zip(weights)
+                .map(|(x, k)| Poly192::mixed_dot_product(x, k))
+                .sum::<Poly192>()
+        });
+    });
+    group.bench_function("batched/64", |b| {
+        b.iter(|| {
+            let (values, _) = black_box(&values).as_chunks::<64>();
+            let (weights, _) = black_box(&weights).as_chunks::<64>();
+            values
+                .iter()
+                .zip(weights)
+                .map(|(x, k)| Poly192::batched_linear_combination(x, k))
+                .sum::<Poly192>()
+        });
+    });
+    group.finish();
+}
+
 /// Frobenius powers and linearized polynomials, tabulated against evaluated.
 ///
 /// Every arm rewrites one buffer in place, so the rows are directly comparable.
@@ -1219,6 +1275,7 @@ criterion_group!(
     bench_batch_kernels,
     bench_aes,
     bench_lean_pair,
+    bench_poly192_batches,
     bench_frobenius
 );
 criterion_main!(benches);
