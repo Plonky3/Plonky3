@@ -27,72 +27,118 @@ use rayon::iter::plumbing::{Producer, ProducerCallback};
 /// Enough for a straggler to be rebalanced, few enough that cutting stays cheap.
 const PIECES_PER_WORKER: usize = 4;
 
-/// A loop cut into pieces whose sizes differ by at most one item.
+/// Items cut into runs whose sizes differ by at most one.
 ///
-/// The longer pieces come first.
-struct Pieces<P> {
-    /// Each piece, taken once by whoever claims its index.
-    slots: Vec<Mutex<Option<P>>>,
-    /// The next unclaimed index.
-    next: AtomicUsize,
-    /// Items in a short piece.
+/// The longer runs come first.
+#[derive(Clone, Copy)]
+struct Tiling {
+    /// Number of runs.
+    count: usize,
+    /// Items in a short run.
     short: usize,
-    /// How many pieces hold one extra item.
+    /// How many runs hold one extra item.
     long: usize,
 }
 
-impl<P> Pieces<P> {
-    /// The item range of one piece.
+impl Tiling {
+    /// Cuts a number of items into a number of runs.
+    const fn new(len: usize, count: usize) -> Self {
+        Self {
+            count,
+            short: len / count,
+            long: len % count,
+        }
+    }
+
+    /// Where a run starts.
+    ///
+    /// One past the last run, this is the end of the items.
+    fn start(&self, i: usize) -> usize {
+        i * self.short + i.min(self.long)
+    }
+
+    /// The items of one run.
     fn range(&self, i: usize) -> Range<usize> {
-        let start = i * self.short + i.min(self.long);
-        start..start + self.short + usize::from(i < self.long)
+        self.start(i)..self.start(i + 1)
     }
 }
 
-impl<P: Producer> Pieces<P> {
-    /// Cuts a loop of `len` items into pieces.
+/// How a loop is cut, at two grains.
+///
+/// - Segments honour the producer's split limits, and each fold runs over one segment.
+/// - Pieces group whole segments, a few per worker, and are what participants claim.
+///
+/// Only pieces are materialized.
+///
+/// A tiny maximum length then costs many segments but never more memory.
+#[derive(Clone, Copy)]
+struct Layout {
+    /// The items, cut into segments.
+    segments: Tiling,
+    /// The segments, grouped into pieces.
+    pieces: Tiling,
+}
+
+impl Layout {
+    /// Lays out a loop.
     ///
-    /// Every piece honours the producer's split limits:
+    /// Every segment honours the producer's split limits:
     /// - at least its minimum length,
     /// - at most its maximum length, unless that conflicts with the minimum.
-    ///
-    /// Hands the producer back when the loop should stay whole.
-    fn cut(producer: P, len: usize) -> Result<Self, P> {
+    fn new<P: Producer>(producer: &P, len: usize) -> Self {
         let workers = current_num_threads();
         let min = producer.min_len().max(1);
         let max = producer.max_len().max(1);
-
-        // Sizes differ by at most one item, so the piece count alone sets both bounds:
-        //
-        //     count >= ceil(len / max)  =>  longest piece  <= max
-        //     count <= floor(len / min) =>  shortest piece >= min
-        //
-        // The minimum wins a conflict, as it does in Rayon's own splitter.
         let wanted = if workers <= 1 {
             1
         } else {
             workers * PIECES_PER_WORKER
         };
-        let count = wanted.max(len.div_ceil(max)).min(len / min);
-        if count <= 1 {
-            return Err(producer);
-        }
 
-        let (short, long) = (len / count, len % count);
+        // Sizes differ by at most one item, so the segment count alone sets both bounds:
+        //
+        //     count >= ceil(len / max)  =>  longest segment  <= max
+        //     count <= floor(len / min) =>  shortest segment >= min
+        //
+        // The minimum wins a conflict, as it does in Rayon's own splitter.
+        let segments = wanted.max(len.div_ceil(max)).min(len / min).max(1);
+        Self {
+            segments: Tiling::new(len, segments),
+            pieces: Tiling::new(segments, segments.min(wanted)),
+        }
+    }
+
+    /// The items of one piece.
+    fn items(&self, i: usize) -> Range<usize> {
+        let segments = self.pieces.range(i);
+        self.segments.start(segments.start)..self.segments.start(segments.end)
+    }
+}
+
+/// A loop cut into pieces, each claimed by one participant.
+struct Pieces<P> {
+    /// Each piece, taken once by whoever claims its index.
+    slots: Vec<Mutex<Option<P>>>,
+    /// The next unclaimed index.
+    next: AtomicUsize,
+}
+
+impl<P: Producer> Pieces<P> {
+    /// Cuts a producer along a layout of at least two pieces.
+    fn cut(producer: P, layout: Layout) -> Self {
+        let count = layout.pieces.count;
         let mut slots = Vec::with_capacity(count);
         let mut rest = producer;
-        for i in 1..count {
-            let (head, tail) = rest.split_at(short + usize::from(i <= long));
+        for i in 0..count - 1 {
+            let (head, tail) = rest.split_at(layout.items(i).len());
             slots.push(Mutex::new(Some(head)));
             rest = tail;
         }
         slots.push(Mutex::new(Some(rest)));
-        Ok(Self {
+        Self {
             slots,
             next: AtomicUsize::new(0),
-            short,
-            long,
-        })
+        }
     }
 
     /// Runs `work(index, piece)` on every piece, the caller included.
@@ -226,10 +272,11 @@ where
 
         fn callback<P: Producer<Item = T>>(self, producer: P) {
             let Self(len, op) = self;
-            match Pieces::cut(producer, len) {
-                Err(whole) => whole.into_iter().for_each(op),
-                Ok(pieces) => pieces.run(|_, piece| piece.into_iter().for_each(&op)),
+            let layout = Layout::new(&producer, len);
+            if layout.pieces.count <= 1 {
+                return producer.into_iter().for_each(op);
             }
+            Pieces::cut(producer, layout).run(|_, piece| piece.into_iter().for_each(&op));
         }
     }
 
@@ -274,19 +321,19 @@ where
     /// The output's length stays zero until every piece succeeds.
     ///
     /// Without this guard, a panic would leak every item already written.
-    struct Written<'a, B, P> {
+    struct Written<'a, B> {
         /// The output's base pointer.
         base: &'a Out<B>,
-        /// The pieces, which give each range's start.
-        pieces: &'a Pieces<P>,
+        /// Where each piece's range starts.
+        layout: Layout,
         /// Slots written per piece, cleared once the output owns them.
         counts: Vec<AtomicUsize>,
     }
 
-    impl<B, P> Drop for Written<'_, B, P> {
+    impl<B> Drop for Written<'_, B> {
         fn drop(&mut self) {
             for (i, count) in self.counts.iter().enumerate() {
-                let start = self.pieces.range(i).start;
+                let start = self.layout.items(i).start;
                 let slots = core::ptr::slice_from_raw_parts_mut(
                     self.base.at(start),
                     count.load(Ordering::Relaxed),
@@ -305,46 +352,46 @@ where
 
         fn callback<P: Producer<Item = T>>(self, producer: P) -> Vec<B> {
             let Self(len, map_op) = self;
-            match Pieces::cut(producer, len) {
-                Err(whole) => whole.into_iter().map(map_op).collect(),
-                Ok(pieces) => {
-                    let mut out: Vec<B> = Vec::with_capacity(len);
-                    let base = Out(out.as_mut_ptr());
-                    let mut written = Written {
-                        base: &base,
-                        pieces: &pieces,
-                        counts: (0..pieces.slots.len())
-                            .map(|_| AtomicUsize::new(0))
-                            .collect(),
-                    };
-                    pieces.run(|i, piece| {
-                        // A producer is a safe trait, so its item count is checked, not trusted.
-                        let range = pieces.range(i);
-                        let mut count = Count(&written.counts[i], 0);
-                        let mut items = piece.into_iter();
-                        for item in items.by_ref().take(range.len()) {
-                            // SAFETY: the write count stays below the range length, so the slot is in this piece's own range.
-                            unsafe { base.at(range.start + count.1).write(map_op(item)) };
-                            count.1 += 1;
-                        }
-                        // A miscounted piece panics here, before `set_len` runs.
-                        assert_eq!(
-                            count.1,
-                            range.len(),
-                            "producer yielded fewer items than its length"
-                        );
-                        assert!(
-                            items.next().is_none(),
-                            "producer yielded more items than its length"
-                        );
-                    });
-                    // Every piece filled its range, so the output now owns every item.
-                    written.counts = Vec::new();
-                    // SAFETY: the pieces tile `0..len`, and each checked it wrote every slot of its range.
-                    unsafe { out.set_len(len) };
-                    out
-                }
+            let layout = Layout::new(&producer, len);
+            if layout.pieces.count <= 1 {
+                return producer.into_iter().map(map_op).collect();
             }
+            let pieces = Pieces::cut(producer, layout);
+            let mut out: Vec<B> = Vec::with_capacity(len);
+            let base = Out(out.as_mut_ptr());
+            let mut written = Written {
+                base: &base,
+                layout,
+                counts: (0..pieces.slots.len())
+                    .map(|_| AtomicUsize::new(0))
+                    .collect(),
+            };
+            pieces.run(|i, piece| {
+                // A producer is a safe trait, so its item count is checked, not trusted.
+                let range = layout.items(i);
+                let mut count = Count(&written.counts[i], 0);
+                let mut items = piece.into_iter();
+                for item in items.by_ref().take(range.len()) {
+                    // SAFETY: the write count stays below the range length, so the slot is in this piece's own range.
+                    unsafe { base.at(range.start + count.1).write(map_op(item)) };
+                    count.1 += 1;
+                }
+                // A miscounted piece panics here, before `set_len` runs.
+                assert_eq!(
+                    count.1,
+                    range.len(),
+                    "producer yielded fewer items than its length"
+                );
+                assert!(
+                    items.next().is_none(),
+                    "producer yielded more items than its length"
+                );
+            });
+            // Every piece filled its range, so the output now owns every item.
+            written.counts = Vec::new();
+            // SAFETY: the pieces tile `0..len`, and each checked it wrote every slot of its range.
+            unsafe { out.set_len(len) };
+            out
         }
     }
 
@@ -352,7 +399,7 @@ where
     iter.with_producer(Callback(len, map_op))
 }
 
-/// Folds each piece from `identity`, then reduces the pieces in index order.
+/// Folds each segment from `identity`, then reduces the segments in index order.
 ///
 /// The order is the items' own, so `reduce_op` need only be associative.
 pub(crate) fn fold_reduce<I, Acc, Id, F, R>(iter: I, identity: Id, fold_op: F, reduce_op: R) -> Acc
@@ -361,7 +408,7 @@ where
     Acc: Send,
     Id: Fn() -> Acc + Sync,
     F: Fn(Acc, I::Item) -> Acc + Sync,
-    R: Fn(Acc, Acc) -> Acc,
+    R: Fn(Acc, Acc) -> Acc + Sync,
 {
     struct Callback<Id, F, R>(usize, Id, F, R);
 
@@ -370,28 +417,52 @@ where
         Acc: Send,
         Id: Fn() -> Acc + Sync,
         F: Fn(Acc, T) -> Acc + Sync,
-        R: Fn(Acc, Acc) -> Acc,
+        R: Fn(Acc, Acc) -> Acc + Sync,
     {
         type Output = Acc;
 
         fn callback<P: Producer<Item = T>>(self, producer: P) -> Acc {
             let Self(len, identity, fold_op, reduce_op) = self;
-            match Pieces::cut(producer, len) {
-                Err(whole) => whole.into_iter().fold(identity(), fold_op),
-                Ok(pieces) => {
-                    let partials: Vec<Mutex<Option<Acc>>> =
-                        (0..pieces.slots.len()).map(|_| Mutex::new(None)).collect();
-                    pieces.run(|i, piece| {
-                        let acc = piece.into_iter().fold(identity(), &fold_op);
-                        *partials[i].lock().unwrap() = Some(acc);
+            let layout = Layout::new(&producer, len);
+
+            // Folds each segment of a run from its own identity, then reduces them in order.
+            //
+            // Segments are split off as they are reached, so none is materialized up front.
+            let fold_segments = |producer: P, segments: Range<usize>| {
+                let fold = |part: P| part.into_iter().fold(identity(), &fold_op);
+                let mut rest = producer;
+                let mut acc = None;
+                for j in segments.start..segments.end - 1 {
+                    let (head, tail) = rest.split_at(layout.segments.range(j).len());
+                    let part = fold(head);
+                    acc = Some(match acc {
+                        Some(acc) => reduce_op(acc, part),
+                        None => part,
                     });
-                    partials
-                        .into_iter()
-                        .map(|p| p.into_inner().unwrap().expect("every piece ran"))
-                        .reduce(reduce_op)
-                        .unwrap_or_else(identity)
+                    rest = tail;
                 }
+                let last = fold(rest);
+                match acc {
+                    Some(acc) => reduce_op(acc, last),
+                    None => last,
+                }
+            };
+
+            if layout.pieces.count <= 1 {
+                return fold_segments(producer, 0..layout.segments.count);
             }
+            let pieces = Pieces::cut(producer, layout);
+            let partials: Vec<Mutex<Option<Acc>>> =
+                (0..pieces.slots.len()).map(|_| Mutex::new(None)).collect();
+            pieces.run(|i, piece| {
+                let acc = fold_segments(piece, layout.pieces.range(i));
+                *partials[i].lock().unwrap() = Some(acc);
+            });
+            partials
+                .into_iter()
+                .map(|p| p.into_inner().unwrap().expect("every piece ran"))
+                .reduce(&reduce_op)
+                .unwrap_or_else(identity)
         }
     }
 
@@ -411,7 +482,7 @@ mod tests {
     use rayon::iter::plumbing::{Consumer, Producer, ProducerCallback, UnindexedConsumer, bridge};
     use rayon::prelude::*;
 
-    use super::{fold_reduce, for_each, map_collect};
+    use super::{Layout, PIECES_PER_WORKER, fold_reduce, for_each, map_collect};
 
     const LENGTHS: [usize; 9] = [0, 1, 2, 3, 31, 128, 129, 1000, 100_003];
 
@@ -518,6 +589,51 @@ mod tests {
         // A maximum of three needs thirty-four pieces, more than the sixteen wanted.
         let sizes = pool.install(|| piece_sizes((0..100).into_par_iter().with_max_len(3)));
         assert_eq!(sizes, [[3; 32].as_slice(), &[2; 2]].concat());
+    }
+
+    #[test]
+    fn a_tiny_maximum_never_materializes_more_pieces() {
+        for threads in [1, 4] {
+            let pool = ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            let len = 5_000_000;
+
+            // Invariant: at most a few pieces per worker exist, however many segments there are.
+            let layout = pool.install(|| {
+                let mut layout = None;
+                (0..len)
+                    .into_par_iter()
+                    .with_max_len(1)
+                    .with_producer(Peek(len, &mut layout));
+                layout.unwrap()
+            });
+            assert_eq!(layout.segments.count, len);
+            assert!(layout.pieces.count <= threads.max(2) * PIECES_PER_WORKER);
+
+            // Each segment folds from its own identity, so counting identities counts segments.
+            let segments = pool.install(|| {
+                fold_reduce(
+                    (0..len).into_par_iter().with_max_len(1),
+                    || 1,
+                    |n, _| n,
+                    |a, b| a + b,
+                )
+            });
+            assert_eq!(segments, len);
+        }
+    }
+
+    /// Captures the layout a producer would be cut along.
+    struct Peek<'a>(usize, &'a mut Option<Layout>);
+
+    impl<T> ProducerCallback<T> for Peek<'_> {
+        type Output = ();
+
+        fn callback<P: Producer<Item = T>>(self, producer: P) {
+            *self.1 = Some(Layout::new(&producer, self.0));
+        }
     }
 
     #[test]
