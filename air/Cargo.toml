@@ -17,10 +17,15 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-field = { path = "../field" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 serde_json.workspace = true
+
+[[bench]]
+name = "constraint_analysis"
+harness = false
 
 [lints]
 workspace = true
