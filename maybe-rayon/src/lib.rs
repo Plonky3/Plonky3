@@ -17,6 +17,9 @@ pub const PARALLEL_ENABLED: bool = cfg!(feature = "parallel");
 #[cfg(not(feature = "parallel"))]
 mod serial;
 
+#[cfg(feature = "parallel")]
+mod dispatch;
+
 pub mod task_size;
 
 pub mod prelude {
@@ -53,6 +56,21 @@ pub mod prelude {
             R: Fn(Acc, Acc) -> Acc + Sync + Send;
     }
 
+    #[cfg(feature = "parallel")]
+    impl<I: IndexedParallelIterator> SharedExt for I {
+        #[inline]
+        fn par_fold_reduce<Acc, Id, F, R>(self, identity: Id, fold_op: F, reduce_op: R) -> Acc
+        where
+            Acc: Send,
+            Id: Fn() -> Acc + Sync + Send,
+            F: Fn(Acc, Self::Item) -> Acc + Sync + Send,
+            R: Fn(Acc, Acc) -> Acc + Sync + Send,
+        {
+            super::dispatch::fold_reduce(self, identity, fold_op, reduce_op)
+        }
+    }
+
+    #[cfg(not(feature = "parallel"))]
     impl<I: ParallelIterator> SharedExt for I {
         #[inline]
         fn par_fold_reduce<Acc, Id, F, R>(self, identity: Id, fold_op: F, reduce_op: R) -> Acc
@@ -62,16 +80,8 @@ pub mod prelude {
             F: Fn(Acc, Self::Item) -> Acc + Sync + Send,
             R: Fn(Acc, Acc) -> Acc + Sync + Send,
         {
-            #[cfg(feature = "parallel")]
-            {
-                self.fold(&identity, fold_op).reduce(&identity, reduce_op)
-            }
-
-            #[cfg(not(feature = "parallel"))]
-            {
-                let _ = reduce_op;
-                self.fold(identity(), fold_op)
-            }
+            let _ = reduce_op;
+            self.fold(identity(), fold_op)
         }
     }
 }
