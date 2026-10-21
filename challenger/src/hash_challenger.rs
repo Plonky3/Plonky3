@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 
-use p3_maybe_rayon::prelude::*;
+use p3_maybe_rayon::search::find_map_first;
 use p3_symmetric::{CryptographicHasher, Hash, MerkleCap};
 
 use crate::grinding_challenger::find_witness_by_cloning;
@@ -241,40 +241,38 @@ where
         let batch_len = H::LANES.max(1);
         let num_batches = num_candidates.div_ceil(batch_len as u64);
 
-        (0..num_batches)
-            .into_par_iter()
-            .map_init(
-                || {
-                    let mut messages = Vec::with_capacity(batch_len * message_len);
-                    for _ in 0..batch_len {
-                        messages.extend_from_slice(&self.input_buffer);
-                        messages.extend_from_slice(&[0; W]);
-                    }
-                    (messages, vec![[0; OUT_LEN]; batch_len])
-                },
-                |(messages, digests), batch| {
-                    let first = batch * batch_len as u64;
-                    // The last batch stops at the end of the candidate range.
-                    let count = (num_candidates - first).min(batch_len as u64) as usize;
+        find_map_first(
+            0..num_batches,
+            || {
+                let mut messages = Vec::with_capacity(batch_len * message_len);
+                for _ in 0..batch_len {
+                    messages.extend_from_slice(&self.input_buffer);
+                    messages.extend_from_slice(&[0; W]);
+                }
+                (messages, vec![[0; OUT_LEN]; batch_len])
+            },
+            |(messages, digests), batch| {
+                let first = batch * batch_len as u64;
+                // The last batch stops at the end of the candidate range.
+                let count = (num_candidates - first).min(batch_len as u64) as usize;
 
-                    for (offset, message) in messages
-                        .chunks_exact_mut(message_len)
-                        .take(count)
-                        .enumerate()
-                    {
-                        message[prefix_len..].copy_from_slice(&encode(first + offset as u64));
-                    }
-                    self.hasher
-                        .hash_many(&messages[..count * message_len], &mut digests[..count]);
+                for (offset, message) in messages
+                    .chunks_exact_mut(message_len)
+                    .take(count)
+                    .enumerate()
+                {
+                    message[prefix_len..].copy_from_slice(&encode(first + offset as u64));
+                }
+                self.hasher
+                    .hash_many(&messages[..count * message_len], &mut digests[..count]);
 
-                    // Scanning in candidate order keeps a serial search on the smallest pass.
-                    digests[..count]
-                        .iter()
-                        .position(|digest| accepts(array::from_fn(|k| digest[OUT_LEN - 1 - k])))
-                        .map(|offset| first + offset as u64)
-                },
-            )
-            .find_map_any(|found| found)
+                // Scanning in candidate order keeps the batch's smallest pass.
+                digests[..count]
+                    .iter()
+                    .position(|digest| accepts(array::from_fn(|k| digest[OUT_LEN - 1 - k])))
+                    .map(|offset| first + offset as u64)
+            },
+        )
     }
 }
 
@@ -303,7 +301,6 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
     use p3_keccak::Keccak256Hash;
-    use p3_maybe_rayon::PARALLEL_ENABLED;
     use p3_sha256::Sha256;
 
     use super::*;
@@ -794,13 +791,11 @@ mod tests {
                 }
                 let found = found.expect("the candidate sampling the target must pass");
                 assert_eq!(in_range[found as usize], *target);
-                // A serial search returns the smallest candidate sampling the target.
-                if !PARALLEL_ENABLED {
-                    assert_eq!(
-                        in_range.iter().position(|s| s == target),
-                        Some(found as usize)
-                    );
-                }
+                // The search returns the smallest candidate sampling the target.
+                assert_eq!(
+                    in_range.iter().position(|s| s == target),
+                    Some(found as usize)
+                );
             }
 
             assert_eq!(

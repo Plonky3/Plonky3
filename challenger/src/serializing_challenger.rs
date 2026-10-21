@@ -538,7 +538,6 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
     use p3_keccak::Keccak256Hash;
-    use p3_maybe_rayon::PARALLEL_ENABLED;
     use p3_sha256::Sha256;
     use p3_symmetric::CryptographicHasher;
 
@@ -749,14 +748,11 @@ mod tests {
         let mut checked = challenger.clone();
         assert!(checked.check_witness(bits, witness));
 
-        // Serially the search returns the smallest candidate `check_witness` accepts.
-        // Every candidate below it is then rejected by both, and the witness accepted by both.
-        if !PARALLEL_ENABLED {
-            let smallest = (0..)
-                .map(C::Witness::from_u64)
-                .find(|&candidate| challenger.clone().check_witness(bits, candidate));
-            assert_eq!(smallest, Some(witness));
-        }
+        // The search returns the smallest candidate `check_witness` accepts, on any thread count.
+        let smallest = (0..)
+            .map(C::Witness::from_u64)
+            .find(|&candidate| challenger.clone().check_witness(bits, candidate));
+        assert_eq!(smallest, Some(witness));
 
         // Grinding leaves the transcript where checking the same witness does.
         let after_grind: [C::Witness; 12] = ground.sample_array();
@@ -766,7 +762,7 @@ mod tests {
 
     fn assert_grind_agrees_for<Inner: ByteGrindingChallenger>(make: impl Fn(u64) -> Inner) {
         for seed in 0..6 {
-            for bits in [1, 2, 4, 8, 12] {
+            for bits in [0, 1, 2, 4, 8, 14] {
                 let narrow = SerializingChallenger32::<BabyBear, _>::new(make(seed));
                 assert_grind_agrees_with_check_witness(&narrow, bits);
                 let wide = SerializingChallenger64::<Goldilocks, _>::new(make(seed));
