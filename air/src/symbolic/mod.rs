@@ -1,6 +1,7 @@
 //! Symbolic expression types for AIR constraint representation.
 
 mod builder;
+mod constraints;
 mod expression;
 pub(crate) mod expression_ext;
 mod flatten;
@@ -12,6 +13,7 @@ use core::iter::{Product, Sum};
 use core::ops;
 
 pub use builder::*;
+pub use constraints::*;
 pub use expression::{BaseLeaf, SymbolicExpression};
 pub use expression_ext::{ExtLeaf, SymbolicExpressionExt};
 use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};

@@ -13,8 +13,8 @@ use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
-    Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression,
-    SymbolicVariable, WindowAccess,
+    Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder, SymbolicConstraints,
+    SymbolicExpression, SymbolicVariable, WindowAccess,
 };
 
 /// Describes the shape of an AIR for symbolic constraint evaluation.
@@ -171,7 +171,7 @@ where
     layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
-    builder.base_constraints()
+    builder.base_constraints
 }
 
 #[instrument(
@@ -191,7 +191,7 @@ where
     layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
-    builder.extension_constraints()
+    builder.extension_constraints
 }
 
 #[instrument(
@@ -214,7 +214,7 @@ where
     layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
-    (builder.base_constraints(), builder.extension_constraints())
+    (builder.base_constraints, builder.extension_constraints)
 }
 
 /// Symbolic AIR builder that records constraints.
@@ -315,6 +315,19 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
 
     pub fn base_constraints(&self) -> Vec<SymbolicExpression<F>> {
         self.base_constraints.clone()
+    }
+
+    /// Consume the builder, returning its constraints and their global ordering.
+    ///
+    /// The expression vectors are moved into the result without cloning.
+    #[must_use]
+    pub fn finish(self) -> SymbolicConstraints<F, EF> {
+        let constraint_layout = self.constraint_layout();
+        SymbolicConstraints {
+            base_constraints: self.base_constraints,
+            extension_constraints: self.extension_constraints,
+            constraint_layout,
+        }
     }
 }
 
