@@ -467,6 +467,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_field::{Algebra, Field, PrimeCharacteristicRing};
+    use p3_field_testing::test_fixed_base;
     use proptest::prelude::*;
 
     use super::Poly64;
@@ -623,6 +624,20 @@ mod tests {
             let x = Poly64::from_repr(bits);
             let encoded = serde_json::to_string(&x).unwrap();
             assert_eq!(serde_json::from_str::<Poly64>(&encoded).unwrap(), x);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn fixed_base_powers_match_square_and_multiply(
+            base: u64,
+            one_limb in prop::collection::vec(any::<[u64; 1]>(), 0..40),
+            two_limbs in prop::collection::vec(any::<[u64; 2]>(), 0..40),
+        ) {
+            test_fixed_base::<Poly64, Poly64, 1>(Poly64::new(base), &one_limb);
+            test_fixed_base::<Poly64, Poly64, 2>(Poly64::new(base), &two_limbs);
         }
     }
 }
