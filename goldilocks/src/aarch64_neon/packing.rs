@@ -18,7 +18,7 @@ use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
 };
-use p3_util::reconstitute_from_base;
+use p3_util::zero_vec_from_base;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
@@ -213,7 +213,7 @@ impl PrimeCharacteristicRing for PackedGoldilocksNeon {
 
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
-        unsafe { reconstitute_from_base(Goldilocks::zero_vec(len * WIDTH)) }
+        unsafe { zero_vec_from_base(len, Goldilocks::zero_vec) }
     }
 }
 

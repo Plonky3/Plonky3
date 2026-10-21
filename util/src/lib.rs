@@ -704,6 +704,36 @@ pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>)
     }
 }
 
+/// Build a vector of `len` zero `BaseArray` elements from a zeroed vector of base elements.
+///
+/// Each `BaseArray` spans `d = size_of::<BaseArray>() / size_of::<Base>()` base elements.
+///
+/// So `base_zero_vec` is asked for `len * d` of them, and the result is reinterpreted in place.
+///
+/// # Safety
+///
+/// - `BaseArray` must have the same alignment and memory layout as `[Base; d]`.
+/// - An array of `d` zeros from `base_zero_vec` must be a valid `BaseArray` zero.
+///
+/// # Panics
+///
+/// Panics with "capacity overflow" if `len * d` overflows `usize`, as `vec![zero; len]` does.
+#[inline]
+pub unsafe fn zero_vec_from_base<Base, BaseArray: Clone>(
+    len: usize,
+    base_zero_vec: impl FnOnce(usize) -> Vec<Base>,
+) -> Vec<BaseArray> {
+    let d = size_of::<BaseArray>() / size_of::<Base>();
+
+    // Why: a wrapped product would ask for fewer base elements than `len` arrays need.
+    //
+    //     len = usize::MAX / 4 + 1, d = 4  ->  len * d wraps to 0  ->  an empty vector
+    let base_len = len.checked_mul(d).expect("capacity overflow");
+
+    // SAFETY: the caller guarantees the layout and that base zeros form a zero array.
+    unsafe { reconstitute_from_base(base_zero_vec(base_len)) }
+}
+
 #[inline(always)]
 pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
     // Check that neither input is 0.

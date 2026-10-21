@@ -17,7 +17,7 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
     uint32x4_mod_sub,
 };
-use p3_util::reconstitute_from_base;
+use p3_util::zero_vec_from_base;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
@@ -278,7 +278,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
+        unsafe { zero_vec_from_base(len, MontyField31::<FP>::zero_vec) }
     }
 
     #[inline(always)]
