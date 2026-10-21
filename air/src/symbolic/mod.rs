@@ -5,6 +5,7 @@ mod constraints;
 mod expression;
 pub(crate) mod expression_ext;
 mod flatten;
+mod fold;
 mod layout;
 mod variable;
 
@@ -17,6 +18,7 @@ pub use builder::*;
 pub use constraints::*;
 pub use expression::{BaseLeaf, SymbolicExpression};
 pub use expression_ext::{ExtLeaf, SymbolicExpressionExt};
+pub use fold::*;
 pub use layout::*;
 use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};
 pub use variable::{BaseEntry, ExtEntry, SymbolicVariable, SymbolicVariableExt};
