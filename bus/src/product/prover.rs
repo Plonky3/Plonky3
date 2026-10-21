@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
-use p3_field::Field;
+use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 
@@ -122,6 +122,11 @@ const BLOCK: usize = 16;
 /// A fused fold writes a quarter of them, which stays in the first-level cache for its sums.
 const TASK_BLOCKS: usize = 64;
 
+/// Most lanes a packed extension may have for the packed block sums.
+///
+/// It sizes the stack buffer of one group's weights.
+const MAX_LANES: usize = 16;
+
 /// Blocks whose products one dot product sums.
 const DOT_BLOCKS: usize = 4;
 
@@ -159,14 +164,17 @@ impl<F: Field> RadixFourState<F> {
     }
 
     /// Sums the polynomial of the next two rounds over every block.
-    fn grid(&self, weights: &BlockWeights<F>) -> GridSums<F> {
+    fn grid<Base: Field>(&self, weights: &BlockWeights<F>) -> GridSums<F>
+    where
+        F: ExtensionField<Base>,
+    {
         let values = &self.values.values;
         values
             .par_chunks(TASK_BLOCKS * BLOCK)
             .enumerate()
             .map_collect_min_task_bytes(Self::task_bytes(), |(task, chunk)| {
                 let mut sums = GridSums::new();
-                sums.add_blocks(chunk, task * TASK_BLOCKS, weights);
+                sums.add_blocks::<Base>(chunk, task * TASK_BLOCKS, weights);
                 sums
             })
             .into_iter()
@@ -176,11 +184,14 @@ impl<F: Field> RadixFourState<F> {
     /// Binds the next two variables to `challenges`, lowest first.
     ///
     /// Given block weights, it also sums the next two rounds' polynomial from the rows it writes.
-    fn fold_two(
+    fn fold_two<Base: Field>(
         &mut self,
         challenges: [F; 2],
         weights: Option<&BlockWeights<F>>,
-    ) -> Option<GridSums<F>> {
+    ) -> Option<GridSums<F>>
+    where
+        F: ExtensionField<Base>,
+    {
         let source = &self.values.values;
 
         // Every block, the last one possibly short, folds into one row.
@@ -203,7 +214,7 @@ impl<F: Field> RadixFourState<F> {
                 // The rows just written are still in cache, so the next grid reads no memory.
                 weights.map(|weights| {
                     let mut sums = GridSums::new();
-                    sums.add_blocks(rows, task * TASK_BLOCKS / 4, weights);
+                    sums.add_blocks::<Base>(rows, task * TASK_BLOCKS / 4, weights);
                     sums
                 })
             });
@@ -355,9 +366,74 @@ impl<F: Field> GridSums<F> {
 
     /// Adds every block of `values`, the first being block `first`.
     ///
+    /// Whole groups of blocks go through the packed extension, block `l` of a group in lane `l`.
+    /// The blocks short of a group, the last one possibly short of rows, go one at a time.
+    #[inline]
+    fn add_blocks<Base: Field>(&mut self, values: &[F], first: usize, weights: &BlockWeights<F>)
+    where
+        F: ExtensionField<Base>,
+    {
+        let lanes = Base::Packing::WIDTH;
+        let (blocks, _) = values.as_chunks::<BLOCK>();
+        let packed = if (2..=MAX_LANES).contains(&lanes) {
+            blocks.len() / lanes * lanes
+        } else {
+            0
+        };
+        if packed > 0 {
+            self.add_packed::<Base>(&blocks[..packed], first, weights);
+        }
+        self.add_scalar(&values[packed * BLOCK..], first + packed, weights);
+    }
+
+    /// Adds whole groups of blocks, one block per lane of the packed extension.
+    #[inline]
+    fn add_packed<Base: Field>(
+        &mut self,
+        blocks: &[[F; BLOCK]],
+        first: usize,
+        weights: &BlockWeights<F>,
+    ) where
+        F: ExtensionField<Base>,
+    {
+        let lanes = Base::Packing::WIDTH;
+        let mut terms = [[F::ExtensionPacking::ZERO; 6]; 6];
+        let mut lane_weights = [F::ZERO; MAX_LANES];
+        for (index, group) in blocks.chunks_exact(lanes).enumerate() {
+            // Lane `l` carries block `first + lanes * index + l` and its weight.
+            let start = first + index * lanes;
+            for (lane, weight) in lane_weights[..lanes].iter_mut().enumerate() {
+                *weight = weights.at(start + lane);
+                self.weight += *weight;
+            }
+            let corners: [F::ExtensionPacking; BLOCK] = core::array::from_fn(|corner| {
+                F::ExtensionPacking::from_ext_fn(|lane| group[lane][corner])
+            });
+            let weight = F::ExtensionPacking::from_ext_fn(|lane| lane_weights[lane]);
+
+            // Each lane's term sums its own blocks.
+            let operands = block_operands(&corners, weight);
+            for (sum, (x, y)) in terms.as_flattened_mut().iter_mut().zip(operands) {
+                *sum += x * y;
+            }
+        }
+
+        // The lanes' sums add into the scalar sums once per call.
+        for (sum, packed) in self
+            .terms
+            .as_flattened_mut()
+            .iter_mut()
+            .zip(terms.as_flattened())
+        {
+            *sum += F::ExtensionPacking::to_ext_iter([*packed]).sum::<F>();
+        }
+    }
+
+    /// Adds every block of `values` one at a time, the first being block `first`.
+    ///
     /// A short last block is completed by implicit identities.
     #[inline]
-    fn add_blocks(&mut self, values: &[F], first: usize, weights: &BlockWeights<F>) {
+    fn add_scalar(&mut self, values: &[F], first: usize, weights: &BlockWeights<F>) {
         let (blocks, short) = values.as_chunks::<BLOCK>();
         let (groups, rest) = blocks.as_chunks::<DOT_BLOCKS>();
         for (index, group) in groups.iter().enumerate() {
@@ -392,45 +468,13 @@ impl<F: Field> GridSums<F> {
     #[inline]
     fn add_group(&mut self, group: &[[F; BLOCK]; DOT_BLOCKS], weights: [F; DOT_BLOCKS]) {
         let operands: [[(F, F); 36]; DOT_BLOCKS] =
-            core::array::from_fn(|block| Self::block_operands(&group[block], weights[block]));
+            core::array::from_fn(|block| block_operands(&group[block], weights[block]));
         for (term, sum) in self.terms.as_flattened_mut().iter_mut().enumerate() {
             let left = core::array::from_fn(|block| operands[block][term].0);
             let right = core::array::from_fn(|block| operands[block][term].1);
             *sum += F::dot_product::<DOT_BLOCKS>(&left, &right);
         }
         self.weight += weights.into_iter().sum::<F>();
-    }
-
-    /// The operand pairs of one block's product terms, its weight carried by the first child.
-    #[inline(always)]
-    fn block_operands(block: &[F; BLOCK], weight: F) -> [(F, F); 36] {
-        // Child `c` as a bilinear polynomial, coefficients indexed `[Y_2 power][Y_1 power]`.
-        //
-        //     V_c = e_0 + Y_1 (e_1 - e_0) + Y_2 (e_2 - e_0) + Y_1 Y_2 (e_3 - e_2 - e_1 + e_0)
-        let child = |c: usize| {
-            let corner = |index: usize| block[4 * index + c];
-            let y1 = corner(1) - corner(0);
-            [
-                [corner(0), y1],
-                [corner(2) - corner(0), corner(3) - corner(2) - y1],
-            ]
-        };
-
-        // The weight scales one factor, so the product carries it.
-        let [[a, b], [c, d]] = child(0);
-        let first = [[a * weight, b * weight], [c * weight, d * weight]];
-
-        // Two pairs of bilinear factors make two biquadratics.
-        let left = bilinear_product(first, child(1));
-        let right = bilinear_product(child(2), child(3));
-
-        // Their product's Karatsuba terms: six in `Y_2`, each six in `Y_1`.
-        let outer = karatsuba_three_operands(left, right, add_coefficients);
-        let mut operands = [(F::ZERO, F::ZERO); 36];
-        for (terms, (u, w)) in operands.as_chunks_mut::<6>().0.iter_mut().zip(outer) {
-            *terms = karatsuba_three_operands(u, w, F::add);
-        }
-        operands
     }
 
     /// Combines the terms into the bivariate polynomial, adding the identity tail.
@@ -445,21 +489,62 @@ impl<F: Field> GridSums<F> {
     }
 }
 
+/// The operand pairs of one block's product terms, its weight carried by the first child.
+#[inline(always)]
+fn block_operands<R: PrimeCharacteristicRing + Copy>(
+    block: &[R; BLOCK],
+    weight: R,
+) -> [(R, R); 36] {
+    // Child `c` as a bilinear polynomial, coefficients indexed `[Y_2 power][Y_1 power]`.
+    //
+    //     V_c = e_0 + Y_1 (e_1 - e_0) + Y_2 (e_2 - e_0) + Y_1 Y_2 (e_3 - e_2 - e_1 + e_0)
+    let child = |c: usize| {
+        let corner = |index: usize| block[4 * index + c];
+        let y1 = corner(1) - corner(0);
+        [
+            [corner(0), y1],
+            [corner(2) - corner(0), corner(3) - corner(2) - y1],
+        ]
+    };
+
+    // The weight scales one factor, so the product carries it.
+    let [[a, b], [c, d]] = child(0);
+    let first = [[a * weight, b * weight], [c * weight, d * weight]];
+
+    // Two pairs of bilinear factors make two biquadratics.
+    let left = bilinear_product(first, child(1));
+    let right = bilinear_product(child(2), child(3));
+
+    // Their product's Karatsuba terms: six in `Y_2`, each six in `Y_1`.
+    let outer = karatsuba_three_operands(left, right, add_coefficients);
+    let mut operands = [(R::ZERO, R::ZERO); 36];
+    for (terms, (u, w)) in operands.as_chunks_mut::<6>().0.iter_mut().zip(outer) {
+        *terms = karatsuba_three_operands(u, w, R::add);
+    }
+    operands
+}
+
 /// Adds two coefficient vectors.
 #[inline(always)]
-fn add_coefficients<F: Field, const N: usize>(a: [F; N], b: [F; N]) -> [F; N] {
+fn add_coefficients<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    a: [R; N],
+    b: [R; N],
+) -> [R; N] {
     core::array::from_fn(|index| a[index] + b[index])
 }
 
 /// Subtracts two coefficient vectors.
 #[inline(always)]
-fn sub_coefficients<F: Field, const N: usize>(a: [F; N], b: [F; N]) -> [F; N] {
+fn sub_coefficients<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    a: [R; N],
+    b: [R; N],
+) -> [R; N] {
     core::array::from_fn(|index| a[index] - b[index])
 }
 
 /// The product of two lines, three products.
 #[inline(always)]
-fn line_product<F: Field>([a0, a1]: [F; 2], [b0, b1]: [F; 2]) -> [F; 3] {
+fn line_product<R: PrimeCharacteristicRing + Copy>([a0, a1]: [R; 2], [b0, b1]: [R; 2]) -> [R; 3] {
     // Karatsuba: the middle coefficient is (a_0 + a_1)(b_0 + b_1) - a_0 b_0 - a_1 b_1.
     let low = a0 * b0;
     let high = a1 * b1;
@@ -468,14 +553,17 @@ fn line_product<F: Field>([a0, a1]: [F; 2], [b0, b1]: [F; 2]) -> [F; 3] {
 
 /// The product of two bilinear polynomials, nine products.
 #[inline(always)]
-fn bilinear_product<F: Field>([a0, a1]: [[F; 2]; 2], [b0, b1]: [[F; 2]; 2]) -> [[F; 3]; 3] {
+fn bilinear_product<R: PrimeCharacteristicRing + Copy>(
+    [a0, a1]: [[R; 2]; 2],
+    [b0, b1]: [[R; 2]; 2],
+) -> [[R; 3]; 3] {
     // Karatsuba in `Y_2`, each of its three products a product of lines in `Y_1`.
     let low = line_product(a0, b0);
     let high = line_product(a1, b1);
     let cross = line_product(add_coefficients(a0, a1), add_coefficients(b0, b1));
     [
         low,
-        core::array::from_fn(|index| cross[index] - low[index] - high[index]),
+        sub_coefficients(sub_coefficients(cross, low), high),
         high,
     ]
 }
@@ -646,12 +734,15 @@ impl<F: Field> RadixFourBatch<F> {
     /// An odd count leaves one round, over two rows.
     ///
     /// `send` takes each round's message and returns its challenge.
-    pub(super) fn prove_rounds(
+    pub(super) fn prove_rounds<Base: Field>(
         &mut self,
         point: &[F],
         batching: F,
         mut send: impl FnMut([F; ROUND_POLY_LEN]) -> F,
-    ) -> Vec<F> {
+    ) -> Vec<F>
+    where
+        F: ExtensionField<Base>,
+    {
         let rounds = point.len();
         let nodes = RoundNodes::<F>::new();
         let mut challenges = Vec::with_capacity(rounds);
@@ -664,7 +755,7 @@ impl<F: Field> RadixFourBatch<F> {
             let weights = BlockWeights::new(&point[2..]);
             self.states
                 .iter()
-                .map(|state| state.grid(&weights))
+                .map(|state| state.grid::<Base>(&weights))
                 .collect::<Vec<_>>()
         });
         while let Some(sums) = grids {
@@ -681,7 +772,7 @@ impl<F: Field> RadixFourBatch<F> {
             let next = self
                 .states
                 .iter_mut()
-                .map(|state| state.fold_two([low, high], weights.as_ref()))
+                .map(|state| state.fold_two::<Base>([low, high], weights.as_ref()))
                 .collect::<Vec<_>>();
             grids = next.into_iter().collect();
         }
@@ -756,7 +847,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_binary_field::{BinaryField128, Ghash128, Poly192};
+    use p3_binary_field::{BinaryField128, Ghash128, Poly64, Poly192};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_multilinear_util::point::Point;
@@ -831,18 +922,21 @@ mod tests {
     }
 
     /// Checks every round message of every radix-four layer against the per-node reference.
-    fn check_rounds<F: Field>(rng: &mut Xoroshiro128Plus, log_height: usize, prefix_lens: &[usize])
-    where
+    fn check_rounds<Base: Field, F: ExtensionField<Base>>(
+        rng: &mut Xoroshiro128Plus,
+        log_height: usize,
+        prefix_lens: &[usize],
+    ) where
         StandardUniform: Distribution<F>,
     {
         let inputs = prefix_lens
             .iter()
             .map(|&len| (0..len).map(|_| rng.random::<F>()).collect::<Vec<_>>())
             .collect::<Vec<_>>();
-        check_input_rounds(rng, log_height, &inputs);
+        check_input_rounds::<Base, F>(rng, log_height, &inputs);
     }
 
-    fn check_input_rounds<F: Field>(
+    fn check_input_rounds<Base: Field, F: ExtensionField<Base>>(
         rng: &mut Xoroshiro128Plus,
         log_height: usize,
         inputs: &[Vec<F>],
@@ -881,7 +975,7 @@ mod tests {
                         let mut round = 0;
 
                         // Each message must equal the reference before both bind the same challenge.
-                        let challenges = batch.prove_rounds(&anchor, batching, |message| {
+                        let challenges = batch.prove_rounds::<Base>(&anchor, batching, |message| {
                             assert_eq!(
                                 message,
                                 per_node_round(&trees, &equality, batching),
@@ -987,16 +1081,16 @@ mod tests {
             &[128, 16, 0],
         ];
         for prefix_lens in shapes {
-            check_rounds::<BinaryField128>(&mut rng, 7, prefix_lens);
-            check_rounds::<Ghash128>(&mut rng, 7, prefix_lens);
-            check_rounds::<BabyBearQuartic>(&mut rng, 7, prefix_lens);
+            check_rounds::<BinaryField128, BinaryField128>(&mut rng, 7, prefix_lens);
+            check_rounds::<Ghash128, Ghash128>(&mut rng, 7, prefix_lens);
+            check_rounds::<BabyBear, BabyBearQuartic>(&mut rng, 7, prefix_lens);
         }
         for log_height in [3, 4, 6] {
             let capacity = 1usize << log_height;
             let prefix_lens = [capacity, 0, capacity - 1];
-            check_rounds::<BinaryField128>(&mut rng, log_height, &prefix_lens);
-            check_rounds::<Ghash128>(&mut rng, log_height, &prefix_lens);
-            check_rounds::<BabyBearQuartic>(&mut rng, log_height, &prefix_lens);
+            check_rounds::<BinaryField128, BinaryField128>(&mut rng, log_height, &prefix_lens);
+            check_rounds::<Ghash128, Ghash128>(&mut rng, log_height, &prefix_lens);
+            check_rounds::<BabyBear, BabyBearQuartic>(&mut rng, log_height, &prefix_lens);
         }
     }
 
@@ -1006,11 +1100,11 @@ mod tests {
         // Prefixes ending inside a task, a block and a row cut each pass at every granularity.
         let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0008);
         let prefix_lens = [4096, 3001, 1037];
-        check_rounds::<Poly192>(&mut rng, 12, &prefix_lens);
-        check_rounds::<BabyBearQuartic>(&mut rng, 13, &prefix_lens);
+        check_rounds::<Poly64, Poly192>(&mut rng, 12, &prefix_lens);
+        check_rounds::<BabyBear, BabyBearQuartic>(&mut rng, 13, &prefix_lens);
     }
 
-    fn check_identity_tails<F: Field>(rng: &mut Xoroshiro128Plus)
+    fn check_identity_tails<Base: Field, F: ExtensionField<Base>>(rng: &mut Xoroshiro128Plus)
     where
         StandardUniform: Distribution<F>,
     {
@@ -1028,7 +1122,7 @@ mod tests {
                             inputs[trees - 1][slot] = F::ZERO;
                         }
                     }
-                    check_input_rounds(rng, 7, &inputs);
+                    check_input_rounds::<Base, F>(rng, 7, &inputs);
                 }
             }
         }
@@ -1037,8 +1131,8 @@ mod tests {
     #[test]
     fn identity_tails_match_the_full_domain_reference() {
         let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0005);
-        check_identity_tails::<BinaryField128>(&mut rng);
-        check_identity_tails::<Ghash128>(&mut rng);
-        check_identity_tails::<BabyBearQuartic>(&mut rng);
+        check_identity_tails::<BinaryField128, BinaryField128>(&mut rng);
+        check_identity_tails::<Ghash128, Ghash128>(&mut rng);
+        check_identity_tails::<BabyBear, BabyBearQuartic>(&mut rng);
     }
 }

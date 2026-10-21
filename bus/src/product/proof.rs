@@ -238,7 +238,7 @@ impl<EF> ProductGkrProof<EF> {
                 // Four child tables share one eq-weighted degree-five sumcheck.
                 let mut batch = RadixFourBatch::new_consuming(&mut all_layers, child_depth);
                 let mut round_polys = Vec::with_capacity(round_count);
-                let round_point = batch.prove_rounds(&point, batching, |round_poly| {
+                let round_point = batch.prove_rounds::<F>(&point, batching, |round_poly| {
                     round_polys.push(round_poly);
                     transcript.round(&round_poly)
                 });
