@@ -1,0 +1,44 @@
+[package]
+name = "p3-modular"
+description = "Rings of integers modulo a run-time modulus: Montgomery prime fields, primality tests and prime sampling."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+# Criterion pulls Rayon transitively, which does not build for WASI.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[dependencies]
+p3-field.workspace = true
+p3-maybe-rayon.workspace = true
+p3-util.workspace = true
+
+num-bigint.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+p3-baby-bear.workspace = true
+p3-bn254.workspace = true
+p3-goldilocks.workspace = true
+p3-koala-bear.workspace = true
+p3-mersenne-31.workspace = true
+
+postcard = { workspace = true, features = ["alloc"] }
+proptest.workspace = true
+rand = { workspace = true, features = ["std_rng"] }
+
+[[bench]]
+name = "mont"
+harness = false
+
+[lints]
+workspace = true
