@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 use core::cmp::Reverse;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use itertools::Itertools;
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MmcsProofGeometry, RowSink};
@@ -89,11 +90,21 @@ where
         let Dimensions { width, height } = dimensions;
         assert!(height > 0, "all matrices have height 0");
         let mut digests = default_digest_layer::<PW::Value, DIGEST_ELEMS>(height);
+        // One flag per row: a call owns its rows only once it has claimed every one of them.
+        let claimed: Vec<AtomicBool> = (0..height).map(|_| AtomicBool::new(false)).collect();
         let slots = DisjointMutPtr::new(&mut digests);
         let sink = |first_row: usize, rows: &[P::Value]| {
             let count = rows.len() / width.max(1);
-            assert!(first_row + count <= height, "rows past the matrix");
-            // SAFETY: the producer hands every row over exactly once, so the slots are disjoint.
+            assert_eq!(count * width, rows.len(), "a partial row");
+            let end = first_row.checked_add(count).expect("rows past the matrix");
+            assert!(end <= height, "rows past the matrix");
+            for flag in &claimed[first_row..end] {
+                assert!(
+                    !flag.swap(true, Ordering::Relaxed),
+                    "a row handed over twice"
+                );
+            }
+            // SAFETY: this call claimed every row of the range, so no other call reaches these slots.
             let out = unsafe { slots.slice_mut(first_row, count) };
             <H as CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>>::hash_many(
                 &self.hash, rows, out,
@@ -105,6 +116,13 @@ where
             dimensions,
             "the matrix the producer promised"
         );
+        // Every sink call has returned with `fill`, so no slot is still borrowed.
+        if width > 0 {
+            assert!(
+                claimed.iter().all(|flag| flag.load(Ordering::Relaxed)),
+                "a row never handed over"
+            );
+        }
 
         let tree = MerkleTree::new_over_leaf_digests::<P, PW, H, C>(
             &self.hash,
@@ -381,6 +399,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -471,6 +491,59 @@ mod tests {
                 assert_eq!(streamed.opening_proof, committed.opening_proof);
             }
         }
+    }
+
+    /// Commit a random matrix whose producer hands over the given `(first_row, rows)` ranges.
+    fn hand_over(ranges: &[(usize, usize)]) {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(9));
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 1);
+        let matrix = RowMajorMatrix::<F>::rand(&mut SmallRng::seed_from_u64(10), 8, 2);
+        mmcs.commit_matrix_streamed(matrix.dimensions(), |sink| {
+            for &(first_row, rows) in ranges {
+                sink(first_row, &matrix.values[..rows * 2]);
+            }
+            matrix.clone()
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "a row handed over twice")]
+    fn overlapping_hand_overs_are_refused() {
+        hand_over(&[(0, 4), (2, 4), (6, 2)]);
+    }
+
+    #[test]
+    fn racing_hand_overs_of_one_row_admit_one_owner() {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(9));
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 1);
+        let matrix = RowMajorMatrix::<F>::rand(&mut SmallRng::seed_from_u64(10), 8, 2);
+        let (streamed, _) = mmcs.commit_matrix_streamed(matrix.dimensions(), |sink| {
+            // Two workers race for row 0: one owns it, the other is refused before writing.
+            let refused = std::thread::scope(|scope| {
+                let workers = [0, 1].map(|_| scope.spawn(|| sink(0, &matrix.values[..2])));
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join())
+                    .filter(Result::is_err)
+                    .count()
+            });
+            assert_eq!(refused, 1);
+            sink(1, &matrix.values[2..]);
+            matrix.clone()
+        });
+        assert_eq!(streamed, mmcs.commit_matrix(matrix).0);
+    }
+
+    #[test]
+    #[should_panic(expected = "rows past the matrix")]
+    fn rows_past_the_matrix_are_refused() {
+        hand_over(&[(usize::MAX, 1)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "a row never handed over")]
+    fn a_missing_row_is_refused() {
+        hand_over(&[(0, 4), (4, 3)]);
     }
 
     #[test]

@@ -92,6 +92,8 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     ///
     /// The closure calls the sink once per finished row, in blocks of whole rows, from any worker.
     ///
+    /// A scheme may panic on a row handed over twice, never, or past the matrix.
+    ///
     /// A scheme may hash the rows there, while the producer still holds them in cache.
     ///
     /// The default ignores them and commits the matrix once it is whole.
