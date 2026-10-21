@@ -432,7 +432,7 @@ where
                 &expected_output.values,
             );
             let mut owned_challenger = make_challenger();
-            let (proof, output) = super::PreparedProductGkr::new_owned(inputs, shape)
+            let (proof, output) = super::PreparedProductGkr::new_owned::<F>(inputs, shape)
                 .prove::<F, _>(&mut owned_challenger);
             assert_eq!(proof, expected_proof);
             assert_eq!(output, expected_output);
@@ -460,5 +460,8 @@ fn owned_leaves_preserve_proofs_with_spare_capacity_and_identity_padding() {
 #[should_panic(expected = "product GKR input exceeds its logical tree")]
 fn owned_leaves_validate_lengths_before_trimming_identities() {
     let shape = ProductGkrShape::new(0, 2, ProductGkrRootShape::FirstTwoShared).unwrap();
-    super::PreparedProductGkr::new_owned([vec![Binary::ONE; 2], vec![Binary::ONE]], shape);
+    super::PreparedProductGkr::new_owned::<Binary>(
+        [vec![Binary::ONE; 2], vec![Binary::ONE]],
+        shape,
+    );
 }

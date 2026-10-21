@@ -11,9 +11,7 @@ use p3_multilinear_util::point::Point;
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 use serde::{Deserialize, Serialize};
 
-use super::math::{
-    combine, has_distinct_round_nodes, interpolate_pair, interpolate_quad, sum_adjacent,
-};
+use super::math::{combine, has_distinct_round_nodes, interpolate_pair, interpolate_quad};
 use super::prover::{ProductLayers, RadixFourBatch};
 use super::transcript::{ProductGkrProverTranscript, ProductGkrVerifierTranscript};
 use super::{ProductGkrError, ProductGkrShape};
@@ -60,36 +58,44 @@ pub struct ProductGkrOutput<EF> {
 }
 
 /// Product layers and roots bound to one validated statement shape.
-pub(crate) struct PreparedProductGkr<EF> {
+///
+/// Borrowed leaves stay borrowed until the first fold of the leaf layer.
+pub(crate) struct PreparedProductGkr<'a, EF: Clone> {
     shape: ProductGkrShape,
-    all_layers: Vec<ProductLayers<EF>>,
+    all_layers: Vec<ProductLayers<'a, EF>>,
     roots: Vec<EF>,
 }
 
-impl<EF: Field> PreparedProductGkr<EF> {
+impl<'a, EF: Field> PreparedProductGkr<'a, EF> {
     /// Prepare layers without asserting the shared-root relation or touching a transcript.
-    pub(crate) fn new(inputs: &[&[EF]], shape: ProductGkrShape) -> Self {
+    pub(crate) fn new<F: Field>(inputs: &[&'a [EF]], shape: ProductGkrShape) -> Self
+    where
+        EF: ExtensionField<F>,
+    {
         Self::validate_lengths(inputs.iter().map(|input| input.len()), shape);
 
         // Keep only explicit prefixes at every product level.
-        // A leaf moves two elements to be copied and fewer than two more to be reduced.
+        // The leaves stay borrowed, and a leaf moves fewer than two elements to be reduced.
         // Each tree is charged the average, so the gate sees every tree's bytes together.
         let tree_bytes = inputs
             .iter()
-            .map(|input| input.len() * 4 * size_of::<EF>())
+            .map(|input| input.len() * 2 * size_of::<EF>())
             .sum::<usize>()
             .checked_div(inputs.len())
             .unwrap_or(0);
         let all_layers = inputs
             .par_iter()
             .map_collect_min_task_bytes(tree_bytes, |input| {
-                ProductLayers::new(input, shape.log_height)
+                ProductLayers::new::<F>(input, shape.log_height)
             });
         Self::from_layers(shape, all_layers)
     }
 
     /// Consume the bus's owned leaves without copying their explicit prefixes.
-    pub(crate) fn new_owned(mut inputs: [Vec<EF>; 2], shape: ProductGkrShape) -> Self {
+    pub(crate) fn new_owned<F: Field>(mut inputs: [Vec<EF>; 2], shape: ProductGkrShape) -> Self
+    where
+        EF: ExtensionField<F>,
+    {
         Self::validate_lengths(inputs.iter().map(Vec::len), shape);
         // No leaf copy is needed; only the retained levels move field values.
         let tree_bytes = inputs
@@ -101,7 +107,7 @@ impl<EF: Field> PreparedProductGkr<EF> {
         let all_layers = inputs
             .par_iter_mut()
             .map_collect_min_task_bytes(tree_bytes, |input| {
-                ProductLayers::new_owned(core::mem::take(input), shape.log_height)
+                ProductLayers::new_owned::<F>(core::mem::take(input), shape.log_height)
             });
         Self::from_layers(shape, all_layers)
     }
@@ -121,7 +127,7 @@ impl<EF: Field> PreparedProductGkr<EF> {
         }
     }
 
-    fn from_layers(shape: ProductGkrShape, all_layers: Vec<ProductLayers<EF>>) -> Self {
+    fn from_layers(shape: ProductGkrShape, all_layers: Vec<ProductLayers<'a, EF>>) -> Self {
         let roots = all_layers
             .iter()
             .map(ProductLayers::root)
@@ -187,12 +193,12 @@ impl<EF> ProductGkrProof<EF> {
             has_distinct_round_nodes::<EF>(),
             "product GKR requires six distinct challenge-field interpolation nodes"
         );
-        Self::prove_inner::<F, Challenger>(PreparedProductGkr::new(inputs, shape), challenger)
+        Self::prove_inner::<F, Challenger>(PreparedProductGkr::new::<F>(inputs, shape), challenger)
     }
 
     /// Run the transcript after the statement and product layers have been checked.
     fn prove_inner<F, Challenger>(
-        prepared: PreparedProductGkr<EF>,
+        prepared: PreparedProductGkr<'_, EF>,
         challenger: &mut Challenger,
     ) -> (Self, ProductGkrOutput<EF>)
     where
@@ -238,35 +244,12 @@ impl<EF> ProductGkrProof<EF> {
                 layer_proofs.push(ProductGkrLayerProof::Binary { children });
             } else {
                 // Four child tables share one eq-weighted degree-five sumcheck.
-                let mut batch = RadixFourBatch::new_consuming(
-                    &mut all_layers,
-                    child_depth,
-                    1usize << round_count,
-                );
-                // The current coordinate factors out of the row sum. Keep only its
-                // normalized suffix table; the root-most layer can have no coordinates.
-                let mut equality = Point::new(point.get(1..).unwrap_or(&[])).equality_weights_lsb();
-                let mut equality_prefix = EF::ONE;
-                let mut logical_len = 1usize << round_count;
-                let mut round_point = Vec::with_capacity(round_count);
+                let mut batch = RadixFourBatch::new_consuming(&mut all_layers, child_depth);
                 let mut round_polys = Vec::with_capacity(round_count);
-
-                for &anchor in &point {
-                    let one = equality_prefix * anchor;
-                    let equality_pair = [equality_prefix - one, one];
-                    let round_poly = batch.round(&equality, equality_pair, logical_len, batching);
-                    let challenge = transcript.round(&round_poly);
-                    batch.fold(challenge, logical_len);
-                    equality_prefix = interpolate_pair(equality_pair, challenge);
-                    logical_len /= 2;
-                    if logical_len > 1 {
-                        // Product GKR binds adjacent pairs (LSB-first), unlike Poly's
-                        // leading-variable convention. No division by a prefix is needed.
-                        sum_adjacent(&mut equality);
-                    }
-                    round_point.push(challenge);
+                let round_point = batch.prove_rounds::<F>(&point, batching, |round_poly| {
                     round_polys.push(round_poly);
-                }
+                    transcript.round(&round_poly)
+                });
 
                 let children = batch.children();
                 let branches = transcript.end_radix_four_layer(&children);
