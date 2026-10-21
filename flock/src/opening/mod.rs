@@ -111,7 +111,11 @@ impl WitnessPcs {
     /// The witness is narrower than one element, the parameters admit no schedule, or no target reaches the bound.
     pub fn new(num_variables: usize, params: &PcsParams) -> Result<Self, OpeningError> {
         for term_bits in params.security_bits..=params.security_bits + MAX_TERM_SLACK {
-            let pcs = Self::with_term_bits(num_variables, params, term_bits)?;
+            // Grinding can cover a whole term, leaving no query; a higher target may still need some.
+            let pcs = match Self::with_term_bits(num_variables, params, term_bits) {
+                Err(OpeningError::Profile(ProfileError::ZeroQueries)) => continue,
+                pcs => pcs?,
+            };
             let composed = pcs
                 .0
                 .readings_security(1, false)
