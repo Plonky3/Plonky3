@@ -39,8 +39,13 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+blake2.workspace = true
+blake3.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
 rand = { workspace = true, features = ["std_rng"] }
+sha2.workspace = true
+tiny-keccak = { workspace = true, features = ["keccak"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
@@ -50,6 +55,10 @@ harness = false
 
 [[bench]]
 name = "lincheck"
+harness = false
+
+[[bench]]
+name = "witness"
 harness = false
 
 [lints]
