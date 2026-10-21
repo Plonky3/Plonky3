@@ -18,6 +18,9 @@ pub(super) const WIDTH: usize = 8;
 /// G, and four spill the working vectors out of the 16 registers.
 pub(super) const GROUPS: usize = 2;
 
+/// The generic rounds of the compression.
+pub(in crate::batch) use crate::batch::compress::compress;
+
 // SAFETY (every block below): this module only compiles when the target enables AVX2.
 impl Word for __m256i {
     #[inline(always)]

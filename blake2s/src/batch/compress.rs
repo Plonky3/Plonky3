@@ -1,4 +1,7 @@
 //! The BLAKE2s compression function of RFC 7693 section 3.2, on vectors of lanes.
+//!
+//! AVX-512 has a hand-scheduled kernel instead, so there only its tests use these rounds.
+#![cfg_attr(target_feature = "avx512f", allow(dead_code))]
 
 use crate::batch::lanes::Word;
 
