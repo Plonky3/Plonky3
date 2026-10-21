@@ -73,13 +73,16 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR: ${{ github.event.pull_request.number }}
           RUN_NUMBER: ${{ github.run_number }}
+        # A branch name is attacker-chosen text, so it reaches the API and jq only as data.
         run: |
-          gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?event=pull_request&branch=$BRANCH&per_page=100" \
-            --jq ".workflow_runs[]
-              | select(.run_number < $RUN_NUMBER)
-              | select(.head_sha != \"$HEAD_SHA\" and .status != \"completed\")
-              | select(any(.pull_requests[]; .number == $PR))
-              | .id" \
+          gh api -X GET "repos/$GH_REPO/actions/workflows/ci.yml/runs" \
+            -f event=pull_request -f branch="$BRANCH" -F per_page=100 \
+            | jq -r --argjson run_number "$RUN_NUMBER" --arg head_sha "$HEAD_SHA" --argjson pr "$PR" '
+              .workflow_runs[]
+              | select(.run_number < $run_number)
+              | select(.head_sha != $head_sha and .status != "completed")
+              | select(any(.pull_requests[]; .number == $pr))
+              | .id' \
             | xargs -r -n1 gh run cancel
 
       - uses: actions/checkout@v6
@@ -105,19 +108,23 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.head_ref }}
           HEAD_REPO_ID: ${{ github.event.pull_request.head.repo.id }}
+        # A branch name is attacker-chosen text, so it reaches jq only as data.
         run: |
           echo "$BASE_SHA $HEAD_SHA" > "$RUNNER_TEMP/ci-context"
           workflow=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
           passed=false
-          for run in $(gh api "repos/$GH_REPO/actions/artifacts?name=ci-context-$BASE_SHA-$HEAD_SHA&per_page=100" \
-            --jq ".artifacts[].workflow_run.id | select(. != $GITHUB_RUN_ID)"); do
-            trusted=$(gh api "repos/$GH_REPO/actions/runs/$run" --jq "
-              .conclusion == \"success\"
-              and .event == \"pull_request\"
-              and .workflow_id == $workflow
-              and .head_sha == \"$HEAD_SHA\"
-              and .head_branch == \"$HEAD_REF\"
-              and .head_repository.id == $HEAD_REPO_ID")
+          for run in $(gh api -X GET "repos/$GH_REPO/actions/artifacts" \
+            -f name="ci-context-$BASE_SHA-$HEAD_SHA" -F per_page=100 \
+            | jq --argjson self "$GITHUB_RUN_ID" '.artifacts[].workflow_run.id | select(. != $self)'); do
+            trusted=$(gh api "repos/$GH_REPO/actions/runs/$run" \
+              | jq --argjson workflow "$workflow" --arg head_sha "$HEAD_SHA" \
+                --arg head_ref "$HEAD_REF" --argjson head_repo "$HEAD_REPO_ID" '
+                .conclusion == "success"
+                and .event == "pull_request"
+                and .workflow_id == $workflow
+                and .head_sha == $head_sha
+                and .head_branch == $head_ref
+                and .head_repository.id == $head_repo')
             if [[ "$trusted" == true ]]; then
               passed=true
               break
