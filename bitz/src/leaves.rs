@@ -62,7 +62,7 @@ impl ProductLeaves<Challenge> for BitLeaves<'_> {
         Cow::Owned(leaves)
     }
 
-    fn layer(&self, _: usize, _: usize) -> Self::Layer<'_> {
+    fn layer(&self, _: usize, _: &[Challenge]) -> Self::Layer<'_> {
         unreachable!("dense bit leaves prove no layer of their own")
     }
 }
