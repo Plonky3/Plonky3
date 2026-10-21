@@ -16,6 +16,8 @@ pub(crate) struct CacheBudget {
     ///
     /// It is at least the private budget.
     pub(crate) shared: usize,
+    /// Bytes of the whole last-level cache this thread sits in, or zero where unknown.
+    pub(crate) last_level: usize,
 }
 
 impl CacheBudget {
@@ -25,9 +27,11 @@ impl CacheBudget {
     /// - The shared budget is 2 MiB, a common per-core slice of L3.
     /// - Apple silicon's cluster L2 holds more than both per core.
     /// - A budget below the real cache only forgoes some fused stages, which is the safe direction.
+    /// - The last-level size is unknown, so no matrix is taken to stay in cache.
     pub(crate) const DEFAULT: Self = Self {
         private: 256 * 1024,
         shared: 2 * 1024 * 1024,
+        last_level: 0,
     };
 
     /// The fewest bytes a detected L2 share is taken at.
@@ -45,25 +49,36 @@ impl CacheBudget {
     pub(crate) fn host() -> Self {
         // Zero means not read yet, since every budget has a non-zero private part.
         //
-        // The private budget sits in the low half, the shared one in the high half, both in KiB.
+        // The three sizes sit in 21-bit fields of KiB, private lowest, which holds up to 2 GiB each.
         static CACHE: AtomicU64 = AtomicU64::new(0);
+        const FIELD: u32 = 21;
+        const MASK: u64 = (1 << FIELD) - 1;
 
         let packed = CACHE.load(Ordering::Relaxed);
         if packed != 0 {
+            let field = |i: u32| (((packed >> (i * FIELD)) & MASK) as usize) << 10;
             return Self {
-                private: ((packed & 0xffff_ffff) as usize) << 10,
-                shared: ((packed >> 32) as usize) << 10,
+                private: field(0),
+                shared: field(1),
+                last_level: field(2),
             };
         }
 
         let budget = Self::from_cpuid().unwrap_or(Self::DEFAULT);
+        let field = |bytes: usize| ((bytes >> 10) as u64).min(MASK);
+        let packed = field(budget.private)
+            | (field(budget.shared) << FIELD)
+            | (field(budget.last_level) << (2 * FIELD));
 
         // Racing threads compute the same answer, so a plain store is enough.
-        CACHE.store(
-            (budget.private as u64 >> 10) | ((budget.shared as u64 >> 10) << 32),
-            Ordering::Relaxed,
-        );
-        budget
+        CACHE.store(packed, Ordering::Relaxed);
+
+        // The budget is returned as the cache will give it back, so every call agrees.
+        Self {
+            private: (field(budget.private) as usize) << 10,
+            shared: (field(budget.shared) as usize) << 10,
+            last_level: (field(budget.last_level) as usize) << 10,
+        }
     }
 
     /// The budget of the running machine.
@@ -118,7 +133,7 @@ impl CacheBudget {
 
             match (r.eax >> 5) & 0x7 {
                 2 => l2 = Some(bytes / sharing),
-                3 => l3 = Some(bytes / sharing),
+                3 => l3 = Some((bytes, bytes / sharing)),
                 _ => {}
             }
         }
@@ -130,9 +145,14 @@ impl CacheBudget {
         //
         // So the shared budget is capped at a few private ones, which every cluster holds.
         let shared = l3
-            .unwrap_or(private)
+            .map_or(private, |(_, share)| share)
             .clamp(private, Self::MAX_SPILL * private);
-        Some(Self { private, shared })
+        let last_level = l3.map_or(0, |(bytes, _)| bytes);
+        Some(Self {
+            private,
+            shared,
+            last_level,
+        })
     }
 }
 

@@ -214,12 +214,14 @@ mod tests {
     const SPILLING: CacheBudget = CacheBudget {
         private: 128 * 1024,
         shared: 512 * 1024,
+        last_level: 0,
     };
 
     /// The same private budget with nothing to spill into, so every tile fills the private one.
     const PRIVATE_ONLY: CacheBudget = CacheBudget {
         private: 128 * 1024,
         shared: 128 * 1024,
+        last_level: 0,
     };
 
     /// Builds an element of any level from a 64-bit pattern, repeating it for wider levels.
@@ -601,6 +603,7 @@ mod tests {
             spill in 0usize..=3,
             workers in 1usize..=33,
             log_inv_rate in 0usize..=3,
+            resident in any::<bool>(),
         ) {
             // A message past 2^16 elements adds time, not shapes.
             prop_assume!(width << log_n <= 1 << 16);
@@ -613,6 +616,7 @@ mod tests {
             let budget = CacheBudget {
                 private: 1 << log_private,
                 shared: 1 << (log_private + spill),
+                last_level: if resident { 1 << 20 } else { 0 },
             };
 
             // Poly64 rows pass a cache line from width 8, BinaryField32 ones from width 16.
@@ -1017,6 +1021,30 @@ mod tests {
             );
             assert_eq!(schedule.log_staged_rows, 9, "workers={workers}");
         }
+    }
+
+    #[test]
+    fn a_lone_worker_skips_staging_where_the_matrix_stays_in_cache() {
+        // Invariant: staging trades sweeps of memory for copies through the cache.
+        // A lone worker over a matrix half the last-level cache holds sweeps no memory, so it skips the trade.
+        //
+        // Fixture state: a 256-byte row, 2^20 rows, so a 256 MiB matrix.
+        //
+        //     last level 512 MiB, 1 worker    matrix fits half of it  -> plain passes
+        //     last level 512 MiB, 2 workers   barriers still pay      -> staged
+        //     last level 256 MiB, 1 worker    matrix overruns half    -> staged
+        //     last level unknown, 1 worker    nothing assumed         -> staged
+        let staged = |last_level: usize, workers: usize| {
+            let budget = CacheBudget {
+                last_level,
+                ..SPILLING
+            };
+            Schedule::for_budget::<Ghash128>(16, 20, workers, budget).log_staged_rows
+        };
+        assert_eq!(staged(512 << 20, 1), 0);
+        assert!(staged(512 << 20, 2) >= MIN_FUSED_STAGES);
+        assert!(staged(256 << 20, 1) >= MIN_FUSED_STAGES);
+        assert!(staged(0, 1) >= MIN_FUSED_STAGES);
     }
 
     #[test]

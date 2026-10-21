@@ -76,6 +76,7 @@ impl Schedule {
     /// - A contiguous tile fills the private budget too.
     /// - It fills the shared budget instead only where that saves a whole sweep.
     /// - A tile is also a task, so it is cut back until every worker has one.
+    /// - A lone worker over a matrix the last-level cache holds runs plain passes, which sweep no memory.
     pub(super) fn for_budget<F>(
         width: usize,
         log_n: usize,
@@ -121,7 +122,20 @@ impl Schedule {
             near
         };
 
-        let (log_slab_rows, log_staged_rows) = staged(log_tile_rows);
+        let (log_slab_rows, staged_rows) = staged(log_tile_rows);
+
+        // A plain pass over a matrix half the last-level cache holds moves no memory, only cache.
+        //
+        //     one worker:      the plain passes stream from that cache, and staging only adds copies
+        //     several workers: each plain pass is a dispatch and a barrier, which staging removes
+        let resident =
+            budget.last_level / 2 >= row_bytes && log_n <= fit(budget.last_level / 2, row_bytes);
+        let log_staged_rows = if workers == 1 && resident {
+            0
+        } else {
+            staged_rows
+        };
+
         Self {
             log_tile_rows,
             log_staged_rows,
