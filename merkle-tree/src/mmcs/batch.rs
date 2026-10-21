@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 use core::cmp::Reverse;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use itertools::Itertools;
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MmcsProofGeometry, RowSink};
@@ -21,6 +21,42 @@ use crate::builder::default_digest_layer;
 use crate::merkle_tree::padded_len;
 use crate::pruning::PrunedMerklePaths;
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
+
+/// A streamed row no sink call has claimed.
+const FREE: u8 = 0;
+
+/// A streamed row one sink call is hashing.
+const CLAIMED: u8 = 1;
+
+/// A streamed row whose digest is written.
+const WRITTEN: u8 = 2;
+
+/// The rows one sink call claimed, released again unless their digests were written.
+struct RowClaim<'a> {
+    /// The states of the call's whole range.
+    rows: &'a [AtomicU8],
+    /// How many leading rows of the range this call holds.
+    claimed: usize,
+}
+
+impl RowClaim<'_> {
+    /// Mark every claimed row as written, keeping it from release.
+    fn written(mut self) {
+        for state in &self.rows[..self.claimed] {
+            state.store(WRITTEN, Ordering::Release);
+        }
+        self.claimed = 0;
+    }
+}
+
+impl Drop for RowClaim<'_> {
+    fn drop(&mut self) {
+        // An unwinding or refused call frees its rows, so a retry may hand them over again.
+        for state in &self.rows[..self.claimed] {
+            state.store(FREE, Ordering::Release);
+        }
+    }
+}
 
 impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize> Mmcs<P::Value>
     for MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>
@@ -90,25 +126,31 @@ where
         let Dimensions { width, height } = dimensions;
         assert!(height > 0, "all matrices have height 0");
         let mut digests = default_digest_layer::<PW::Value, DIGEST_ELEMS>(height);
-        // One flag per row: a call owns its rows only once it has claimed every one of them.
-        let claimed: Vec<AtomicBool> = (0..height).map(|_| AtomicBool::new(false)).collect();
+        // One state per row: a call owns its rows only once it has claimed every one of them.
+        let states: Vec<AtomicU8> = (0..height).map(|_| AtomicU8::new(FREE)).collect();
         let slots = DisjointMutPtr::new(&mut digests);
         let sink = |first_row: usize, rows: &[P::Value]| {
             let count = rows.len() / width.max(1);
             assert_eq!(count * width, rows.len(), "a partial row");
             let end = first_row.checked_add(count).expect("rows past the matrix");
             assert!(end <= height, "rows past the matrix");
-            for flag in &claimed[first_row..end] {
-                assert!(
-                    !flag.swap(true, Ordering::Relaxed),
-                    "a row handed over twice"
-                );
+            let mut claim = RowClaim {
+                rows: &states[first_row..end],
+                claimed: 0,
+            };
+            for state in claim.rows {
+                let free =
+                    state.compare_exchange(FREE, CLAIMED, Ordering::Acquire, Ordering::Relaxed);
+                // A refused call releases what it claimed, so the rows stay free for another.
+                assert!(free.is_ok(), "a row handed over twice");
+                claim.claimed += 1;
             }
             // SAFETY: this call claimed every row of the range, so no other call reaches these slots.
             let out = unsafe { slots.slice_mut(first_row, count) };
             <H as CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>>::hash_many(
                 &self.hash, rows, out,
             );
+            claim.written();
         };
         let matrix = fill(&sink);
         assert_eq!(
@@ -119,7 +161,9 @@ where
         // Every sink call has returned with `fill`, so no slot is still borrowed.
         if width > 0 {
             assert!(
-                claimed.iter().all(|flag| flag.load(Ordering::Relaxed)),
+                states
+                    .iter()
+                    .all(|state| state.load(Ordering::Acquire) == WRITTEN),
                 "a row never handed over"
             );
         }
@@ -403,6 +447,7 @@ mod tests {
 
     use alloc::vec;
     use alloc::vec::Vec;
+    use std::panic::AssertUnwindSafe;
 
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -532,6 +577,36 @@ mod tests {
             matrix.clone()
         });
         assert_eq!(streamed, mmcs.commit_matrix(matrix).0);
+    }
+
+    /// Commit rows 0..8 of width 2: row 1 first, then a refused hand-over of rows 0..2, then `rest`.
+    fn after_a_refused_hand_over(rest: &[(usize, usize)]) -> bool {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(9));
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 1);
+        let matrix = RowMajorMatrix::<F>::rand(&mut SmallRng::seed_from_u64(10), 8, 2);
+        let (streamed, _) = mmcs.commit_matrix_streamed(matrix.dimensions(), |sink| {
+            let rows = |first: usize, count: usize| &matrix.values[2 * first..2 * (first + count)];
+            sink(1, rows(1, 1));
+            // Row 0 is claimed, then row 1 is refused: the call unwinds and must free row 0.
+            let refused = std::panic::catch_unwind(AssertUnwindSafe(|| sink(0, rows(0, 2))));
+            assert!(refused.is_err());
+            for &(first, count) in rest {
+                sink(first, rows(first, count));
+            }
+            matrix.clone()
+        });
+        streamed == mmcs.commit_matrix(matrix).0
+    }
+
+    #[test]
+    fn a_refused_hand_over_frees_its_rows_for_a_retry() {
+        assert!(after_a_refused_hand_over(&[(0, 1), (2, 6)]));
+    }
+
+    #[test]
+    #[should_panic(expected = "a row never handed over")]
+    fn a_row_only_a_refused_hand_over_claimed_is_missing() {
+        after_a_refused_hand_over(&[(2, 6)]);
     }
 
     #[test]
