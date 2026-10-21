@@ -32,6 +32,7 @@ members = [
     "mds",
     "merkle-tree",
     "mersenne-31",
+    "modular",
     "monolith",
     "monolith-air",
     "monty-31",
@@ -146,6 +147,7 @@ p3-maybe-rayon = { path = "maybe-rayon", version = "0.8.0" }
 p3-mds = { path = "mds", version = "0.8.0" }
 p3-merkle-tree = { path = "merkle-tree", version = "0.8.0" }
 p3-mersenne-31 = { path = "mersenne-31", version = "0.8.0" }
+p3-modular = { path = "modular", version = "0.8.0" }
 p3-monolith = { path = "monolith", version = "0.8.0" }
 p3-monolith-air = { path = "monolith-air", version = "0.8.0" }
 p3-monty-31 = { path = "monty-31", version = "0.8.0" }
