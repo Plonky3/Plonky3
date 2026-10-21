@@ -1,5 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::mem::MaybeUninit;
+use core::slice::ChunksMut;
 
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
@@ -59,26 +61,49 @@ where
     }
 }
 
+/// The one or two tree levels above four child tables.
+///
+/// Two levels come out of one pass whenever the level after the next still has a row.
+fn reduce_levels<N, A>(n0: &[N], n1: &[N], d0: &[A], d1: &[A]) -> Vec<SplitFraction<Poly<A>>>
+where
+    N: PrimeCharacteristicRing + Copy + Send + Sync,
+    A: Algebra<N> + Copy + Send + Sync,
+{
+    let tables = Tables { n0, n1, d0, d1 };
+    if tables.len() >= 4 {
+        let (next, after) = tables.reduce_two();
+        vec![next.into_polys(), after.into_polys()]
+    } else {
+        vec![reduce_fraction(n0, n1, d0, d1)]
+    }
+}
+
 impl<'a, F: Field, EF: ExtensionField<F>> LeafFraction<'a, F, EF> {
     /// Fold adjacent fraction pairs into the first extension-field layer.
     ///
     /// The four arms are the two numerator storages crossed with the two denominator storages.
     ///
     /// Every arm lands in the extension field, so no layer below this one branches again.
-    fn reduce(&self) -> SplitFractionMaybePacked<F, EF> {
-        match (&self.n, self.d) {
+    fn reduce(&self) -> Vec<SplitFractionMaybePacked<F, EF>> {
+        let mut levels = match (&self.n, self.d) {
             (LeafNumerator::Base(numer), PolyMaybePacked::Packed(denom)) => {
                 // Base-field numerators are stored one scalar per evaluation.
                 // Packing them here lines them up with the packed denominator.
                 let numer = F::Packing::pack_slice(numer.as_slice());
                 let (n0, n1) = numer.split_at(numer.len() / 2);
                 let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
-                SplitFractionMaybePacked::Packed(reduce_fraction(n0, n1, d0, d1))
+                reduce_levels(n0, n1, d0, d1)
+                    .into_iter()
+                    .map(SplitFractionMaybePacked::Packed)
+                    .collect::<Vec<_>>()
             }
             (LeafNumerator::Base(numer), PolyMaybePacked::Scalar(denom)) => {
                 let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
                 let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
-                SplitFractionMaybePacked::Scalar(reduce_fraction(n0, n1, d0, d1))
+                reduce_levels(n0, n1, d0, d1)
+                    .into_iter()
+                    .map(SplitFractionMaybePacked::Scalar)
+                    .collect()
             }
             (
                 LeafNumerator::Ext(PolyMaybePacked::Packed(numer)),
@@ -87,7 +112,10 @@ impl<'a, F: Field, EF: ExtensionField<F>> LeafFraction<'a, F, EF> {
                 // Both halves already agree on storage, so the kernel runs with one type.
                 let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
                 let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
-                SplitFractionMaybePacked::Packed(reduce_fraction(n0, n1, d0, d1))
+                reduce_levels(n0, n1, d0, d1)
+                    .into_iter()
+                    .map(SplitFractionMaybePacked::Packed)
+                    .collect::<Vec<_>>()
             }
             (
                 LeafNumerator::Ext(PolyMaybePacked::Scalar(numer)),
@@ -95,10 +123,17 @@ impl<'a, F: Field, EF: ExtensionField<F>> LeafFraction<'a, F, EF> {
             ) => {
                 let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
                 let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
-                SplitFractionMaybePacked::Scalar(reduce_fraction(n0, n1, d0, d1))
+                reduce_levels(n0, n1, d0, d1)
+                    .into_iter()
+                    .map(SplitFractionMaybePacked::Scalar)
+                    .collect()
             }
             _ => unreachable!("{MIXED_LEAF_STORAGE}"),
+        };
+        for level in &mut levels {
+            level.transition();
         }
+        levels
     }
 }
 
@@ -113,6 +148,11 @@ const TASK_BYTES: usize = 1 << 16;
 const fn task_blocks<A>() -> usize {
     let blocks = TASK_BYTES / (16 * size_of::<A>());
     if blocks == 0 { 1 } else { blocks }
+}
+
+/// The next task's window of a table cut into task-sized chunks.
+fn next_window<'a, T>(chunks: &mut ChunksMut<'a, T>) -> &'a mut [T] {
+    chunks.next().expect("every table has a window per task")
 }
 
 /// The polynomial of a pair of rounds, summed at the points both messages are read from.
@@ -323,11 +363,7 @@ where
         next: Option<(&[A], A)>,
     ) -> Grid<A> {
         let len = self.len() / 4;
-        let mut slots = [&mut out.n0, &mut out.n1, &mut out.d0, &mut out.d1].map(|table| {
-            table.clear();
-            table.reserve(len);
-            &mut table.spare_capacity_mut()[..len]
-        });
+        let mut slots = out.spare_rows(len);
 
         let grid = if len < 4 {
             // Too short for quarters: one or two rows, folded in place of a task.
@@ -362,11 +398,9 @@ where
             });
             let tasks = (0..next_quarter.div_ceil(blocks))
                 .map(|_| {
-                    windows.each_mut().map(|quarters| {
-                        quarters.each_mut().map(|chunks| {
-                            chunks.next().expect("every quarter has a window per task")
-                        })
-                    })
+                    windows
+                        .each_mut()
+                        .map(|quarters| quarters.each_mut().map(next_window))
                 })
                 .collect::<Vec<_>>();
 
@@ -411,11 +445,80 @@ where
                 .fold(Grid::zero(), Grid::merge)
         };
 
-        for table in [&mut out.n0, &mut out.n1, &mut out.d0, &mut out.d1] {
-            // SAFETY: every row below `len` was written exactly once above.
-            unsafe { table.set_len(len) };
-        }
+        // SAFETY: every row below `len` was written exactly once above.
+        unsafe { out.set_rows(len) };
         grid
+    }
+
+    /// Adds each pair of fractions, two tree levels in one pass.
+    ///
+    /// Row `i` of the next level is the sum of the fractions at row `i` of both halves:
+    ///
+    /// ```text
+    ///     n0 / d0 + n1 / d1 = (d1 n0 + d0 n1) / (d0 d1)
+    /// ```
+    ///
+    /// The level after takes those sums in pairs again while they are still in registers.
+    fn reduce_two(&self) -> (SplitFraction<Vec<A>>, SplitFraction<Vec<A>>) {
+        let quarter = self.len() / 4;
+        debug_assert!(quarter >= 1);
+        let mut next = SplitFraction::with_capacity(2 * quarter);
+        let mut after = SplitFraction::with_capacity(quarter);
+
+        // Row `i` of the next level and its partner `i + 2 quarter` sum into row `i` of the one after.
+        //
+        // That row is in the first half of the level after when `i < quarter`, else in the second.
+        let blocks = task_blocks::<A>();
+        let [n0, n1, d0, d1] = next
+            .spare_rows(2 * quarter)
+            .map(|table| table.split_at_mut(quarter));
+        let [after_n0, after_n1, after_d0, after_d1] = after.spare_rows(quarter);
+        let halves = [
+            (0, [n0.0, n1.0, d0.0, d1.0], [after_n0, after_d0]),
+            (quarter, [n0.1, n1.1, d0.1, d1.1], [after_n1, after_d1]),
+        ];
+        let tasks = halves
+            .into_iter()
+            .flat_map(|(offset, next, after)| {
+                let mut next = next.map(|table| table.chunks_mut(blocks));
+                let mut after = after.map(|table| table.chunks_mut(blocks));
+                (0..quarter.div_ceil(blocks)).map(move |task| {
+                    (
+                        offset + task * blocks,
+                        next.each_mut().map(next_window),
+                        after.each_mut().map(next_window),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+
+        tasks.into_par_iter().for_each_min_task_bytes(
+            4 * TASK_BYTES,
+            |(start, [n0s, n1s, d0s, d1s], [after_n, after_d])| {
+                let rows = n0s.len();
+                for row in 0..rows {
+                    let i = start + row;
+                    let sum = |j: usize| {
+                        let (n0, n1, d0, d1) = (self.n0[j], self.n1[j], self.d0[j], self.d1[j]);
+                        (A::mixed_dot_product::<2>(&[d1, d0], &[n0, n1]), d0 * d1)
+                    };
+                    let ((n_low, d_low), (n_high, d_high)) = (sum(i), sum(i + 2 * quarter));
+                    n0s[row].write(n_low);
+                    d0s[row].write(d_low);
+                    n1s[row].write(n_high);
+                    d1s[row].write(d_high);
+                    after_n[row].write(A::dot_product::<2>(&[d_high, d_low], &[n_low, n_high]));
+                    after_d[row].write(d_low * d_high);
+                }
+            },
+        );
+
+        // SAFETY: the tasks' windows cover every row of both levels, each written once.
+        unsafe {
+            next.set_rows(2 * quarter);
+            after.set_rows(quarter);
+        }
+        (next, after)
     }
 }
 
@@ -427,6 +530,46 @@ impl<A> SplitFraction<Vec<A>> {
             d0: Vec::new(),
             n1: Vec::new(),
             d1: Vec::new(),
+        }
+    }
+
+    /// Empty tables with room for `len` rows each.
+    fn with_capacity(len: usize) -> Self {
+        Self {
+            n0: Vec::with_capacity(len),
+            d0: Vec::with_capacity(len),
+            n1: Vec::with_capacity(len),
+            d1: Vec::with_capacity(len),
+        }
+    }
+
+    /// The first `len` unwritten rows of every table, cleared first.
+    fn spare_rows(&mut self, len: usize) -> [&mut [MaybeUninit<A>]; 4] {
+        [&mut self.n0, &mut self.n1, &mut self.d0, &mut self.d1].map(|table| {
+            table.clear();
+            table.reserve(len);
+            &mut table.spare_capacity_mut()[..len]
+        })
+    }
+
+    /// Marks the first `len` rows of every table written.
+    ///
+    /// # Safety
+    ///
+    /// Every table must have its first `len` rows initialized.
+    unsafe fn set_rows(&mut self, len: usize) {
+        for table in [&mut self.n0, &mut self.n1, &mut self.d0, &mut self.d1] {
+            // SAFETY: the caller wrote the first `len` rows.
+            unsafe { table.set_len(len) };
+        }
+    }
+
+    fn into_polys(self) -> SplitFraction<Poly<A>> {
+        SplitFraction {
+            n0: Poly::new(self.n0),
+            d0: Poly::new(self.d0),
+            n1: Poly::new(self.n1),
+            d1: Poly::new(self.d1),
         }
     }
 
@@ -709,8 +852,8 @@ where
         self.n0.num_variables() + 1
     }
 
-    fn reduce(&self) -> Self {
-        reduce_fraction(
+    fn reduce(&self) -> Vec<Self> {
+        reduce_levels(
             self.n0.as_slice(),
             self.n1.as_slice(),
             self.d0.as_slice(),
@@ -777,13 +920,20 @@ impl<F: Field, EF: ExtensionField<F>> SplitFractionMaybePacked<F, EF> {
         }
     }
 
-    fn reduce(&self) -> Self {
-        let mut reduced = match self {
-            Self::Packed(fraction) => Self::Packed(fraction.reduce()),
-            Self::Scalar(fraction) => Self::Scalar(fraction.reduce()),
+    /// The one or two tree levels above this one.
+    fn reduce(&self) -> Vec<Self> {
+        let mut levels = match self {
+            Self::Packed(fraction) => fraction.reduce().into_iter().map(Self::Packed).collect(),
+            Self::Scalar(fraction) => fraction
+                .reduce()
+                .into_iter()
+                .map(Self::Scalar)
+                .collect::<Vec<_>>(),
         };
-        reduced.transition();
-        reduced
+        for level in &mut levels {
+            level.transition();
+        }
+        levels
     }
 
     /// Leave packed mode after its final useful SIMD reduction.
@@ -990,9 +1140,10 @@ where
 
     // Build every reduced tree layer while retaining the original input for the
     // final leaf layer, the only one whose numerator may sit in the base field.
-    let mut fractions = vec![fraction.reduce()];
+    let mut fractions = fraction.reduce();
     while fractions.last().unwrap().num_variables() > 1 {
-        fractions.push(fractions.last().unwrap().reduce());
+        let levels = fractions.last().unwrap().reduce();
+        fractions.extend(levels);
     }
 
     let root_claims = fractions.pop().unwrap().unpack().into_constants();
@@ -1107,7 +1258,7 @@ mod tests {
     use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
 
-    use super::{Grid, SplitFraction, Tables, sum_lanes};
+    use super::{Grid, SplitFraction, Tables, reduce_fraction, sum_lanes};
 
     type Bb4 = BinomialExtensionField<BabyBear, 4>;
 
@@ -1332,6 +1483,29 @@ mod tests {
             if quarter >= 4 {
                 assert_eq!(grid, expected.view().grid(&eq, lambda), "quarter {quarter}");
             }
+        }
+    }
+
+    #[test]
+    fn two_tree_levels_in_one_pass_match_two_passes() {
+        let mut rng = SmallRng::seed_from_u64(9);
+        // The smallest pair of levels, and enough rows for several tasks.
+        for quarter in [1, 2, 4096] {
+            let (n0, n1, d0, d1) = tables::<BabyBear, Bb4>(&mut rng, quarter);
+            let (next, after) = Tables {
+                n0: &n0,
+                n1: &n1,
+                d0: &d0,
+                d1: &d1,
+            }
+            .reduce_two();
+
+            // The reference adds one level per pass.
+            let once = reduce_fraction(&n0, &n1, &d0, &d1);
+            let view = once.view();
+            let twice = reduce_fraction(view.n0, view.n1, view.d0, view.d1);
+            assert_eq!(next.into_polys(), once, "quarter {quarter}");
+            assert_eq!(after.into_polys(), twice, "quarter {quarter}");
         }
     }
 
