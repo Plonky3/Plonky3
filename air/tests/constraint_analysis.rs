@@ -52,8 +52,11 @@ fn layout_matches_symbolic_with_interleaving_filtering_and_duplicates() {
     let cheap = capture_constraint_layout::<F, EF>(layout(), mixed_eval);
     assert_eq!(cheap.base_indices, [0, 2, 3, 5, 6, 9]);
     assert_eq!(cheap.ext_indices, [1, 4, 7, 8, 10]);
-    assert_eq!(cheap.base_indices, symbolic.constraint_layout.base_indices);
-    assert_eq!(cheap.ext_indices, symbolic.constraint_layout.ext_indices);
+    assert_eq!(
+        cheap.base_indices,
+        symbolic.constraint_layout().base_indices
+    );
+    assert_eq!(cheap.ext_indices, symbolic.constraint_layout().ext_indices);
     assert_eq!(
         symbolic.constraint_counts(),
         ConstraintCounts {
@@ -323,8 +326,11 @@ fn zero_width_windows_match_symbolic_capture() {
     let cheap = capture_constraint_layout::<F, EF>(AirLayout::default(), eval);
     assert_eq!(cheap.base_indices, [0]);
     assert_eq!(cheap.ext_indices, [1]);
-    assert_eq!(cheap.base_indices, symbolic.constraint_layout.base_indices);
-    assert_eq!(cheap.ext_indices, symbolic.constraint_layout.ext_indices);
+    assert_eq!(
+        cheap.base_indices,
+        symbolic.constraint_layout().base_indices
+    );
+    assert_eq!(cheap.ext_indices, symbolic.constraint_layout().ext_indices);
 }
 
 #[test]
@@ -404,7 +410,7 @@ fn seeded_assertion_sequences_match_symbolic_layouts() {
                 .collect(),
         );
         let symbolic = capture_symbolic_constraints::<F, EF>(shape, |builder| air.eval(builder));
-        let symbolic = symbolic.constraint_layout;
+        let symbolic = symbolic.constraint_layout();
         let cheap = capture_constraint_layout::<F, EF>(shape, |builder| air.eval(builder));
         assert_eq!(cheap.base_indices, symbolic.base_indices, "seed {seed}");
         assert_eq!(cheap.ext_indices, symbolic.ext_indices, "seed {seed}");

@@ -310,6 +310,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
     /// Consume the builder, returning its constraints and their global ordering.
     ///
     /// The expression vectors are moved into the result without cloning.
+    #[must_use]
     pub fn finish(self) -> SymbolicConstraints<F, EF> {
         let constraint_layout = self.constraint_layout();
         SymbolicConstraints {
