@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use p3_air::{
-    AirLayout, BaseEntry, BaseLeaf, DebugConstraintBuilder, ExtEntry, ExtLeaf, SymbolicAirBuilder,
-    SymbolicExpr, SymbolicExprVisitor, SymbolicExpression, SymbolicExpressionExt, SymbolicVariable,
-    SymbolicVariableExt, fold_symbolic_expressions, resolve_symbolic_expressions,
-    resolve_symbolic_expressions_ext,
+    AirLayout, BaseEntry, BaseLeaf, DebugConstraintBuilder, ExtEntry, ExtLeaf,
+    PermutationAirBuilder, SymbolicAirBuilder, SymbolicExpr, SymbolicExprVisitor,
+    SymbolicExpression, SymbolicExpressionExt, SymbolicVariable, SymbolicVariableExt, WindowAccess,
+    fold_symbolic_expressions, resolve_symbolic_expressions, resolve_symbolic_expressions_ext,
 };
 use p3_baby_bear::BabyBear as F;
 use p3_field::extension::BinomialExtensionField;
@@ -18,28 +18,34 @@ type EF = BinomialExtensionField<F, 4>;
 struct Evaluate {
     leaves: usize,
     operations: usize,
+    events: Vec<(&'static str, i64)>,
 }
 
 impl<'a> SymbolicExprVisitor<'a, i64> for Evaluate {
     type Output = i64;
     fn leaf(&mut self, value: &'a i64) -> i64 {
         self.leaves += 1;
+        self.events.push(("leaf", *value));
         *value
     }
     fn add(&mut self, x: &i64, y: &i64) -> i64 {
         self.operations += 1;
+        self.events.push(("add", x + y));
         x + y
     }
     fn sub(&mut self, x: &i64, y: &i64) -> i64 {
         self.operations += 1;
+        self.events.push(("sub", x - y));
         x - y
     }
     fn mul(&mut self, x: &i64, y: &i64) -> i64 {
         self.operations += 1;
+        self.events.push(("mul", x * y));
         x * y
     }
     fn neg(&mut self, x: &i64) -> i64 {
         self.operations += 1;
+        self.events.push(("neg", -x));
         -x
     }
 }
@@ -73,6 +79,17 @@ fn fold_preserves_order_and_visits_shared_nodes_once_across_roots() {
         [64, 5, 64, -5]
     );
     assert_eq!((visitor.leaves, visitor.operations), (2, 4));
+    assert_eq!(
+        visitor.events,
+        [
+            ("leaf", 3),
+            ("leaf", 5),
+            ("add", 8),
+            ("mul", 64),
+            ("sub", 5),
+            ("neg", -5),
+        ]
+    );
     assert!(fold_symbolic_expressions::<i64, _>(&[], &mut visitor).is_empty());
     assert_eq!((visitor.leaves, visitor.operations), (2, 4));
     let equal_leaves = [SymbolicExpr::Leaf(3), SymbolicExpr::Leaf(3)];
@@ -327,7 +344,7 @@ fn extension_resolution_rejects_unsupported_row_offsets() {
         permutation_width: 1,
         ..AirLayout::default()
     });
-    ext(ExtEntry::Permutation { offset: 2 }).resolve(&builder);
+    let _ = ext(ExtEntry::Permutation { offset: 2 }).resolve(&builder);
 }
 
 #[test]
@@ -337,9 +354,175 @@ fn extension_resolution_rejects_out_of_bounds_columns() {
         permutation_width: 1,
         ..AirLayout::default()
     });
-    SymbolicExpressionExt::from(SymbolicVariableExt::new(
+    let _ = SymbolicExpressionExt::from(SymbolicVariableExt::new(
         ExtEntry::Permutation { offset: 0 },
         1,
     ))
     .resolve(&builder);
+}
+
+// Keep the reference independent of the extension resolver and its visitor.
+fn resolve_extension_reference(
+    expression: &SymbolicExpressionExt<F, EF>,
+    builder: &DebugConstraintBuilder<'_, F, EF>,
+) -> EF {
+    match expression {
+        SymbolicExpr::Leaf(ExtLeaf::Base(base)) => base.resolve(builder).into(),
+        SymbolicExpr::Leaf(ExtLeaf::ExtConstant(value)) => *value,
+        SymbolicExpr::Leaf(ExtLeaf::ExtVariable(variable)) => match variable.entry {
+            ExtEntry::Permutation { offset: 0 } => {
+                builder.permutation().current(variable.index).unwrap()
+            }
+            ExtEntry::Permutation { offset: 1 } => {
+                builder.permutation().next(variable.index).unwrap()
+            }
+            ExtEntry::Permutation { .. } => unreachable!(),
+            ExtEntry::Challenge => builder.permutation_randomness()[variable.index],
+            ExtEntry::PermutationValue => builder.permutation_values()[variable.index],
+        },
+        SymbolicExpr::Add { x, y, .. } => {
+            resolve_extension_reference(x, builder) + resolve_extension_reference(y, builder)
+        }
+        SymbolicExpr::Sub { x, y, .. } => {
+            resolve_extension_reference(x, builder) - resolve_extension_reference(y, builder)
+        }
+        SymbolicExpr::Neg { x, .. } => -resolve_extension_reference(x, builder),
+        SymbolicExpr::Mul { x, y, .. } => {
+            resolve_extension_reference(x, builder) * resolve_extension_reference(y, builder)
+        }
+    }
+}
+
+// A fixed generator keeps failures reproducible without another dependency.
+const fn random_index(state: &mut u64, limit: usize) -> usize {
+    *state = state
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    ((*state >> 32) as usize) % limit
+}
+
+fn grow_random_dag<A>(pool: &mut Vec<Arc<SymbolicExpr<A>>>, state: &mut u64) {
+    for _ in 0..48 {
+        let x = pool[random_index(state, pool.len())].clone();
+        let y = pool[random_index(state, pool.len())].clone();
+        let degree_multiple = 0;
+        let expression = match random_index(state, 4) {
+            0 => SymbolicExpr::Add {
+                x,
+                y,
+                degree_multiple,
+            },
+            1 => SymbolicExpr::Sub {
+                x,
+                y,
+                degree_multiple,
+            },
+            2 => SymbolicExpr::Neg { x, degree_multiple },
+            _ => SymbolicExpr::Mul {
+                x,
+                y,
+                degree_multiple,
+            },
+        };
+        pool.push(Arc::new(expression));
+    }
+}
+
+#[test]
+fn seeded_random_dags_match_recursive_base_and_extension_resolution() {
+    let main = [F::new(2), F::new(3)];
+    let prep = [F::new(5), F::new(7)];
+    let public = [F::new(11)];
+    let periodic = [F::new(13)];
+    let ec = EF::from_basis_coefficients_slice(&[F::new(17), F::new(19), F::new(23), F::new(29)])
+        .unwrap();
+    let permutation = [ec, ec + F::ONE];
+    let challenges = [ec + F::TWO];
+    let values = [ec + F::new(3)];
+    let builder = DebugConstraintBuilder::new_with_permutation(
+        0,
+        pair(&main),
+        pair(&prep),
+        &public,
+        F::new(31),
+        F::new(37),
+        F::new(41),
+        ViewPair::new(
+            RowMajorMatrixView::new(&permutation[..1], 1),
+            RowMajorMatrixView::new(&permutation[1..], 1),
+        ),
+        &challenges,
+        &values,
+        &periodic,
+    );
+    for seed in 0..300 {
+        let mut state = seed;
+        let mut bases: Vec<_> = [
+            base(BaseEntry::Main { offset: 0 }),
+            base(BaseEntry::Main { offset: 1 }),
+            base(BaseEntry::Preprocessed { offset: 0 }),
+            base(BaseEntry::Preprocessed { offset: 1 }),
+            base(BaseEntry::Public),
+            base(BaseEntry::Periodic),
+            SymbolicExpr::Leaf(BaseLeaf::IsFirstRow),
+            SymbolicExpr::Leaf(BaseLeaf::IsLastRow),
+            SymbolicExpr::Leaf(BaseLeaf::IsTransition),
+            SymbolicExpression::from(F::new(43)),
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect();
+        grow_random_dag(&mut bases, &mut state);
+        let mut base_roots: Vec<_> = (0..7)
+            .map(|_| bases[random_index(&mut state, bases.len())].as_ref())
+            .collect();
+        base_roots.push(base_roots[0]);
+        assert_eq!(
+            resolve_symbolic_expressions(&base_roots, &builder),
+            base_roots
+                .iter()
+                .map(|root| root.resolve(&builder))
+                .collect::<Vec<_>>(),
+            "base seed {seed}"
+        );
+
+        // Lift the entire pool: distinct embedded roots still share Arc children.
+        let mut extensions: Vec<_> = bases
+            .iter()
+            .map(|base| Arc::new(SymbolicExpressionExt::from(base.as_ref().clone())))
+            .collect();
+        extensions.extend(
+            [
+                ext(ExtEntry::Permutation { offset: 0 }),
+                ext(ExtEntry::Permutation { offset: 1 }),
+                ext(ExtEntry::Challenge),
+                ext(ExtEntry::PermutationValue),
+                SymbolicExpr::Leaf(ExtLeaf::ExtConstant(ec)),
+            ]
+            .into_iter()
+            .map(Arc::new),
+        );
+        grow_random_dag(&mut extensions, &mut state);
+        let mut roots: Vec<_> = (0..7)
+            .map(|_| extensions[random_index(&mut state, extensions.len())].as_ref())
+            .collect();
+        roots.push(roots[0]);
+        let expected: Vec<_> = roots
+            .iter()
+            .map(|root| resolve_extension_reference(root, &builder))
+            .collect();
+        assert_eq!(
+            resolve_symbolic_expressions_ext(&roots, &builder),
+            expected,
+            "extension seed {seed}"
+        );
+        assert_eq!(
+            roots
+                .iter()
+                .map(|root| root.resolve(&builder))
+                .collect::<Vec<_>>(),
+            expected,
+            "recursive extension seed {seed}"
+        );
+    }
 }

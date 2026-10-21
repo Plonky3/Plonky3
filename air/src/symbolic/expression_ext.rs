@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::variable::SymbolicVariableExt;
-use crate::symbolic::{SymLeaf, SymbolicExpr, SymbolicExpression, SymbolicVariable};
+use crate::symbolic::{ExtEntry, SymLeaf, SymbolicExpr, SymbolicExpression, SymbolicVariable};
+use crate::{PermutationAirBuilder, WindowAccess};
 
 /// Leaf nodes for extension-field symbolic expressions.
 ///
@@ -75,6 +76,47 @@ impl<F: Field, EF: ExtensionField<F>> SymLeaf for ExtLeaf<F, EF> {
 
     fn from_const(c: F) -> Self {
         Self::Base(SymbolicExpression::from(c))
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> SymbolicExpressionExt<F, EF> {
+    /// Resolve this extension expression against a permutation-capable builder.
+    ///
+    /// Recursively evaluates arithmetic in the builder's algebra, preserving
+    /// embedded base subtrees in `AB::Expr` before lifting their results.
+    /// Use [`crate::resolve_symbolic_expressions_ext`] to share computed values
+    /// across roots and shared children with an iterative, memoized traversal.
+    ///
+    /// # Panics
+    ///
+    /// Panics for row offsets other than zero or one, out-of-bounds indices, or
+    /// permutation references on a builder without permutation data.
+    #[must_use]
+    pub fn resolve<AB: PermutationAirBuilder<F = F, EF = EF>>(&self, builder: &AB) -> AB::ExprEF {
+        match self {
+            Self::Leaf(ExtLeaf::Base(base)) => base.resolve(builder).into(),
+            Self::Leaf(ExtLeaf::ExtConstant(value)) => (*value).into(),
+            Self::Leaf(ExtLeaf::ExtVariable(variable)) => match variable.entry {
+                ExtEntry::Permutation { offset } => {
+                    let permutation = builder.permutation();
+                    match offset {
+                        0 => permutation.current(variable.index),
+                        1 => permutation.next(variable.index),
+                        _ => panic!("expressions cannot span more than two rows"),
+                    }
+                    .expect("permutation column index out of bounds")
+                    .into()
+                }
+                ExtEntry::Challenge => builder.permutation_randomness()[variable.index].into(),
+                ExtEntry::PermutationValue => {
+                    builder.permutation_values()[variable.index].clone().into()
+                }
+            },
+            Self::Add { x, y, .. } => x.resolve(builder) + y.resolve(builder),
+            Self::Sub { x, y, .. } => x.resolve(builder) - y.resolve(builder),
+            Self::Neg { x, .. } => -x.resolve(builder),
+            Self::Mul { x, y, .. } => x.resolve(builder) * y.resolve(builder),
+        }
     }
 }
 

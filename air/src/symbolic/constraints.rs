@@ -10,14 +10,61 @@ use super::{
 ///
 /// Both streams retain emission order, including duplicate and zero constraints.
 /// [`Self::constraint_layout`] records how the two streams were interleaved.
+/// Its base and extension index counts always match the corresponding stream lengths.
+///
+/// The streams cannot be mutated independently of their layout:
+///
+/// ```compile_fail,E0616
+/// use p3_air::SymbolicConstraints;
+/// use p3_baby_bear::BabyBear;
+///
+/// fn clear_constraints(mut captured: SymbolicConstraints<BabyBear>) {
+///     captured.base_constraints.clear();
+/// }
+/// ```
 #[derive(Debug)]
 pub struct SymbolicConstraints<F: Field, EF: ExtensionField<F> = F> {
     /// Constraints emitted through [`crate::AirBuilder::assert_zero`].
-    pub base_constraints: Vec<SymbolicExpression<F>>,
+    pub(super) base_constraints: Vec<SymbolicExpression<F>>,
     /// Constraints emitted through [`crate::ExtensionBuilder::assert_zero_ext`].
-    pub extension_constraints: Vec<SymbolicExpressionExt<F, EF>>,
+    pub(super) extension_constraints: Vec<SymbolicExpressionExt<F, EF>>,
     /// Global assertion indices for the base and extension streams.
-    pub constraint_layout: ConstraintLayout,
+    pub(super) constraint_layout: ConstraintLayout,
+}
+
+impl<F: Field, EF: ExtensionField<F>> SymbolicConstraints<F, EF> {
+    /// Constraints emitted through [`crate::AirBuilder::assert_zero`], in emission order.
+    pub fn base_constraints(&self) -> &[SymbolicExpression<F>] {
+        &self.base_constraints
+    }
+
+    /// Constraints emitted through [`crate::ExtensionBuilder::assert_zero_ext`], in emission order.
+    pub fn extension_constraints(&self) -> &[SymbolicExpressionExt<F, EF>] {
+        &self.extension_constraints
+    }
+
+    /// Global assertion indices for the base and extension streams.
+    pub const fn constraint_layout(&self) -> &ConstraintLayout {
+        &self.constraint_layout
+    }
+
+    /// Consume the result, returning the base constraints, extension constraints, and layout.
+    ///
+    /// The expression vectors and layout are moved without cloning.
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<SymbolicExpression<F>>,
+        Vec<SymbolicExpressionExt<F, EF>>,
+        ConstraintLayout,
+    ) {
+        (
+            self.base_constraints,
+            self.extension_constraints,
+            self.constraint_layout,
+        )
+    }
 }
 
 /// Number of assertions in each emission stream.
@@ -31,8 +78,9 @@ pub struct ConstraintCounts {
 
 /// Conservative maximum degrees for the two assertion streams.
 ///
-/// The method returning this value determines the degree units. An empty stream
-/// has degree zero. Bounds do not account for algebraic cancellation.
+/// The method returning this value determines the degree units.
+/// An empty stream has degree zero.
+/// Bounds do not account for algebraic cancellation.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConstraintDegrees {
     /// Maximum degree of a base-field assertion.
@@ -52,24 +100,10 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicConstraints<F, EF> {
 
     /// Maximum cached degree multiples, with transition selectors weighted zero.
     ///
-    /// Trace, periodic, and boundary-selector leaves have weight one; constants,
-    /// public values, and challenges have weight zero. These conservative multiples
-    /// are trace-size independent, rather than raw polynomial degree bounds.
+    /// Trace, periodic, and boundary-selector leaves have weight one; constants, public values, and challenges have weight zero.
+    /// These conservative multiples are trace-size independent, rather than raw polynomial degree bounds.
     pub fn max_constraint_degrees(&self) -> ConstraintDegrees {
-        ConstraintDegrees {
-            base: self
-                .base_constraints
-                .iter()
-                .map(|c| c.degree_multiple())
-                .max()
-                .unwrap_or(0),
-            extension: self
-                .extension_constraints
-                .iter()
-                .map(|c| c.degree_multiple())
-                .max()
-                .unwrap_or(0),
-        }
+        self.max_constraint_degrees_with_transition(0)
     }
 
     /// Maximum degree multiples with a caller-selected transition-selector weight.
@@ -80,60 +114,72 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicConstraints<F, EF> {
         &self,
         transition_degree: usize,
     ) -> ConstraintDegrees {
-        ConstraintDegrees {
-            base: self
-                .base_constraints
-                .iter()
-                .map(|c| c.degree_multiple_with_transition(transition_degree))
-                .max()
-                .unwrap_or(0),
-            extension: self
-                .extension_constraints
-                .iter()
-                .map(|c| c.degree_multiple_with_transition(transition_degree))
-                .max()
-                .unwrap_or(0),
-        }
+        max_constraint_degrees(
+            &self.base_constraints,
+            &self.extension_constraints,
+            transition_degree,
+        )
     }
 
     /// Maximum raw polynomial degree bounds for a trace and its periodic columns.
     ///
-    /// Uses [`super::SymbolicExpr::poly_degree`]: trace and boundary-selector leaves
-    /// have degree `trace_len - 1` (saturating), transition selectors have degree one,
-    /// and periodic columns use their supplied periods. Missing periodic entries
-    /// use the conservative full-trace period, as in the expression API.
+    /// Uses [`super::SymbolicExpr::poly_degree`]: trace and boundary-selector leaves have degree `trace_len - 1` (saturating), transition selectors have degree one, and periodic columns use their supplied periods.
+    /// Missing periodic entries use the conservative full-trace period, as in the expression API.
     ///
-    /// These are polynomial bounds before vanishing-polynomial division, rather
-    /// than protocol quotient sizing. Callers choose their domain-specific sizing
-    /// policy, such as [`super::constraint_degree_from_poly_degree`].
+    /// These are polynomial bounds before vanishing-polynomial division, rather than protocol quotient sizing.
+    /// Callers choose their domain-specific sizing policy, such as [`super::constraint_degree_from_poly_degree`].
     pub fn max_constraint_poly_degrees(
         &self,
         trace_len: usize,
         periodic_periods: &[usize],
     ) -> ConstraintDegrees {
-        ConstraintDegrees {
-            base: self
-                .base_constraints
-                .iter()
-                .map(|c| c.poly_degree(trace_len, periodic_periods))
-                .max()
-                .unwrap_or(0),
-            extension: self
-                .extension_constraints
-                .iter()
-                .map(|c| c.poly_degree(trace_len, periodic_periods))
-                .max()
-                .unwrap_or(0),
-        }
+        max_constraint_poly_degrees(
+            &self.base_constraints,
+            &self.extension_constraints,
+            trace_len,
+            periodic_periods,
+        )
     }
+}
+
+// Borrowing the streams lets degree inference reuse summaries without collecting a layout.
+pub(super) fn max_constraint_degrees<F: Field, EF: ExtensionField<F>>(
+    base: &[SymbolicExpression<F>],
+    extension: &[SymbolicExpressionExt<F, EF>],
+    transition_degree: usize,
+) -> ConstraintDegrees {
+    ConstraintDegrees {
+        base: max_degree(base, |c| {
+            c.degree_multiple_with_transition(transition_degree)
+        }),
+        extension: max_degree(extension, |c| {
+            c.degree_multiple_with_transition(transition_degree)
+        }),
+    }
+}
+
+pub(super) fn max_constraint_poly_degrees<F: Field, EF: ExtensionField<F>>(
+    base: &[SymbolicExpression<F>],
+    extension: &[SymbolicExpressionExt<F, EF>],
+    trace_len: usize,
+    periodic_periods: &[usize],
+) -> ConstraintDegrees {
+    ConstraintDegrees {
+        base: max_degree(base, |c| c.poly_degree(trace_len, periodic_periods)),
+        extension: max_degree(extension, |c| c.poly_degree(trace_len, periodic_periods)),
+    }
+}
+
+fn max_degree<T>(constraints: &[T], degree: impl Fn(&T) -> usize) -> usize {
+    constraints.iter().map(degree).max().unwrap_or(0)
 }
 
 /// Evaluate a closure once and take ownership of its symbolic constraints.
 ///
 /// The closure does not need to implement [`crate::Air`] or [`crate::BaseAir`].
-/// The caller must supply an [`AirLayout`] matching every input the closure reads;
-/// no AIR metadata is available to validate the layout automatically. When calling
-/// an existing AIR, use [`AirLayout::validate_against_air`] if validation is needed.
+/// The caller must supply an [`AirLayout`] matching every input the closure reads.
+/// No AIR metadata is available to validate the layout automatically.
+/// When calling an existing AIR, use [`AirLayout::validate_against_air`] if validation is needed.
 ///
 /// ```
 /// use p3_air::{AirBuilder, AirLayout, WindowAccess, capture_symbolic_constraints};
@@ -148,11 +194,12 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicConstraints<F, EF> {
 ///         builder.assert_eq(main.next(0).unwrap(), value);
 ///     },
 /// );
-/// assert_eq!(constraints.base_constraints.len(), 2);
-/// assert_eq!(constraints.base_constraints[0].degree_multiple(), 2);
-/// assert_eq!(constraints.constraint_layout.base_indices, [0, 1]);
-/// assert!(constraints.extension_constraints.is_empty());
+/// assert_eq!(constraints.base_constraints().len(), 2);
+/// assert_eq!(constraints.base_constraints()[0].degree_multiple(), 2);
+/// assert_eq!(constraints.constraint_layout().base_indices, [0, 1]);
+/// assert!(constraints.extension_constraints().is_empty());
 /// ```
+#[must_use]
 pub fn capture_symbolic_constraints<F: Field, EF: ExtensionField<F>>(
     layout: AirLayout,
     eval: impl FnOnce(&mut SymbolicAirBuilder<F, EF>),

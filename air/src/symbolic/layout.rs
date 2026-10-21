@@ -1,3 +1,4 @@
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -13,13 +14,13 @@ use crate::{
 /// Both rows remain accessible when the width is zero.
 #[derive(Clone, Debug)]
 pub struct ConstraintLayoutWindow<T> {
-    values: Vec<T>,
+    values: Arc<[T]>,
 }
 
 impl<T: Clone> ConstraintLayoutWindow<T> {
     fn new(width: usize, zero: T) -> Self {
         Self {
-            values: vec![zero; 2 * width],
+            values: core::iter::repeat_n(zero, 2 * width).collect(),
         }
     }
 }
@@ -36,13 +37,12 @@ impl<T> WindowAccess<T> for ConstraintLayoutWindow<T> {
 
 /// Collects assertion ordering using concrete field arithmetic, without expression trees.
 ///
-/// All inputs and selectors are zero; base expressions use `F`, while extension
-/// expressions use `EF`. Every assertion is recorded, including duplicates and
-/// assertions under zero filters. Constraint values are discarded.
+/// All inputs and selectors are zero; base expressions use `F`, while extension expressions use `EF`.
+/// Every assertion is recorded, including duplicates and assertions under zero filters.
+/// Constraint values are discarded.
 ///
-/// This is useful for evaluators generic over their builder. An AIR may specialize
-/// its implementation for a builder type or branch on concrete values, so this
-/// collector need not reproduce evaluation by [`super::SymbolicAirBuilder`].
+/// This is useful for evaluators generic over their builder.
+/// An AIR may specialize its implementation for a builder type or branch on concrete values, so this collector need not reproduce evaluation by [`super::SymbolicAirBuilder`].
 /// [`super::get_constraint_layout`] continues to use symbolic evaluation.
 #[derive(Debug)]
 pub struct ConstraintLayoutBuilder<F: Field, EF: ExtensionField<F> = F> {
@@ -156,9 +156,9 @@ impl<F: Field, EF: ExtensionField<F>> PassthroughNamedAirBuilder
 
 /// Evaluate a closure once to collect assertion ordering without symbolic capture.
 ///
-/// The closure need not implement [`crate::Air`] or [`crate::BaseAir`]. The caller
-/// supplies the shape of every input it reads. See [`ConstraintLayoutBuilder`]
-/// for the zero-valued evaluation semantics.
+/// The closure need not implement [`crate::Air`] or [`crate::BaseAir`].
+/// The caller supplies the shape of every input it reads.
+/// See [`ConstraintLayoutBuilder`] for the zero-valued evaluation semantics.
 ///
 /// ```
 /// use p3_air::{AirBuilder, AirLayout, WindowAccess, capture_constraint_layout};

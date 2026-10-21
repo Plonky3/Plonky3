@@ -5,8 +5,8 @@ use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_air::{
     Air, AirLayout, BaseAir, ConstraintCounts, ConstraintLayout, ConstraintLayoutBuilder,
-    PermutationAirBuilder, SymbolicAirBuilder, SymbolicConstraints, WindowAccess,
-    capture_constraint_layout,
+    PermutationAirBuilder, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
+    WindowAccess, capture_constraint_layout,
 };
 use p3_baby_bear::BabyBear as F;
 use p3_field::extension::BinomialExtensionField;
@@ -61,12 +61,18 @@ fn builder(air: &Workload) -> SymbolicAirBuilder<F, EF> {
     builder
 }
 
-fn clone_extraction(builder: &SymbolicAirBuilder<F, EF>) -> SymbolicConstraints<F, EF> {
-    SymbolicConstraints {
-        base_constraints: builder.base_constraints(),
-        extension_constraints: builder.extension_constraints(),
-        constraint_layout: builder.constraint_layout(),
-    }
+type ConstraintParts = (
+    Vec<SymbolicExpression<F>>,
+    Vec<SymbolicExpressionExt<F, EF>>,
+    ConstraintLayout,
+);
+
+fn clone_extraction(builder: &SymbolicAirBuilder<F, EF>) -> ConstraintParts {
+    (
+        builder.base_constraints(),
+        builder.extension_constraints(),
+        builder.constraint_layout(),
+    )
 }
 
 fn assert_layout_eq(a: &ConstraintLayout, b: &ConstraintLayout) {
@@ -76,10 +82,10 @@ fn assert_layout_eq(a: &ConstraintLayout, b: &ConstraintLayout) {
 
 fn verify(air: &Workload) {
     let owned = builder(air).finish();
-    let cloned = clone_extraction(&builder(air));
+    let (cloned_base, cloned_extension, cloned_layout) = clone_extraction(&builder(air));
     let cheap = capture_constraint_layout::<F, EF>(layout(), |b| air.eval(b));
-    assert_layout_eq(&owned.constraint_layout, &cheap);
-    assert_layout_eq(&owned.constraint_layout, &cloned.constraint_layout);
+    assert_layout_eq(owned.constraint_layout(), &cheap);
+    assert_layout_eq(owned.constraint_layout(), &cloned_layout);
     assert_eq!(
         owned.constraint_counts(),
         ConstraintCounts {
@@ -87,17 +93,19 @@ fn verify(air: &Workload) {
             extension: air.constraints,
         }
     );
-    assert_eq!(owned.constraint_counts(), cloned.constraint_counts());
+    assert_eq!(
+        owned.constraint_counts(),
+        ConstraintCounts {
+            base: cloned_base.len(),
+            extension: cloned_extension.len(),
+        }
+    );
     let inputs = ConstraintLayoutBuilder::<F, EF>::new(layout());
-    for (a, b) in owned.base_constraints.iter().zip(&cloned.base_constraints) {
+    for (a, b) in owned.base_constraints().iter().zip(&cloned_base) {
         assert_eq!(a.resolve(&inputs), b.resolve(&inputs));
         assert_eq!(a.degree_multiple(), b.degree_multiple());
     }
-    for (a, b) in owned
-        .extension_constraints
-        .iter()
-        .zip(&cloned.extension_constraints)
-    {
+    for (a, b) in owned.extension_constraints().iter().zip(&cloned_extension) {
         assert_eq!(
             serde_json::to_value(a).unwrap(),
             serde_json::to_value(b).unwrap()
