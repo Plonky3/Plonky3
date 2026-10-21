@@ -6,7 +6,7 @@
 mod tests;
 
 use p3_binary_pcs::whir::preset::keccak64::{ProverData, WitnessCommitment};
-use p3_binary_pcs::whir::{Region, SuffixTensors, WeightedClaim};
+use p3_binary_pcs::whir::{Region, WeightedClaim};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::instrument;
@@ -38,14 +38,7 @@ pub struct Placement<'a> {
 }
 
 /// The claim a prover leaves on its region, with its element split for the deferred ring switch.
-#[must_use = "the claim is sound only once opened against the commitment"]
-#[derive(Clone, Debug)]
-pub struct RegionClaim {
-    /// The claim on the whole commitment.
-    pub claim: WeightedClaim<Challenge>,
-    /// The claim's element, split from the folded witness rather than from the commitment.
-    pub split: Option<SuffixTensors<Challenge, Val>>,
-}
+pub type RegionClaim = p3_binary_pcs::whir::RegionClaim<Val, Challenge>;
 
 /// Why a placement cannot hold a batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
