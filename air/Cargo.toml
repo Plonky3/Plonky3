@@ -9,6 +9,12 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[package.metadata.plonky3.ci]
+test-features = ["testing"]
+
+[features]
+testing = []
+
 [dependencies]
 hashbrown.workspace = true
 p3-field.workspace = true
