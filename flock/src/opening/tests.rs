@@ -197,3 +197,20 @@ fn the_default_commitment_composes_to_its_target() {
         );
     }
 }
+
+#[test]
+fn a_target_grinding_covers_whole_moves_on_to_the_next() {
+    // Grinding 16 bits leaves the 16-bit target no query, while 17 bits composes to the bound.
+    let params = PcsParams {
+        security_bits: 16,
+        query_grinding: 16,
+        ..PcsParams::default()
+    };
+    assert!(matches!(
+        WitnessPcs::with_term_bits(12, &params, 16),
+        Err(OpeningError::Profile(ProfileError::ZeroQueries))
+    ));
+    let pcs = WitnessPcs::new(12, &params).unwrap();
+    let bits = pcs.0.readings_security(1, false).unwrap().error().bits();
+    assert!(bits >= 16.0, "composes to {bits} bits");
+}
