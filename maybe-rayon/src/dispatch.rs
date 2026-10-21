@@ -113,6 +113,28 @@ impl Layout {
         let segments = self.pieces.range(i);
         self.segments.start(segments.start)..self.segments.start(segments.end)
     }
+
+    /// Hands each segment of a run to a visitor as its own producer, in order.
+    ///
+    /// Each segment is split off only when reached, so none is materialized up front.
+    ///
+    /// A segment becomes an iterator on its own.
+    /// Per-split state, such as the value an init closure builds, then follows the segment.
+    fn each_segment<P: Producer>(
+        &self,
+        producer: P,
+        segments: Range<usize>,
+        mut visit: impl FnMut(Range<usize>, P),
+    ) {
+        let mut rest = producer;
+        for j in segments.start..segments.end - 1 {
+            let range = self.segments.range(j);
+            let (head, tail) = rest.split_at(range.len());
+            visit(range, head);
+            rest = tail;
+        }
+        visit(self.segments.range(segments.end - 1), rest);
+    }
 }
 
 /// A loop cut into pieces, each claimed by one participant.
@@ -273,10 +295,15 @@ where
         fn callback<P: Producer<Item = T>>(self, producer: P) {
             let Self(len, op) = self;
             let layout = Layout::new(&producer, len);
+            let run = |producer: P, segments: Range<usize>| {
+                layout.each_segment(producer, segments, |_, segment| {
+                    segment.into_iter().for_each(&op);
+                });
+            };
             if layout.pieces.count <= 1 {
-                return producer.into_iter().for_each(op);
+                return run(producer, 0..layout.segments.count);
             }
-            Pieces::cut(producer, layout).run(|_, piece| piece.into_iter().for_each(&op));
+            Pieces::cut(producer, layout).run(|i, piece| run(piece, layout.pieces.range(i)));
         }
     }
 
@@ -354,7 +381,11 @@ where
             let Self(len, map_op) = self;
             let layout = Layout::new(&producer, len);
             if layout.pieces.count <= 1 {
-                return producer.into_iter().map(map_op).collect();
+                let mut out = Vec::with_capacity(len);
+                layout.each_segment(producer, 0..layout.segments.count, |_, segment| {
+                    out.extend(segment.into_iter().map(&map_op));
+                });
+                return out;
             }
             let pieces = Pieces::cut(producer, layout);
             let mut out: Vec<B> = Vec::with_capacity(len);
@@ -367,25 +398,28 @@ where
                     .collect(),
             };
             pieces.run(|i, piece| {
-                // A producer is a safe trait, so its item count is checked, not trusted.
-                let range = layout.items(i);
+                // The piece's slots are written front to back, segment after segment.
+                let start = layout.items(i).start;
                 let mut count = Count(&written.counts[i], 0);
-                let mut items = piece.into_iter();
-                for item in items.by_ref().take(range.len()) {
-                    // SAFETY: the write count stays below the range length, so the slot is in this piece's own range.
-                    unsafe { base.at(range.start + count.1).write(map_op(item)) };
-                    count.1 += 1;
-                }
-                // A miscounted piece panics here, before `set_len` runs.
-                assert_eq!(
-                    count.1,
-                    range.len(),
-                    "producer yielded fewer items than its length"
-                );
-                assert!(
-                    items.next().is_none(),
-                    "producer yielded more items than its length"
-                );
+                layout.each_segment(piece, layout.pieces.range(i), |range, segment| {
+                    // A producer is a safe trait, so its item count is checked, not trusted.
+                    let mut items = segment.into_iter();
+                    for item in items.by_ref().take(range.len()) {
+                        // SAFETY: the write count stays within the segment, so the slot is in this piece's own range.
+                        unsafe { base.at(start + count.1).write(map_op(item)) };
+                        count.1 += 1;
+                    }
+                    // A miscounted segment panics here, before `set_len` runs.
+                    assert_eq!(
+                        start + count.1,
+                        range.end,
+                        "producer yielded fewer items than its length"
+                    );
+                    assert!(
+                        items.next().is_none(),
+                        "producer yielded more items than its length"
+                    );
+                });
             });
             // Every piece filled its range, so the output now owns every item.
             written.counts = Vec::new();
@@ -426,26 +460,16 @@ where
             let layout = Layout::new(&producer, len);
 
             // Folds each segment of a run from its own identity, then reduces them in order.
-            //
-            // Segments are split off as they are reached, so none is materialized up front.
             let fold_segments = |producer: P, segments: Range<usize>| {
-                let fold = |part: P| part.into_iter().fold(identity(), &fold_op);
-                let mut rest = producer;
                 let mut acc = None;
-                for j in segments.start..segments.end - 1 {
-                    let (head, tail) = rest.split_at(layout.segments.range(j).len());
-                    let part = fold(head);
-                    acc = Some(match acc {
+                layout.each_segment(producer, segments, |_, segment| {
+                    let part = segment.into_iter().fold(identity(), &fold_op);
+                    acc = Some(match acc.take() {
                         Some(acc) => reduce_op(acc, part),
                         None => part,
                     });
-                    rest = tail;
-                }
-                let last = fold(rest);
-                match acc {
-                    Some(acc) => reduce_op(acc, last),
-                    None => last,
-                }
+                });
+                acc.expect("a run holds at least one segment")
             };
 
             if layout.pieces.count <= 1 {
@@ -483,6 +507,7 @@ mod tests {
     use rayon::prelude::*;
 
     use super::{Layout, PIECES_PER_WORKER, fold_reduce, for_each, map_collect};
+    use crate::task_size::TaskSizeExt;
 
     const LENGTHS: [usize; 9] = [0, 1, 2, 3, 31, 128, 129, 1000, 100_003];
 
@@ -634,6 +659,35 @@ mod tests {
         fn callback<P: Producer<Item = T>>(self, producer: P) {
             *self.1 = Some(Layout::new(&producer, self.0));
         }
+    }
+
+    #[test]
+    fn per_split_state_follows_every_segment() {
+        // Fixture state: four workers, and an item cost so high that every item may be its own task.
+        let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        let len = 64;
+
+        // Each split gets a fresh counter, so with a maximum of one item every count is one.
+        let counted = || {
+            (0..len).into_par_iter().with_max_len(1).map_init(
+                || 0,
+                |count, _| {
+                    *count += 1;
+                    *count
+                },
+            )
+        };
+
+        let collected = pool.install(|| counted().map_collect_min_task_bytes(usize::MAX, |c| c));
+        assert_eq!(collected, vec![1; len]);
+
+        let ones = AtomicUsize::new(0);
+        pool.install(|| {
+            counted().for_each_min_task_bytes(usize::MAX, |c| {
+                ones.fetch_add(usize::from(c == 1), Ordering::Relaxed);
+            });
+        });
+        assert_eq!(ones.load(Ordering::Relaxed), len);
     }
 
     #[test]
