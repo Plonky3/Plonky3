@@ -301,7 +301,7 @@ fn legacy_layout_helper_retains_builder_specialization() {
     assert_eq!(legacy.base_indices, [0, 1]);
     assert!(legacy.ext_indices.is_empty());
     let concrete = capture_constraint_layout::<F, F>(AirLayout::default(), |builder| {
-        Specialized.eval(builder)
+        Specialized.eval(builder);
     });
     assert!(concrete.base_indices.is_empty());
     assert_eq!(concrete.ext_indices, [0]);
