@@ -19,6 +19,11 @@ pub struct MmcsProofGeometry {
     pub commitment_digests: usize,
     /// Most authentication digests in one row opening.
     pub opening_digests: usize,
+    /// Whether a multi-opening is a pruned binary frontier.
+    ///
+    /// Each of the `opening_digests` levels then sends at most one sibling per opened parent.
+    /// Otherwise a multi-opening is bounded only by its row openings' digests.
+    pub binary_frontier: bool,
 }
 
 impl MmcsProofGeometry {
@@ -27,6 +32,18 @@ impl MmcsProofGeometry {
         Self {
             commitment_digests,
             opening_digests,
+            binary_frontier: false,
+        }
+    }
+
+    /// Bounds a binary tree whose multi-openings send one sibling per opened parent and level.
+    ///
+    /// `path_levels` is the number of tree levels below the commitment.
+    pub const fn binary_frontier(commitment_digests: usize, path_levels: usize) -> Self {
+        Self {
+            commitment_digests,
+            opening_digests: path_levels,
+            binary_frontier: true,
         }
     }
 }
