@@ -852,11 +852,13 @@ impl HasFrobenius<Poly64> for Poly192 {
 mod tests {
     use alloc::vec::Vec;
 
+    use num_bigint::BigUint;
     use p3_field::extension::HasFrobenius;
     use p3_field::{
-        Algebra, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
-        PrimeCharacteristicRing,
+        Algebra, BasedVectorSpace, ExtensionField, Field, FixedBase, PackedFieldExtension,
+        PackedValue, PrimeCharacteristicRing,
     };
+    use p3_field_testing::test_fixed_base;
     use proptest::prelude::*;
 
     use super::{DEGREE, Poly192, Poly192MixedAccumulator};
@@ -1262,6 +1264,109 @@ mod tests {
                 ExtensionField::<Poly64>::is_in_basefield(&x),
                 a[1] == 0 && a[2] == 0
             );
+        }
+    }
+
+    /// The distinct primes of 2^192 - 1 = 3^2·5·7·13·17·97·193·241·257·641·673·65537·6700417·22253377·(2^64 - 2^32 + 1).
+    const GROUP_ORDER_PRIMES: [u64; 15] = [
+        3,
+        5,
+        7,
+        13,
+        17,
+        97,
+        193,
+        241,
+        257,
+        641,
+        673,
+        65537,
+        6_700_417,
+        22_253_377,
+        18_446_744_069_414_584_321,
+    ];
+
+    /// Miller-Rabin on the first twelve prime bases, which is deterministic below 2^64.
+    fn is_prime(n: u64) -> bool {
+        const BASES: [u64; 12] = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
+        if n < 2 {
+            return false;
+        }
+        if let Some(&p) = BASES.iter().find(|&&p| n.is_multiple_of(p)) {
+            return n == p;
+        }
+        let mul = |a: u64, b: u64| ((u128::from(a) * u128::from(b)) % u128::from(n)) as u64;
+        let pow = |mut a: u64, mut e: u64| {
+            let mut r = 1;
+            while e > 0 {
+                if e & 1 == 1 {
+                    r = mul(r, a);
+                }
+                a = mul(a, a);
+                e >>= 1;
+            }
+            r
+        };
+        let s = (n - 1).trailing_zeros();
+        let d = (n - 1) >> s;
+        BASES.iter().all(|&a| {
+            let mut x = pow(a, d);
+            if x == 1 || x == n - 1 {
+                return true;
+            }
+            (1..s).any(|_| {
+                x = mul(x, x);
+                x == n - 1
+            })
+        })
+    }
+
+    #[test]
+    fn the_order_factors_are_prime() {
+        for p in GROUP_ORDER_PRIMES {
+            assert!(is_prime(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn the_generator_has_the_full_order() {
+        // 3 is the only repeated factor.
+        let factors: Vec<(BigUint, u32)> = GROUP_ORDER_PRIMES
+            .iter()
+            .map(|&p| (BigUint::from(p), if p == 3 { 2 } else { 1 }))
+            .collect();
+        p3_field_testing::test_generator::<Poly192>(&factors);
+    }
+
+    #[test]
+    fn fixed_base_powers_certify_the_generator_order() {
+        let order = Poly192::order() - 1u32;
+        let limbs = |n: &BigUint| -> [u64; 3] {
+            let digits = n.to_u64_digits();
+            core::array::from_fn(|i| digits.get(i).copied().unwrap_or(0))
+        };
+        let g = FixedBase::new(Poly192::GENERATOR, 192);
+        assert_eq!(g.pow(&limbs(&order)), Poly192::ONE);
+        for p in GROUP_ORDER_PRIMES {
+            assert_ne!(
+                g.pow(&limbs(&(&order / p))),
+                Poly192::ONE,
+                "g^(n/{p}) is one"
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn fixed_base_powers_match_square_and_multiply(
+            base: [u64; 3],
+            exponents in prop::collection::vec(any::<[u64; 3]>(), 0..40),
+        ) {
+            // Packed over the coefficient field, then one element at a time.
+            test_fixed_base::<Poly64, Poly192, 3>(element(base), &exponents);
+            test_fixed_base::<Poly192, Poly192, 3>(element(base), &exponents);
         }
     }
 }
