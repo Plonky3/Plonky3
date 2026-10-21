@@ -253,6 +253,10 @@ impl<F: Field, EF: ExtensionField<F>> CapturedArithmeticConstraints<F, EF> {
     /// Grouping and sharing may differ from legacy capture; serialized structure
     /// and protocol commitments are not guaranteed to match.
     ///
+    /// Caches retain entries for the full capture, which can use more memory and
+    /// work and be slower for mostly unshared roots. Consider per-root
+    /// [`ArithmeticExpr::lower`](super::ArithmeticExpr::lower) for those workloads.
+    ///
     /// Traversal bounds recursion and uses an explicit stack for deeper graphs.
     /// Destroying deeply nested source or result graphs still uses recursive `Arc` drops.
     ///
