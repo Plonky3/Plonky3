@@ -10,6 +10,9 @@ const MIN_LOG_ROWS: usize = 6;
 /// Row variables past which a fold accumulator lane could carry.
 const MAX_LOG_ROWS: usize = 31;
 
+/// Variables past which a bit index no longer fits a `usize` (bits are addressed in 64-bit words).
+const MAX_VARIABLES: usize = usize::BITS as usize - 7;
+
 /// `2^n` committed bits as `2^r1` rows of `2^r2` columns: bit `c 2^r1 + b` is row `b` of column `c`.
 ///
 /// Rows are folded into integers, so a column is `2^r1` adjacent bits of whole words.
@@ -40,11 +43,11 @@ impl BitShape {
                 maximum: MAX_LOG_ROWS,
             });
         }
-        let num_variables = log_rows + log_columns;
-        if num_variables >= usize::BITS as usize - 6 {
+        // The bound is checked before the sum, which could otherwise wrap.
+        if log_columns > MAX_VARIABLES - log_rows {
             return Err(ParamsError::TooManyVariables {
-                num_variables,
-                maximum: usize::BITS as usize - 7,
+                num_variables: log_rows.saturating_add(log_columns),
+                maximum: MAX_VARIABLES,
             });
         }
         Ok(Self {
@@ -63,6 +66,13 @@ impl BitShape {
             return Err(ParamsError::RowsTooShort {
                 log_rows: num_variables,
                 minimum: MIN_LOG_ROWS,
+            });
+        }
+        // The bound is checked before the split, whose arithmetic could otherwise overflow.
+        if num_variables > MAX_VARIABLES {
+            return Err(ParamsError::TooManyVariables {
+                num_variables,
+                maximum: MAX_VARIABLES,
             });
         }
         let target = (3 * num_variables).div_ceil(5).saturating_sub(1);

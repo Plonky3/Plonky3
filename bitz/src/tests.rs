@@ -170,6 +170,28 @@ fn the_balanced_shape_follows_the_paper_split() {
 }
 
 #[test]
+fn oversized_shapes_are_refused_before_their_arithmetic() {
+    // A column count whose sum with the rows would wrap is refused, not wrapped to a small shape.
+    let max = usize::BITS as usize - 7;
+    for log_columns in [max - 5, usize::MAX - 5, usize::MAX] {
+        assert!(matches!(
+            BitShape::new(6, log_columns),
+            Err(ParamsError::TooManyVariables { maximum, .. }) if maximum == max
+        ));
+    }
+    // The largest addressable shape is still accepted.
+    assert_eq!(BitShape::new(6, max - 6).unwrap().num_variables(), max);
+    // The balanced split refuses before multiplying the size.
+    for n in [max + 1, usize::MAX] {
+        assert!(matches!(
+            BitShape::balanced(n),
+            Err(ParamsError::TooManyVariables { num_variables, .. }) if num_variables == n
+        ));
+    }
+    assert_eq!(BitShape::balanced(max).unwrap().num_variables(), max);
+}
+
+#[test]
 fn every_gate_rejects_its_tampering() {
     let run = Run::<KoalaBear>::new(12, 3, 2, 7);
     run.verify(&run.claims, &run.proof).unwrap();
