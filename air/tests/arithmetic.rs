@@ -1058,3 +1058,46 @@ fn zero_coefficient_degree_terms_remain_skipped_in_deep_fallback() {
     assert_eq!(base.degree_multiple_with_transition(1 << 16), 1);
     assert_eq!(ext.degree_multiple_with_transition(1 << 16), 1);
 }
+
+#[test]
+fn lowering_sums_reuses_shared_operand_roots() {
+    fn product_count<L: p3_air::SymLeaf>(e: &SymbolicExpr<L>) -> usize {
+        fn visit<L: p3_air::SymLeaf>(
+            e: &SymbolicExpr<L>,
+            products: &mut std::collections::BTreeSet<usize>,
+        ) {
+            match e {
+                SymbolicExpr::Mul { .. } => {
+                    products.insert(core::ptr::from_ref(e) as usize);
+                }
+                SymbolicExpr::Add { x, y, .. } | SymbolicExpr::Sub { x, y, .. } => {
+                    visit(x, products);
+                    visit(y, products);
+                }
+                SymbolicExpr::Neg { x, .. } => visit(x, products),
+                SymbolicExpr::Leaf(_) => {}
+            }
+        }
+        let mut products = Default::default();
+        visit(e, &mut products);
+        products.len()
+    }
+    let b = ArithmeticAirBuilder::<F, EF>::new(layout());
+    let x = E::from(b.main().values[0]);
+    let z = EE::from(b.permutation().values[0]);
+    let base: E = core::iter::repeat_n(BaseOperand::from(x.square()), 33).sum();
+    let ext: EE = core::iter::repeat_n(ExtOperand::from(z.square()), 33).sum();
+    let lowered_base = base.lower();
+    let lowered_ext = ext.lower();
+    assert_eq!(product_count(&lowered_base), 1);
+    assert_eq!(product_count(&lowered_ext), 1);
+    let concrete = Concrete::new(3);
+    assert_eq!(
+        lowered_base.resolve(&concrete),
+        concrete.main.values[0].square() * F::from_usize(33)
+    );
+    assert_eq!(
+        eval_legacy(&lowered_ext, &concrete),
+        concrete.perm.values[0].square() * F::from_usize(33)
+    );
+}

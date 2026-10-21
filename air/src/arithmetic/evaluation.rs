@@ -151,6 +151,7 @@ impl<F: Field> ArithmeticExpression<F> {
     pub fn resolve<AB: AirBuilder<F = F>>(&self, builder: &AB) -> AB::Expr {
         self.resolve_inner(builder, &mut BTreeMap::new(), 0)
     }
+    #[inline]
     fn resolve_inner<AB: AirBuilder<F = F>>(
         &self,
         b: &AB,
@@ -365,6 +366,7 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticExpressionExt<F, EF> {
     {
         self.resolve_inner(builder, &mut BTreeMap::new(), &mut BTreeMap::new(), 0)
     }
+    #[inline]
     fn resolve_inner<AB>(
         &self,
         b: &AB,

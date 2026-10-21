@@ -105,6 +105,7 @@ pub(super) const RECURSION_LIMIT: usize = 32;
 
 // Complete children before evaluating their parent, keeping traversal frames on the heap.
 // Keys refer to stable expressions borrowed from the source graph for the entire walk.
+#[cold]
 pub(super) fn evaluate_graph<'a, L: ArithmeticLeaf, V: Clone>(
     root: &'a ArithmeticExpr<L>,
     memo: &mut BTreeMap<usize, V>,
@@ -190,6 +191,7 @@ impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
             0,
         )
     }
+    #[inline]
     pub(crate) fn degree_inner(
         &self,
         trace: Option<(usize, &[usize])>,
@@ -424,6 +426,7 @@ impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
     pub fn lower(&self) -> crate::SymbolicExpr<L::LegacyLeaf> {
         self.lower_inner(&mut BTreeMap::new(), &mut L::LowerBase::default(), 0)
     }
+    #[inline]
     pub(crate) fn lower_inner(
         &self,
         memo: &mut BTreeMap<usize, Arc<crate::SymbolicExpr<L::LegacyLeaf>>>,
@@ -449,7 +452,7 @@ impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
             _ => None,
         };
         let special = |v: &crate::SymbolicExpr<L::LegacyLeaf>| {
-            constant(v).is_some_and(|c| c.is_zero() || c.is_one())
+            constant(v).is_some_and(|c| c.is_zero() || (op == Mul && c.is_one()))
         };
         if special(&x) || special(&y) || (constant(&x).is_some() && constant(&y).is_some()) {
             return match op {
@@ -518,7 +521,25 @@ impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
                     y: v,
                 }
             }
-            ArithmeticNode::Sum(a) => a.iter().map(|a| a.lower_value(memo, base, depth + 1)).sum(),
+            ArithmeticNode::Sum(a) => {
+                let mut values = a.iter().filter(|a| a.constant() != Some(L::Value::ZERO));
+                let Some(first) = values.next() else {
+                    return S::ZERO;
+                };
+                let Some(second) = values.next() else {
+                    return first.lower_value(memo, base, depth + 1);
+                };
+                let mut sum = Self::lower_binary(
+                    first.lower(memo, base, depth + 1),
+                    second.lower(memo, base, depth + 1),
+                    Add,
+                );
+                for value in values {
+                    sum =
+                        Self::lower_binary(Arc::new(sum), value.lower(memo, base, depth + 1), Add);
+                }
+                sum
+            }
             ArithmeticNode::Dot(a) | ArithmeticNode::MixedDot(a) => a
                 .iter()
                 .map(|(a, b)| {

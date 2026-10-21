@@ -205,7 +205,7 @@ impl<F: Field, EF: ExtensionField<F>> ArithmeticOperand for ExtOperand<F, EF> {
             Self::ExtensionScalar(c) => {
                 Arc::new(crate::SymbolicExpr::Leaf(crate::ExtLeaf::ExtConstant(*c)))
             }
-            Self::Base(e) => Arc::new((*lower_shared(e, base, &mut (), depth)).clone().into()),
+            Self::Base(e) => Arc::new(lower_shared_value(e, base, &mut (), depth).into()),
             Self::Extension(e) => lower_shared(e, memo, base, depth),
         }
     }
