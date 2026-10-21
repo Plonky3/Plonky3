@@ -1,9 +1,11 @@
 //! Identity-padded storage and folding state used by the product prover.
 
 use alloc::vec::Vec;
+use core::mem::MaybeUninit;
 
 use p3_field::Field;
 use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::point::Point;
 
 use super::ROUND_POLY_LEN;
 use super::math::interpolate_pair;
@@ -16,12 +18,11 @@ struct IdentityPrefix<F> {
 
 impl<F: Field> IdentityPrefix<F> {
     /// Creates a canonical explicit prefix from a complete or partial table.
-    fn new(mut values: Vec<F>) -> Self {
+    fn new(values: Vec<F>) -> Self {
         // Trailing identities have the same semantics when left implicit.
-        while values.last() == Some(&F::ONE) {
-            values.pop();
-        }
-        Self { values }
+        let mut prefix = Self { values };
+        prefix.trim();
+        prefix
     }
 
     /// Reads one logical value through implicit identity padding.
@@ -42,26 +43,8 @@ impl<F: Field> IdentityPrefix<F> {
         Self::new(values)
     }
 
-    /// Bytes one fold moves: two reads and one write per folded row.
-    #[inline]
-    const fn fold_bytes(&self) -> usize {
-        3 * self.values.len().div_ceil(2) * size_of::<F>()
-    }
-
-    /// Binds the lowest remaining variable.
-    fn fold(&mut self, logical_len: usize, challenge: F) {
-        debug_assert!(self.values.len() <= logical_len);
-        debug_assert!(logical_len >= 2);
-        let output_len = self.values.len().div_ceil(2);
-
-        // Missing entries retain the constant-one suffix during interpolation.
-        self.values = (0..output_len)
-            .into_par_iter()
-            .map_collect_min_task_bytes(3 * size_of::<F>(), |row| {
-                interpolate_pair([self.get(2 * row), self.get(2 * row + 1)], challenge)
-            });
-
-        // Restore the canonical shortest representation after folding.
+    /// Restores the canonical shortest representation.
+    fn trim(&mut self) {
         while self.values.last() == Some(&F::ONE) {
             self.values.pop();
         }
@@ -123,73 +106,504 @@ impl<F: Field> ProductLayers<F> {
         children
     }
 
-    /// Splits a retained level, releasing its source after the child gathers finish.
-    fn take_radix_four_state(&mut self, depth: usize, logical_len: usize) -> RadixFourState<F> {
-        let source = IdentityPrefix {
+    /// Takes a retained level, releasing it from the layers.
+    fn take_layer(&mut self, depth: usize) -> IdentityPrefix<F> {
+        IdentityPrefix {
             values: core::mem::take(&mut self.layers[depth].values),
-        };
-        RadixFourState::new(&source, logical_len)
-    }
-
-    /// Splits one retained level into four low-bit child prefixes.
-    #[cfg(test)]
-    fn radix_four_state(&self, depth: usize, logical_len: usize) -> RadixFourState<F> {
-        RadixFourState::new(&self.layers[depth], logical_len)
+        }
     }
 }
 
-/// Four child multilinears represented as arbitrary prefixes of constant-one tables.
+/// Values in one block: four rows of four children.
+const BLOCK: usize = 16;
+
+/// Blocks one task of a pass reads.
+///
+/// A fused fold writes a quarter of them, which stays in the first-level cache for its sums.
+const TASK_BLOCKS: usize = 64;
+
+/// Blocks whose products one dot product sums.
+const DOT_BLOCKS: usize = 4;
+
+/// Most low variables of the split block weights.
+///
+/// Every task rereads the low table, so it stays small enough for the second-level cache.
+const EQ_LOW_VARS: usize = 10;
+
+/// One tree's child level, read in place as rows of four children.
+///
+/// Row `z` holds the children `values[4z..4z + 4]`.
+///
+/// Rows past the explicit prefix are all ones.
 struct RadixFourState<F> {
-    /// One prefix per low-bit child slot.
-    children: [IdentityPrefix<F>; 4],
+    /// Explicit child values after removing trailing identities.
+    values: IdentityPrefix<F>,
+    /// The buffer a fold writes, then swaps with the values.
+    spare: Vec<F>,
 }
 
 impl<F: Field> RadixFourState<F> {
-    /// Splits an interleaved product level into four child tables.
-    fn new(values: &IdentityPrefix<F>, logical_len: usize) -> Self {
-        let values = &values.values;
-        debug_assert!(values.len().div_ceil(4) <= logical_len);
+    /// Wraps a retained level without moving its values.
+    const fn new(values: IdentityPrefix<F>) -> Self {
+        Self {
+            values,
+            spare: Vec::new(),
+        }
+    }
 
-        // Slot `s` gathers explicit entries `s, s + 4, s + 8, ...`, reading and writing each once.
-        let children = core::array::from_fn(|slot| {
-            let rows = (values.len() + 3 - slot) / 4;
-            IdentityPrefix::new(
-                (0..rows)
-                    .into_par_iter()
-                    .map_collect_min_task_bytes(2 * size_of::<F>(), |row| values[4 * row + slot]),
+    /// Bytes one task of a pass is charged.
+    ///
+    /// Each block costs dozens of products, so its bytes are weighted by a few products each.
+    const fn task_bytes() -> usize {
+        4 * TASK_BLOCKS * BLOCK * size_of::<F>()
+    }
+
+    /// Sums the polynomial of the next two rounds over every block.
+    fn grid(&self, weights: &BlockWeights<F>) -> GridSums<F> {
+        let values = &self.values.values;
+        values
+            .par_chunks(TASK_BLOCKS * BLOCK)
+            .enumerate()
+            .map_collect_min_task_bytes(Self::task_bytes(), |(task, chunk)| {
+                let mut sums = GridSums::new();
+                sums.add_blocks(chunk, task * TASK_BLOCKS, weights);
+                sums
+            })
+            .into_iter()
+            .fold(GridSums::new(), GridSums::merge)
+    }
+
+    /// Binds the next two variables to `challenges`, lowest first.
+    ///
+    /// Given block weights, it also sums the next two rounds' polynomial from the rows it writes.
+    fn fold_two(
+        &mut self,
+        challenges: [F; 2],
+        weights: Option<&BlockWeights<F>>,
+    ) -> Option<GridSums<F>> {
+        let source = &self.values.values;
+
+        // Every block, the last one possibly short, folds into one row.
+        let len = 4 * source.len().div_ceil(BLOCK);
+        self.spare.clear();
+        self.spare.reserve(len);
+        let destination = &mut self.spare.spare_capacity_mut()[..len];
+
+        // Source and destination split into the same number of chunks, one per task.
+        let partials = destination
+            .par_chunks_mut(4 * TASK_BLOCKS)
+            .zip(source.par_chunks(TASK_BLOCKS * BLOCK))
+            .enumerate()
+            .map_collect_min_task_bytes(Self::task_bytes(), |(task, (out, chunk))| {
+                fold_blocks(chunk, out, challenges);
+                // SAFETY: the fold wrote every slot of `out`, and `MaybeUninit<F>` has `F`'s layout.
+                let rows =
+                    unsafe { core::slice::from_raw_parts(out.as_ptr().cast::<F>(), out.len()) };
+
+                // The rows just written are still in cache, so the next grid reads no memory.
+                weights.map(|weights| {
+                    let mut sums = GridSums::new();
+                    sums.add_blocks(rows, task * TASK_BLOCKS / 4, weights);
+                    sums
+                })
+            });
+
+        // SAFETY: the tasks' chunks cover the first `len` slots, and each task wrote all of its own.
+        unsafe { self.spare.set_len(len) };
+        core::mem::swap(&mut self.values.values, &mut self.spare);
+        self.values.trim();
+
+        weights.map(|_| {
+            partials
+                .into_iter()
+                .map(|sums| sums.expect("every task sums when weights are given"))
+                .fold(GridSums::new(), GridSums::merge)
+        })
+    }
+
+    /// Binds the last variable of a layer with two rows left.
+    fn fold_last(&mut self, challenge: F) {
+        let children: [F; 4] = core::array::from_fn(|child| {
+            interpolate_pair(
+                [self.values.get(child), self.values.get(4 + child)],
+                challenge,
             )
         });
-        Self { children }
+        self.values = IdentityPrefix::new(children.to_vec());
     }
 
-    /// Rows whose endpoint pairs may contain a nonidentity child value.
-    fn active_rows(&self) -> usize {
-        self.children
-            .iter()
-            .map(|child| child.values.len())
-            .max()
-            .unwrap_or(0)
-            .div_ceil(2)
-    }
-
-    /// Bytes one fold of every child moves.
-    fn fold_bytes(&self) -> usize {
-        self.children.iter().map(IdentityPrefix::fold_bytes).sum()
-    }
-
-    /// Binds one parent variable in every child multilinear.
-    fn fold(&mut self, challenge: F, logical_len: usize) {
-        // Each child is charged the average, so the gate sees the whole fold, and still splits its
-        // own rows when they pay.
-        let child_bytes = self.fold_bytes() / 4;
-        self.children
-            .par_iter_mut()
-            .for_each_min_task_bytes(child_bytes, |child| child.fold(logical_len, challenge));
+    /// The four lines' product at every node, for a layer with two rows left.
+    fn last_product(&self, nodes: &RoundNodes<F>) -> [F; ROUND_POLY_LEN] {
+        let line = |child: usize| nodes.line(self.values.get(child), self.values.get(4 + child));
+        let mut product = line(0);
+        for child in 1..4 {
+            for (product, value) in product.iter_mut().zip(line(child)) {
+                *product *= value;
+            }
+        }
+        product
     }
 
     /// Reads the four terminal child claims after every parent variable is bound.
     fn children(&self) -> [F; 4] {
-        core::array::from_fn(|slot| self.children[slot].get(0))
+        core::array::from_fn(|child| self.values.get(child))
+    }
+}
+
+/// Folds each block of `source` into one row of `out`, binding its two row bits.
+///
+/// A short last block is completed by implicit identities.
+#[inline]
+fn fold_blocks<F: Field>(source: &[F], out: &mut [MaybeUninit<F>], [low, high]: [F; 2]) {
+    // Row `2 b_2 + b_1` of a block is its corner at `(Y_1, Y_2) = (b_1, b_2)`.
+    //
+    //     lower  = e_0 + r_0 (e_1 - e_0)
+    //     upper  = e_2 + r_0 (e_3 - e_2)
+    //     folded = lower + r_1 (upper - lower)
+    let fold = |block: &[F; BLOCK], row: &mut [MaybeUninit<F>]| {
+        for (child, slot) in row.iter_mut().enumerate() {
+            let corner = |index: usize| block[4 * index + child];
+            let lower = interpolate_pair([corner(0), corner(1)], low);
+            let upper = interpolate_pair([corner(2), corner(3)], low);
+            slot.write(interpolate_pair([lower, upper], high));
+        }
+    };
+    let (blocks, short) = source.as_chunks::<BLOCK>();
+    let (rows, _) = out.as_chunks_mut::<4>();
+    for (block, row) in blocks.iter().zip(&mut *rows) {
+        fold(block, row);
+    }
+    if !short.is_empty() {
+        fold(&padded_block(short), &mut rows[blocks.len()]);
+    }
+}
+
+/// Completes a short block with implicit identities.
+#[inline]
+fn padded_block<F: Field>(short: &[F]) -> [F; BLOCK] {
+    let mut block = [F::ONE; BLOCK];
+    block[..short.len()].copy_from_slice(short);
+    block
+}
+
+/// The equality weight of every block, factored into two short tables.
+///
+/// Block `q` splits into its low bits `l` and high bits `h`:
+///
+/// ```text
+///     eq(a, q) = eq(a_low, l) * eq(a_high, h)
+/// ```
+struct BlockWeights<F> {
+    /// Weights over the low block bits.
+    low: Vec<F>,
+    /// Weights over the high block bits.
+    high: Vec<F>,
+    /// Number of low block bits.
+    low_vars: usize,
+}
+
+impl<F: Field> BlockWeights<F> {
+    /// Factors `eq(point, .)`, its first coordinate binding the lowest block bit.
+    fn new(point: &[F]) -> Self {
+        let low_vars = point.len().min(EQ_LOW_VARS);
+        Self {
+            low: Point::new(&point[..low_vars]).equality_weights_lsb(),
+            high: Point::new(&point[low_vars..]).equality_weights_lsb(),
+            low_vars,
+        }
+    }
+
+    /// The weight of block `block`.
+    #[inline]
+    fn at(&self, block: usize) -> F {
+        self.low[block & (self.low.len() - 1)] * self.high[block >> self.low_vars]
+    }
+}
+
+/// Sums of the block products of two rounds, for one tree.
+///
+/// Each block's product is kept as its Karatsuba terms.
+///
+/// The terms combine into coefficients only once, after the sum.
+#[derive(Clone, Copy)]
+struct GridSums<F> {
+    /// Term sums, indexed by the `Y_2` term then the `Y_1` term.
+    terms: [[F; 6]; 6],
+    /// Sum of the weights of every summed block.
+    weight: F,
+}
+
+impl<F: Field> GridSums<F> {
+    /// The empty sum.
+    const fn new() -> Self {
+        Self {
+            terms: [[F::ZERO; 6]; 6],
+            weight: F::ZERO,
+        }
+    }
+
+    /// Adds two partial sums.
+    fn merge(mut self, other: Self) -> Self {
+        for (terms, other) in self.terms.iter_mut().zip(other.terms) {
+            for (term, other) in terms.iter_mut().zip(other) {
+                *term += other;
+            }
+        }
+        self.weight += other.weight;
+        self
+    }
+
+    /// Adds every block of `values`, the first being block `first`.
+    ///
+    /// A short last block is completed by implicit identities.
+    #[inline]
+    fn add_blocks(&mut self, values: &[F], first: usize, weights: &BlockWeights<F>) {
+        let (blocks, short) = values.as_chunks::<BLOCK>();
+        let (groups, rest) = blocks.as_chunks::<DOT_BLOCKS>();
+        for (index, group) in groups.iter().enumerate() {
+            let start = first + index * DOT_BLOCKS;
+            self.add_group(
+                group,
+                core::array::from_fn(|block| weights.at(start + block)),
+            );
+        }
+
+        // The blocks short of a whole group, the last one possibly short of rows.
+        // Missing blocks are all ones with weight zero, so they add nothing.
+        if !rest.is_empty() || !short.is_empty() {
+            let start = first + groups.len() * DOT_BLOCKS;
+            let mut group = [[F::ONE; BLOCK]; DOT_BLOCKS];
+            let mut group_weights = [F::ZERO; DOT_BLOCKS];
+            group[..rest.len()].copy_from_slice(rest);
+            let used = rest.len() + usize::from(!short.is_empty());
+            if !short.is_empty() {
+                group[rest.len()] = padded_block(short);
+            }
+            for (block, weight) in group_weights[..used].iter_mut().enumerate() {
+                *weight = weights.at(start + block);
+            }
+            self.add_group(&group, group_weights);
+        }
+    }
+
+    /// Adds a group of block products, each scaled by its weight.
+    ///
+    /// Each term sums over the group with one dot product, which a field may reduce once.
+    #[inline]
+    fn add_group(&mut self, group: &[[F; BLOCK]; DOT_BLOCKS], weights: [F; DOT_BLOCKS]) {
+        let operands: [[(F, F); 36]; DOT_BLOCKS] =
+            core::array::from_fn(|block| Self::block_operands(&group[block], weights[block]));
+        for (term, sum) in self.terms.as_flattened_mut().iter_mut().enumerate() {
+            let left = core::array::from_fn(|block| operands[block][term].0);
+            let right = core::array::from_fn(|block| operands[block][term].1);
+            *sum += F::dot_product::<DOT_BLOCKS>(&left, &right);
+        }
+        self.weight += weights.into_iter().sum::<F>();
+    }
+
+    /// The operand pairs of one block's product terms, its weight carried by the first child.
+    #[inline(always)]
+    fn block_operands(block: &[F; BLOCK], weight: F) -> [(F, F); 36] {
+        // Child `c` as a bilinear polynomial, coefficients indexed `[Y_2 power][Y_1 power]`.
+        //
+        //     V_c = e_0 + Y_1 (e_1 - e_0) + Y_2 (e_2 - e_0) + Y_1 Y_2 (e_3 - e_2 - e_1 + e_0)
+        let child = |c: usize| {
+            let corner = |index: usize| block[4 * index + c];
+            let y1 = corner(1) - corner(0);
+            [
+                [corner(0), y1],
+                [corner(2) - corner(0), corner(3) - corner(2) - y1],
+            ]
+        };
+
+        // The weight scales one factor, so the product carries it.
+        let [[a, b], [c, d]] = child(0);
+        let first = [[a * weight, b * weight], [c * weight, d * weight]];
+
+        // Two pairs of bilinear factors make two biquadratics.
+        let left = bilinear_product(first, child(1));
+        let right = bilinear_product(child(2), child(3));
+
+        // Their product's Karatsuba terms: six in `Y_2`, each six in `Y_1`.
+        let outer = karatsuba_three_operands(left, right, add_coefficients);
+        let mut operands = [(F::ZERO, F::ZERO); 36];
+        for (terms, (u, w)) in operands.as_chunks_mut::<6>().0.iter_mut().zip(outer) {
+            *terms = karatsuba_three_operands(u, w, F::add);
+        }
+        operands
+    }
+
+    /// Combines the terms into the bivariate polynomial, adding the identity tail.
+    ///
+    /// Blocks never summed are all ones, so each contributes its weight to the constant.
+    /// The weights of all blocks sum to one, so those blocks contribute one minus the summed weight.
+    fn finish(self) -> [[F; 5]; 5] {
+        let in_y1 = self.terms.map(karatsuba_three_combine);
+        let mut grid = karatsuba_three_combine_with(in_y1, add_coefficients, sub_coefficients);
+        grid[0][0] += F::ONE - self.weight;
+        grid
+    }
+}
+
+/// Adds two coefficient vectors.
+#[inline(always)]
+fn add_coefficients<F: Field, const N: usize>(a: [F; N], b: [F; N]) -> [F; N] {
+    core::array::from_fn(|index| a[index] + b[index])
+}
+
+/// Subtracts two coefficient vectors.
+#[inline(always)]
+fn sub_coefficients<F: Field, const N: usize>(a: [F; N], b: [F; N]) -> [F; N] {
+    core::array::from_fn(|index| a[index] - b[index])
+}
+
+/// The product of two lines, three products.
+#[inline(always)]
+fn line_product<F: Field>([a0, a1]: [F; 2], [b0, b1]: [F; 2]) -> [F; 3] {
+    // Karatsuba: the middle coefficient is (a_0 + a_1)(b_0 + b_1) - a_0 b_0 - a_1 b_1.
+    let low = a0 * b0;
+    let high = a1 * b1;
+    [low, (a0 + a1) * (b0 + b1) - low - high, high]
+}
+
+/// The product of two bilinear polynomials, nine products.
+#[inline(always)]
+fn bilinear_product<F: Field>([a0, a1]: [[F; 2]; 2], [b0, b1]: [[F; 2]; 2]) -> [[F; 3]; 3] {
+    // Karatsuba in `Y_2`, each of its three products a product of lines in `Y_1`.
+    let low = line_product(a0, b0);
+    let high = line_product(a1, b1);
+    let cross = line_product(add_coefficients(a0, a1), add_coefficients(b0, b1));
+    [
+        low,
+        core::array::from_fn(|index| cross[index] - low[index] - high[index]),
+        high,
+    ]
+}
+
+/// The six operand pairs of a three-coefficient Karatsuba product.
+///
+/// ```text
+///     (a_0, b_0), (a_1, b_1), (a_2, b_2),
+///     (a_0 + a_1, b_0 + b_1), (a_0 + a_2, b_0 + b_2), (a_1 + a_2, b_1 + b_2)
+/// ```
+#[inline(always)]
+fn karatsuba_three_operands<T: Copy>(a: [T; 3], b: [T; 3], add: impl Fn(T, T) -> T) -> [(T, T); 6] {
+    let sum = |i: usize, j: usize| (add(a[i], a[j]), add(b[i], b[j]));
+    [
+        (a[0], b[0]),
+        (a[1], b[1]),
+        (a[2], b[2]),
+        sum(0, 1),
+        sum(0, 2),
+        sum(1, 2),
+    ]
+}
+
+/// The five coefficients a three-coefficient Karatsuba product's terms combine into.
+#[inline]
+fn karatsuba_three_combine<F: Field>(terms: [F; 6]) -> [F; 5] {
+    karatsuba_three_combine_with(terms, F::add, F::sub)
+}
+
+/// Combines the six terms `c_0, c_1, c_2, d_01, d_02, d_12` over any coefficient type.
+///
+/// ```text
+///     p_0 = c_0
+///     p_1 = d_01 - c_0 - c_1
+///     p_2 = d_02 - c_0 - c_2 + c_1
+///     p_3 = d_12 - c_1 - c_2
+///     p_4 = c_2
+/// ```
+#[inline]
+fn karatsuba_three_combine_with<T: Copy>(
+    [c0, c1, c2, d01, d02, d12]: [T; 6],
+    add: impl Fn(T, T) -> T,
+    sub: impl Fn(T, T) -> T,
+) -> [T; 5] {
+    [
+        c0,
+        sub(sub(d01, c0), c1),
+        add(sub(sub(d02, c0), c2), c1),
+        sub(sub(d12, c1), c2),
+        c2,
+    ]
+}
+
+/// The bivariate polynomial `P(Y_1, Y_2) = sum_q eq(q) prod_c V_c(Y_1, Y_2)` of two rounds.
+///
+/// Coefficients are indexed `[Y_2 power][Y_1 power]`, and `Y_1` is bound first.
+struct Grid<F>([[F; 5]; 5]);
+
+impl<F: Field> Grid<F> {
+    /// Combines every tree's sums with consecutive powers of the batching challenge.
+    fn batch(sums: Vec<GridSums<F>>, batching: F) -> Self {
+        let mut grid = [[F::ZERO; 5]; 5];
+        for (sums, power) in sums.into_iter().zip(batching.powers()) {
+            for (row, tree_row) in grid.iter_mut().zip(sums.finish()) {
+                for (coefficient, tree_coefficient) in row.iter_mut().zip(tree_row) {
+                    *coefficient += power * tree_coefficient;
+                }
+            }
+        }
+        Self(grid)
+    }
+
+    /// The first round's inner polynomial, its rows weighed by `eq(anchor, Y_2)`.
+    ///
+    /// ```text
+    ///     [Y_1^k] = P_{0,k} + anchor * sum_{m >= 1} P_{m,k}
+    /// ```
+    fn first_round(&self, anchor: F) -> [F; 5] {
+        let [low, upper @ ..] = &self.0;
+        core::array::from_fn(|k| low[k] + anchor * upper.iter().map(|row| row[k]).sum::<F>())
+    }
+
+    /// The second round's inner polynomial, once `Y_1` is bound to `challenge`.
+    ///
+    /// ```text
+    ///     [Y_2^m] = sum_k challenge^k P_{m,k}
+    /// ```
+    fn second_round(&self, challenge: F) -> [F; 5] {
+        self.0.map(|row| horner(&row, challenge))
+    }
+}
+
+/// Evaluates a polynomial given by its coefficients, constant first.
+#[inline]
+fn horner<F: Field>(coefficients: &[F], point: F) -> F {
+    coefficients
+        .iter()
+        .rev()
+        .fold(F::ZERO, |sum, &coefficient| sum * point + coefficient)
+}
+
+/// The equality factor `eq(point[..j], r[..j])` of the coordinates bound so far.
+struct EqPrefix<F>(F);
+
+impl<F: Field> EqPrefix<F> {
+    /// The empty product.
+    const fn new() -> Self {
+        Self(F::ONE)
+    }
+
+    /// Sends one round's message and binds its coordinate.
+    ///
+    /// The message is the inner values times the line `eq(point[..j], r[..j]) eq(anchor, X)`.
+    fn round(
+        &mut self,
+        nodes: &RoundNodes<F>,
+        anchor: F,
+        inner: [F; ROUND_POLY_LEN],
+        send: &mut impl FnMut([F; ROUND_POLY_LEN]) -> F,
+    ) -> F {
+        let one = self.0 * anchor;
+        let pair = [self.0 - one, one];
+        let eq_values = nodes.line(pair[0], pair[1]);
+        let challenge = send(core::array::from_fn(|index| {
+            eq_values[index] * inner[index]
+        }));
+        self.0 = interpolate_pair(pair, challenge);
+        challenge
     }
 }
 
@@ -202,197 +616,91 @@ pub(super) struct RadixFourBatch<F> {
 impl<F: Field> RadixFourBatch<F> {
     /// Creates the batched states from one retained level per tree.
     #[cfg(test)]
-    pub(super) fn new(layers: &[ProductLayers<F>], depth: usize, logical_len: usize) -> Self {
-        // A tree reads its retained level once and writes it back as four children.
-        let tree_bytes = layers
-            .iter()
-            .map(|layers| 2 * layers.layers[depth].values.len() * size_of::<F>())
-            .sum::<usize>()
-            .checked_div(layers.len())
-            .unwrap_or(0);
+    pub(super) fn new(layers: &[ProductLayers<F>], depth: usize) -> Self {
         let states = layers
-            .par_iter()
-            .map_collect_min_task_bytes(tree_bytes, |layers| {
-                layers.radix_four_state(depth, logical_len)
-            });
-        Self { states }
-    }
-
-    /// Consumes one retained level per tree after gathering its child prefixes.
-    pub(super) fn new_consuming(
-        layers: &mut [ProductLayers<F>],
-        depth: usize,
-        logical_len: usize,
-    ) -> Self {
-        // A tree reads its retained level once and writes it back as four children.
-        let tree_bytes = layers
             .iter()
-            .map(|layers| 2 * layers.layers[depth].values.len() * size_of::<F>())
-            .sum::<usize>()
-            .checked_div(layers.len())
-            .unwrap_or(0);
-        let states = layers
-            .par_iter_mut()
-            .map_collect_min_task_bytes(tree_bytes, |layers| {
-                layers.take_radix_four_state(depth, logical_len)
-            });
-        Self { states }
-    }
-
-    /// Computes one degree-five batched sumcheck message. The equality polynomial
-    /// is split into current-coordinate endpoints and normalized suffix weights.
-    pub(super) fn round(
-        &self,
-        equality: &[F],
-        equality_pair: [F; 2],
-        logical_len: usize,
-        batching: F,
-    ) -> [F; ROUND_POLY_LEN] {
-        debug_assert!(logical_len >= 2);
-        debug_assert_eq!(equality.len(), logical_len / 2);
-
-        let nodes = RoundNodes::<F>::new();
-        let eq_values = nodes.line(equality_pair[0], equality_pair[1]);
-        let Some((first_tree, other_trees)) = self.states.split_first() else {
-            return [F::ZERO; ROUND_POLY_LEN];
-        };
-        // The first tree has coefficient one; only later trees need batching products.
-        let powers = batching
-            .shifted_powers(batching)
-            .collect_n(other_trees.len());
-        let first_rows = first_tree.active_rows();
-        let same_cutoff = other_trees
-            .iter()
-            .all(|state| state.active_rows() == first_rows);
-        let mut evaluations = if same_cutoff {
-            Self::reduce_trees(&self.states, &powers, &nodes, equality, first_rows)
-        } else {
-            // Each tree can omit its own identity tail before batching the totals.
-            let mut evaluations = Self::reduce_trees(
-                core::slice::from_ref(first_tree),
-                &[],
-                &nodes,
-                equality,
-                first_rows,
-            );
-            for (state, &power) in other_trees.iter().zip(&powers) {
-                let partial = Self::reduce_trees(
-                    core::slice::from_ref(state),
-                    &[],
-                    &nodes,
-                    equality,
-                    state.active_rows(),
-                );
-                for (evaluation, partial) in evaluations.iter_mut().zip(partial) {
-                    *evaluation += power * partial;
-                }
-            }
-            evaluations
-        };
-        for (evaluation, eq_value) in evaluations.iter_mut().zip(eq_values) {
-            *evaluation *= eq_value;
-        }
-        evaluations
-    }
-
-    /// Reduces a nonempty tree group through its last nonidentity endpoint pair.
-    fn reduce_trees(
-        states: &[RadixFourState<F>],
-        powers: &[F],
-        nodes: &RoundNodes<F>,
-        equality: &[F],
-        rows: usize,
-    ) -> [F; ROUND_POLY_LEN] {
-        let (first_tree, other_trees) = states.split_first().expect("nonempty product tree group");
-        debug_assert_eq!(powers.len(), other_trees.len());
-        let accumulate = |evaluations: &mut [F; ROUND_POLY_LEN], row: usize| {
-            let tree_product = |state: &RadixFourState<F>| {
-                let [first, rest @ ..] = &state.children;
-                let mut product = nodes.line(first.get(2 * row), first.get(2 * row + 1));
-                for child in rest {
-                    let values = nodes.line(child.get(2 * row), child.get(2 * row + 1));
-                    for (product, value) in product.iter_mut().zip(values) {
-                        *product *= value;
-                    }
-                }
-                product
-            };
-            let mut batched = tree_product(first_tree);
-            for (state, &power) in other_trees.iter().zip(powers) {
-                for (batched, product) in batched.iter_mut().zip(tree_product(state)) {
-                    *batched += power * product;
-                }
-            }
-
-            for (evaluation, batched) in evaluations.iter_mut().zip(batched) {
-                *evaluation += equality[row] * batched;
-            }
-        };
-
-        debug_assert!(rows <= equality.len());
-        // An active row reads one equality weight and eight child values per tree.
-        let row_bytes = ROUND_POLY_LEN * (1 + 8 * states.len()) * size_of::<F>();
-
-        // Each task sums one run of rows, so only its partial message crosses threads.
-        let task_rows = min_task_len(rows, row_bytes);
-        let mut evaluations = (0..rows.div_ceil(task_rows))
-            .into_par_iter()
-            .map_collect_min_task_bytes(task_rows * row_bytes, |task| {
-                let mut evaluations = [F::ZERO; ROUND_POLY_LEN];
-                for row in task * task_rows..rows.min((task + 1) * task_rows) {
-                    accumulate(&mut evaluations, row);
-                }
-                evaluations
+            .map(|layers| {
+                RadixFourState::new(IdentityPrefix {
+                    values: layers.layers[depth].values.clone(),
+                })
             })
-            .into_iter()
-            .fold([F::ZERO; ROUND_POLY_LEN], |mut evaluations, partial| {
-                for (evaluation, partial) in evaluations.iter_mut().zip(partial) {
-                    *evaluation += partial;
-                }
-                evaluations
-            });
-        if rows < equality.len() {
-            // Normalized suffix weights sum to one. Read the shorter side.
-            let tail_weight: F = if rows < equality.len() - rows {
-                F::ONE
-                    - equality[..rows]
-                        .par_iter()
-                        .with_min_task::<F>()
-                        .copied()
-                        .sum::<F>()
-            } else {
-                equality[rows..]
-                    .par_iter()
-                    .with_min_task::<F>()
-                    .copied()
-                    .sum()
-            };
-            let tail = if powers.is_empty() {
-                tail_weight
-            } else {
-                tail_weight * (F::ONE + powers.iter().copied().sum::<F>())
-            };
-            for evaluation in &mut evaluations {
-                *evaluation += tail;
-            }
-        }
-        evaluations
+            .collect();
+        Self { states }
     }
 
-    /// Binds one parent variable across every tree in the batch.
-    pub(super) fn fold(&mut self, challenge: F, logical_len: usize) {
-        // Each tree is charged the average, so the gate sees the whole fold, and still splits its
-        // children when they pay.
-        let tree_bytes = self
-            .states
-            .iter()
-            .map(RadixFourState::fold_bytes)
-            .sum::<usize>()
-            .checked_div(self.states.len())
-            .unwrap_or(0);
-        self.states
-            .par_iter_mut()
-            .for_each_min_task_bytes(tree_bytes, |state| state.fold(challenge, logical_len));
+    /// Consumes one retained level per tree, reading it in place.
+    pub(super) fn new_consuming(layers: &mut [ProductLayers<F>], depth: usize) -> Self {
+        let states = layers
+            .iter_mut()
+            .map(|layers| RadixFourState::new(layers.take_layer(depth)))
+            .collect();
+        Self { states }
+    }
+
+    /// Runs every sumcheck round of the layer.
+    ///
+    /// Round `j` binds the lowest remaining row bit.
+    /// Its rows are weighed by `eq(point[j + 1..], .)`, and the line `eq(point[j], X)` scales its message.
+    ///
+    /// Rounds run in pairs, one pass over the rows per pair.
+    /// An odd count leaves one round, over two rows.
+    ///
+    /// `send` takes each round's message and returns its challenge.
+    pub(super) fn prove_rounds(
+        &mut self,
+        point: &[F],
+        batching: F,
+        mut send: impl FnMut([F; ROUND_POLY_LEN]) -> F,
+    ) -> Vec<F> {
+        let rounds = point.len();
+        let nodes = RoundNodes::<F>::new();
+        let mut challenges = Vec::with_capacity(rounds);
+
+        // Already bound coordinates contribute one scalar to the equality line.
+        let mut eq = EqPrefix::new();
+
+        // Two rounds per pass: rounds `j` and `j + 1` read one polynomial of their two variables.
+        let mut grids = (rounds >= 2).then(|| {
+            let weights = BlockWeights::new(&point[2..]);
+            self.states
+                .iter()
+                .map(|state| state.grid(&weights))
+                .collect::<Vec<_>>()
+        });
+        while let Some(sums) = grids {
+            let j = challenges.len();
+            let grid = Grid::batch(sums, batching);
+            let first = nodes.evaluate(&grid.first_round(point[j + 1]));
+            let low = eq.round(&nodes, point[j], first, &mut send);
+            let second = nodes.evaluate(&grid.second_round(low));
+            let high = eq.round(&nodes, point[j + 1], second, &mut send);
+            challenges.extend([low, high]);
+
+            // The fold reads the rows once more and sums the next two rounds on the way.
+            let weights = (j + 4 <= rounds).then(|| BlockWeights::new(&point[j + 4..]));
+            let next = self
+                .states
+                .iter_mut()
+                .map(|state| state.fold_two([low, high], weights.as_ref()))
+                .collect::<Vec<_>>();
+            grids = next.into_iter().collect();
+        }
+
+        // An odd count leaves one round, over two rows per tree.
+        if challenges.len() < rounds {
+            let mut product = [F::ZERO; ROUND_POLY_LEN];
+            for (state, power) in self.states.iter().zip(batching.powers()) {
+                for (sum, value) in product.iter_mut().zip(state.last_product(&nodes)) {
+                    *sum += power * value;
+                }
+            }
+            let challenge = eq.round(&nodes, point[rounds - 1], product, &mut send);
+            for state in &mut self.states {
+                state.fold_last(challenge);
+            }
+            challenges.push(challenge);
+        }
+        challenges
     }
 
     /// Collects the terminal child claims in tree order.
@@ -416,6 +724,12 @@ impl<F: Field> RoundNodes<F> {
         let unit_steps =
             core::array::from_fn(|index| index > 0 && nodes[index] == nodes[index - 1] + F::ONE);
         Self { nodes, unit_steps }
+    }
+
+    /// Evaluates a polynomial given by its coefficients at every node.
+    #[inline]
+    fn evaluate(&self, coefficients: &[F]) -> [F; ROUND_POLY_LEN] {
+        self.nodes.map(|node| horner(coefficients, node))
     }
 
     /// Evaluates the line through `zero` and `one` at every node.
@@ -442,7 +756,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_binary_field::{BinaryField128, Ghash128};
+    use p3_binary_field::{BinaryField128, Ghash128, Poly192};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_multilinear_util::point::Point;
@@ -451,31 +765,45 @@ mod tests {
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
-    use crate::product::math::{fold_dense, sum_adjacent};
 
     type BabyBearQuartic = BinomialExtensionField<BabyBear, 4>;
 
+    /// Folds a fully materialized multilinear table at its lowest variable.
+    fn fold_dense<F: Field>(values: &mut Vec<F>, challenge: F) {
+        *values = values
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pair| interpolate_pair(pair, challenge))
+            .collect();
+    }
+
+    /// Splits an interleaved level into four dense child tables of `logical_len` rows.
+    fn dense_children<F: Field>(values: &[F], logical_len: usize) -> [Vec<F>; 4] {
+        core::array::from_fn(|child| {
+            (0..logical_len)
+                .map(|row| values.get(4 * row + child).copied().unwrap_or(F::ONE))
+                .collect()
+        })
+    }
+
     /// Interpolates every line separately at every node, as an obvious reference.
     fn per_node_round<F: Field>(
-        batch: &RadixFourBatch<F>,
+        trees: &[[Vec<F>; 4]],
         equality: &[F],
-        logical_len: usize,
         batching: F,
     ) -> [F; ROUND_POLY_LEN] {
         let nodes = [0, 2, 3, 4, 5].map(F::interpolation_node);
         let mut evaluations = [F::ZERO; ROUND_POLY_LEN];
-        for row in 0..logical_len / 2 {
+        for row in 0..equality.len() / 2 {
             for (node_index, node) in nodes.into_iter().enumerate() {
                 let eq_value = interpolate_pair([equality[2 * row], equality[2 * row + 1]], node);
                 let mut power = F::ONE;
                 let mut batched_product = F::ZERO;
-                for state in &batch.states {
-                    let product = state
-                        .children
+                for children in trees {
+                    let product = children
                         .iter()
-                        .map(|child| {
-                            interpolate_pair([child.get(2 * row), child.get(2 * row + 1)], node)
-                        })
+                        .map(|child| interpolate_pair([child[2 * row], child[2 * row + 1]], node))
                         .product::<F>();
                     batched_product += power * product;
                     power *= batching;
@@ -539,46 +867,46 @@ mod tests {
                     })
                     .collect::<Vec<_>>();
                 for challenge_kind in 0..3 {
-                    let mut logical_len = 1usize << variables;
-                    let mut batch = RadixFourBatch::new(&layers, depth, logical_len);
-                    let mut equality = Point::new(anchor.as_slice()).equality_weights_lsb();
-                    let mut suffix = Point::new(&anchor[1..]).equality_weights_lsb();
-                    let mut prefix = F::ONE;
-                    let batching = rng.random::<F>();
+                    let random_batching = rng.random::<F>();
+                    for batching in [F::ZERO, F::ONE, random_batching] {
+                        // The reference keeps dense child tables and the full equality table.
+                        let mut trees = layers
+                            .iter()
+                            .map(|layers| {
+                                dense_children(&layers.layers[depth].values, 1 << variables)
+                            })
+                            .collect::<Vec<_>>();
+                        let mut equality = Point::new(anchor.as_slice()).equality_weights_lsb();
+                        let mut batch = RadixFourBatch::new(&layers, depth);
+                        let mut round = 0;
 
-                    // Keep the fully materialized equality table as the independent reference.
-                    for (round, &coordinate) in anchor.iter().enumerate() {
-                        let one = prefix * coordinate;
-                        let pair = [prefix - one, one];
-                        for (weights, &weight) in equality.as_chunks::<2>().0.iter().zip(&suffix) {
-                            assert_eq!(weights, &[weight * pair[0], weight * pair[1]]);
-                        }
-                        for batching in [F::ZERO, F::ONE, batching] {
+                        // Each message must equal the reference before both bind the same challenge.
+                        let challenges = batch.prove_rounds(&anchor, batching, |message| {
                             assert_eq!(
-                                batch.round(&suffix, pair, logical_len, batching),
-                                per_node_round(&batch, &equality, logical_len, batching),
-                                "depth={depth} len={logical_len} anchor={anchor_kind} challenge={challenge_kind}",
+                                message,
+                                per_node_round(&trees, &equality, batching),
+                                "depth={depth} round={round} anchor={anchor_kind} challenge={challenge_kind}",
                             );
-                        }
-                        let challenge = match challenge_kind {
-                            0 => F::ZERO,
-                            1 => F::ONE,
-                            _ => rng.random::<F>(),
-                        };
-                        batch.fold(challenge, logical_len);
-                        fold_dense(&mut equality, challenge);
-                        prefix = interpolate_pair(pair, challenge);
-                        logical_len /= 2;
-                        if logical_len > 1 {
-                            sum_adjacent(&mut suffix);
-                            // Check the normalized table even when the accumulated prefix is zero.
-                            assert_eq!(
-                                suffix,
-                                Point::new(&anchor[round + 2..]).equality_weights_lsb(),
-                            );
-                        } else {
-                            assert_eq!(equality, [prefix]);
-                        }
+                            let challenge = match challenge_kind {
+                                0 => F::ZERO,
+                                1 => F::ONE,
+                                _ => rng.random::<F>(),
+                            };
+                            for child in trees.iter_mut().flatten() {
+                                fold_dense(child, challenge);
+                            }
+                            fold_dense(&mut equality, challenge);
+                            round += 1;
+                            challenge
+                        });
+                        assert_eq!(challenges.len(), variables);
+
+                        // Once every variable is bound, each child table is its terminal claim.
+                        let expected = trees
+                            .iter()
+                            .map(|children| children.each_ref().map(|child| child[0]))
+                            .collect::<Vec<_>>();
+                        assert_eq!(batch.children(), expected);
                     }
                 }
             }
@@ -622,15 +950,10 @@ mod tests {
                         let expected = layers.binary_children(depth);
                         assert_eq!(layers.take_binary_children(depth), expected);
                     } else {
-                        let logical_len = capacity >> (depth + 2);
-                        let expected = layers.radix_four_state(depth, logical_len);
-                        let actual = layers.take_radix_four_state(depth, logical_len);
-                        for (actual, expected) in actual.children.iter().zip(&expected.children) {
-                            assert_eq!(actual.values, expected.values);
-                            for row in 0..logical_len {
-                                assert_eq!(actual.get(row), expected.get(row));
-                            }
-                        }
+                        // The taken level is the retained allocation itself, not a copy.
+                        let taken = layers.take_layer(depth);
+                        assert_eq!(taken.values, before[depth].0);
+                        assert_eq!(taken.values.capacity(), before[depth].1);
                     }
                     for (index, (values, reserved)) in before.iter().enumerate() {
                         if index == depth {
@@ -643,33 +966,6 @@ mod tests {
                     }
                     product_depth = depth;
                 }
-            }
-        }
-    }
-
-    #[test]
-    fn child_split_matches_an_interleaved_walk() {
-        // Lengths through seventeen end each slot on a full, partial or missing final row.
-        // Every third entry is one, so trailing identities are trimmed from some children.
-        let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0003);
-        for len in 0..=17usize {
-            let values = (0..len)
-                .map(|index| {
-                    if index % 3 == 2 {
-                        BabyBear::ONE
-                    } else {
-                        rng.random::<BabyBear>()
-                    }
-                })
-                .collect::<Vec<_>>();
-            let state = RadixFourState::new(&IdentityPrefix::new(values.clone()), len.div_ceil(4));
-
-            let mut expected: [Vec<BabyBear>; 4] = Default::default();
-            for (index, &value) in values.iter().enumerate() {
-                expected[index % 4].push(value);
-            }
-            for (child, expected) in state.children.iter().zip(expected) {
-                assert_eq!(child.values, IdentityPrefix::new(expected).values);
             }
         }
     }
@@ -702,6 +998,16 @@ mod tests {
             check_rounds::<Ghash128>(&mut rng, log_height, &prefix_lens);
             check_rounds::<BabyBearQuartic>(&mut rng, log_height, &prefix_lens);
         }
+    }
+
+    #[test]
+    fn rounds_spanning_several_tasks_match_the_per_node_reference() {
+        // A task reads 1024 values, so leaf levels of 4096 values span four tasks.
+        // Prefixes ending inside a task, a block and a row cut each pass at every granularity.
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0x5107_0008);
+        let prefix_lens = [4096, 3001, 1037];
+        check_rounds::<Poly192>(&mut rng, 12, &prefix_lens);
+        check_rounds::<BabyBearQuartic>(&mut rng, 13, &prefix_lens);
     }
 
     fn check_identity_tails<F: Field>(rng: &mut Xoroshiro128Plus)

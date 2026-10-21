@@ -1,26 +1,6 @@
 //! Multilinear arithmetic shared by product-tree proving and verification.
 
-use alloc::vec::Vec;
-
 use p3_field::Field;
-use p3_maybe_rayon::prelude::*;
-
-/// Folds a fully materialized multilinear table.
-#[cfg(test)]
-pub(super) fn fold_dense<F: Field>(values: &mut Vec<F>, challenge: F) {
-    *values = values
-        .par_chunks_exact(2)
-        .map_collect_min_task_bytes(3 * size_of::<F>(), |pair| {
-            interpolate_pair([pair[0], pair[1]], challenge)
-        });
-}
-
-/// Sums adjacent endpoint pairs, eliminating the lowest-address variable.
-pub(super) fn sum_adjacent<F: Field>(values: &mut Vec<F>) {
-    *values = values
-        .par_chunks_exact(2)
-        .map_collect_min_task_bytes(3 * size_of::<F>(), |pair| pair[0] + pair[1]);
-}
 
 /// Combines one claim per tree with consecutive powers of one challenge.
 pub(super) fn combine<F: Field>(values: &[F], challenge: F) -> F {

@@ -11,9 +11,7 @@ use p3_multilinear_util::point::Point;
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 use serde::{Deserialize, Serialize};
 
-use super::math::{
-    combine, has_distinct_round_nodes, interpolate_pair, interpolate_quad, sum_adjacent,
-};
+use super::math::{combine, has_distinct_round_nodes, interpolate_pair, interpolate_quad};
 use super::prover::{ProductLayers, RadixFourBatch};
 use super::transcript::{ProductGkrProverTranscript, ProductGkrVerifierTranscript};
 use super::{ProductGkrError, ProductGkrShape};
@@ -238,35 +236,12 @@ impl<EF> ProductGkrProof<EF> {
                 layer_proofs.push(ProductGkrLayerProof::Binary { children });
             } else {
                 // Four child tables share one eq-weighted degree-five sumcheck.
-                let mut batch = RadixFourBatch::new_consuming(
-                    &mut all_layers,
-                    child_depth,
-                    1usize << round_count,
-                );
-                // The current coordinate factors out of the row sum. Keep only its
-                // normalized suffix table; the root-most layer can have no coordinates.
-                let mut equality = Point::new(point.get(1..).unwrap_or(&[])).equality_weights_lsb();
-                let mut equality_prefix = EF::ONE;
-                let mut logical_len = 1usize << round_count;
-                let mut round_point = Vec::with_capacity(round_count);
+                let mut batch = RadixFourBatch::new_consuming(&mut all_layers, child_depth);
                 let mut round_polys = Vec::with_capacity(round_count);
-
-                for &anchor in &point {
-                    let one = equality_prefix * anchor;
-                    let equality_pair = [equality_prefix - one, one];
-                    let round_poly = batch.round(&equality, equality_pair, logical_len, batching);
-                    let challenge = transcript.round(&round_poly);
-                    batch.fold(challenge, logical_len);
-                    equality_prefix = interpolate_pair(equality_pair, challenge);
-                    logical_len /= 2;
-                    if logical_len > 1 {
-                        // Product GKR binds adjacent pairs (LSB-first), unlike Poly's
-                        // leading-variable convention. No division by a prefix is needed.
-                        sum_adjacent(&mut equality);
-                    }
-                    round_point.push(challenge);
+                let round_point = batch.prove_rounds(&point, batching, |round_poly| {
                     round_polys.push(round_poly);
-                }
+                    transcript.round(&round_poly)
+                });
 
                 let children = batch.children();
                 let branches = transcript.end_radix_four_layer(&children);
