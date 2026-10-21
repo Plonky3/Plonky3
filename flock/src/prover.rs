@@ -1,13 +1,14 @@
-//! The Flock prover: bind the statement, commit, zerocheck, lincheck, open.
+//! The Flock prover: bind the statement, commit, run the PIOP on the whole commitment, open.
 
+use p3_binary_pcs::whir::preset::keccak64;
 use tracing::instrument;
 
 use crate::config::{FlockChallenger, FlockConfig};
 use crate::error::ProvingError;
-use crate::opening::WitnessPcs;
+use crate::piop::{self, Placement};
 use crate::ports::PublicPorts;
 use crate::proof::FlockProof;
-use crate::{Batch, Witness, lincheck, zerocheck};
+use crate::{Batch, Witness};
 
 /// Prove that a witness satisfies every instance of a batch and holds its public port words.
 ///
@@ -24,33 +25,29 @@ pub fn prove(
     challenger: &mut FlockChallenger,
 ) -> Result<FlockProof, ProvingError> {
     // The statement first, so every challenge depends on it.
-    public.check_witness(batch, &witness)?;
     public.bind(batch, challenger)?;
 
     // Then the commitment, so every challenge depends on the witness.
-    let pcs = WitnessPcs::new(batch.log_n(), &config.pcs)?;
-    // The words move into the commitment, which hands them back to the lincheck.
+    let pcs = keccak64::witness_commitment(batch.log_n(), &config.pcs, 1)?;
+    // The words move into the commitment, which hands them back to the PIOP.
     let (commitment, data) = pcs.commit(witness.take_z(), challenger)?;
 
-    // a * b = c everywhere, reduced to claims at one point.
-    let (zerocheck, claims) = zerocheck::prove(batch, &witness, config.pow_bits, challenger);
-
-    // Those claims and the public words, reduced to one claim on the committed bits.
-    let (lincheck, claim, folded) = lincheck::prove_folded(
+    // The circuit and the public words, reduced to one claim on the committed bits.
+    let (piop, claim) = piop::prove(
+        config.pow_bits,
         batch,
-        WitnessPcs::committed_words(&data),
-        &claims,
         public,
+        &witness,
+        &Placement::whole(&pcs),
+        &data,
         challenger,
-    );
+    )?;
 
-    // That claim, opened, its element split from the folded witness rather than from the commitment.
-    let split = pcs.suffix_tensors(&folded, &claim.point, batch.log_instances());
-    let opening = pcs.open(data, &[claim], &[split.as_ref()], challenger)?;
+    // That claim, opened.
+    let opening = pcs.open(data, &[claim.claim], &[claim.split.as_ref()], challenger)?;
     Ok(FlockProof {
         commitment,
-        zerocheck,
-        lincheck,
+        piop,
         opening,
     })
 }

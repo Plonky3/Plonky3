@@ -93,6 +93,26 @@ impl Region {
         assert!(self.log_bits >= 6, "a region of whole words");
         &all[self.offset_bits >> 6..][..1 << (self.log_bits - 6)]
     }
+
+    /// The packed words of the region, to write.
+    ///
+    /// # Panics
+    ///
+    /// The region is narrower than one word, or `all` does not hold it.
+    #[must_use]
+    pub fn words_mut<'a>(&self, all: &'a mut [u64]) -> &'a mut [u64] {
+        assert!(self.log_bits >= 6, "a region of whole words");
+        &mut all[self.offset_bits >> 6..][..1 << (self.log_bits - 6)]
+    }
+
+    /// Whether the region is aligned to its size and lies inside a commitment of `2^total` bits.
+    #[must_use]
+    pub const fn lies_within(&self, total: usize) -> bool {
+        total < usize::BITS as usize
+            && self.log_bits <= total
+            && self.offset_bits & ((1 << self.log_bits) - 1) == 0
+            && self.offset_bits >> self.log_bits < 1 << (total - self.log_bits)
+    }
 }
 
 #[cfg(test)]
@@ -149,6 +169,26 @@ mod tests {
             offset_bits: 3 << 9,
         };
         assert_eq!(region.words(&all), &all[24..32]);
+        let mut written = all.clone();
+        region.words_mut(&mut written).fill(0);
+        assert!(written[24..32].iter().all(|&w| w == 0));
+        assert_eq!(written[..24], all[..24]);
+        assert_eq!(written[32..], all[32..]);
+    }
+
+    #[test]
+    fn a_region_lies_within_only_aligned_and_inside() {
+        let region = |log_bits, offset_bits| Region {
+            log_bits,
+            offset_bits,
+        };
+        assert!(region(8, 3 << 8).lies_within(10));
+        assert!(region(10, 0).lies_within(10));
+        // Past the end, misaligned, or wider than the commitment.
+        assert!(!region(8, 4 << 8).lies_within(10));
+        assert!(!region(8, 1 << 7).lies_within(10));
+        assert!(!region(11, 0).lies_within(10));
+        assert!(!region(0, 0).lies_within(usize::BITS as usize));
     }
 
     proptest! {
@@ -161,6 +201,7 @@ mod tests {
             for (region, &log) in regions.iter().zip(&log_sizes) {
                 prop_assert_eq!(region.log_bits, log);
                 prop_assert_eq!(region.offset_bits % (1 << log), 0);
+                prop_assert!(region.lies_within(layout.num_variables));
                 prop_assert!(region.offset_bits + (1 << log) <= total);
                 // The selector names the region's slot.
                 let slot = region.selector(layout.num_variables).iter().fold(0, |acc, &bit| (acc << 1) | usize::from(bit));
