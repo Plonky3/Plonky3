@@ -322,6 +322,8 @@ where
             }
         }
 
+        // Unreachable for validated dimensions: the schedule reaches every injection.
+        // Fail closed if this walk ever disagrees with the schedule.
         if heights_tallest_first.peek().is_some() {
             return Err(CapMismatch);
         }

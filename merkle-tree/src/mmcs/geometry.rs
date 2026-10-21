@@ -61,8 +61,9 @@ pub struct ArityAndPositions {
 
 /// Validates that matrix heights lie on the binary height ladder.
 ///
-/// Higher arities additionally require a progressing injection schedule; that check
-/// is shared by tree construction and verification through `select_arity_step`.
+/// Higher arities also need every binary bridge to make progress.
+///
+/// Tree construction and verification check that while planning the layers.
 ///
 /// # Overview
 ///
