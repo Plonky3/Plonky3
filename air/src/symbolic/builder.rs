@@ -3,12 +3,12 @@ use alloc::vec::Vec;
 use core::borrow::Borrow;
 
 use p3_field::{Algebra, ExtensionField, Field};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::symbolic::SymbolicExpr;
+use crate::symbolic::constraints::{max_constraint_degrees, max_constraint_poly_degrees};
 use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
@@ -132,30 +132,20 @@ where
     // degree, and every other leaf scales with `trace_len - 1`. Reuse the cached
     // degrees and skip the expression walk entirely.
     if layout.num_periodic_columns == 0 {
-        return base_constraints
-            .iter()
-            .map(|c| c.degree_multiple())
-            .chain(extension_constraints.iter().map(|c| c.degree_multiple()))
-            .max()
-            .unwrap_or(0);
+        let degrees = max_constraint_degrees(&base_constraints, &extension_constraints, 0);
+        return degrees.base.max(degrees.extension);
     }
 
     // Period (cycle length) of each periodic column, indexed by periodic column index.
     let periodic_periods = air.periodic_periods();
 
-    let base_degree = base_constraints
-        .iter()
-        .map(|c| c.poly_degree(trace_len, &periodic_periods))
-        .max()
-        .unwrap_or(0);
-
-    let extension_degree = extension_constraints
-        .iter()
-        .map(|c| c.poly_degree(trace_len, &periodic_periods))
-        .max()
-        .unwrap_or(0);
-
-    constraint_degree_from_poly_degree(base_degree.max(extension_degree), trace_len)
+    let degrees = max_constraint_poly_degrees(
+        &base_constraints,
+        &extension_constraints,
+        trace_len,
+        &periodic_periods,
+    );
+    constraint_degree_from_poly_degree(degrees.base.max(degrees.extension), trace_len)
 }
 
 #[instrument(
@@ -330,32 +320,34 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
     }
 }
 
-/// Implement `WindowAccess` for `RowMajorMatrix` treating it as a two-row window
-/// (first row = current, second row = next).
+/// Implement `WindowAccess` for `RowMajorMatrix` treating it as a two-row window (first row = current, second row = next).
+/// A zero-width matrix with no values represents two empty rows.
 ///
 /// # Panics
 ///
-/// Panics if the matrix does not have exactly 2 rows.
+/// Panics unless the matrix contains exactly `2 * width` values.
 impl<T: Clone + Send + Sync> WindowAccess<T> for RowMajorMatrix<T> {
     fn current_slice(&self) -> &[T] {
-        assert_eq!(
-            self.height(),
-            2,
-            "WindowAccess for RowMajorMatrix requires exactly 2 rows, got {}",
-            self.height()
-        );
         let values: &[T] = self.values.borrow();
+        assert_eq!(
+            values.len(),
+            2 * self.width,
+            "WindowAccess for RowMajorMatrix requires exactly 2 rows (2*{} values), got {} values",
+            self.width,
+            values.len()
+        );
         &values[..self.width]
     }
 
     fn next_slice(&self) -> &[T] {
-        assert_eq!(
-            self.height(),
-            2,
-            "WindowAccess for RowMajorMatrix requires exactly 2 rows, got {}",
-            self.height()
-        );
         let values: &[T] = self.values.borrow();
+        assert_eq!(
+            values.len(),
+            2 * self.width,
+            "WindowAccess for RowMajorMatrix requires exactly 2 rows (2*{} values), got {} values",
+            self.width,
+            values.len()
+        );
         &values[self.width..]
     }
 }

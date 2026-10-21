@@ -306,3 +306,121 @@ fn legacy_layout_helper_retains_builder_specialization() {
     assert!(concrete.base_indices.is_empty());
     assert_eq!(concrete.ext_indices, [0]);
 }
+
+#[test]
+fn zero_width_windows_match_symbolic_capture() {
+    fn eval<AB: PermutationAirBuilder<F = F, EF = EF>>(builder: &mut AB) {
+        assert!(builder.preprocessed().current_slice().is_empty());
+        assert!(builder.preprocessed().next_slice().is_empty());
+        assert!(builder.main().current_slice().is_empty());
+        assert!(builder.main().next_slice().is_empty());
+        assert!(builder.permutation().current_slice().is_empty());
+        assert!(builder.permutation().next_slice().is_empty());
+        builder.assert_zero(F::ZERO);
+        builder.assert_zero_ext(EF::ZERO);
+    }
+    let symbolic = capture_symbolic_constraints::<F, EF>(AirLayout::default(), eval);
+    let cheap = capture_constraint_layout::<F, EF>(AirLayout::default(), eval);
+    assert_eq!(cheap.base_indices, [0]);
+    assert_eq!(cheap.ext_indices, [1]);
+    assert_eq!(cheap.base_indices, symbolic.constraint_layout.base_indices);
+    assert_eq!(cheap.ext_indices, symbolic.constraint_layout.ext_indices);
+}
+
+#[test]
+fn layout_window_clones_share_storage() {
+    let builder = ConstraintLayoutBuilder::<F, EF>::new(layout());
+    let main = builder.main();
+    let main_clone = builder.main();
+    assert!(core::ptr::eq(
+        main.current_slice(),
+        main_clone.current_slice()
+    ));
+    let permutation = builder.permutation();
+    let permutation_clone = builder.permutation();
+    assert!(core::ptr::eq(
+        permutation.next_slice(),
+        permutation_clone.next_slice()
+    ));
+}
+
+#[test]
+fn seeded_assertion_sequences_match_symbolic_layouts() {
+    struct AssertionSequence(Vec<u8>);
+
+    impl BaseAir<F> for AssertionSequence {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: PermutationAirBuilder<F = F, EF = EF>> Air<AB> for AssertionSequence {
+        fn eval(&self, builder: &mut AB) {
+            for &action in &self.0 {
+                let zero = action & 2 != 0;
+                if action & 1 == 0 {
+                    let value: AB::Expr = if zero {
+                        F::ZERO.into()
+                    } else {
+                        builder.main().current(0).unwrap().into()
+                    };
+                    match (action >> 2) & 3 {
+                        0 => builder.assert_zero(value),
+                        1 => builder.when(F::ZERO).assert_zero(value),
+                        2 => builder.when(F::ONE).assert_zero(value),
+                        _ => builder.when_transition().assert_zero(value),
+                    }
+                } else {
+                    let value: AB::ExprEF = if zero {
+                        EF::ZERO.into()
+                    } else {
+                        builder.permutation().current(0).unwrap().into()
+                    };
+                    match (action >> 2) & 3 {
+                        0 => builder.assert_zero_ext(value),
+                        1 => builder.when(F::ZERO).assert_zero_ext(value),
+                        2 => builder.when(F::ONE).assert_zero_ext(value),
+                        _ => builder.when_transition().assert_zero_ext(value),
+                    }
+                }
+            }
+        }
+    }
+
+    let shape = AirLayout {
+        main_width: 1,
+        permutation_width: 1,
+        ..Default::default()
+    };
+    // Fixed seeds make randomized stream interleavings reproducible.
+    for seed in 0..64_u64 {
+        let mut state = seed;
+        let air = AssertionSequence(
+            (0..128)
+                .map(|_| {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    (state >> 32) as u8 & 15
+                })
+                .collect(),
+        );
+        let symbolic = capture_symbolic_constraints::<F, EF>(shape, |builder| air.eval(builder));
+        let symbolic = symbolic.constraint_layout;
+        let cheap = capture_constraint_layout::<F, EF>(shape, |builder| air.eval(builder));
+        assert_eq!(cheap.base_indices, symbolic.base_indices, "seed {seed}");
+        assert_eq!(cheap.ext_indices, symbolic.ext_indices, "seed {seed}");
+        assert_eq!(cheap.total_constraints(), air.0.len());
+    }
+}
+
+#[test]
+fn symbolic_windows_reject_malformed_row_storage() {
+    use p3_matrix::dense::RowMajorMatrix;
+
+    for (values, width) in [(vec![F::ZERO; 5], 2), (vec![F::ZERO], 0)] {
+        // Construct directly so the window check sees malformed public storage.
+        let mut window = RowMajorMatrix::new(vec![], width);
+        window.values = values;
+        assert!(std::panic::catch_unwind(|| window.current_slice()).is_err());
+        assert!(std::panic::catch_unwind(|| window.next_slice()).is_err());
+    }
+}
