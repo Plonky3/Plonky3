@@ -287,7 +287,7 @@ pub type BooleanTraceError<EF, MmcsError> =
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum BooleanTraceCommitmentError<E> {
-    /// Public opening shapes or counts cannot be represented without overflow.
+    /// Public opening shapes or counts overflow, or opening points fail validation.
     #[error("invalid Boolean trace opening protocol")]
     InvalidOpeningProtocol,
 
