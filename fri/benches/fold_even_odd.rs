@@ -9,6 +9,7 @@ use p3_fri::{FriFoldingStrategy, TwoAdicFriFolding};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
+use p3_verifier_arith::Native;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -80,11 +81,12 @@ fn bench_fold_row(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(FriFoldingStrategy::<F, EF>::fold_row(
                         &folding,
-                        black_box(73),
+                        &mut Native::new(),
+                        &black_box(73),
                         10,
                         log_arity,
                         black_box(beta),
-                        black_box(&evals).iter().copied(),
+                        black_box(&evals),
                     ))
                 });
             });

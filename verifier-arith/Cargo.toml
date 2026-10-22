@@ -1,0 +1,22 @@
+[package]
+name = "p3-verifier-arith"
+description = "The arithmetic a verifier is written over, so that one verifier runs natively or inside a circuit."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-field.workspace = true
+p3-util.workspace = true
+
+[dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
+
+proptest.workspace = true
+
+[lints]
+workspace = true

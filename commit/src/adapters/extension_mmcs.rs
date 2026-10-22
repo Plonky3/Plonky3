@@ -63,6 +63,11 @@ impl<F, EF, InnerMmcs> ExtensionMmcs<F, EF, InnerMmcs> {
             _phantom: PhantomData,
         }
     }
+
+    /// The base-field MMCS the extension rows are committed with.
+    pub const fn inner(&self) -> &InnerMmcs {
+        &self.inner
+    }
 }
 
 impl<F, EF, InnerMmcs> ExtensionMmcs<F, EF, InnerMmcs>
@@ -92,7 +97,40 @@ where
             .collect()
     }
 
-    fn check_widths<R: AsRef<[EF]>>(
+    /// The base-field dimensions of a multi-opening whose shape matches the extension dimensions.
+    ///
+    /// `opened_values[q][m]` is the row of matrix `m` opened by query `q`.
+    ///
+    /// # Errors
+    ///
+    /// When a query or matrix count, a row width, or a base width does not fit the dimensions.
+    pub fn multi_opening_shape<T, R: AsRef<[T]>>(
+        dimensions: &[Dimensions],
+        queries: usize,
+        opened_values: &[Vec<R>],
+    ) -> Result<Vec<Dimensions>, ExtensionMmcsError<InnerMmcs::Error>> {
+        if opened_values.len() != queries {
+            return Err(ExtensionMmcsError::WrongBatchSize {
+                expected: queries,
+                got: opened_values.len(),
+            });
+        }
+        for rows in opened_values {
+            if rows.len() != dimensions.len() {
+                return Err(ExtensionMmcsError::WrongBatchSize {
+                    expected: dimensions.len(),
+                    got: rows.len(),
+                });
+            }
+        }
+        let base_dimensions = Self::base_dimensions(dimensions)?;
+        for rows in opened_values {
+            Self::check_widths(dimensions, rows)?;
+        }
+        Ok(base_dimensions)
+    }
+
+    fn check_widths<T, R: AsRef<[T]>>(
         dimensions: &[Dimensions],
         rows: &[R],
     ) -> Result<(), ExtensionMmcsError<InnerMmcs::Error>> {
@@ -204,24 +242,7 @@ where
         opened_values: &[Vec<R>],
         proof: &Self::MultiProof,
     ) -> Result<(), Self::Error> {
-        if opened_values.len() != indices.len() {
-            return Err(ExtensionMmcsError::WrongBatchSize {
-                expected: indices.len(),
-                got: opened_values.len(),
-            });
-        }
-        for rows in opened_values {
-            if rows.len() != dimensions.len() {
-                return Err(ExtensionMmcsError::WrongBatchSize {
-                    expected: dimensions.len(),
-                    got: rows.len(),
-                });
-            }
-        }
-        let base_dimensions = Self::base_dimensions(dimensions)?;
-        for rows in opened_values {
-            Self::check_widths(dimensions, rows)?;
-        }
+        let base_dimensions = Self::multi_opening_shape(dimensions, indices.len(), opened_values)?;
         // Each extension row reinterprets as `EF::DIMENSION` base elements.
         // This layer always materializes owned base rows.
         let opened_base_values: Vec<Vec<Vec<F>>> = opened_values

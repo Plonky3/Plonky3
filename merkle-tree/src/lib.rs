@@ -15,7 +15,9 @@ mod packed_row_tests;
 
 pub use hiding_mmcs::*;
 pub use merkle_tree::MerkleTree;
-pub use mmcs::{MerkleTreeError, MerkleTreeMmcs, PrunedBatchOpening, PrunedProofError};
+pub use mmcs::{
+    MerkleTreeError, MerkleTreeMmcs, OpeningPlan, PlanLevel, PrunedBatchOpening, PrunedProofError,
+};
 pub use p3_symmetric::MerkleCap;
 pub use pruning::{MerkleAuthPath, PrunedMerklePaths};
 pub use storage::MerkleDigestStorage;

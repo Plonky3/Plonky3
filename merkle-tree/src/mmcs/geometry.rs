@@ -59,6 +59,28 @@ pub struct ArityAndPositions {
     pub query_positions: Vec<usize>,
 }
 
+/// How one opening folds into its cap entry, from the commitment's geometry alone.
+///
+/// The leaf digest hashes the rows of [`Self::leaf`], in order.
+///
+/// Each level compresses the running digest with its siblings, then hashes in the rows it injects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpeningPlan {
+    /// Matrices hashed into the leaf digest, in hashing order.
+    pub leaf: Vec<usize>,
+    /// The levels the proof walks, leaves first.
+    pub levels: Vec<PlanLevel>,
+}
+
+/// One level of an [`OpeningPlan`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanLevel {
+    /// Children compressed into one parent at this level.
+    pub arity: usize,
+    /// Matrices whose rows are hashed and compressed into the parent, in hashing order.
+    pub inject: Vec<usize>,
+}
+
 /// Validates that matrix heights lie on the binary height ladder.
 ///
 /// Higher arities also need every binary bridge to make progress.

@@ -5,6 +5,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_security::fri::FriRegime;
 use p3_security::grinding::GrindingSites;
+use p3_verifier_arith::Arith;
 
 /// A proving input cannot be folded with the configured terminal polynomial size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -234,15 +235,19 @@ pub trait FriFoldingStrategy<F: Field, EF: ExtensionField<F>> {
     fn extra_query_index_bits(&self) -> usize;
 
     /// Fold a row with the specified arity, returning a single value.
+    ///
     /// The input row has `2^log_arity` elements.
-    fn fold_row(
+    ///
+    /// `index` is the position of the folded value in the domain of size `2^log_height`.
+    fn fold_row<A: Arith<Val = F, Challenge = EF>>(
         &self,
-        index: usize,
+        arith: &mut A,
+        index: &A::Index,
         log_height: usize,
         log_arity: usize,
-        beta: EF,
-        evals: impl Iterator<Item = EF>,
-    ) -> EF;
+        beta: A::EF,
+        evals: &[A::EF],
+    ) -> A::EF;
 
     /// Fold an entire matrix with the specified arity.
     /// The matrix has width `2^log_arity` and the result has length `matrix.height()`.

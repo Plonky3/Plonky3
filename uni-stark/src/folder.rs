@@ -1,11 +1,12 @@
 use alloc::vec::Vec;
 
 use p3_air::{AirBuilder, ExtensionBuilder, RowWindow};
-use p3_field::{Algebra, BasedVectorSpace, Vectorized, VectorizedExt};
+use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing, Vectorized, VectorizedExt};
 use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::stack::ViewPair;
+use p3_matrix::stack::{VerticalPair, ViewPair};
+use p3_verifier_arith::Native;
 
-use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
+use crate::{ConstraintInputs, PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
 /// Vectorized base-field expression type used by [`VectorizedConstraintFolder`]:
 /// `N` packed vectors evaluated in lockstep.
@@ -339,6 +340,34 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolder<'_, SC>
     {
         self.ext_constraints.push(x.into());
         self.constraint_index += 1;
+    }
+}
+
+impl<'a, SC: StarkGenericConfig> VerifierConstraintFolder<'a, SC> {
+    /// A folder over native openings, with a zero accumulator.
+    pub fn new(inputs: &ConstraintInputs<'a, Native<Val<SC>, SC::Challenge>>) -> Self {
+        let main = VerticalPair::new(
+            RowMajorMatrixView::new_row(inputs.trace_local),
+            RowMajorMatrixView::new_row(inputs.trace_next),
+        );
+        let preprocessed = VerticalPair::new(
+            RowMajorMatrixView::new_row(inputs.preprocessed_local),
+            RowMajorMatrixView::new_row(inputs.preprocessed_next),
+        );
+        let preprocessed_window =
+            RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
+        Self {
+            main,
+            preprocessed,
+            preprocessed_window,
+            periodic_values: inputs.periodic_values,
+            public_values: inputs.public_values,
+            is_first_row: inputs.selectors.is_first_row,
+            is_last_row: inputs.selectors.is_last_row,
+            is_transition: inputs.selectors.is_transition,
+            alpha: inputs.alpha,
+            accumulator: SC::Challenge::ZERO,
+        }
     }
 }
 

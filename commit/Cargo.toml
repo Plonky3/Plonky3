@@ -20,6 +20,7 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+p3-verifier-arith.workspace = true
 
 itertools.workspace = true
 # The opening types derive their codecs, and they hold `Vec`s.

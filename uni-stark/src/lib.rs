@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+mod arith;
 mod config;
 mod error;
 mod folder;
@@ -15,6 +16,7 @@ mod symbolic;
 mod transcript;
 mod verifier;
 
+pub use arith::*;
 pub use config::*;
 pub use error::*;
 pub use folder::*;

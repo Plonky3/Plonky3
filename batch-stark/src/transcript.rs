@@ -70,7 +70,7 @@ use p3_challenger::fs::{
     Kind, Length, ProverState, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample, CanSampleBits, GrindingChallenger};
-use p3_field::{ExtensionField, PrimeField64};
+use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, PrimeField64};
 use p3_lookup::{
     Challenges, Kind as LookupKind, Lookup, LookupProtocol, assert_uniform_tuple_width,
 };
@@ -451,15 +451,15 @@ impl BatchShape {
 ///
 /// - When the gadget does not read exactly two challenges per lookup.
 /// - When two interactions sharing a global bus disagree on their payload width.
-fn lay_out_lookup_challenges<F, EF, LG, L>(
+pub(crate) fn lay_out_lookup_challenges<F, EF, LG, L>(
     all_lookups: &[L],
     lookup_gadget: &LG,
     alpha: EF,
     beta: EF,
 ) -> Vec<Vec<EF>>
 where
-    F: PrimeField64,
-    EF: ExtensionField<F>,
+    F: Field,
+    EF: PrimeCharacteristicRing,
     LG: LookupProtocol,
     L: AsRef<[Lookup<F>]>,
 {
@@ -536,7 +536,7 @@ where
         .map(|instance_buses| {
             instance_buses
                 .iter()
-                .flat_map(|&bus| [challenges.bus_prefix[bus], beta])
+                .flat_map(|&bus| [challenges.bus_prefix[bus].dup(), challenges.beta.dup()])
                 .collect()
         })
         .collect()
@@ -822,7 +822,9 @@ where
         }
     }
 
-    /// Replay the grind, redraw the lookup pair, and lay it out per instance.
+    /// Replay the grind and redraw the lookup pair, when the batch declares a lookup.
+    ///
+    /// The caller lays the pair out per instance.
     ///
     /// # Errors
     ///
@@ -830,16 +832,10 @@ where
     /// - The batch declares none and the proof carries one anyway.
     /// - The witness misses the difficulty its step requires.
     /// - The difficulty is zero and the witness is not the value a free search returns.
-    pub fn lookup_phase<LG, L>(
+    pub fn lookup_phase(
         &mut self,
-        all_lookups: &[L],
-        lookup_gadget: &LG,
         witness: Option<F>,
-    ) -> Result<Vec<Vec<EF>>, BatchTranscriptFailure>
-    where
-        LG: LookupProtocol,
-        L: AsRef<[Lookup<F>]>,
-    {
+    ) -> Result<Option<(EF, EF)>, BatchTranscriptFailure> {
         let bits = self.shape.lookup_pow_bits;
 
         if !self.shape.has_lookups() {
@@ -851,7 +847,7 @@ where
                 self.state.abort();
                 return Err(BatchTranscriptFailure::UnexpectedLookupPowWitness);
             }
-            return Ok(all_lookups.iter().map(|_| Vec::new()).collect());
+            return Ok(None);
         }
 
         // With no witness the described step cannot be replayed at all.
@@ -887,12 +883,7 @@ where
             .challenge_extension::<F, EF, FieldToFieldCodec<F>>(LOOKUP_BETA)
             .into_inner();
 
-        Ok(lay_out_lookup_challenges::<F, EF, LG, L>(
-            all_lookups,
-            lookup_gadget,
-            alpha,
-            beta,
-        ))
+        Ok(Some((alpha, beta)))
     }
 
     /// Replay the permutation commitment and every terminal, then redraw the folding challenge.
@@ -1178,7 +1169,7 @@ mod tests {
             BatchVerifierTranscript::<Ch, F, EF, [F; 8]>::new(&mut challenger, plain_shape());
 
         let err = transcript
-            .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), Some(F::ONE))
+            .lookup_phase(Some(F::ONE))
             .expect_err("a witness for a step that is never described must error");
 
         assert_eq!(err, BatchTranscriptFailure::UnexpectedLookupPowWitness);
@@ -1198,7 +1189,7 @@ mod tests {
             BatchVerifierTranscript::<Ch, F, EF, [F; 8]>::new(&mut challenger, shape);
 
         let err = transcript
-            .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), None)
+            .lookup_phase(None)
             .expect_err("a described grinding step with no witness must error");
 
         assert_eq!(
@@ -1225,7 +1216,7 @@ mod tests {
             BatchVerifierTranscript::<Ch, F, EF, [F; 8]>::new(&mut challenger, shape);
 
         let err = transcript
-            .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), Some(F::ONE))
+            .lookup_phase(Some(F::ONE))
             .expect_err("a nonzero witness at zero difficulty must error");
 
         assert_eq!(err, BatchTranscriptFailure::NonCanonicalLookupPowWitness);
@@ -1248,7 +1239,7 @@ mod tests {
         transcript.main_phase([F::ONE; 8], &[&[] as &[F], &[F::ONE]]);
         transcript.preprocessed_phase(None);
         transcript
-            .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), None)
+            .lookup_phase(None)
             .expect("a batch with no lookups replays with no witness");
         let _alpha = transcript.permutation_phase(None, &[]);
         transcript.quotient_phase([F::ZERO; 8], None);
@@ -1277,7 +1268,7 @@ mod tests {
         transcript.main_phase([F::ONE; 8], &[&[] as &[F], &[F::ONE]]);
         transcript.preprocessed_phase(None);
         transcript
-            .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), None)
+            .lookup_phase(None)
             .expect("a batch with no lookups replays with no witness");
         let _alpha = transcript.permutation_phase(None, &[]);
         transcript.quotient_phase([F::ZERO; 8], None);
@@ -1308,7 +1299,7 @@ mod tests {
         verifier.main_phase([F::ONE; 8], &public_values);
         verifier.preprocessed_phase(None);
         verifier
-            .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), None)
+            .lookup_phase(None)
             .expect("a batch with no lookups replays with no witness");
         let verifier_alpha = verifier.permutation_phase(None, &[]);
         verifier.quotient_phase([F::ZERO; 8], None);

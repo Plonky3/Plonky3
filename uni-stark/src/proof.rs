@@ -97,6 +97,28 @@ impl<Challenge> OpenedValues<Challenge> {
     pub fn preprocessed_next(&self) -> Option<&[Challenge]> {
         self.preprocessed.as_ref().and_then(|p| p.next.as_deref())
     }
+
+    /// The same openings with every value mapped through `f`, in field order.
+    pub fn map<T>(&self, mut f: impl FnMut(&Challenge) -> T) -> OpenedValues<T> {
+        let mut row = |values: &[Challenge]| values.iter().map(&mut f).collect::<Vec<T>>();
+        OpenedValues {
+            trace_local: row(&self.trace_local),
+            trace_next: self.trace_next.as_deref().map(&mut row),
+            preprocessed: self
+                .preprocessed
+                .as_ref()
+                .map(|p| PreprocessedOpenedValues {
+                    local: row(&p.local),
+                    next: p.next.as_deref().map(&mut row),
+                }),
+            quotient_chunks: self
+                .quotient_chunks
+                .iter()
+                .map(|chunk| row(chunk))
+                .collect(),
+            random: self.random.as_deref().map(row),
+        }
+    }
 }
 
 /// The wire layout of the openings, with the two preprocessed rows as separate optional fields.

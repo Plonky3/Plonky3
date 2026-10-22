@@ -1,7 +1,6 @@
 //! The [`Mmcs`] trait implementation: commit, then open and verify one index or many.
 
 use alloc::vec::Vec;
-use core::cmp::Reverse;
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use itertools::Itertools;
@@ -18,7 +17,6 @@ use crate::MerkleTreeError::{
     CapMismatch, EmptyBatch, IndexOutOfBounds, WrongBatchSize, WrongHeight,
 };
 use crate::builder::default_digest_layer;
-use crate::merkle_tree::padded_len;
 use crate::pruning::PrunedMerklePaths;
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 
@@ -335,8 +333,8 @@ where
         // Derive the arity schedule from verifier-known dimensions and the configured cap height.
         // Rejecting a wrong-length proof or cap here costs only integer work — no hashing yet.
         self.check_cap_size(commit, dimensions)?;
-        let arity_schedule = self.proof_arity_schedule(dimensions)?;
-        let expected_proof_len: usize = arity_schedule.iter().map(|step| step - 1).sum();
+        let plan = self.opening_plan(dimensions)?;
+        let expected_proof_len: usize = plan.levels.iter().map(|level| level.arity - 1).sum();
         if opening_proof.len() != expected_proof_len {
             return Err(WrongHeight {
                 expected_proof_len,
@@ -344,36 +342,24 @@ where
             });
         }
 
-        // The leaf hash flattens all rows at one height into a single stream,
-        // so row boundaries are only authenticated by checking each row width.
+        // Each opened row must match the width the verifier expects for its matrix.
         check_widths(dimensions, opened_values)?;
-
-        let mut heights_tallest_first = dimensions
-            .iter()
-            .enumerate()
-            .sorted_by_key(|(_, dims)| Reverse(dims.height))
-            .peekable();
-
-        // Leaf layer width before the walk starts, padded to a full N-ary group.
-        let mut curr_height_padded = padded_len(max_height, N);
 
         if index >= max_height {
             return Err(IndexOutOfBounds { max_height, index });
         }
 
-        // Hash all matrix openings at the current height.
-        let leaf_height_npt = max_height.next_power_of_two();
-        let mut digest: [PW::Value; DIGEST_ELEMS] = self.hash.hash_iter_slices(
-            heights_tallest_first
-                .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == leaf_height_npt)
-                .map(|(i, _)| opened_values[i].as_slice()),
-        );
+        // The leaf digest hashes every matrix the plan places in the leaf layer.
+        let mut digest: [PW::Value; DIGEST_ELEMS] = self
+            .hash
+            .hash_iter_slices(plan.leaf.iter().map(|&i| opened_values[i].as_slice()));
 
         let default_digest = [PW::Value::default(); DIGEST_ELEMS];
 
         let mut proof_pos: usize = 0;
 
-        for &step in &arity_schedule {
+        for level in &plan.levels {
+            let step = level.arity;
             let num_siblings = step - 1;
             let siblings = &opening_proof[proof_pos..proof_pos + num_siblings];
             proof_pos += num_siblings;
@@ -396,39 +382,19 @@ where
 
             digest = self.compress.compress(inputs);
             index /= step;
-            let logical_next = curr_height_padded / step;
-            curr_height_padded = padded_len(logical_next, N);
 
-            // Check if there are any new matrix rows to inject at the next height.
-            let logical_next_npt = logical_next.next_power_of_two();
-            let next_height = heights_tallest_first
-                .peek()
-                .map(|(_, dims)| dims.height)
-                .filter(|h| h.next_power_of_two() == logical_next_npt);
-            if let Some(next_height) = next_height {
-                let next_height_openings_digest = self.hash.hash_iter_slices(
-                    heights_tallest_first
-                        .peeking_take_while(|(_, dims)| dims.height == next_height)
-                        .map(|(i, _)| opened_values[i].as_slice()),
-                );
-
-                let inject_inputs: [_; N] = core::array::from_fn(|k| {
-                    if k == 0 {
-                        digest
-                    } else if k == 1 {
-                        next_height_openings_digest
-                    } else {
-                        default_digest
-                    }
+            // Hash in the rows the plan injects at the next height.
+            if !level.inject.is_empty() {
+                let injected_digest = self
+                    .hash
+                    .hash_iter_slices(level.inject.iter().map(|&i| opened_values[i].as_slice()));
+                let inject_inputs: [_; N] = core::array::from_fn(|k| match k {
+                    0 => digest,
+                    1 => injected_digest,
+                    _ => default_digest,
                 });
                 digest = self.compress.compress(inject_inputs);
             }
-        }
-
-        // Unreachable for validated dimensions: the schedule reaches every injection.
-        // Fail closed if this walk ever disagrees with the schedule.
-        if heights_tallest_first.peek().is_some() {
-            return Err(CapMismatch);
         }
 
         // After processing the proof, `index` has been shifted by the proof length.

@@ -14,6 +14,7 @@
 //! If we changed our domain construction (e.g., using multiple cosets), we would need to carefully reconsider these assumptions.
 
 use alloc::borrow::Cow;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 use core::fmt::Debug;
@@ -22,15 +23,14 @@ use core::marker::PhantomData;
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{
-    CommitmentOpening, Mmcs, OpenedValues, OpeningRequest, Pcs, PeriodicLdeTable,
-    UnivariateStarkPcs,
+    CommitmentOpening, MatrixOpening, Mmcs, MmcsArith, OpenedValues, OpeningRequest, Pcs,
+    PeriodicLdeTable, PointOpening, UnivariateStarkPcs,
 };
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, HornerIter, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
-    PrimeField64, TwoAdicField, batch_multiplicative_inverse, batch_multiplicative_inverse_map,
-    dot_product,
+    ExtensionField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, PrimeField64,
+    TwoAdicField, batch_multiplicative_inverse_map, dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -39,6 +39,7 @@ use p3_matrix::interpolation::{Interpolate, compute_adjusted_weights};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
+use p3_verifier_arith::{Arith, Lift, Native};
 use tracing::{debug_span, instrument};
 
 use crate::periodic::build_periodic_lde_table_two_adic;
@@ -79,6 +80,11 @@ impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
             forged_fold_schedule: None,
             _phantom: PhantomData,
         }
+    }
+
+    /// The commitment scheme of the committed matrices.
+    pub const fn mmcs(&self) -> &InputMmcs {
+        &self.mmcs
     }
 }
 
@@ -160,71 +166,16 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
         0
     }
 
-    fn fold_row(
+    fn fold_row<A: Arith<Val = F, Challenge = EF>>(
         &self,
-        index: usize,
+        arith: &mut A,
+        index: &A::Index,
         log_height: usize,
         log_arity: usize,
-        beta: EF,
-        mut evals: impl Iterator<Item = EF>,
-    ) -> EF {
-        let arity = 1 << log_arity;
-
-        // Compute this row's subgroup generator and bit-reversed exponent.
-        let subgroup_generator = F::two_adic_generator(log_height + log_arity);
-        let subgroup_power = reverse_bits_len(index, log_height) as u64;
-
-        if log_arity == 1 {
-            let subgroup_start = subgroup_generator.exp_u64(subgroup_power);
-            // The two interpolation points are `{s, -s}` for `s = subgroup_start`, so
-            //     f(beta) = (y_0 + y_1) / 2 + (y_0 - y_1) * beta / (2 s).
-            // This is the closed form used by the arity-2 kernel of `fold_matrix`.
-            let (lo, hi) = evals.next_tuple().expect("Expected 2 evaluations");
-            assert!(evals.next().is_none(), "Expected 2 evaluations");
-
-            let halve_inv_power = subgroup_start.double().inverse();
-            return (lo + hi).halve() + (lo - hi) * beta * halve_inv_power;
-        }
-
-        if matches!(log_arity, 2 | 3) {
-            // A subgroup order wider than u64 needs the original inversion path.
-            let subgroup_start_inv = 1u64
-                .checked_shl((log_height + log_arity) as u32)
-                .map_or_else(
-                    || subgroup_generator.exp_u64(subgroup_power).inverse(),
-                    |order| subgroup_generator.exp_u64(order - subgroup_power),
-                );
-
-            // The inverse FFT returns the coefficients of arity * p(s X), where s is the subgroup start.
-            // Horner evaluation at beta / s followed by division by arity therefore yields p(beta), with no allocation or extension-field inversion.
-            if log_arity == 2 {
-                let row = core::array::from_fn(|_| evals.next().expect("Expected 4 evaluations"));
-                assert!(evals.next().is_none(), "Expected 4 evaluations");
-                let [c0, c1, c2, c3] = ifft4(row, -F::two_adic_generator(2));
-                let x = beta * subgroup_start_inv;
-                return [c0, c1, c2].into_iter().horner_acc(c3, x) * F::ONE.halve().halve();
-            }
-
-            let row = core::array::from_fn(|_| evals.next().expect("Expected 8 evaluations"));
-            assert!(evals.next().is_none(), "Expected 8 evaluations");
-            let [c0, c1, c2, c3, c4, c5, c6, c7] = ifft8::<F, EF>(row);
-            let x = beta * subgroup_start_inv;
-            return [c0, c1, c2, c3, c4, c5, c6].into_iter().horner_acc(c7, x)
-                * F::ONE.halve().halve().halve();
-        }
-
-        let evals: Vec<_> = evals.collect();
-        assert_eq!(evals.len(), arity, "Expected {} evaluations", arity);
-
-        let subgroup_start = subgroup_generator.exp_u64(subgroup_power);
-        let mut xs: Vec<F> = F::two_adic_generator(log_arity)
-            .shifted_powers(subgroup_start)
-            .take(arity)
-            .collect();
-        reverse_slice_index_bits(&mut xs);
-
-        // Lagrange interpolation at beta
-        lagrange_interpolate_at(&xs, &evals, beta)
+        beta: A::EF,
+        evals: &[A::EF],
+    ) -> A::EF {
+        arith.fold_coset_row(index, log_height, log_arity, beta, evals)
     }
 
     #[instrument(skip_all, level = "debug")]
@@ -322,47 +273,6 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
             data
         }
     }
-}
-
-/// Unnormalized inverse FFT of four evaluations in bit-reversed order.
-/// The supplied inverse fourth root must belong to this transform's domain.
-#[inline]
-fn ifft4<F: TwoAdicField, EF: ExtensionField<F>>(
-    [y0, y2, y1, y3]: [EF; 4],
-    root_inv: F,
-) -> [EF; 4] {
-    let a0 = y0 + y2;
-    let a1 = y0 - y2;
-    let a2 = y1 + y3;
-    let a3 = (y1 - y3) * root_inv;
-    [a0 + a2, a1 + a3, a0 - a2, a1 - a3]
-}
-
-/// Unnormalized inverse FFT of eight evaluations in bit-reversed order.
-#[inline]
-fn ifft8<F: TwoAdicField, EF: ExtensionField<F>>(
-    [y0, y4, y2, y6, y1, y5, y3, y7]: [EF; 8],
-) -> [EF; 8] {
-    let root = F::two_adic_generator(3);
-    let root_squared = root.square();
-    // Derive every twiddle from this domain's root.
-    // A field need not choose its fourth root to be the square of its eighth root.
-    let fourth_root_inv = -root_squared;
-    let [b0, b1, b2, b3] = ifft4([y0, y4, y2, y6], fourth_root_inv);
-    let [b4, b5, b6, b7] = ifft4([y1, y5, y3, y7], fourth_root_inv);
-    let t1 = b5 * -(root_squared * root);
-    let t2 = b6 * fourth_root_inv;
-    let t3 = b7 * -root;
-    [
-        b0 + b4,
-        b1 + t1,
-        b2 + t2,
-        b3 + t3,
-        b0 - b4,
-        b1 - t1,
-        b2 - t2,
-        b3 - t3,
-    ]
 }
 
 /// Whether `fold_matrix` folds a matrix of `height` rows over a base field of `field_bits`
@@ -478,49 +388,150 @@ where
     folded
 }
 
-/// Lagrange interpolation: given points `(xs[i], ys[i])`, evaluate at z.
-///
-/// Uses the barycentric formula for efficiency when xs are roots of unity.
-fn lagrange_interpolate_at<F: TwoAdicField, EF: ExtensionField<F>>(
-    xs: &[F],
-    ys: &[EF],
-    z: EF,
-) -> EF {
-    debug_assert_eq!(xs.len(), ys.len());
-    let n = xs.len();
+impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
+where
+    Val: TwoAdicField + PrimeField64,
+{
+    /// Verifies an opening argument within an arithmetic.
+    ///
+    /// The claims are lifted into the arithmetic.
+    ///
+    /// The native transcript replays them, so both sides absorb the same values in the same order.
+    ///
+    /// # Errors
+    ///
+    /// When the opening argument does not verify.
+    #[allow(clippy::type_complexity)]
+    pub fn verify_in<A, Challenger>(
+        &self,
+        arith: &mut A,
+        commitments_with_opening_points: &[CommitmentOpening<
+            A::EF,
+            <InputMmcs as MmcsArith<A, A::F>>::Target,
+            TwoAdicMultiplicativeCoset<Val>,
+        >],
+        proof: &FriProof<A::Challenge, FriMmcs, Val, Vec<BatchMultiOpening<Val, InputMmcs>>>,
+        challenger: &mut Challenger,
+    ) -> Result<
+        (),
+        FriError<<FriMmcs as MmcsArith<A, A::EF>>::Error, <InputMmcs as MmcsArith<A, A::F>>::Error>,
+    >
+    where
+        A: Lift<Val = Val, F: Clone, EF: Clone>,
+        InputMmcs: Mmcs<Val, MultiProof: Sync>
+            + MmcsArith<
+                A,
+                A::F,
+                Commitment = <InputMmcs as Mmcs<Val>>::Commitment,
+                MultiProof = <InputMmcs as Mmcs<Val>>::MultiProof,
+                Error: Sync,
+            >,
+        FriMmcs: Mmcs<A::Challenge>
+            + MmcsArith<
+                A,
+                A::EF,
+                Commitment = <FriMmcs as Mmcs<A::Challenge>>::Commitment,
+                MultiProof = <FriMmcs as Mmcs<A::Challenge>>::MultiProof,
+            >,
+        Challenger: FieldChallenger<Val>
+            + CanObserve<<FriMmcs as Mmcs<A::Challenge>>::Commitment>
+            + GrindingChallenger<Witness = Val>,
+    {
+        // A zero grinding budget leaves the witness unread, so its value is pinned here instead.
+        //
+        //     bits = 0 -> prover emits zero, verifier reads nothing -> pin the field here
+        //     bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
+        //
+        // The FRI verifier repeats the check for the two phases it owns.
+        verifier::check_canonical_pow_witnesses(&self.fri, proof)?;
 
-    if n == 0 {
-        return EF::ZERO;
-    }
-
-    // If z equals one of the interpolation points, return early.
-    for i in 0..n {
-        if (z - xs[i]).is_zero() {
-            return ys[i];
+        // The native view of the claims, for the native transcript to replay.
+        //
+        // Each claimed value is announced in the order the transcript absorbs it.
+        let native_claims: Vec<
+            CommitmentOpening<A::Challenge, (), TwoAdicMultiplicativeCoset<Val>>,
+        > = commitments_with_opening_points
+            .iter()
+            .map(|claim| CommitmentOpening {
+                commitment: (),
+                matrices: claim
+                    .matrices
+                    .iter()
+                    .map(|matrix| MatrixOpening {
+                        domain: matrix.domain,
+                        points: matrix
+                            .points
+                            .iter()
+                            .map(|opening| PointOpening {
+                                point: arith.value_ext(&opening.point),
+                                values: opening
+                                    .values
+                                    .iter()
+                                    .map(|value| {
+                                        arith.will_observe_ext(value);
+                                        arith.value_ext(value)
+                                    })
+                                    .collect(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        if self.fri.batch_proof_of_work_bits > 0 {
+            let witness = arith.load(proof.batch_pow_witness);
+            arith.will_observe(vec![witness]);
         }
+
+        // Describe the transcript from the claims, which are this verifier's own input.
+        //
+        // The prover built the identical description from the matrices it opened.
+        let mut transcript = arith.seeding(|| {
+            PcsVerifierTranscript::<Challenger, Val, A::Challenge>::new(
+                challenger,
+                PcsShape::from_claims(&self.fri, &native_claims),
+            )
+        });
+
+        // Replay every claimed evaluation, in commitment, matrix and point order.
+        //
+        // A failure poisons the driver on its way out, so dropping it here is silent.
+        transcript.claimed_openings(&native_claims)?;
+
+        // Replay the grind and redraw the challenge that batches the claims.
+        let alpha = transcript.batch_phase(Some(proof.batch_pow_witness))?;
+        let alpha = arith.sampled_ext(alpha);
+
+        let folding: TwoAdicFriFolding<
+            Vec<BatchMultiOpening<Val, InputMmcs>>,
+            <InputMmcs as MmcsArith<A, A::F>>::Error,
+        > = TwoAdicFriFolding(PhantomData);
+
+        // Run the low-degree test inside the bracket, lending it the sponge.
+        //
+        // Invariant: the bracket closes whichever way the delegated run goes.
+        //
+        //     delegate  -> Begin, run, End      (End is recorded on any outcome)
+        //     finish    -> every described step replayed
+        //     rejection -> propagated afterwards, never across an unfinished driver
+        let result = transcript.delegate(|challenger| {
+            verifier::verify_fri(
+                arith,
+                &folding,
+                &self.fri,
+                proof,
+                challenger,
+                commitments_with_opening_points,
+                &self.mmcs,
+                alpha,
+            )
+        });
+
+        // Every described step has now been replayed.
+        transcript.finish();
+
+        result
     }
-
-    let log_n = log2_strict_usize(n);
-
-    // All xs lie in a coset of the 2^log_n roots of unity.
-    let coset_power = xs[0].exp_power_of_2(log_n);
-    let weight_scale = (F::from_usize(n) * coset_power).inverse();
-
-    // Compute (z - x_i)^{-1} as a batch inversion
-    let diffs: Vec<_> = xs.iter().map(|&x| z - x).collect();
-    let diff_invs = batch_multiplicative_inverse(&diffs);
-
-    // Compute L(z) = prod_i (z - x_i)
-    let l_z = diffs.iter().copied().product::<EF>();
-
-    // Barycentric formula: sum_i (w_i * y_i / (z - x_i))
-    // where w_i = 1 / prod_{j != i} (x_i - x_j) = x_i * weight_scale.
-    let mut result = EF::ZERO;
-    for ((&x, &y), &diff_inv) in xs.iter().zip(ys).zip(diff_invs.iter()) {
-        let weight = x * weight_scale;
-        result += y * weight * diff_inv;
-    }
-    result * l_z
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
@@ -953,56 +964,12 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        // A zero grinding budget leaves the witness unread, so every field is pinned here
-        // rather than by its grind.
-        //
-        //     bits = 0 -> prover emits zero, verifier reads nothing -> pin the field here
-        //     bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
-        //
-        // The FRI verifier repeats the check for the two phases it owns.
-        verifier::check_canonical_pow_witnesses(&self.fri, proof)?;
-
-        // Describe the transcript from the claims, which are this verifier's own input.
-        //
-        // The prover built the identical description from the matrices it opened.
-        let mut transcript = PcsVerifierTranscript::<Challenger, Val, Challenge>::new(
+        self.verify_in(
+            &mut Native::new(),
+            &commitments_with_opening_points,
+            proof,
             challenger,
-            PcsShape::from_claims(&self.fri, &commitments_with_opening_points),
-        );
-
-        // Replay every claimed evaluation, in commitment, matrix and point order.
-        //
-        // A failure poisons the driver on its way out, so dropping it here is silent.
-        transcript.claimed_openings(&commitments_with_opening_points)?;
-
-        // Replay the grind and redraw the challenge that batches the claims.
-        let alpha = transcript.batch_phase(Some(proof.batch_pow_witness))?;
-
-        let folding: TwoAdicFriFoldingForMmcs<Val, InputMmcs> = TwoAdicFriFolding(PhantomData);
-
-        // Run the low-degree test inside the bracket, lending it the sponge.
-        //
-        // Invariant: the bracket closes whichever way the delegated run goes.
-        //
-        //     delegate  -> Begin, run, End      (End is recorded on any outcome)
-        //     finish    -> every described step replayed
-        //     rejection -> propagated afterwards, never across an unfinished driver
-        let result = transcript.delegate(|challenger| {
-            verifier::verify_fri(
-                &folding,
-                &self.fri,
-                proof,
-                challenger,
-                &commitments_with_opening_points,
-                &self.mmcs,
-                alpha,
-            )
-        });
-
-        // Every described step has now been replayed.
-        transcript.finish();
-
-        result
+        )
     }
 }
 
@@ -1172,7 +1139,7 @@ mod tests {
     use p3_commit::ExtensionMmcs;
     use p3_dft::Radix2Dit;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_field::{Field, PrimeCharacteristicRing, batch_multiplicative_inverse};
     use p3_goldilocks::Goldilocks;
     use p3_matrix::dense::RowMajorMatrixView;
     use p3_merkle_tree::MerkleTreeMmcs;
@@ -1611,32 +1578,38 @@ mod tests {
         }
     }
 
-    /// `fold_row`'s arity-2 closed form must agree with the generic barycentric path.
+    /// `fold_row` evaluates the interpolant of the row at `beta`, for every arity it supports.
     #[test]
-    fn fold_row_arity_two_matches_lagrange_interpolation() {
+    fn fold_row_matches_lagrange_interpolation() {
         let mut rng = SmallRng::seed_from_u64(0);
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
-        for log_height in 0..6 {
-            for index in 0..(1 << log_height) {
-                let beta: EF = rng.random();
-                let evals: [EF; 2] = [rng.random(), rng.random()];
+        for log_arity in 1..=4 {
+            for log_height in 0..5 {
+                for index in 0..(1 << log_height) {
+                    let beta: EF = rng.random();
+                    let evals: Vec<EF> = (0..1 << log_arity).map(|_| rng.random()).collect();
 
-                // The interpolation points the generic path would build for this row.
-                let subgroup_start = F::two_adic_generator(log_height + 1)
-                    .exp_u64(reverse_bits_len(index, log_height) as u64);
-                let xs = [subgroup_start, -subgroup_start];
-                let expected = lagrange_interpolate_at(&xs, &evals, beta);
+                    // The row's points, in the bit-reversed order the prover commits them.
+                    let start = F::two_adic_generator(log_height + log_arity)
+                        .exp_u64(reverse_bits_len(index, log_height) as u64);
+                    let mut xs: Vec<F> = F::two_adic_generator(log_arity)
+                        .shifted_powers(start)
+                        .take(1 << log_arity)
+                        .collect();
+                    reverse_slice_index_bits(&mut xs);
 
-                let folded = FriFoldingStrategy::<F, EF>::fold_row(
-                    &folding,
-                    index,
-                    log_height,
-                    1,
-                    beta,
-                    evals.into_iter(),
-                );
-                assert_eq!(folded, expected);
+                    let folded = FriFoldingStrategy::<F, EF>::fold_row(
+                        &folding,
+                        &mut Native::new(),
+                        &index,
+                        log_height,
+                        log_arity,
+                        beta,
+                        &evals,
+                    );
+                    assert_eq!(folded, lagrange_interpolate_at(&xs, &evals, beta));
+                }
             }
         }
     }
@@ -1688,11 +1661,12 @@ mod tests {
                             assert_eq!(
                                 FriFoldingStrategy::<Base, Ext>::fold_row(
                                     &folding,
-                                    index,
+                                    &mut Native::new(),
+                                    &index,
                                     log_height,
                                     log_arity,
                                     beta,
-                                    evals.iter().copied(),
+                                    &evals,
                                 ),
                                 expected,
                                 "log_arity={log_arity}, log_height={log_height}, index={index}",
@@ -1713,20 +1687,66 @@ mod tests {
         for log_arity in 1..=4 {
             let arity = 1 << log_arity;
             for len in (0..=arity + 2).filter(|&len| len != arity) {
-                // Filter hides the exact size, so validation cannot rely on a size hint.
+                let evals = vec![EF::ONE; len];
                 let result = std::panic::catch_unwind(|| {
                     FriFoldingStrategy::<F, EF>::fold_row(
                         &folding,
-                        0,
+                        &mut Native::new(),
+                        &0,
                         0,
                         log_arity,
                         EF::ZERO,
-                        (0..len).filter(|_| true).map(|_| EF::ONE),
+                        &evals,
                     )
                 });
                 assert!(result.is_err(), "log_arity={log_arity}, len={len}");
             }
         }
+    }
+
+    /// Lagrange interpolation: given points `(xs[i], ys[i])`, evaluate at z.
+    ///
+    /// Uses the barycentric formula for efficiency when xs are roots of unity.
+    fn lagrange_interpolate_at<F: TwoAdicField, EF: ExtensionField<F>>(
+        xs: &[F],
+        ys: &[EF],
+        z: EF,
+    ) -> EF {
+        debug_assert_eq!(xs.len(), ys.len());
+        let n = xs.len();
+
+        if n == 0 {
+            return EF::ZERO;
+        }
+
+        // If z equals one of the interpolation points, return early.
+        for i in 0..n {
+            if (z - xs[i]).is_zero() {
+                return ys[i];
+            }
+        }
+
+        let log_n = log2_strict_usize(n);
+
+        // All xs lie in a coset of the 2^log_n roots of unity.
+        let coset_power = xs[0].exp_power_of_2(log_n);
+        let weight_scale = (F::from_usize(n) * coset_power).inverse();
+
+        // Compute (z - x_i)^{-1} as a batch inversion
+        let diffs: Vec<_> = xs.iter().map(|&x| z - x).collect();
+        let diff_invs = batch_multiplicative_inverse(&diffs);
+
+        // Compute L(z) = prod_i (z - x_i)
+        let l_z = diffs.iter().copied().product::<EF>();
+
+        // Barycentric formula: sum_i (w_i * y_i / (z - x_i))
+        // where w_i = 1 / prod_{j != i} (x_i - x_j) = x_i * weight_scale.
+        let mut result = EF::ZERO;
+        for ((&x, &y), &diff_inv) in xs.iter().zip(ys).zip(diff_invs.iter()) {
+            let weight = x * weight_scale;
+            result += y * weight * diff_inv;
+        }
+        result * l_z
     }
 
     /// `fold_matrix` folds row `i` of its input exactly as `fold_row` folds that row on its own,
@@ -1773,9 +1793,15 @@ mod tests {
                 assert_eq!(folded.len(), m.height());
 
                 for (index, &expected) in folded.iter().enumerate() {
-                    let row = m.row(index).unwrap().into_iter();
+                    let row: Vec<Ext> = m.row(index).unwrap().into_iter().collect();
                     let folded_row = FriFoldingStrategy::<Base, Ext>::fold_row(
-                        &folding, index, log_height, log_arity, beta, row,
+                        &folding,
+                        &mut Native::new(),
+                        &index,
+                        log_height,
+                        log_arity,
+                        beta,
+                        &row,
                     );
                     assert_eq!(folded_row, expected);
                 }

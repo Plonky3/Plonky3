@@ -27,6 +27,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_security::grinding::{GrindingBudget, GrindingSites, RecordedGrind};
 use p3_uni_stark::{InvalidProofShapeError, OpeningShape, PeriodicColumnShapeError};
 use p3_util::log2_strict_usize;
+use p3_verifier_arith::Native;
 
 const TWO_ADIC_FIXTURE: &str = "tests/fixtures/batch_stark_two_adic_v0_8_0.postcard";
 const CIRCLE_FIXTURE: &str = "tests/fixtures/batch_stark_circle_v0_8_0.postcard";
@@ -1793,11 +1794,16 @@ fn test_batch_degree_bits_below_circle_pcs_minimum_rejected() {
     //
     // It re-derives every trace domain from the claimed heights, so it applies the same bound.
     // The heights are rejected before any of the later arguments are read.
-    let err = commitments_with_opening_points::<CircleConfig, _>(
+    let err = commitments_with_opening_points(
+        &mut Native::new(),
         &config,
         &airs,
-        CircleChallenge::ZERO,
+        &CircleChallenge::ZERO,
         &proof.commitments,
+        common
+            .preprocessed
+            .as_ref()
+            .map(|global| &global.commitment),
         &proof.opened_values,
         common,
         &proof.degree_bits,
@@ -3875,10 +3881,15 @@ fn opening_helper_rejects_mismatched_instance_counts() {
         let chunks = if collection == 4 { vec![] } else { vec![0] };
         let common = p3_batch_stark::CommonData::empty(if collection == 5 { 0 } else { 1 });
         let result = commitments_with_opening_points(
+            &mut Native::new(),
             &config,
             &airs,
-            Challenge::from(Val::from_u64(11)),
+            &Challenge::from(Val::from_u64(11)),
             &commitments,
+            common
+                .preprocessed
+                .as_ref()
+                .map(|global| &global.commitment),
             &opened,
             &common,
             &degrees,
@@ -3910,10 +3921,12 @@ fn opening_helper_rejects_missing_or_short_next_rows() {
         let (commitments, mut opened) = opening_helper_inputs();
         opened.instances[0].base_opened_values.trace_next = next;
         let result = commitments_with_opening_points(
+            &mut Native::new(),
             &config,
             &[air],
-            Challenge::from(Val::from_u64(11)),
+            &Challenge::from(Val::from_u64(11)),
             &commitments,
+            None,
             &opened,
             &p3_batch_stark::CommonData::empty(1),
             &[3],
@@ -3943,10 +3956,12 @@ fn opening_helper_rejects_random_openings_without_zk() {
     for random in [None, Some(vec![Challenge::ONE; 4])] {
         opened.instances[0].base_opened_values.random = random;
         let result = commitments_with_opening_points(
+            &mut Native::new(),
             &config,
             &[air],
-            Challenge::from(Val::from_u64(11)),
+            &Challenge::from(Val::from_u64(11)),
             &commitments,
+            None,
             &opened,
             &p3_batch_stark::CommonData::empty(1),
             &[3],
@@ -3971,10 +3986,12 @@ fn opening_helper_accepts_well_shaped_inputs() {
     };
     let (commitments, opened) = opening_helper_inputs();
     let (claims, domains, preprocessed_index) = commitments_with_opening_points(
+        &mut Native::new(),
         &config,
         &[air],
-        Challenge::from(Val::from_u64(11)),
+        &Challenge::from(Val::from_u64(11)),
         &commitments,
+        None,
         &opened,
         &p3_batch_stark::CommonData::empty(1),
         &[3],
@@ -4000,10 +4017,12 @@ fn opening_helper_rejects_missing_zk_random_openings() {
     for random in [None, Some(vec![Challenge::ONE])] {
         opened.instances[0].base_opened_values.random = random;
         let result = commitments_with_opening_points(
+            &mut Native::new(),
             &config,
             &[air],
-            Challenge::from(Val::from_u64(11)),
+            &Challenge::from(Val::from_u64(11)),
             &commitments,
+            None,
             &opened,
             &p3_batch_stark::CommonData::empty(1),
             &[4],
@@ -4057,10 +4076,15 @@ fn opening_helper_rejects_invalid_preprocessed_metadata() {
         let width = if case == 3 { 2 } else { 1 };
         let degree = if case == 4 { 4 } else { 3 };
         let result = commitments_with_opening_points(
+            &mut Native::new(),
             &config,
             &[air],
-            Challenge::from(Val::from_u64(11)),
+            &Challenge::from(Val::from_u64(11)),
             &commitments,
+            common
+                .preprocessed
+                .as_ref()
+                .map(|global| &global.commitment),
             &opened,
             &common,
             &[degree],
@@ -4110,10 +4134,15 @@ fn opening_helper_rejects_missing_or_short_preprocessed_next_rows() {
             vec![Default::default()],
         );
         let result = commitments_with_opening_points(
+            &mut Native::new(),
             &config,
             &[air],
-            Challenge::from(Val::from_u64(11)),
+            &Challenge::from(Val::from_u64(11)),
             &commitments,
+            common
+                .preprocessed
+                .as_ref()
+                .map(|global| &global.commitment),
             &opened,
             &common,
             &[3],
@@ -4167,10 +4196,15 @@ fn opening_helper_and_verify_batch_agree_on_missing_preprocessed_opening() {
         .len()
         .ilog2() as usize;
     let helper_result = commitments_with_opening_points(
+        &mut Native::new(),
         &config,
         from_ref(&air),
-        Challenge::from(Val::from_u64(11)),
+        &Challenge::from(Val::from_u64(11)),
         &proof.commitments,
+        data.common
+            .preprocessed
+            .as_ref()
+            .map(|global| &global.commitment),
         &proof.opened_values,
         &data.common,
         &proof.degree_bits,
