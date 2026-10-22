@@ -10,7 +10,6 @@
 //!
 //! Public words add `L (1 + log_instances + 63 + p) / |E|`, `2^p` words the region they lie in.
 
-mod fold;
 mod prover;
 mod sumcheck;
 mod transcript;
@@ -25,7 +24,6 @@ use p3_challenger::fs::TranscriptError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub(crate) use self::fold::partial_fold;
 pub use self::prover::{prove, prove_folded};
 pub use self::verifier::verify;
 use crate::point::{QuirkyClaim, QuirkyPoint};

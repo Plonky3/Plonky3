@@ -16,6 +16,7 @@ mod tests;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_binary_field::fold_rows;
 use p3_challenger::CanObserve;
 use p3_challenger::fs::{DomainSeparator, FieldUnit, InteractionPattern};
 use p3_field::PrimeCharacteristicRing;
@@ -27,9 +28,8 @@ use p3_util::log2_strict_usize;
 use thiserror::Error;
 
 use crate::circuit::Port;
-use crate::lincheck::partial_fold;
 use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
-use crate::{Batch, Challenge, Val, Witness};
+use crate::{Batch, Challenge, Val};
 
 /// Instances a statement chunk hashes on its own.
 const DIGEST_INSTANCES: usize = 1 << 10;
@@ -213,23 +213,18 @@ impl PublicPorts {
         }
     }
 
-    /// Check the ports against a batch, then against the witness of every instance.
+    /// Check the ports against a batch, then against the witness bits of every instance.
     ///
     /// # Errors
     ///
     /// The ports do not fit the batch, or an instance disagrees with its public words.
-    pub(crate) fn check_witness(
-        &self,
-        batch: &Batch<'_>,
-        witness: &Witness,
-    ) -> Result<(), PortsError> {
+    pub(crate) fn check_words(&self, batch: &Batch<'_>, z: &[u64]) -> Result<(), PortsError> {
         self.check(batch)?;
         if self.is_empty() {
             return Ok(());
         }
         let instance_words = 1 << (batch.circuit().k_log() - K_SKIP);
-        let mismatch = witness
-            .z()
+        let mismatch = z
             .par_chunks_exact(instance_words)
             .zip(self.values.par_chunks_exact(self.stride))
             .enumerate()
@@ -245,10 +240,12 @@ impl PublicPorts {
 
     /// Bind the whole statement into the sponge, before any challenge: the circuit and the public words' digest.
     ///
+    /// A batch proved on a shared commitment binds here before the commitment.
+    ///
     /// # Errors
     ///
     /// The ports do not fit the batch.
-    pub(crate) fn bind<C: CanObserve<Val>>(
+    pub fn bind<C: CanObserve<Val>>(
         &self,
         batch: &Batch<'_>,
         challenger: &mut C,
@@ -288,7 +285,7 @@ impl PublicPorts {
         region: &[Challenge],
     ) -> Challenge {
         let eq_outer = Poly::new_from_point(outer, Challenge::ONE);
-        let folded = partial_fold(
+        let folded = fold_rows(
             &self.values,
             log2_strict_usize(self.stride) + K_SKIP,
             SKIP_SIZE * self.words.len(),

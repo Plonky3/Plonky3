@@ -15,6 +15,8 @@ criterion.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+# Expose the scalar model of the byte-sliced register, for tests of kernels written against it.
+test-utils = []
 
 # Select eight polynomial-field lanes on AVX-512 builds for throughput-oriented row kernels.
 wide-poly = []
@@ -46,6 +48,10 @@ harness = false
 
 [[bench]]
 name = "bitslice"
+harness = false
+
+[[bench]]
+name = "fixed_base"
 harness = false
 
 [lints]

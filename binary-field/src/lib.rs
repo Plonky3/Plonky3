@@ -5,11 +5,13 @@ extern crate alloc;
 
 mod aes;
 mod bitslice;
+pub mod byteslice;
 mod cantor;
 mod challenger;
 mod clmul;
 mod coordinates;
 mod extension;
+mod fold_rows;
 mod gf2;
 mod ghash;
 mod linear;
@@ -33,6 +35,7 @@ pub use bitslice::{
 };
 pub use challenger::BinaryChallenger;
 pub use coordinates::BitCoordinates;
+pub use fold_rows::fold_rows;
 pub use gf2::Gf2;
 pub use ghash::Ghash128;
 #[cfg(any(
