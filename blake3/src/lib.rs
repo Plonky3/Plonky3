@@ -11,16 +11,22 @@
 //! On x86-64 the batched path picks AVX-512, AVX2 or SSE2 at run time, the widest the CPU has.
 //!
 //! Other targets pick at build time: NEON on AArch64, SIMD128 on wasm32, and one lane elsewhere.
+//!
+//! Raw single-block compression is available through [`compress_raw`],
+//! [`compress_raw_xof`], and [`compress_raw_packed`].
 
 #![no_std]
 
 #[cfg(test)]
 extern crate alloc;
 #[cfg(test)]
+mod raw_tests;
+#[cfg(test)]
 mod tests;
 
 mod batch;
 
+pub use batch::raw::{compress_raw, compress_raw_packed, compress_raw_xof};
 use blake3::{CHUNK_LEN, OUT_LEN};
 use p3_symmetric::CryptographicHasher;
 
