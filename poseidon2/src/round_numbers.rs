@@ -30,6 +30,7 @@ use thiserror::Error;
 
 /// Reasons the precomputed 128-bit Poseidon2 round table cannot serve a parameter set.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum Poseidon2RoundNumbersError {
     /// The S-box exponent does not define a permutation of the field.
     #[error(

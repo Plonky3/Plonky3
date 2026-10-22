@@ -5,6 +5,7 @@ use thiserror::Error;
 
 /// A challenge field too small for the lift, or a failed multiplication reduction.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IntegerMulError {
     /// The multiplicative group is too small to hold a full-width product without collisions.
     #[error("a challenge field of order below 2^{required} cannot lift {required}-bit products")]

@@ -28,6 +28,7 @@ pub(crate) const TABLE_ROWS: usize = 1 << CHUNK_BITS;
 
 /// Reasons the extension table cannot be built.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CompressedLdeError {
     /// The subspace holds fewer points than one chunk covers bits.
     ///

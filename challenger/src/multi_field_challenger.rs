@@ -48,6 +48,7 @@ where
 
 /// Why a multi-field challenger cannot be constructed.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MultiField32ChallengerError {
     /// The transcript field cannot injectively encode values from the sampled field.
     #[error(

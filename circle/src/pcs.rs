@@ -78,6 +78,7 @@ pub struct CircleInputProof<
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum InputError<InputMmcsError, FriMmcsError>
 where
     InputMmcsError: core::fmt::Debug,

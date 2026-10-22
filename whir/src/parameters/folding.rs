@@ -11,6 +11,7 @@ const MAX_NUM_VARIABLES_TO_SEND_COEFFS: usize = 6;
 
 /// Errors that can occur when validating a folding factor.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FoldingFactorError {
     /// The folding factor is larger than the number of variables.
     #[error(

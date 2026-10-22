@@ -569,6 +569,7 @@ impl GrindingBudget {
 ///
 /// Every variant names the site, and both numbers wherever there are two.
 #[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GrindingMismatch {
     /// A step is described at a difficulty the model does not credit.
     #[error(

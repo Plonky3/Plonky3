@@ -550,6 +550,7 @@ pub struct LookupTerminal<F>(pub F);
 
 /// Lookup verification error.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LookupError {
     /// Two tuples on one bus declare different payload widths.
     ///

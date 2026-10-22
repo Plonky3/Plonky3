@@ -11,6 +11,7 @@ use thiserror::Error;
 
 /// Why a proof payload cannot be bounded.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProofShapeError {
     /// The commitment backend does not describe its payload geometry.
     #[error("the MMCS does not support proof payload bounds for this geometry")]

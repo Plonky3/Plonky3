@@ -80,6 +80,7 @@ fn example_circle_parameters<EF: Field, M>(mmcs: M) -> FriParameters<M> {
 
 /// Distinguishes a rejected proving budget from a rejected proof.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ProofRunError<P, V> {
     /// Proof generation rejected its configuration or opening budget.
     #[error("proof generation failed: {0}")]

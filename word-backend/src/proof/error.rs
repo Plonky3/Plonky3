@@ -8,6 +8,7 @@ use crate::{IntegerMulError, ShiftReductionError};
 
 /// A malformed statement or a failed word-level proof.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WordProofError<E> {
     /// The commitment is too narrow to hold the padded bit trace.
     #[error("the commitment spans {actual} variables, short of the {expected} the trace needs")]

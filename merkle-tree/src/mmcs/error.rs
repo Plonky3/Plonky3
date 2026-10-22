@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Errors that may arise during Merkle tree commitment, opening, or verification.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum MerkleTreeError {
     /// The number of openings provided does not match the expected number.
     #[error("batch size mismatch: expected {expected} entries, got {got}")]
@@ -101,6 +102,7 @@ pub enum MerkleTreeError {
 ///
 /// Each variant pins one failure mode with its diagnostic fields.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PrunedProofError {
     /// The flat sibling list does not match the frontier the query set implies.
     ///

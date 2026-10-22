@@ -147,6 +147,8 @@ where
                     expected,
                     actual,
                 },
+                // Future mismatch kinds must still reject the opening protocol.
+                _ => BooleanTraceCommitmentError::InvalidOpeningProtocol,
             })?;
         Ok(placements)
     }

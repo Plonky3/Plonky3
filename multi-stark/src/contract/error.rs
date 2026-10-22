@@ -9,6 +9,7 @@ use crate::verifier::VerificationError;
 
 /// Why a declaration or a run of it is not usable.
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[non_exhaustive]
 pub enum DeclarationError {
     /// A statement with no tables proves nothing.
     #[error("a statement must declare at least one table")]
@@ -127,6 +128,7 @@ pub enum DeclarationError {
 
 /// Why a byte string is not an acceptable proof for a statement.
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
+#[non_exhaustive]
 pub enum EnvelopeError {
     /// The run does not belong to the statement it was used with.
     #[error("declaration: {0}")]
@@ -220,6 +222,7 @@ pub enum EnvelopeError {
 
 /// Why a sealed proof was not accepted.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SealedVerificationError<E: Debug> {
     /// The byte string never became a proof.
     #[error("envelope: {0}")]

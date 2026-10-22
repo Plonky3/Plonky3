@@ -515,6 +515,7 @@ impl BusPlan {
 
 /// Symbolic expression position rejected during planning.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BusExpressionLocation {
     /// Tuple payload expression at this position.
     Field(usize),
@@ -524,6 +525,7 @@ pub enum BusExpressionLocation {
 
 /// Expression access unavailable to the later opening-based evaluator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UnsupportedBusAccess {
     /// A main-trace row other than the current row.
     MainOffset(usize),

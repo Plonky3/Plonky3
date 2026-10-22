@@ -9,6 +9,7 @@ use crate::transcript::TranscriptFailure;
 
 /// Errors during WHIR proof verification.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum VerifierError {
     /// The public opening batch does not reach the configured security target.
     #[error(transparent)]

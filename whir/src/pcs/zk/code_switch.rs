@@ -31,6 +31,7 @@ use thiserror::Error;
 
 /// Errors in the Construction 9.7 batching step.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum CodeSwitchError {
     /// The number of private OOD answers does not match the OOD batching coefficients.
     #[error("private OOD answer count mismatch: expected {expected}, got {actual}")]

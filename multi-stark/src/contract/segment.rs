@@ -331,6 +331,7 @@ impl ChainedExecution {
 
 /// Why a list of verified segments does not form one chain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Error)]
+#[non_exhaustive]
 pub enum ChainError {
     /// An empty list describes no execution.
     #[error("a chain needs at least one segment")]

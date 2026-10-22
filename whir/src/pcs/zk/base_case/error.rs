@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Failure modes of the HVZK base case.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum BaseCaseZkError {
     /// A revealed vector has the wrong length.
     #[error("blinded {kind} length mismatch: expected {expected}, got {actual}")]

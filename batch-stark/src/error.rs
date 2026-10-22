@@ -19,6 +19,7 @@ use crate::transcript::BatchTranscriptFailure;
 ///
 /// Splitting them keeps lookup and transcript concerns out of the base STARK error type.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum BatchVerificationError<PcsErr>
 where
     PcsErr: Debug,

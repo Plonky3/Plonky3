@@ -391,6 +391,7 @@ where
 /// Each variant is a statement about the declaration and the trace height alone.
 /// No witness data is involved.
 #[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PeriodicError {
     /// The advertised periodic column count disagrees with the period vectors supplied.
     #[error("periodic column count mismatch: declared {declared}, supplied {supplied}")]

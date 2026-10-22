@@ -21,6 +21,7 @@ use crate::{
 };
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum FriError<CommitMmcsErr, InputError>
 where
     CommitMmcsErr: core::fmt::Debug,

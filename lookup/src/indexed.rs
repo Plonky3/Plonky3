@@ -207,6 +207,7 @@ impl IndexedLookups {
 
 /// What makes a set of indexed declarations fail to describe a reduction.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum IndexedLookupError {
     /// A proof carries a claim list the statement does not describe.
     #[error("the statement describes {expected} readers, and the claim list carries {actual}")]

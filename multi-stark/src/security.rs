@@ -67,6 +67,7 @@ const COLLISION_CAP_LABEL: &str = "commitment-and-transcript-collision";
 
 /// Reasons a security target cannot be certified for this statement.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SecurityError {
     /// Statement dimensions or AIR metadata do not describe a supported proof.
     #[error("invalid multi-STARK security shape: {0}")]

@@ -57,6 +57,7 @@ use crate::zerocheck::transcript::{
 
 /// Reasons the zerocheck verifier rejects a proof.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ZerocheckError {
     /// The inner sumcheck transcript failed to verify.
     #[error("zerocheck sumcheck: {0}")]

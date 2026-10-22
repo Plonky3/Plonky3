@@ -105,6 +105,7 @@ use crate::permutation::{CryptographicPermutation, Derangement};
 
 /// Reasons a cross-field sponge cannot encode its input field injectively.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum MultiFieldSpongeError {
     /// The packing field is not strictly larger than the input field.
     #[error(

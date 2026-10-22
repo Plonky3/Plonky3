@@ -13,6 +13,7 @@ use crate::domain::WhirDomain;
 
 /// Reasons a set of user-facing parameters cannot form a valid WHIR configuration.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum WhirConfigError {
     /// The number of claims cannot be represented by the budget counter.
     #[error("initial claim count overflow")]

@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// A malformed statement or failed shift reduction.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ShiftReductionError {
     /// A statement point has a different arity from the checked system shape.
     #[error("{axis} point has length {actual}, expected {expected}")]

@@ -353,6 +353,7 @@ impl<EF: Field> SkipOpening<EF> {
 
 /// Reasons a proof of the opening reduction is rejected.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SkipOpeningError {
     /// The blends and the openings disagree on how many were batched.
     #[error("the proof carries {blends} blends and {openings} openings")]

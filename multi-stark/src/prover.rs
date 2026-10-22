@@ -50,6 +50,7 @@ pub(crate) struct Forgery {
 
 /// A proving-time PCS budget failure or a failed statement security assessment.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ProvingError<E> {
     /// The PCS rejected a commitment or an opening budget.
     #[error("PCS {phase} failed: {source:?}")]

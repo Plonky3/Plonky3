@@ -31,6 +31,7 @@ use crate::zerocheck::{AirZerocheck, BusFamily, ZerocheckError};
 
 /// Reasons the multilinear AIR verifier rejects a proof.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum VerificationError<E>
 where
     E: Debug,

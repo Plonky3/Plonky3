@@ -559,6 +559,7 @@ pub enum LayoutComponent {
 
 /// A constraint system no key can represent or prove.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
 pub enum KeyCompileError {
     /// A segment component cannot be addressed by its compact index.
     #[error("{segment:?} {component:?} has unsupported length {len}")]

@@ -8,6 +8,7 @@ use crate::{BusNameError, ProductGkrError};
 
 /// Invalid plans, witnesses, or reduced claims for read-only memory checking.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ReadOnlyMemoryError {
     /// The caller named the array outside the channel-name alphabet.
     #[error("read-only memory bus name is invalid: {0}")]

@@ -12,6 +12,7 @@ use super::{FractionGkrOutput, FractionGkrProof};
 
 /// Malformed fractional-GKR proofs rejected by the verifier.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum FractionGkrError {
     /// The reduction was asked to run over a table with no variables at all.
     #[error("fraction GKR requires at least one input variable")]

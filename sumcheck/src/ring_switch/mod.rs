@@ -136,6 +136,7 @@ pub struct RingSwitchProof<F, EF> {
 
 /// Why a ring-switching proof was rejected.
 #[derive(Error, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RingSwitchError {
     /// `ŝ` does not carry `DIMENSION²` base coefficients, so neither of its readings is defined.
     #[error("Ring switching: s_hat carries {actual} base coefficients, expected {expected}")]

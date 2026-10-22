@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Invalid statements, layouts, or witnesses for mutable read-write memory.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum RamError {
     /// A one-row trace has no transition, so nothing compares a row against the row above it.
     #[error("mutable memory covers {access_count} accesses, expected at least {minimum}")]

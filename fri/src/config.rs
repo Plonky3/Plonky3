@@ -8,6 +8,7 @@ use p3_security::grinding::GrindingSites;
 
 /// A proving input cannot be folded with the configured terminal polynomial size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum FriProverError {
     #[error(
         "FRI input log height {log_input_height} must exceed terminal log height {log_final_height}"

@@ -9,6 +9,7 @@ use crate::{BusDirection, BusNameError, ProductGkrShapeError};
 
 /// Invalid statement shapes rejected before transcript construction.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum BusPlanError {
     /// The total number of symbolic declarations overflowed.
     #[error("binary-bus declaration count overflows usize")]

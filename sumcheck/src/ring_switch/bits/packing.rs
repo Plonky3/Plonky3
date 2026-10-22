@@ -158,6 +158,7 @@ impl<EF: TowerLevel, S: Borrow<[EF]>> BitPacking<EF, S> {
 
 /// Reasons a bit witness cannot be packed.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BitPackingError {
     /// The level's elements are narrower than one byte.
     ///

@@ -7,6 +7,7 @@ use crate::fractional_gkr::FractionGkrError;
 
 /// Reasons the reduction rejects a proof.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum LogupStarError {
     /// A pushforward carries a different number of entries than its table has.
     #[error("table {table} pushforward has {actual} entries, expected {expected}")]

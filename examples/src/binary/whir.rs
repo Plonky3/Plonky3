@@ -93,6 +93,7 @@ impl core::fmt::Display for WhirInteractionFamily {
 
 /// Typed refusals made before WHIR setup, pricing, or witness generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum WhirIncompatibility {
     /// WHIR currently uses binary authentication geometry.
     #[error("WHIR requires binary Merkle arity 2, got {actual}")]
