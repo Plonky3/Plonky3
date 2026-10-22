@@ -322,18 +322,29 @@ impl Builder {
     #[must_use]
     pub fn finish(self) -> Circuit {
         let useful_bits = self.next_slot;
-        let output_words: usize = self
+        // Each port's words: inputs from word zero, outputs after them.
+        let mut end = 0;
+        let inputs = self
+            .inputs
+            .iter()
+            .map(|wires| {
+                let start = end;
+                end += wires.len().div_ceil(64);
+                start..end
+            })
+            .collect();
+        let outputs = self
             .outputs
             .iter()
-            .map(|&(_, bits)| bits.div_ceil(64))
-            .sum();
+            .map(|&(base, bits)| base / 64..base / 64 + bits.div_ceil(64))
+            .collect();
         Circuit::new(
             self.gates,
-            64 * (self.n_input_words + output_words),
+            inputs,
+            outputs,
             // At least one packed word per instance.
             useful_bits.next_power_of_two().trailing_zeros().max(6) as usize,
             useful_bits,
-            self.n_input_words,
         )
     }
 }

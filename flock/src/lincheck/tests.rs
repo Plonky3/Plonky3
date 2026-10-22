@@ -11,11 +11,12 @@ use p3_multilinear_util::poly::Poly;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
+use super::transcript::LincheckShape;
 use super::*;
 use crate::skip::{SKIP_SIZE, lagrange_weights};
 use crate::tests::{random_circuit, random_rows};
 use crate::zerocheck::{MIN_LOG_N, ZerocheckClaims};
-use crate::{Circuit, FlockChallenger, Witness};
+use crate::{Circuit, FlockChallenger, Port, PublicPorts, Witness};
 
 /// Challenge field.
 type E = Challenge;
@@ -86,7 +87,13 @@ impl Fixture {
     }
 
     fn prove(&self, witness: &Witness) -> (LincheckProof, QuirkyClaim) {
-        prove(&self.batch(), witness, &self.claims, &mut challenger())
+        prove(
+            &self.batch(),
+            witness,
+            &self.claims,
+            &PublicPorts::default(),
+            &mut challenger(),
+        )
     }
 
     fn verify(&self, proof: &LincheckProof) -> Result<QuirkyClaim, LincheckError> {
@@ -98,7 +105,13 @@ impl Fixture {
         claims: &ZerocheckClaims,
         proof: &LincheckProof,
     ) -> Result<QuirkyClaim, LincheckError> {
-        verify(&self.batch(), claims, proof, &mut challenger())
+        verify(
+            &self.batch(),
+            claims,
+            &PublicPorts::default(),
+            proof,
+            &mut challenger(),
+        )
     }
 }
 
@@ -249,7 +262,13 @@ fn a_false_input_claim_is_refused() {
             "{which}"
         );
         // A prover replaying the false claims honestly fails the same way.
-        let (proof, _) = prove(&f.batch(), &f.witness, &claims, &mut challenger());
+        let (proof, _) = prove(
+            &f.batch(),
+            &f.witness,
+            &claims,
+            &PublicPorts::default(),
+            &mut challenger(),
+        );
         assert_eq!(
             f.verify_claims(&claims, &proof),
             Err(LincheckError::FinalCheck),
@@ -299,9 +318,43 @@ fn the_transcript_binds_the_circuit_and_the_batch() {
     let other = random_circuit(&mut SmallRng::seed_from_u64(11), 400);
     if other.k_log() == f.circuit.k_log() {
         let batch = Batch::new(&other, f.log_instances).unwrap();
-        assert!(verify(&batch, &f.claims, &proof, &mut challenger()).is_err());
+        assert!(
+            verify(
+                &batch,
+                &f.claims,
+                &PublicPorts::default(),
+                &proof,
+                &mut challenger()
+            )
+            .is_err()
+        );
     }
     // A sponge that saw something first replays other challenges.
     let mut seeded = FlockChallenger::from_hasher(vec![1], Keccak256Hash);
-    assert!(verify(&f.batch(), &f.claims, &proof, &mut seeded).is_err());
+    assert!(
+        verify(
+            &f.batch(),
+            &f.claims,
+            &PublicPorts::default(),
+            &proof,
+            &mut seeded
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn the_transcript_binds_the_public_values() {
+    let f = Fixture::new(12, 400, 3);
+    let batch = f.batch();
+    let words = 1 << (f.circuit.k_log() - 6);
+    // The first word of every instance, with bit `flip` of instance 0 toggled.
+    let public = |flip: u64| {
+        PublicPorts::new(&batch, &[Port::Input(0)], |i, out| {
+            out[0] = f.witness.z()[i * words] ^ if i == 0 { flip } else { 0 };
+        })
+    };
+    // The lincheck's own seed differs, not only the outer statement's.
+    let seed = |flip| LincheckShape::new(&batch, &public(flip)).domain_separator();
+    assert_ne!(seed(1), seed(0));
 }

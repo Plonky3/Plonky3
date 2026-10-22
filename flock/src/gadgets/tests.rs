@@ -18,7 +18,9 @@ use super::keccak::KeccakF1600;
 use super::sha256::Sha256Compress;
 use crate::tests::satisfies;
 use crate::zerocheck::MIN_LOG_N;
-use crate::{Batch, Circuit, FlockChallenger, FlockConfig, Witness, prove, verify};
+use crate::{
+    Batch, Circuit, FlockChallenger, FlockConfig, Port, PublicPorts, Witness, prove, verify,
+};
 
 /// Instances per batch: two full 64-lane walks.
 const LOG_N: usize = 7;
@@ -593,31 +595,58 @@ fn sponge() -> FlockChallenger {
     FlockChallenger::from_hasher(Vec::new(), Keccak256Hash)
 }
 
-/// Prove and verify the smallest batch holding one vector instance, whose output ports must hold the expected output.
-fn prove_vector<G>(instance: &G, expected: &G::Output)
+/// Every port of a gadget's circuit, inputs then outputs.
+fn all_ports(circuit: &Circuit) -> Vec<Port> {
+    let inputs = (0..).map(Port::Input);
+    let outputs = (0..).map(Port::Output);
+    inputs
+        .take_while(|&p| circuit.port(p).is_some())
+        .chain(outputs.take_while(|&p| circuit.port(p).is_some()))
+        .collect()
+}
+
+/// A statement whose instances' input and output words come from the gadget's encoders.
+fn statement<G>(batch: &Batch<'_>, rows: &[(G, G::Output)]) -> PublicPorts
 where
     G: Gadget + Sync,
-    G::Output: PartialEq + Debug,
+    G::Output: Sync,
+{
+    let n_in = G::INPUT_WORDS;
+    PublicPorts::new(batch, &all_ports(batch.circuit()), |i, words| {
+        let (row, output) = &rows[i % rows.len()];
+        row.write_input(&mut words[..n_in]);
+        G::write_output(output, &mut words[n_in..]);
+    })
+}
+
+/// Prove and verify `rows`, repeated to `2^log_instances` instances, with every input and output public.
+fn prove_public<G>(log_instances: usize, rows: &[(G, G::Output)])
+where
+    G: Gadget + Sync,
+    G::Output: Sync,
 {
     let circuit = G::circuit();
-    let log_instances = MIN_LOG_N.saturating_sub(circuit.k_log());
-    let w = Witness::generate(
-        &circuit,
-        log_instances,
-        core::slice::from_ref(instance),
-        instance,
-        G::write_input,
-    );
-    let words = (1 << circuit.k_log()) / 64;
-    assert_eq!(
-        &G::decode_output(circuit.output_words(&w.z()[..words])),
-        expected
-    );
-
+    let inputs: Vec<&G> = (0..1 << log_instances)
+        .map(|i| &rows[i % rows.len()].0)
+        .collect();
+    let w = Witness::generate(&circuit, log_instances, &inputs, &inputs[0], |g, words| {
+        g.write_input(words);
+    });
     let batch = Batch::new(&circuit, log_instances).unwrap();
+    let public = statement(&batch, rows);
     let config = FlockConfig::default();
-    let proof = prove(&config, &batch, &w, &mut sponge()).unwrap();
-    verify(&config, &batch, &proof, &mut sponge()).unwrap();
+    let proof = prove(&config, &batch, &public, &w, &mut sponge()).unwrap();
+    verify(&config, &batch, &public, &proof, &mut sponge()).unwrap();
+}
+
+/// Prove and verify the smallest batch holding one vector instance, its input and expected output public.
+fn prove_vector<G>(instance: G, expected: G::Output)
+where
+    G: Gadget + Sync,
+    G::Output: Sync,
+{
+    let log_instances = MIN_LOG_N.saturating_sub(G::circuit().k_log());
+    prove_public(log_instances, &[(instance, expected)]);
 }
 
 #[test]
@@ -633,8 +662,8 @@ fn every_gadget_proves_an_official_vector_end_to_end() {
     };
     let digest = hex("508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982");
     prove_vector(
-        &abc,
-        &core::array::from_fn(|i| u32::from_le_bytes(digest[4 * i..4 * i + 4].try_into().unwrap())),
+        abc,
+        core::array::from_fn(|i| u32::from_le_bytes(digest[4 * i..4 * i + 4].try_into().unwrap())),
     );
 
     // The BLAKE3 test vector of length 64: one root compression.
@@ -651,7 +680,7 @@ fn every_gadget_proves_an_official_vector_end_to_end() {
     let cv: [u32; 8] =
         core::array::from_fn(|i| u32::from_le_bytes(digest[4 * i..4 * i + 4].try_into().unwrap()));
     assert_eq!(out[..8], cv);
-    prove_vector(&block, &out);
+    prove_vector(block, out);
 
     // FIPS 180-4: the one compression of SHA-256("abc").
     let mut abc = [0u32; 16];
@@ -659,15 +688,15 @@ fn every_gadget_proves_an_official_vector_end_to_end() {
     abc[15] = 24;
     let digest = hex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     prove_vector(
-        &Sha256Compress {
+        Sha256Compress {
             state: IV,
             block: abc,
         },
-        &core::array::from_fn(|i| u32::from_be_bytes(digest[4 * i..4 * i + 4].try_into().unwrap())),
+        core::array::from_fn(|i| u32::from_be_bytes(digest[4 * i..4 * i + 4].try_into().unwrap())),
     );
 
     // XKCP: Keccak-f[1600] of the zero state.
-    prove_vector(&KeccakF1600::default(), &KECCAK_OF_ZERO);
+    prove_vector(KeccakF1600::default(), KECCAK_OF_ZERO);
 }
 
 #[test]
@@ -714,4 +743,77 @@ fn product_counts_and_instance_sizes_are_pinned() {
     assert_eq!(shape(Blake2sCompress::circuit()), (14_714, 14));
     assert_eq!(shape(Sha256Compress::circuit()), (22_271, 15));
     assert_eq!(shape(KeccakF1600::circuit()), (24 * 1600, 16));
+}
+
+#[test]
+fn batches_of_compressions_prove_their_public_inputs_and_outputs() {
+    // The statement: these inputs compress to these outputs, the outputs computed natively, not read from the witness.
+    let mut rng = SmallRng::seed_from_u64(0x9B);
+    let sha: Vec<_> = (0..12)
+        .map(|_| {
+            let x = random_sha256(&mut rng);
+            (x, sha256_reference(&x))
+        })
+        .collect();
+    prove_public(4, &sha);
+    let blake3: Vec<_> = (0..12)
+        .map(|_| {
+            let x = random_blake3(&mut rng);
+            (x, blake3_reference(&x))
+        })
+        .collect();
+    prove_public(4, &blake3);
+
+    // Mutation: one claimed SHA-256 output word is wrong, so the honest prover refuses it.
+    let circuit = Sha256Compress::circuit();
+    let batch = Batch::new(&circuit, 4).unwrap();
+    let mut wrong = sha.clone();
+    wrong[7].1[3] ^= 1;
+    let inputs: Vec<_> = (0..16).map(|i| sha[i % sha.len()].0).collect();
+    let w = Witness::generate(
+        &circuit,
+        4,
+        &inputs,
+        &inputs[0],
+        Sha256Compress::write_input,
+    );
+    let config = FlockConfig::default();
+    assert!(
+        prove(
+            &config,
+            &batch,
+            &statement(&batch, &wrong),
+            &w,
+            &mut sponge()
+        )
+        .is_err()
+    );
+
+    // Mutation: an honest proof checked against the wrong outputs.
+    let proof = prove(&config, &batch, &statement(&batch, &sha), &w, &mut sponge()).unwrap();
+    assert!(
+        verify(
+            &config,
+            &batch,
+            &statement(&batch, &wrong),
+            &proof,
+            &mut sponge()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn writing_an_output_inverts_decoding_it() {
+    let mut rng = SmallRng::seed_from_u64(0x0D);
+    let words: Vec<u64> = (0..25).map(|_| rng.next_u64()).collect();
+    let mut out = vec![0; 25];
+    KeccakF1600::write_output(&KeccakF1600::decode_output(&words), &mut out);
+    assert_eq!(out, words);
+    Blake3Compress::write_output(&Blake3Compress::decode_output(&words[..8]), &mut out[..8]);
+    assert_eq!(out[..8], words[..8]);
+    Sha256Compress::write_output(&Sha256Compress::decode_output(&words[..4]), &mut out[..4]);
+    assert_eq!(out[..4], words[..4]);
+    Blake2sCompress::write_output(&Blake2sCompress::decode_output(&words[..4]), &mut out[..4]);
+    assert_eq!(out[..4], words[..4]);
 }

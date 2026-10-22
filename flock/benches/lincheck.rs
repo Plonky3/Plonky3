@@ -8,8 +8,8 @@ use p3_challenger::CanSample;
 use p3_flock::opening::WitnessPcs;
 use p3_flock::zerocheck::ZerocheckClaims;
 use p3_flock::{
-    Batch, Builder, Challenge, Circuit, FlockChallenger, PcsParams, QuirkyClaim, QuirkyPoint, Wire,
-    Witness, lincheck,
+    Batch, Builder, Challenge, Circuit, FlockChallenger, PcsParams, PublicPorts, QuirkyClaim,
+    QuirkyPoint, Wire, Witness, lincheck,
 };
 use p3_keccak::Keccak256Hash;
 use rand::rngs::SmallRng;
@@ -90,11 +90,34 @@ fn lincheck(c: &mut Criterion) {
         let (w, claims) = batch(&circuit, log_instances);
         let statement = Batch::new(&circuit, log_instances).expect("a zerocheck batch");
         group.bench_function(BenchmarkId::new("prove", log_instances), |b| {
-            b.iter(|| lincheck::prove(&statement, &w, &claims, &mut challenger()));
+            b.iter(|| {
+                lincheck::prove(
+                    &statement,
+                    &w,
+                    &claims,
+                    &PublicPorts::default(),
+                    &mut challenger(),
+                )
+            });
         });
-        let (proof, _) = lincheck::prove(&statement, &w, &claims, &mut challenger());
+        let (proof, _) = lincheck::prove(
+            &statement,
+            &w,
+            &claims,
+            &PublicPorts::default(),
+            &mut challenger(),
+        );
         group.bench_function(BenchmarkId::new("verify", log_instances), |b| {
-            b.iter(|| lincheck::verify(&statement, &claims, &proof, &mut challenger()).unwrap());
+            b.iter(|| {
+                lincheck::verify(
+                    &statement,
+                    &claims,
+                    &PublicPorts::default(),
+                    &proof,
+                    &mut challenger(),
+                )
+                .unwrap()
+            });
         });
         group.bench_function(BenchmarkId::new("evaluate_packed", log_instances), |b| {
             b.iter(|| claims.point.evaluate_packed(black_box(w.z()), 14));

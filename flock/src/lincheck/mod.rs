@@ -2,11 +2,13 @@
 //!
 //! The matrices are block-diagonal, so a claim at `(s_out, s_in)` collapses to `2^k_log` terms of the witness folded at `s_out`.
 //!
-//! The prover forms the column weights of `A_0 + alpha B_0 + alpha^2 I` by one backward walk, pins the constant wire at `alpha^3`, and runs a product sumcheck over the inner variables past the skip.
+//! The prover forms the column weights of `A_0 + alpha B_0 + alpha^2 I` by one backward walk, pins the constant wire at `alpha^3`, weighs the public words at `alpha^4`, and runs a product sumcheck over the inner variables past the skip.
 //!
 //! The verifier closes it by one forward walk, then folds the 64 slices left into one claim at a fresh skip coordinate.
 //!
 //! Soundness error at most `L (3 + 2 (k_log - 6) + 63 + log_instances) / |E|`, `L` the opening's list size; `log_instances / |E|` is the pin's.
+//!
+//! Public words add `L (1 + log_instances + 63 + p) / |E|`, `2^p` words the region they lie in.
 
 mod fold;
 mod prover;
@@ -27,6 +29,7 @@ pub(crate) use self::fold::partial_fold;
 pub use self::prover::prove;
 pub use self::verifier::verify;
 use crate::point::{QuirkyClaim, QuirkyPoint};
+use crate::ports::PortsError;
 use crate::skip::{K_SKIP, interpolate};
 use crate::{Batch, Challenge};
 
@@ -70,6 +73,9 @@ pub enum LincheckError {
     /// The transcript refused a message.
     #[error(transparent)]
     Transcript(#[from] TranscriptError),
+    /// The public words do not fit the batch.
+    #[error(transparent)]
+    Ports(#[from] PortsError),
     /// The sumcheck's final value is not the circuit's terms at its point.
     #[error("the sumcheck's final claim does not match the circuit")]
     FinalCheck,
