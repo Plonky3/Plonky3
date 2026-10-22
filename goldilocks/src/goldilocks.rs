@@ -385,7 +385,7 @@ impl PrimeCharacteristicRing for Goldilocks {
         // 2. It is greater than the maximum possible product of two u64s.
         const OFFSET: u128 = ((P as u128) << 64) - (P as u128) + ((P as u128) << 32);
         const {
-            assert!((N as u32) <= (1 << 31));
+            assert!(N <= 1 << 31);
         }
         match N {
             0 => Self::ZERO,
@@ -416,7 +416,7 @@ impl PrimeCharacteristicRing for Goldilocks {
                         // Split val into (hi, lo) where hi is the upper 32 bits and lo is the lower 96 bits.
                         let val_hi = (val >> 96) as u64;
                         // acc_hi accumulates hi, acc_lo accumulates lo + 2^{96}hi.
-                        // As N <= 2^32, acc_hi cannot overflow.
+                        // As N <= 2^31 and val_hi < 2^32, acc_hi cannot overflow.
                         unsafe { (acc_lo.wrapping_add(val), acc_hi.unchecked_add(val_hi)) }
                     });
                 // First, remove the hi part from lo_plus_hi.
@@ -983,6 +983,24 @@ mod tests {
         // Checked u64 conversion: p itself is rejected.
         assert!(F::from_canonical_checked(P - 1).is_some());
         assert!(F::from_canonical_checked(P).is_none());
+    }
+
+    #[test]
+    fn dot_product_extreme_values() {
+        // Stored values may be any u64, so u64::MAX is a valid representative.
+        //
+        // Its square has the largest top 32 bits, the worst case for the accumulators.
+        let x = F::new(u64::MAX);
+
+        // Reference: each product reduced modulo p, then summed modulo p.
+        let p = P as u128;
+        let square = (u64::MAX as u128 * u64::MAX as u128) % p;
+
+        let expected = |n: u128| F::from_int(((square * n) % p) as u64);
+
+        // N = 9 and N = 64 take the general path, above the unrolled cases.
+        assert_eq!(F::dot_product(&[x; 9], &[x; 9]), expected(9));
+        assert_eq!(F::dot_product(&[x; 64], &[x; 64]), expected(64));
     }
 
     /// Check both product limbs, not just the residue: a lost carry could otherwise
