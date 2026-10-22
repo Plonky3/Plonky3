@@ -497,8 +497,13 @@ fn lookup_counts_match_float_and_remain_monotone() {
                                     .bits(),
                             );
                         let actual = to_f64(actual);
+                        // The legacy B=0 path retains its existing rounding convention.
+                        // New paths must stay below the floating reference without an
+                        // upward tolerance; exact Q16 boundary cases have integer oracles
+                        // in the budget unit tests.
+                        let upward_tolerance = if fractions_per_proof == 0 { 1e-9 } else { 0.0 };
                         assert!(
-                            actual <= truth + 1e-9,
+                            actual <= truth + upward_tolerance,
                             "lookup overstates: f={fractions_per_row}, B={fractions_per_proof}, W={max_message_width}, h={height}, pow={pow_bits}: {actual} > {truth}"
                         );
                         assert!(

@@ -211,7 +211,7 @@ const fn lookup_round(
         );
     }
     let error = if per_row == 0 {
-        fixed::ceil_log2(per_proof)
+        lookup_ceil_log2(per_proof)
     } else if instance.log_max_height <= 64 {
         // Each coefficient fits in u64. Even at height 2^64 their sum fits in u128.
         let size = ((per_row as u128) << instance.log_max_height) + per_proof as u128;
@@ -226,7 +226,7 @@ const fn lookup_round(
             Some(mantissa)
         };
         match rounded {
-            Some(mantissa) => fixed::ceil_log2(mantissa) + fixed::from_bits(shift),
+            Some(mantissa) => lookup_ceil_log2(mantissa) + fixed::from_bits(shift),
             None => fixed::from_bits(64 + shift),
         }
     } else {
@@ -237,6 +237,16 @@ const fn lookup_round(
     };
     let bits = instance.field_bits.saturating_sub(error) + fixed::from_bits(pow_bits);
     SecurityTerm::new(LOOKUP_LABEL, min(bits, cap))
+}
+
+/// Upper logarithm for the new lookup paths, accounting for the Q32 truncation inside
+/// `fixed::ceil_log2`. Normalization and each squared/renormalized mantissa lose less
+/// than 2^-31 logarithm bits. Referred back to the input, these losses form a geometric
+/// series totaling less than 2^-30 bits. The floor also leaves a fractional tail below
+/// one Q16 unit, so one extra unit above the nominal ceiling covers both. Powers of
+/// two have no truncation or fractional tail and remain exact.
+const fn lookup_ceil_log2(value: u64) -> u64 {
+    fixed::ceil_log2(value) + if value.is_power_of_two() { 0 } else { 1 }
 }
 
 /// Coefficient `2 · (2^log_folding_arity − 1)` of the folding round, or `None` when the arity is
@@ -530,6 +540,36 @@ mod tests {
             security_report(&params(), &instance, &air).terms()[0].bits,
             0
         );
+    }
+
+    #[test]
+    fn once_per_proof_logarithms_round_up_at_q16_boundaries() {
+        // These exact Q16 expectations catch Q32 normalization losing a logarithm bit.
+        // The first two numerators lie just above a Q16 logarithm boundary; the rest
+        // are exact powers of two, including one that requires u128 normalization.
+        for (per_row, per_proof, width, height, expected) in [
+            (0, 2_970_122_603, 2_085_664_753, 0, 4_297_474),
+            (2_298_374_928, 694_652_501, 1_542_241_952, 5, 4_021_687),
+            (0, 8, 2, 0, 8_060_928),
+            (2, 8, 2, 2, 7_995_392),
+            (u32::MAX, 1 << 31, 2, 31, 4_128_768),
+        ] {
+            let mut air = air();
+            air.lookup = Some(LookupShape {
+                fractions_per_row: per_row,
+                fractions_per_proof: per_proof,
+                max_message_width: width,
+            });
+            let instance = InstanceShape {
+                field_bits: fixed::from_bits(128),
+                ..instance(height)
+            };
+            assert_eq!(
+                security_report(&params(), &instance, &air).terms()[0].bits,
+                expected,
+                "f={per_row}, B={per_proof}, W={width}, h={height}"
+            );
+        }
     }
 
     #[test]
