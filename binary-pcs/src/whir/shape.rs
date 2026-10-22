@@ -2,7 +2,7 @@
 
 use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_commit::{Mmcs, MmcsProofGeometry};
 use p3_field::{ExtensionField, Field};
 use p3_sumcheck::ring_switch::bits::BitTensor;
 use p3_whir::WhirConfig;
@@ -29,6 +29,48 @@ fn power_of_two(log: usize) -> Result<usize, ProofShapeError> {
     checked(1usize.checked_shl(shift))
 }
 
+/// Most siblings a multiproof over one tree sends.
+///
+/// Without more structure, each position costs a whole row opening.
+///
+/// A pruned binary frontier sends a sibling only for a parent with exactly one opened child.
+///
+/// So depth `d` sends at most `min(positions, 2^(d - 1))` siblings.
+///
+/// Down to a fully covered depth, every node is computed from below and sends none.
+///
+/// ```text
+///     depth:     1 .. covered   covered + 1 .. height
+///     siblings:  0              min(positions, 2^(d - 1)) each
+/// ```
+///
+/// The cap replaces the levels above it, so only the levels below it count.
+fn multiproof_siblings(
+    height: usize,
+    geometry: MmcsProofGeometry,
+    covered_depth: usize,
+    positions: usize,
+) -> Option<usize> {
+    let generic = positions.checked_mul(geometry.opening_digests)?;
+    if !geometry.binary_frontier {
+        return Some(generic);
+    }
+    // First depth whose siblings the proof can carry.
+    let first = height
+        .saturating_sub(geometry.opening_digests)
+        .max(covered_depth)
+        + 1;
+    let pruned = (first..=height).try_fold(0usize, |total, depth| {
+        // Parents one level up, capped by the opened positions.
+        let parents = u32::try_from(depth - 1)
+            .ok()
+            .and_then(|shift| 1usize.checked_shl(shift))
+            .map_or(positions, |parents| parents.min(positions));
+        total.checked_add(parents)
+    })?;
+    Some(pruned.min(generic))
+}
+
 /// Everything a schedule fixes about the size of its proofs and the work of checking one.
 ///
 /// Each figure is read off the derived schedule and the claim count, never off a witness.
@@ -45,7 +87,7 @@ pub struct ProofShape {
 
     /// Digests the proof carries, including folded codewords' commitments and opened paths.
     ///
-    /// No prefix a path shares with another is discounted.
+    /// Openings are pruned multiproofs, so each level sends at most one sibling per opened parent.
     pub merkle_digests: usize,
 
     /// Alphabet elements the proof carries outside the openings, which are its grinding witnesses.
@@ -140,6 +182,21 @@ impl ProofShape {
                 queries
             };
             let elements = checked(positions.checked_mul(power_of_two(folding)?))?;
+            // Deepest level every node of which has an opened leaf below it.
+            //
+            //     opening every position      -> every level
+            //     2^c deepest strata, stratified -> the top c levels
+            let covered_depth = match query_draws(domain_size, queries) {
+                0 => log_folded,
+                draws if config.stratified_queries() => draws.ilog2() as usize,
+                _ => 0,
+            };
+            let siblings = checked(multiproof_siblings(
+                log_folded,
+                geometry,
+                covered_depth,
+                positions,
+            ))?;
 
             shape.stir_queries = checked(shape.stir_queries.checked_add(positions))?;
             if index == 0 {
@@ -155,11 +212,7 @@ impl ProofShape {
                         .checked_add(geometry.commitment_digests),
                 )?;
             }
-            shape.merkle_digests = checked(
-                shape
-                    .merkle_digests
-                    .checked_add(checked(positions.checked_mul(geometry.opening_digests))?),
-            )?;
+            shape.merkle_digests = checked(shape.merkle_digests.checked_add(siblings))?;
             shape.sent_extension_elements =
                 checked(shape.sent_extension_elements.checked_add(ood))?;
         }
@@ -246,7 +299,9 @@ impl ProofShape {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProofShape, ProofShapeError, power_of_two};
+    use p3_commit::MmcsProofGeometry;
+
+    use super::{ProofShape, ProofShapeError, multiproof_siblings, power_of_two};
 
     // A hand-built shape whose byte total is computable without the implementation.
     const SHAPE: ProofShape = ProofShape {
@@ -272,6 +327,25 @@ mod tests {
             SHAPE.max_bytes(16, 16, 32).unwrap() - SHAPE.max_bytes(4, 16, 32).unwrap(),
             110 * (16 - 4)
         );
+    }
+
+    #[test]
+    fn a_generic_backend_keeps_its_row_opening_bound() {
+        // Height 10, one position, a backend sending up to 20 digests per row opening.
+        let generic = MmcsProofGeometry::new(1, 20);
+        assert_eq!(multiproof_siblings(10, generic, 0, 1), Some(20));
+        assert_eq!(multiproof_siblings(10, generic, 0, 3), Some(60));
+    }
+
+    #[test]
+    fn a_binary_frontier_prunes_shared_and_covered_levels() {
+        // Depths 1..=10 send min(positions, 2^(d - 1)): 1 + 2 + 4 + 4 * 7.
+        let binary = MmcsProofGeometry::binary_frontier(1, 10);
+        assert_eq!(multiproof_siblings(10, binary, 0, 4), Some(35));
+        // One position sends one sibling per level, as its row opening does.
+        assert_eq!(multiproof_siblings(10, binary, 0, 1), Some(10));
+        // Covered levels send nothing.
+        assert_eq!(multiproof_siblings(10, binary, 2, 4), Some(32));
     }
 
     #[test]

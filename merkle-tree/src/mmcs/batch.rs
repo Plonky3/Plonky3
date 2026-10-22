@@ -45,7 +45,7 @@ where
             return None;
         }
         let cap_height = self.cap_height.min(log_height);
-        Some(MmcsProofGeometry::new(
+        Some(MmcsProofGeometry::binary_frontier(
             1usize.checked_shl(cap_height as u32)?,
             log_height - cap_height,
         ))
@@ -885,6 +885,7 @@ mod tests {
             let geometry = mmcs.proof_geometry(5).unwrap();
             assert_eq!(geometry.commitment_digests, commit.num_roots());
             assert_eq!(geometry.opening_digests, 5 - cap_height);
+            assert!(geometry.binary_frontier);
 
             // Proof should have (log2(32) - cap_height) = 5 - cap_height elements
             let opening = mmcs.open_batch(17, &data);
