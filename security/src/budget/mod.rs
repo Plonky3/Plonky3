@@ -14,9 +14,9 @@
 //!
 //! Every bound is stated as `error ≤ coefficient · size / |E|`, which in bits is
 //! `log2|E| − log2(coefficient) − log2(size)`. Coefficients round up and the field size rounds
-//! down, so each round is understated rather than overstated. The out-of-domain round is the one
-//! exception to that framing: part of its size is additive rather than a multiple of the trace
-//! height, so it takes the logarithm of the whole product at once. It states the same bound as
+//! down, so each round is understated rather than overstated. The lookup and out-of-domain rounds
+//! can also have additive sizes rather than just multiples of the trace height, so they bound
+//! the logarithm of the full size. The out-of-domain round states the same bound as
 //! [`crate::deep::deep_ali_error`], the `f64` mirror of the same equation, and the two are meant
 //! to be read together.
 //!
@@ -99,21 +99,9 @@ pub const fn security_report(
     //
     // Together `ε ≤ (W + 1)(M − 1)/|E| + M/|E| ≤ (W + 2)·M/|E|`.
     //
-    // `M` is taken as `fractions_per_row · 2^log_max_height`, charging every AIR the maximum
-    // height.
-    let lookup = round(
-        LOOKUP_LABEL,
-        instance,
-        match air.lookup {
-            Some(lookup) => {
-                Some((lookup.max_message_width as u64 + 2) * lookup.fractions_per_row as u64)
-            }
-            None => None,
-        },
-        instance.log_max_height,
-        params.lookup_pow_bits,
-        cap,
-    );
+    // `M = fractions_per_row · 2^log_max_height + fractions_per_proof`, charging every
+    // AIR's per-row emissions at the maximum height, and one-time emissions only once.
+    let lookup = lookup_round(instance, air.lookup, params.lookup_pow_bits, cap);
 
     // Constraints are batched by powers of one challenge and the AIRs by a second, so a violated
     // constraint survives only on a root of the resulting univariate of degree below the total
@@ -195,6 +183,60 @@ pub const fn security_report(
         query,
         SecurityTerm::new(COLLISION_LABEL, cap),
     ])
+}
+
+/// Bounds all lookup denominator factors before applying grinding and the transcript cap.
+const fn lookup_round(
+    instance: &InstanceShape,
+    lookup: Option<LookupShape>,
+    pow_bits: u32,
+    cap: u64,
+) -> SecurityTerm {
+    let lookup = match lookup {
+        None => return SecurityTerm::new(LOOKUP_LABEL, cap),
+        Some(lookup) => lookup,
+    };
+    let width = lookup.max_message_width as u64 + 2;
+    let per_row = width * lookup.fractions_per_row as u64;
+    let per_proof = width * lookup.fractions_per_proof as u64;
+    // Keep the previous fixed-point rounding exactly when there are no one-time factors.
+    if per_proof == 0 {
+        return round(
+            LOOKUP_LABEL,
+            instance,
+            Some(per_row),
+            instance.log_max_height,
+            pow_bits,
+            cap,
+        );
+    }
+    let error = if per_row == 0 {
+        fixed::ceil_log2(per_proof)
+    } else if instance.log_max_height <= 64 {
+        // Each coefficient fits in u64. Even at height 2^64 their sum fits in u128.
+        let size = ((per_row as u128) << instance.log_max_height) + per_proof as u128;
+        let shift = (128 - size.leading_zeros()).saturating_sub(64);
+        // Round the normalized mantissa up before taking its logarithm. If that rounds
+        // beyond u64, the next power of two is an exact conservative upper bound.
+        let mantissa = (size >> shift) as u64;
+        let remainder = size - ((mantissa as u128) << shift);
+        let rounded = if remainder != 0 {
+            mantissa.checked_add(1)
+        } else {
+            Some(mantissa)
+        };
+        match rounded {
+            Some(mantissa) => fixed::ceil_log2(mantissa) + fixed::from_bits(shift),
+            None => fixed::from_bits(64 + shift),
+        }
+    } else {
+        // B/(f·H) < 2^-32 here because B fits in u32 and f >= 1. Thus the additive
+        // correction log2(1 + B/(f·H)) is smaller than one fixed-point ulp, without
+        // materializing a height whose shift could overflow.
+        fixed::ceil_log2(per_row) + fixed::from_bits(instance.log_max_height) + 1
+    };
+    let bits = instance.field_bits.saturating_sub(error) + fixed::from_bits(pow_bits);
+    SecurityTerm::new(LOOKUP_LABEL, min(bits, cap))
 }
 
 /// Coefficient `2 · (2^log_folding_arity − 1)` of the folding round, or `None` when the arity is
@@ -356,9 +398,183 @@ mod tests {
             num_deep_terms: Some(130),
             lookup: Some(LookupShape {
                 fractions_per_row: 27,
+                fractions_per_proof: 0,
                 max_message_width: 16,
             }),
         }
+    }
+
+    // Missing the once-per-proof factors would give 0 bits instead of 123.
+    #[test]
+    fn boundary_only_lookup_is_independent_of_height() {
+        let mut air = air();
+        air.lookup = Some(LookupShape {
+            fractions_per_row: 0,
+            fractions_per_proof: 8,
+            max_message_width: 2,
+        });
+        let instance = InstanceShape {
+            field_bits: fixed::from_bits(128),
+            ..instance(0)
+        };
+        for height in [0, 20, 63, 64, 128, u32::MAX] {
+            let instance = InstanceShape {
+                log_max_height: height,
+                ..instance
+            };
+            assert_eq!(
+                security_report(&params(), &instance, &air).terms()[0].bits,
+                fixed::from_bits(123)
+            );
+        }
+    }
+
+    // With H=4, f=2, B=8, W=2, the error numerator is exactly 64.
+    #[test]
+    fn mixed_lookup_counts_precede_grinding_and_cap() {
+        let mut air = air();
+        air.lookup = Some(LookupShape {
+            fractions_per_row: 2,
+            fractions_per_proof: 8,
+            max_message_width: 2,
+        });
+        let instance = InstanceShape {
+            field_bits: fixed::from_bits(128),
+            collision_resistance: 124,
+            ..instance(2)
+        };
+        for (pow_bits, expected) in [(0, 122), (1, 123), (2, 124), (32, 124)] {
+            let params = ProtocolParams {
+                lookup_pow_bits: pow_bits,
+                ..params()
+            };
+            assert_eq!(
+                security_report(&params, &instance, &air).terms()[0].bits,
+                fixed::from_bits(expected)
+            );
+        }
+        // An error numerator larger than the field is clamped before grinding credit.
+        let small_field = InstanceShape {
+            field_bits: fixed::from_bits(4),
+            ..instance
+        };
+        let params = ProtocolParams {
+            lookup_pow_bits: 3,
+            ..params()
+        };
+        assert_eq!(
+            security_report(&params, &small_field, &air).terms()[0].bits,
+            fixed::from_bits(3)
+        );
+    }
+
+    #[test]
+    fn per_row_only_lookup_preserves_previous_rounding() {
+        let mut air = air();
+        air.lookup = Some(LookupShape {
+            fractions_per_row: 2,
+            fractions_per_proof: 0,
+            max_message_width: 2,
+        });
+        for (height, expected) in [(0, 125), (2, 123), (64, 61), (u32::MAX, 0)] {
+            let instance = InstanceShape {
+                field_bits: fixed::from_bits(128),
+                ..instance(height)
+            };
+            assert_eq!(
+                security_report(&params(), &instance, &air).terms()[0].bits,
+                fixed::from_bits(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn lookup_extreme_counts_and_heights_do_not_wrap() {
+        let mut air = air();
+        air.lookup = Some(LookupShape {
+            fractions_per_row: u32::MAX,
+            fractions_per_proof: u32::MAX,
+            max_message_width: u32::MAX,
+        });
+        let instance = InstanceShape {
+            field_bits: fixed::from_bits(129),
+            collision_resistance: 129,
+            ..instance(64)
+        };
+        // (2^32+1)(2^32-1)(2^64+1) = 2^128-1, rounded up to 128 bits.
+        assert_eq!(
+            security_report(&params(), &instance, &air).terms()[0].bits,
+            fixed::ONE
+        );
+        air.lookup.as_mut().unwrap().fractions_per_row = 1;
+        air.lookup.as_mut().unwrap().fractions_per_proof = 1;
+        air.lookup.as_mut().unwrap().max_message_width = 2;
+        let instance = InstanceShape {
+            field_bits: fixed::from_bits(128),
+            ..instance
+        };
+        // The once-per-proof correction above a 2^65 trace costs at most one ulp.
+        let instance = InstanceShape {
+            log_max_height: 65,
+            ..instance
+        };
+        assert_eq!(
+            security_report(&params(), &instance, &air).terms()[0].bits,
+            fixed::from_bits(61) - 1
+        );
+        let instance = InstanceShape {
+            log_max_height: u32::MAX,
+            ..instance
+        };
+        assert_eq!(
+            security_report(&params(), &instance, &air).terms()[0].bits,
+            0
+        );
+    }
+
+    #[test]
+    fn mixed_lookup_is_monotone_in_counts_width_and_height() {
+        for axis in 0..4 {
+            let mut previous = u64::MAX;
+            for size in [1, 2, 20, 63, 64, 65, 128, u32::MAX] {
+                let mut air = air();
+                let mut lookup = LookupShape {
+                    fractions_per_row: 2,
+                    fractions_per_proof: 8,
+                    max_message_width: 4,
+                };
+                let mut instance = instance(2);
+                match axis {
+                    0 => lookup.fractions_per_row = size,
+                    1 => lookup.fractions_per_proof = size,
+                    2 => lookup.max_message_width = size,
+                    _ => instance.log_max_height = size,
+                }
+                air.lookup = Some(lookup);
+                let actual = security_report(&params(), &instance, &air).terms()[0].bits;
+                assert!(
+                    actual <= previous,
+                    "lookup gained bits on axis {axis} at {size}"
+                );
+                previous = actual;
+            }
+        }
+    }
+
+    #[test]
+    fn empty_lookup_cannot_gain_security_from_grinding() {
+        let mut air = air();
+        let lookup = air.lookup.as_mut().unwrap();
+        lookup.fractions_per_row = 0;
+        lookup.fractions_per_proof = 0;
+        let params = ProtocolParams {
+            lookup_pow_bits: u32::MAX,
+            ..params()
+        };
+        assert_eq!(
+            security_report(&params, &instance(20), &air).terms()[0].bits,
+            0
+        );
     }
 
     #[test]
@@ -610,6 +826,7 @@ mod tests {
             num_deep_terms: Some(1024),
             lookup: Some(LookupShape {
                 fractions_per_row: 64,
+                fractions_per_proof: 0,
                 max_message_width: 16,
             }),
         };

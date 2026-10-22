@@ -14,8 +14,8 @@
 //! fingerprint polynomial.
 //!
 //! Cleared of denominators, that polynomial has degree ≤ `N` in `alpha` and
-//! ≤ `N·W` in `beta`, where `N = num_interactions · trace_length` is the
-//! number of denominator factors (interactions summed over all buses) and
+//! ≤ `N·W` in `beta`, where `N = num_interactions · trace_length + num_interactions_per_proof`
+//! is the number of denominator factors, summed over all AIRs, buses, and both lookup sides, and
 //! `W = max_message_width` is the widest payload. Sampling both challenges
 //! independently and uniformly from the challenge field `EF`, the per-variable
 //! union bound puts a numerator root at `N·(W + 1) / |EF|`.
@@ -52,7 +52,7 @@
 //! - Haböck, *Multivariate lookups based on logarithmic derivatives*
 //!   ([2022/1530](https://eprint.iacr.org/2022/1530)).
 
-use libm::log2;
+use libm::{exp2, log2};
 
 use crate::error::ErrorBits;
 use crate::grinding::{GrindingSites, boost};
@@ -65,16 +65,21 @@ pub const LOGUP_LABEL: &str = "logup-fingerprint";
 /// Shape of a LogUp lookup argument, as seen by its soundness bound.
 #[derive(Copy, Clone, Debug)]
 pub struct LogUpAir {
-    /// Number of bus messages emitted per trace row, summed across all buses
-    /// (global + local interactions). Each is one denominator factor.
+    /// Number of denominator factors emitted per trace row, summed across all AIRs,
+    /// buses, and both lookup sides (including sends and receives).
     pub num_interactions: usize,
-    /// Widest message payload tuple (`max_message_width`) — the degree of the
-    /// `beta`-compression.
+    /// Additional denominator factors emitted once per proof across all AIRs and both
+    /// lookup sides. Exclude factors counted in [`Self::num_interactions`]; set to zero
+    /// for an argument containing only per-row emissions.
+    pub num_interactions_per_proof: usize,
+    /// Widest message payload tuple across both per-row and once-per-proof emissions
+    /// (`max_message_width`) — the degree of the `beta`-compression.
     pub max_message_width: usize,
 }
 
 /// `-log2(ε_logup)` in bits, following `ε_logup ≤ N·(W + 2) / |EF|` with
-/// `N = num_interactions · 2^log_trace_length` and `W = max_message_width`.
+/// `N = num_interactions · 2^log_trace_length + num_interactions_per_proof`
+/// and `W = max_message_width`. Zero once-per-proof interactions preserve the per-row-only bound.
 ///
 /// The `W + 2` covers both ways a sampled `(alpha, beta)` breaks the argument: a root of the
 /// cleared numerator, and a vanishing denominator that lets a message be dropped.
@@ -83,10 +88,21 @@ pub struct LogUpAir {
 /// size). Prefer [`security_term`], which omits the term entirely when there
 /// are no interactions rather than reporting a binding 0-bit bound.
 pub fn fingerprint_error(air: &LogUpAir, shape: &InstanceShape) -> ErrorBits {
-    if air.num_interactions == 0 || shape.modulus_bits == 0 {
+    if (air.num_interactions == 0 && air.num_interactions_per_proof == 0) || shape.modulus_bits == 0
+    {
         return ErrorBits::from_log2(0.0);
     }
-    let log_n = shape.log_trace_length as f64 + log2(air.num_interactions as f64);
+    let log_n = if air.num_interactions == 0 {
+        log2(air.num_interactions_per_proof as f64)
+    } else {
+        let per_row = shape.log_trace_length as f64 + log2(air.num_interactions as f64);
+        // Work in the log domain so even very large trace heights do not overflow.
+        per_row
+            + log2(
+                1.0 + (air.num_interactions_per_proof as f64 / air.num_interactions as f64)
+                    * exp2(-(shape.log_trace_length as f64)),
+            )
+    };
     let width = air.max_message_width.max(1) as f64;
     let bits = shape.modulus_bits as f64 - log_n - log2(width + 2.0);
     ErrorBits::from_log2(bits.max(0.0))
@@ -102,7 +118,7 @@ pub fn security_term(
     shape: &InstanceShape,
     grinding: &GrindingSites,
 ) -> Option<SecurityTerm> {
-    if air.num_interactions == 0 {
+    if air.num_interactions == 0 && air.num_interactions_per_proof == 0 {
         return None;
     }
     Some(SecurityTerm::new(
@@ -124,12 +140,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn once_per_proof_interactions_are_charged_without_rows() {
+        let air = LogUpAir {
+            num_interactions: 0,
+            num_interactions_per_proof: 8,
+            max_message_width: 2,
+        };
+        for log_trace_length in [0, 20, 128, usize::MAX] {
+            let shape = InstanceShape {
+                log_trace_length,
+                ..shape(128)
+            };
+            assert_eq!(fingerprint_error(&air, &shape).bits(), 123.0);
+            assert!(security_term(&air, &shape, &GrindingSites::NONE).is_some());
+        }
+    }
+
     /// `ε ≤ N·(W+2)/|EF|` → bits = |EF| − log2(N) − log2(W+2). For
     /// N = 2^20 · 16 = 2^24 and W = 3: 128 − 24 − log2(5).
     #[test]
     fn fingerprint_error_regression() {
         let air = LogUpAir {
             num_interactions: 16,
+            num_interactions_per_proof: 0,
             max_message_width: 3,
         };
         let bits = fingerprint_error(&air, &shape(128)).bits();
@@ -142,6 +176,7 @@ mod tests {
     fn fingerprint_error_is_monotone() {
         let base = LogUpAir {
             num_interactions: 16,
+            num_interactions_per_proof: 0,
             max_message_width: 3,
         };
         let more_interactions = LogUpAir {
@@ -163,12 +198,14 @@ mod tests {
     fn security_term_absent_without_interactions() {
         let none = LogUpAir {
             num_interactions: 0,
+            num_interactions_per_proof: 0,
             max_message_width: 4,
         };
         assert!(security_term(&none, &shape(128), &GrindingSites::NONE).is_none());
 
         let some = LogUpAir {
             num_interactions: 4,
+            num_interactions_per_proof: 0,
             max_message_width: 4,
         };
         let term =
@@ -183,6 +220,7 @@ mod tests {
     fn lookup_challenge_grinding_boosts_the_term() {
         let air = LogUpAir {
             num_interactions: 4,
+            num_interactions_per_proof: 0,
             max_message_width: 4,
         };
         let s = shape(128);
@@ -223,6 +261,7 @@ mod tests {
         let s = shape(64);
         let logup = LogUpAir {
             num_interactions: 1 << 10,
+            num_interactions_per_proof: 0,
             max_message_width: 8,
         };
 

@@ -747,6 +747,7 @@ fn security_estimate_with_and_without_lookups() {
     // many such interactions per row (range checks, memory, …).
     let lookups = LogUpAir {
         num_interactions: 256,
+        num_interactions_per_proof: 0,
         max_message_width: 16,
     };
 
