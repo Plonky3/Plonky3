@@ -40,24 +40,29 @@ pub(crate) fn partial_fold<R: SliceRegister + Send, const TILE: usize>(
 ) -> Vec<Challenge> {
     assert!(fits(&stripes, TILE), "whole lines and whole tiles");
     let blocks = groups.div_ceil(8);
-    let acc = (0..stripes.len() / TILE).into_par_iter().par_fold_reduce(
-        || vec![[R::zero(); OUT_BYTES]; 8 * blocks],
-        |mut acc, tile| {
-            fold_tile::<R, TILE>(
-                stripes,
-                &eq_outer[8 * TILE * tile..][..8 * TILE],
-                tile,
-                &mut acc,
-            );
-            acc
-        },
-        |mut x, y| {
-            for (x, y) in x.iter_mut().flatten().zip(y.iter().flatten()) {
-                *x = x.xor(*y);
-            }
-            x
-        },
-    );
+    let tiles = stripes.len() / TILE;
+    // One run of tiles per worker: each extra accumulator costs a zeroing and a merge of every group.
+    let acc = (0..tiles)
+        .into_par_iter()
+        .with_min_len(tiles.div_ceil(current_num_threads()))
+        .par_fold_reduce(
+            || vec![[R::zero(); OUT_BYTES]; 8 * blocks],
+            |mut acc, tile| {
+                fold_tile::<R, TILE>(
+                    stripes,
+                    &eq_outer[8 * TILE * tile..][..8 * TILE],
+                    tile,
+                    &mut acc,
+                );
+                acc
+            },
+            |mut x, y| {
+                for (x, y) in x.iter_mut().flatten().zip(y.iter().flatten()) {
+                    *x = x.xor(*y);
+                }
+                x
+            },
+        );
     // Groups past the useful ones fold zero padding, so only the useful ones are stored.
     let mut out = vec![Challenge::ZERO; stripes.positions()];
     for (acc, out) in acc.iter().take(groups).zip(out.as_chunks_mut::<64>().0) {
