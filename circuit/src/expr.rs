@@ -336,11 +336,18 @@ impl<F: Field, EF: ExtensionField<F>> PrimeCharacteristicRing for Ext<F, EF> {
     }
 }
 
-impl<F: Field> Algebra<F> for Base<F> {}
+// A linear combination in one chunk is a chain of sums, so each product folds into its sum's row.
+impl<F: Field> Algebra<F> for Base<F> {
+    const BATCHED_LC_CHUNK: usize = 1;
+}
 
-impl<F: Field, EF: ExtensionField<F>> Algebra<EF> for Ext<F, EF> {}
+impl<F: Field, EF: ExtensionField<F>> Algebra<EF> for Ext<F, EF> {
+    const BATCHED_LC_CHUNK: usize = 1;
+}
 
-impl<F: Field, EF: ExtensionField<F>> Algebra<Base<F>> for Ext<F, EF> {}
+impl<F: Field, EF: ExtensionField<F>> Algebra<Base<F>> for Ext<F, EF> {
+    const BATCHED_LC_CHUNK: usize = 1;
+}
 
 #[cfg(test)]
 mod tests {

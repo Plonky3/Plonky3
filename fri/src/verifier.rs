@@ -1103,6 +1103,20 @@ where
     Ok((folded_eval, rows))
 }
 
+/// The openings of one height at one point, which share the denominator `z - x`.
+struct OpeningGroup<EF, Challenge> {
+    /// Log height of the matrices, blowup included.
+    log_height: usize,
+    /// The opening point `z`.
+    point: EF,
+    /// The native value of `z`, which identifies the group.
+    value: Challenge,
+    /// `S(z)`: every claimed value of the group, combined with its rung of the alpha ladder.
+    sum_at_z: EF,
+    /// The first opening point of the group, as (batch, matrix, point).
+    position: (usize, usize, usize),
+}
+
 /// Given the query indices and one shared opening per input batch, check every
 /// opening proof and combine the opened values into each query's FRI inputs
 /// along the path specified by its index.
@@ -1290,147 +1304,125 @@ where
         query_points.push(points);
     }
 
-    // Each opening point `z` contributes a quotient `(f(z) - f(x)) / (z - x)` per query.
+    // Within one `log_height`, the powers of `alpha` form a ladder.
     //
-    // The denominators depend only on the query point and the opening points.
+    // It advances once per opened column, walking (batch, matrix, point, column) in a fixed order.
     //
-    // So all of them are inverted together, in one batch.
+    // The column counts come from the claimed evaluations, which bind every opened row.
     //
-    // A coinciding opening point makes its quotient undefined and is rejected by position.
+    // So the ladder is the same for every query.
     //
-    // The collection order is the accumulation order below: query, batch, matrix, point.
-    let mut denominators = Vec::new();
-    let mut positions = Vec::new();
-    for points in &query_points {
-        for (batch, CommitmentOpening { matrices: mats, .. }) in
-            commitments_with_opening_points.iter().enumerate()
-        {
-            for (
-                matrix,
-                MatrixOpening {
-                    domain: mat_domain,
-                    points: mat_points_and_values,
-                },
-            ) in mats.iter().enumerate()
-            {
-                let log_height = log2_strict_usize(mat_domain.size()) + log_blowup;
-                let x = &points[&log_height];
-                for (point, PointOpening { point: z, .. }) in
-                    mat_points_and_values.iter().enumerate()
-                {
-                    denominators.push(z.clone() - x.clone());
-                    positions.push((batch, matrix, point));
-                }
-            }
-        }
-    }
-    let inverse_denominators = arith.batch_inverse(&denominators, |at| {
-        let (batch, matrix, point) = positions[at];
-        FriError::OpeningPointMatchesQueryPoint {
-            batch,
-            matrix,
-            point,
-        }
-    })?;
-    let mut inverse_denominators = inverse_denominators.into_iter();
-
-    // Within one `log_height`, the powers of `alpha` form a ladder that advances once per opened
-    // column, walking (batch, matrix, point, column) in a fixed order. The column counts come from
-    // the claimed evaluations, which the opening check above has already bound every opened row
-    // to, so the ladder is the same for every query.
-    //
-    // Writing `off` for the ladder position at which an opening point starts, that point contributes
-    //
-    //     sum_i alpha^(off + i) * (p_i(z) - p_i(x)) / (z - x).
-    //
-    // The `p_i(z)` half depends only on the claimed values, so it is shared across all queries. The
-    // remaining `p_i(x)` half is a dot product of extension-field powers against an authenticated
-    // base-field row. This mirrors how the prover builds the same combination in `TwoAdicFriPcs`.
-    let opening_points = || {
-        commitments_with_opening_points.iter().flat_map(
-            |CommitmentOpening { matrices: mats, .. }| {
-                mats.iter().flat_map(
-                    |MatrixOpening {
-                         domain: mat_domain,
-                         points: mat_points_and_values,
-                     }| {
-                        let log_height = log2_strict_usize(mat_domain.size()) + log_blowup;
-                        mat_points_and_values.iter().map(
-                            move |PointOpening {
-                                      values: ps_at_z, ..
-                                  }| (log_height, ps_at_z),
-                        )
-                    },
-                )
-            },
-        )
-    };
-
     // The longest ladder over all heights bounds how many powers of alpha are ever needed.
     let mut ladder_lens = BTreeMap::<usize, usize>::new();
-    for (log_height, ps_at_z) in opening_points() {
-        *ladder_lens.entry(log_height).or_insert(0) += ps_at_z.len();
+    for CommitmentOpening { matrices: mats, .. } in commitments_with_opening_points {
+        for MatrixOpening { domain, points } in mats {
+            let log_height = log2_strict_usize(domain.size()) + log_blowup;
+            *ladder_lens.entry(log_height).or_insert(0) +=
+                points.iter().map(|p| p.values.len()).sum::<usize>();
+        }
     }
     let alpha_powers: Vec<A::EF> = alpha
         .powers()
         .take(ladder_lens.into_values().max().unwrap_or(0))
         .collect();
 
-    // For each opening point, its ladder start and `sum_i alpha^(off + i) * p_i(z)`.
+    // Every matrix of one height opened at one point shares the denominator `z - x`.
+    //
+    // So the openings are grouped by height and point, and each query divides once per group.
+    //
+    //     reduced(x) = sum_g (S_g(z) - S_g(x)) / (z_g - x)
+    //
+    // `S_g` combines every column of group `g` with its rung of the alpha ladder.
+    //
+    // The `S_g(z)` half depends only on the claimed values, so every query shares it.
+    let mut groups: Vec<OpeningGroup<A::EF, A::Challenge>> = Vec::new();
+    // The group and ladder start of every opening point, in (batch, matrix, point) order.
+    let mut placements: Vec<(usize, usize)> = Vec::new();
     let mut ladder_offsets = BTreeMap::<usize, usize>::new();
-    let point_reductions: Vec<(usize, A::EF)> = opening_points()
-        .map(|(log_height, ps_at_z)| {
-            let offset = ladder_offsets.entry(log_height).or_insert(0);
-            let start = *offset;
-            *offset += ps_at_z.len();
-            let sum_at_z = dot_product(
-                alpha_powers[start..*offset].iter().cloned(),
-                ps_at_z.iter().cloned(),
-            );
-            (start, sum_at_z)
-        })
-        .collect();
+    for (batch, CommitmentOpening { matrices: mats, .. }) in
+        commitments_with_opening_points.iter().enumerate()
+    {
+        for (matrix, MatrixOpening { domain, points }) in mats.iter().enumerate() {
+            let log_height = log2_strict_usize(domain.size()) + log_blowup;
+            for (
+                point,
+                PointOpening {
+                    point: z,
+                    values: ps_at_z,
+                },
+            ) in points.iter().enumerate()
+            {
+                let offset = ladder_offsets.entry(log_height).or_insert(0);
+                let start = *offset;
+                *offset += ps_at_z.len();
+                let sum_at_z = dot_product(
+                    alpha_powers[start..*offset].iter().cloned(),
+                    ps_at_z.iter().cloned(),
+                );
+                let value = arith.value_ext(z);
+                let group = if let Some(group) = groups
+                    .iter()
+                    .position(|g| g.log_height == log_height && g.value == value)
+                {
+                    groups[group].sum_at_z += sum_at_z;
+                    group
+                } else {
+                    groups.push(OpeningGroup {
+                        log_height,
+                        point: z.clone(),
+                        value,
+                        sum_at_z,
+                        position: (batch, matrix, point),
+                    });
+                    groups.len() - 1
+                };
+                placements.push((group, start));
+            }
+        }
+    }
+
+    // The denominators of every query and group, inverted together in one batch.
+    //
+    // A coinciding opening point makes its quotient undefined and is rejected by position.
+    let mut denominators = Vec::with_capacity(query_points.len() * groups.len());
+    for points in &query_points {
+        for group in &groups {
+            denominators.push(group.point.clone() - points[&group.log_height].clone());
+        }
+    }
+    let inverses = arith.batch_inverse(&denominators, |at| {
+        let (batch, matrix, point) = groups[at % groups.len()].position;
+        FriError::OpeningPointMatchesQueryPoint {
+            batch,
+            matrix,
+            point,
+        }
+    })?;
 
     // Combine each query's authenticated values into its reduced openings.
     (0..indices.len())
         .map(|query| {
-            // log_height -> reduced_opening
-            let mut reduced_openings = BTreeMap::<usize, A::EF>::new();
-            // The per-opening-point data above, replayed in the same order for this query.
-            let mut reductions = point_reductions.iter();
-
+            // `S_g(x)` of every group, a dot product of ladder powers against authenticated rows.
+            let mut sums_at_x = vec![A::EF::ZERO; groups.len()];
+            let mut placements = placements.iter();
             for (batch, (batch_rows, CommitmentOpening { matrices: mats, .. })) in opened_rows
                 .iter()
                 .zip(commitments_with_opening_points.iter())
                 .enumerate()
             {
-                // For each matrix in the commitment
-                for (
-                    matrix,
-                    (
-                        mat_opening,
-                        MatrixOpening {
-                            domain: mat_domain,
-                            points: mat_points_and_values,
-                        },
-                    ),
-                ) in batch_rows[query].iter().zip(mats.iter()).enumerate()
+                for (matrix, (mat_opening, MatrixOpening { points, .. })) in
+                    batch_rows[query].iter().zip(mats.iter()).enumerate()
                 {
-                    let log_height = log2_strict_usize(mat_domain.size()) + log_blowup;
-
-                    let ro = reduced_openings
-                        .entry(log_height) // Get a mutable reference to the entry.
-                        .or_insert(A::EF::ZERO);
-
-                    // For each opening point, combine this matrix's polynomials with the powers of
-                    // alpha at that point's ladder position, map the combination through
-                    // `(f(z) - f(x))/(z - x)` and add it to the reduced opening for this log_height.
+                    // Every point of a matrix combines the same row, one ladder rung further on.
+                    //
+                    // So the first point's combination, times `alpha^(start - first)`, is every other.
+                    let mut first: Option<(usize, A::EF)> = None;
                     for (
                         point,
                         PointOpening {
                             values: ps_at_z, ..
                         },
-                    ) in mat_points_and_values.iter().enumerate()
+                    ) in points.iter().enumerate()
                     {
                         if mat_opening.len() != ps_at_z.len() {
                             return Err(FriError::PointEvaluationCountMismatch {
@@ -1441,29 +1433,32 @@ where
                                 got: ps_at_z.len(),
                             });
                         }
-                        // Inverse of (z - x), precomputed in the batched inversion above. The
-                        // pre-pass pushed exactly one denominator per (query, batch, matrix,
-                        // point) in this iteration order, so the next entry corresponds to this
-                        // opening point.
-                        let quotient = inverse_denominators
-                            .next()
-                            .expect("one inverse was precomputed per opening point");
-                        // The ladder position and the combination of the claimed values at this
-                        // opening point, precomputed above in this same iteration order.
-                        let (offset, sum_at_z) = reductions
-                            .next()
-                            .expect("one reduction was precomputed per opening point");
-
-                        // Note we just checked batch proofs to ensure mat_opening is correct.
-                        // x, z were sent by the verifier.
-                        // ps_at_z was sent to the verifier and we are using fri to prove it is correct.
-                        let sum_at_x = A::EF::batched_linear_combination(
-                            &alpha_powers[*offset..*offset + mat_opening.len()],
-                            mat_opening,
-                        );
-                        *ro += (sum_at_z.clone() - sum_at_x) * quotient;
+                        let &(group, start) =
+                            placements.next().expect("one placement per opening point");
+                        let (first_start, combination) = first.get_or_insert_with(|| {
+                            let combination = A::EF::batched_linear_combination(
+                                &alpha_powers[start..start + mat_opening.len()],
+                                mat_opening,
+                            );
+                            (start, combination)
+                        });
+                        sums_at_x[group] += if start == *first_start {
+                            combination.clone()
+                        } else {
+                            combination.clone() * alpha_powers[start - *first_start].clone()
+                        };
                     }
                 }
+            }
+
+            // log_height -> reduced_opening
+            let mut reduced_openings = BTreeMap::<usize, A::EF>::new();
+            let query_inverses = &inverses[query * groups.len()..(query + 1) * groups.len()];
+            for ((group, sum_at_x), inverse) in groups.iter().zip(sums_at_x).zip(query_inverses) {
+                *reduced_openings
+                    .entry(group.log_height)
+                    .or_insert(A::EF::ZERO) +=
+                    (group.sum_at_z.clone() - sum_at_x) * inverse.clone();
             }
 
             // The blowup-height entry exists only for a height-1 (constant) trace matrix.
