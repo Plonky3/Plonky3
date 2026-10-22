@@ -919,7 +919,8 @@ mod tests {
         let input: Vec<T> = (0..width * height).map(make).collect();
         let mut output = vec![zero; input.len()];
         // SAFETY: both buffers have the nonzero width * height shape used by
-        // these tests, and the typed engine never reinterprets elements as words.
+        // these tests. The typed engine never reinterprets elements as words
+        // or deinitializes output slots, so the initialized view stays valid.
         unsafe {
             transpose_parallel::<false, T>(
                 &input,

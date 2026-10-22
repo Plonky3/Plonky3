@@ -525,7 +525,9 @@ mod simd {
                 calls.set(count + 1);
                 &src
             },
-            &mut dst,
+            // SAFETY: the kernel only writes valid input copies, keeping
+            // every previously initialized slot valid even if row() panics.
+            unsafe { super::super::rectangular::initialized_output(&mut dst) },
             L,
         );
         assert_eq!(dst, [7; L * L]);
@@ -549,7 +551,9 @@ mod simd {
                 calls.set(count + 1);
                 if count < L { &src } else { &src[..0] }
             },
-            &mut dst,
+            // SAFETY: the kernel only writes valid input copies, keeping
+            // every previously initialized slot valid even if row() panics.
+            unsafe { super::super::rectangular::initialized_output(&mut dst) },
             L,
         );
     }

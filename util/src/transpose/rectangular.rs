@@ -193,7 +193,10 @@ pub fn transpose<T: Copy + Send + Sync>(
     width: usize,
     height: usize,
 ) {
-    super::portable::transpose_uninit(input, initialized_output(output), width, height);
+    // SAFETY: the typed engine only writes valid input copies and never
+    // deinitializes an output slot, including if shape validation panics.
+    let output = unsafe { initialized_output(output) };
+    super::portable::transpose_uninit(input, output, width, height);
 }
 
 /// Transpose elements whose representation can be copied through integer words.
@@ -221,8 +224,13 @@ pub unsafe fn transpose_words<T: Copy + Send + Sync>(
 }
 
 /// View initialized storage as writable slots without changing its validity.
+///
+/// # Safety
+/// Every returned slot must remain initialized with a valid T, including on
+/// panic paths. Callers may only overwrite slots with valid values, never
+/// deinitialize them, because the original storage remains initialized T.
 #[inline]
-pub(super) const fn initialized_output<T>(output: &mut [T]) -> &mut [MaybeUninit<T>] {
+pub(super) const unsafe fn initialized_output<T>(output: &mut [T]) -> &mut [MaybeUninit<T>] {
     // SAFETY: MaybeUninit<T> has T's layout and alignment, and permits every
     // initialized T. Users of this private view must never deinitialize slots.
     unsafe { core::slice::from_raw_parts_mut(output.as_mut_ptr().cast(), output.len()) }
