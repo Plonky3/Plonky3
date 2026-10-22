@@ -160,7 +160,12 @@ fn the_default_parameters_reach_128_bits() {
 
 #[test]
 fn the_balanced_shape_follows_the_paper_split() {
+    // Sizes past the target's addressable bits are covered by the oversized-shape test.
+    let max = usize::BITS as usize - 7;
     for (n, r1) in [(20, 11), (24, 14), (26, 15), (28, 16), (6, 6), (8, 6)] {
+        if n > max {
+            continue;
+        }
         let shape = BitShape::balanced(n).unwrap();
         assert_eq!((shape.log_rows(), shape.num_variables()), (r1, n));
     }
@@ -181,6 +186,18 @@ fn oversized_shapes_are_refused_before_their_arithmetic() {
     }
     // The largest addressable shape is still accepted.
     assert_eq!(BitShape::new(6, max - 6).unwrap().num_variables(), max);
+    // On 32-bit targets a row count alone can exceed the bound, which must be refused, not wrapped.
+    for log_rows in 6..=31 {
+        let shape = BitShape::new(log_rows, 0);
+        if log_rows <= max {
+            assert_eq!(shape.unwrap().num_variables(), log_rows);
+        } else {
+            assert!(matches!(
+                shape,
+                Err(ParamsError::TooManyVariables { num_variables, .. }) if num_variables == log_rows
+            ));
+        }
+    }
     // The balanced split refuses before multiplying the size.
     for n in [max + 1, usize::MAX] {
         assert!(matches!(

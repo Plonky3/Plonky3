@@ -43,17 +43,17 @@ impl BitShape {
                 maximum: MAX_LOG_ROWS,
             });
         }
-        // The bound is checked before the sum, which could otherwise wrap.
-        if log_columns > MAX_VARIABLES - log_rows {
-            return Err(ParamsError::TooManyVariables {
+        // The sum is checked, since either dimension can exceed the bound on its own.
+        match log_rows.checked_add(log_columns) {
+            Some(num_variables) if num_variables <= MAX_VARIABLES => Ok(Self {
+                log_rows,
+                log_columns,
+            }),
+            _ => Err(ParamsError::TooManyVariables {
                 num_variables: log_rows.saturating_add(log_columns),
                 maximum: MAX_VARIABLES,
-            });
+            }),
         }
-        Ok(Self {
-            log_rows,
-            log_columns,
-        })
     }
 
     /// The fastest split of `2^n` bits, `r1 = ceil(0.6 n) - 1` within `[6, min(n, 31)]` (Section 7).
