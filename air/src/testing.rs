@@ -28,6 +28,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_field::{Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue};
+use thiserror::Error;
 
 use crate::{
     AirBuilder, AirLayout, ExtensionBuilder, PassthroughNamedAirBuilder, PermutationAirBuilder,
@@ -157,14 +158,7 @@ where
         &self,
         evaluate: impl FnOnce(&mut RecordingAirBuilder<'_, F, EF, B, E>),
     ) -> ConstraintEvaluations<B, E> {
-        self.shape();
-        let mut builder = RecordingAirBuilder {
-            inputs: self,
-            preprocessed: RowWindow::from_two_rows(&self.preprocessed[0], &self.preprocessed[1]),
-            recording: ConstraintEvaluations {
-                assertions: Vec::new(),
-            },
-        };
+        let mut builder = RecordingAirBuilder::new(self);
         evaluate(&mut builder);
         builder.recording
     }
@@ -313,9 +307,10 @@ impl<B: Copy + PartialEq, E: Copy + PartialEq> ConstraintEvaluations<B, E> {
 }
 
 /// First difference, with structural checks performed before any value checks.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum ConstraintMismatch<B, E> {
     /// Total assertion counts differ.
+    #[error("assertion counts differ: expected {expected}, actual {actual}")]
     Count {
         /// Reference count.
         expected: usize,
@@ -323,6 +318,7 @@ pub enum ConstraintMismatch<B, E> {
         actual: usize,
     },
     /// The base/extension routing differs at a global assertion index.
+    #[error("assertion {assertion} kind differs: expected {expected:?}, actual {actual:?}")]
     Kind {
         /// Global assertion index.
         assertion: usize,
@@ -332,6 +328,7 @@ pub enum ConstraintMismatch<B, E> {
         actual: AssertionKind,
     },
     /// Concrete values differ at a global assertion index.
+    #[error("assertion {assertion} value differs: expected {expected:?}, actual {actual:?}")]
     Value {
         /// Global assertion index.
         assertion: usize,
@@ -343,7 +340,8 @@ pub enum ConstraintMismatch<B, E> {
 }
 
 /// A packed comparison failure, located at the first disagreeing SIMD lane.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[error("SIMD lane {lane}: {mismatch}")]
 pub struct PackedMismatch<F, EF> {
     /// SIMD lane checked against its scalar reference.
     pub lane: usize,
@@ -395,10 +393,68 @@ pub fn compare_packed<F: Field, EF: ExtensionField<F>>(
 ///
 /// The expression bounds deliberately allow test rings as well as fields and packed fields.
 /// Named assertions are recorded without evaluating their labels.
+/// Construct once and warm up before benchmarking, then reset between evaluations to reuse storage.
+/// With at most the warmed-up assertion count, recording itself performs no further allocations.
+///
+/// ```
+/// use p3_air::{AirBuilder, AirLayout, WindowAccess};
+/// use p3_air::testing::{EvaluationInputs, RecordingAirBuilder};
+/// use p3_baby_bear::BabyBear as F;
+/// use p3_field::PrimeCharacteristicRing;
+///
+/// let inputs = EvaluationInputs::<F>::from_fn(
+///     AirLayout { main_width: 1, ..Default::default() },
+///     vec![], || F::from_u32(7), || F::ZERO,
+/// );
+/// let evaluate = |b: &mut RecordingAirBuilder<'_, F>| {
+///     let x = b.main().current_slice()[0];
+///     b.assert_zero(x * x + x);
+/// };
+/// let mut recorder = RecordingAirBuilder::new(&inputs);
+/// evaluate(&mut recorder); // Warm up assertion storage before timing.
+/// for _ in 0..10 {
+///     recorder.reset();
+///     evaluate(&mut recorder); // Time this evaluation in a benchmark.
+///     core::hint::black_box(recorder.recording().assertions());
+/// }
+/// ```
 pub struct RecordingAirBuilder<'a, F, EF = F, B = F, E = EF> {
     inputs: &'a EvaluationInputs<F, EF, B, E>,
+    main: RowWindow<'a, B>,
     preprocessed: RowWindow<'a, B>,
+    permutation: RowWindow<'a, E>,
     recording: ConstraintEvaluations<B, E>,
+}
+impl<'a, F, EF, B, E> RecordingAirBuilder<'a, F, EF, B, E> {
+    /// Create an empty recorder borrowing immutable inputs, validating all row widths once.
+    ///
+    /// # Panics
+    /// Panics if any current/next row widths differ, including in release builds.
+    pub fn new(inputs: &'a EvaluationInputs<F, EF, B, E>) -> Self {
+        inputs.shape();
+        Self {
+            inputs,
+            main: RowWindow::from_two_rows(&inputs.main[0], &inputs.main[1]),
+            preprocessed: RowWindow::from_two_rows(
+                &inputs.preprocessed[0],
+                &inputs.preprocessed[1],
+            ),
+            permutation: RowWindow::from_two_rows(&inputs.permutation[0], &inputs.permutation[1]),
+            recording: ConstraintEvaluations {
+                assertions: Vec::new(),
+            },
+        }
+    }
+
+    /// Clear prior assertions while retaining their allocation for the next evaluation.
+    pub fn reset(&mut self) {
+        self.recording.assertions.clear();
+    }
+
+    /// Borrow all assertions emitted since construction or the last reset.
+    pub const fn recording(&self) -> &ConstraintEvaluations<B, E> {
+        &self.recording
+    }
 }
 impl<'a, F, EF, B, E> AirBuilder for RecordingAirBuilder<'a, F, EF, B, E>
 where
@@ -413,7 +469,7 @@ where
     type PublicVar = F;
     type PeriodicVar = B;
     fn main(&self) -> Self::MainWindow {
-        RowWindow::from_two_rows(&self.inputs.main[0], &self.inputs.main[1])
+        self.main
     }
     fn preprocessed(&self) -> &Self::PreprocessedWindow {
         &self.preprocessed
@@ -466,7 +522,7 @@ where
     type RandomVar = E;
     type PermutationVar = E;
     fn permutation(&self) -> Self::MP {
-        RowWindow::from_two_rows(&self.inputs.permutation[0], &self.inputs.permutation[1])
+        self.permutation
     }
     fn permutation_randomness(&self) -> &[E] {
         &self.inputs.permutation_randomness
@@ -480,4 +536,59 @@ where
     F: Field,
     B: Algebra<F> + Copy + Send + Sync,
 {
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+
+    use super::*;
+
+    #[test]
+    fn reset_retains_storage_for_same_smaller_and_empty_recordings() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        fn check<B, E>(inputs: &EvaluationInputs<F, EF, B, E>)
+        where
+            B: Algebra<F> + Copy + Send + Sync,
+            E: Algebra<B> + Algebra<EF> + Copy + Send + Sync,
+        {
+            let mut recorder = RecordingAirBuilder::new(inputs);
+            for _ in 0..32 {
+                recorder.assert_zero(inputs.selectors[0]);
+                recorder.assert_zero_ext(inputs.permutation_values[0]);
+            }
+            let capacity = recorder.recording.assertions.capacity();
+            let allocation = recorder.recording.assertions.as_ptr();
+            for count in [64, 63, 2, 0, 0, 64] {
+                recorder.reset();
+                assert!(recorder.recording().assertions().is_empty());
+                for i in 0..count {
+                    if i % 2 == 0 {
+                        recorder.assert_zero(inputs.selectors[0]);
+                    } else {
+                        recorder.assert_zero_ext(inputs.permutation_values[0]);
+                    }
+                }
+                assert_eq!(recorder.recording().assertions().len(), count);
+                assert_eq!(recorder.recording.assertions.capacity(), capacity);
+                assert_eq!(recorder.recording.assertions.as_ptr(), allocation);
+            }
+        }
+        let input = EvaluationInputs::<F, EF>::from_fn(
+            AirLayout {
+                num_permutation_values: 1,
+                ..Default::default()
+            },
+            alloc::vec![],
+            || F::ONE,
+            || EF::ONE,
+        );
+        check(&input);
+        check(&EvaluationInputs::pack(
+            &alloc::vec![input; <F as Field>::Packing::WIDTH],
+        ));
+    }
 }

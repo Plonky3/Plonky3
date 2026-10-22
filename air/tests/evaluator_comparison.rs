@@ -2,7 +2,7 @@
 
 use p3_air::testing::{
     AssertionKind, ConstraintMismatch, ConstraintValue, EvaluationInputs, PackedEvaluationInputs,
-    RecordingAirBuilder, compare_packed, compare_scalar,
+    PackedMismatch, RecordingAirBuilder, compare_packed, compare_scalar,
 };
 use p3_air::{AirBuilder, AirLayout, ExtensionBuilder, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::BabyBear;
@@ -357,7 +357,7 @@ fn packing_and_sampling_reject_inconsistent_shapes() {
     );
     let mut lanes = vec![input; <F as Field>::Packing::WIDTH];
     if lanes.len() > 1 {
-        lanes[1].periodic_values.clear();
+        lanes[1].periodic_values.push(F::ONE);
         assert!(std::panic::catch_unwind(|| EvaluationInputs::pack(&lanes)).is_err());
     }
     for rows in [0, 1] {
@@ -527,4 +527,126 @@ fn mixed_base_and_extension_arithmetic_matches_independent_reference() {
         candidate(b, constant);
     })
     .unwrap();
+}
+
+#[test]
+fn scalar_mismatch_propagates_as_an_error() {
+    fn compare() -> Result<(), Box<dyn core::error::Error>> {
+        compare_scalar(
+            &fixture::<F, EF>(0),
+            |b| b.assert_zero(F::ONE),
+            |b| b.assert_zero(F::TWO),
+        )?;
+        Ok(())
+    }
+    let err = compare().unwrap_err();
+    assert!(err.downcast_ref::<ConstraintMismatch<F, EF>>().is_some());
+    assert_eq!(
+        err.to_string(),
+        "assertion 0 value differs: expected Base(1), actual Base(2)"
+    );
+    let count = ConstraintMismatch::<F, EF>::Count {
+        expected: 3,
+        actual: 2,
+    };
+    assert_eq!(
+        count.to_string(),
+        "assertion counts differ: expected 3, actual 2"
+    );
+    let kind = ConstraintMismatch::<F, EF>::Kind {
+        assertion: 4,
+        expected: AssertionKind::Base,
+        actual: AssertionKind::Extension,
+    };
+    assert_eq!(
+        kind.to_string(),
+        "assertion 4 kind differs: expected Base, actual Extension"
+    );
+}
+
+#[test]
+fn packed_mismatch_propagates_as_an_error() {
+    fn compare() -> Result<(), Box<dyn core::error::Error>> {
+        let lanes = vec![fixture::<F, EF>(0); <F as Field>::Packing::WIDTH];
+        compare_packed(
+            &EvaluationInputs::pack(&lanes),
+            |b| b.assert_zero(F::ONE),
+            |b| b.assert_zero(<F as Field>::Packing::from(F::TWO)),
+        )?;
+        Ok(())
+    }
+    let err = compare().unwrap_err();
+    assert!(err.downcast_ref::<PackedMismatch<F, EF>>().is_some());
+    assert_eq!(
+        err.to_string(),
+        "SIMD lane 0: assertion 0 value differs: expected Base(1), actual Base(2)"
+    );
+}
+
+#[test]
+fn reusable_scalar_and_packed_recorders_preserve_interleaving() {
+    fn evaluate<AB: PermutationAirBuilder>(b: &mut AB) {
+        b.assert_zero(b.main().current_slice()[0]);
+        b.assert_zero_ext(b.permutation().next_slice()[0]);
+        b.assert_zero(b.is_last_row());
+    }
+    let input = fixture::<F, EF>(0);
+    let expected = [
+        ConstraintValue::Base(input.main[0][0]),
+        ConstraintValue::Extension(input.permutation[1][0]),
+        ConstraintValue::Base(input.selectors[1]),
+    ];
+    let mut recorder = RecordingAirBuilder::new(&input);
+    assert!(recorder.recording().assertions().is_empty());
+    for _ in 0..3 {
+        evaluate(&mut recorder);
+        assert_eq!(recorder.recording().assertions(), expected);
+        recorder.reset();
+        assert!(recorder.recording().assertions().is_empty());
+    }
+    recorder.assert_zero_ext(EF::ONE);
+    assert_eq!(
+        recorder.recording().assertions(),
+        &[ConstraintValue::Extension(EF::ONE)]
+    );
+    recorder.reset();
+    recorder.reset();
+    evaluate(&mut recorder);
+    assert_eq!(recorder.recording().assertions(), expected);
+
+    let lanes: Vec<_> = (0..<F as Field>::Packing::WIDTH)
+        .map(|i| fixture::<F, EF>(i * 13))
+        .collect();
+    let packed = EvaluationInputs::pack(&lanes);
+    let mut recorder = RecordingAirBuilder::new(&packed);
+    for _ in 0..3 {
+        evaluate(&mut recorder);
+        for (lane, input) in lanes.iter().enumerate() {
+            let values = recorder.recording().assertions();
+            assert!(
+                matches!(values[0], ConstraintValue::Base(v) if PackedValue::extract(&v, lane) == input.main[0][0])
+            );
+            assert!(
+                matches!(values[1], ConstraintValue::Extension(v) if PackedFieldExtension::<F, EF>::extract(&v, lane) == input.permutation[1][0])
+            );
+            assert!(
+                matches!(values[2], ConstraintValue::Base(v) if PackedValue::extract(&v, lane) == input.selectors[1])
+            );
+        }
+        recorder.reset();
+        assert!(recorder.recording().assertions().is_empty());
+    }
+}
+
+#[test]
+fn recorder_construction_rejects_every_malformed_window() {
+    for window in 0..3 {
+        let mut input = fixture::<F, EF>(0);
+        match window {
+            0 => input.main[1].clear(),
+            1 => input.preprocessed[1].clear(),
+            _ => input.permutation[1].clear(),
+        }
+        assert!(std::panic::catch_unwind(|| RecordingAirBuilder::new(&input)).is_err());
+    }
 }
