@@ -243,10 +243,14 @@ const fn lookup_round(
 /// `fixed::ceil_log2`. Normalization and each squared/renormalized mantissa lose less
 /// than 2^-31 logarithm bits. Referred back to the input, these losses form a geometric
 /// series totaling less than 2^-30 bits. The floor also leaves a fractional tail below
-/// one Q16 unit, so one extra unit above the nominal ceiling covers both. Powers of
-/// two have no truncation or fractional tail and remain exact.
+/// one Q16 unit, so one extra unit above the nominal ceiling covers both. Cap that
+/// guarded bound at the exact whole-bit ceiling: both bounds are monotone upper
+/// bounds, so their minimum remains conservative and monotone, and powers of two
+/// remain exact without a guard that drops at the power.
 const fn lookup_ceil_log2(value: u64) -> u64 {
-    fixed::ceil_log2(value) + if value.is_power_of_two() { 0 } else { 1 }
+    let guarded = fixed::ceil_log2(value) + 1;
+    let whole = fixed::from_bits(u64::BITS - (value - 1).leading_zeros());
+    min(guarded, whole)
 }
 
 /// Coefficient `2 · (2^log_folding_arity − 1)` of the folding round, or `None` when the arity is
@@ -569,6 +573,51 @@ mod tests {
                 expected,
                 "f={per_row}, B={per_proof}, W={width}, h={height}"
             );
+        }
+    }
+
+    #[test]
+    fn lookup_security_does_not_rise_across_power_of_two_counts() {
+        // The numerator is exactly a power of two at each center count. Its valid
+        // immediate predecessor must not cost more logarithm bits than that power.
+        for (per_row, center, width, height, at_power) in [
+            (0, 1 << 30, 2, 0, 6_291_456),
+            (0, 1 << 30, 6, u32::MAX, 6_225_920),
+            (0, 1 << 30, 14, 64, 6_160_384),
+            (1, (1 << 31) - 32, 2, 5, 6_225_920),
+            (1, (1 << 31) - 1024, 6, 10, 6_160_384),
+            (1, 1 << 30, 14, 30, 6_094_848),
+            (u32::MAX, 1 << 31, 2, 31, 4_128_768),
+            (u32::MAX, 1 << 31, 6, 31, 4_063_232),
+            (u32::MAX, 1 << 31, 14, 31, 3_997_696),
+        ] {
+            let mut previous = u64::MAX;
+            for (per_proof, expected) in [
+                (center - 1, at_power),
+                (center, at_power),
+                (center + 1, at_power - 2),
+            ] {
+                let mut air = air();
+                air.lookup = Some(LookupShape {
+                    fractions_per_row: per_row,
+                    fractions_per_proof: per_proof,
+                    max_message_width: width,
+                });
+                let instance = InstanceShape {
+                    field_bits: fixed::from_bits(128),
+                    ..instance(height)
+                };
+                let actual = security_report(&params(), &instance, &air).terms()[0].bits;
+                assert_eq!(
+                    actual, expected,
+                    "f={per_row}, B={per_proof}, W={width}, h={height}"
+                );
+                assert!(
+                    actual <= previous,
+                    "security rose with a larger proof count"
+                );
+                previous = actual;
+            }
         }
     }
 
