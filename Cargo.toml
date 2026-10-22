@@ -47,6 +47,7 @@ members = [
     "security",
     "sha256",
     "sha256-air",
+    "sphincs",
     "stir",
     "sumcheck",
     "symmetric",
@@ -106,6 +107,7 @@ serde_json = "1.0.150"
 sha2 = { version = "0.11.0", default-features = false }
 sha3 = { version = "0.12.0", default-features = false }
 shake = { version = "0.1.0", default-features = false }
+slh-dsa = { version = "0.2.0-rc.5", default-features = false }
 spin = "0.12.0"
 subtle = { version = "2.6.1", default-features = false }
 thiserror = { version = "2.0", default-features = false }
@@ -167,6 +169,7 @@ p3-rescue = { path = "rescue", version = "0.8.0" }
 p3-security = { path = "security", version = "0.8.0" }
 p3-sha256 = { path = "sha256", version = "0.8.0" }
 p3-sha256-air = { path = "sha256-air", version = "0.8.0" }
+p3-sphincs = { path = "sphincs", version = "0.8.0" }
 p3-stir = { path = "stir", version = "0.8.0" }
 p3-sumcheck = { path = "sumcheck", version = "0.8.0" }
 p3-symmetric = { path = "symmetric", version = "0.8.0" }

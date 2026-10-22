@@ -4,7 +4,7 @@ use super::rows::Rows;
 use crate::circuit::{Builder, Wire, Word};
 
 /// The initial value of BLAKE2s (RFC 7693, Section 2.6) and BLAKE3, the SHA-256 IV.
-pub(crate) const IV: [u32; 8] = [
+pub const IV: [u32; 8] = [
     0x6A09_E667,
     0xBB67_AE85,
     0x3C6E_F372,

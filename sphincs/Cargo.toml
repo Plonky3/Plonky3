@@ -1,0 +1,32 @@
+[package]
+name = "p3-sphincs"
+description = "SLH-DSA (FIPS 205) verification decomposed into its SHA-256 calls, and many signatures aggregated in one binary-field Flock proof."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tikv-jemallocator.workspace = true
+
+[features]
+parallel = ["p3-flock/parallel"]
+
+[dependencies]
+p3-flock.workspace = true
+p3-util.workspace = true
+
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+p3-keccak.workspace = true
+
+postcard = { workspace = true, features = ["alloc"] }
+slh-dsa.workspace = true
+
+[lints]
+workspace = true

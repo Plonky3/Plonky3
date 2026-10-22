@@ -1,5 +1,6 @@
 //! The SHA-256 compression function (FIPS 180-4, Section 6.2.2): the message schedule, 64 rounds and the feed-forward.
 
+pub use super::arx::IV;
 use super::{Gadget, pack_u32s, unpack_u32s};
 use crate::circuit::{Builder, Circuit, Word};
 
@@ -101,38 +102,13 @@ impl Gadget for Sha256Compress {
 
     fn circuit() -> Circuit {
         let mut c = Builder::new(&[256, 512], &[256]);
-        let state = Word::split_u32(c.input(0));
-        let mut w = Word::split_u32(c.input(1));
-
-        // The schedule: one four-operand sum per word.
-        for t in 16..64 {
-            let s0 = sigma3(&mut c, &w[t - 15], [7, 18, 3], true);
-            let s1 = sigma3(&mut c, &w[t - 2], [17, 19, 10], true);
-            let next = c.wrapping_sum(&[&s1, &w[t - 7], &s0, &w[t - 16]]);
-            w.push(next);
-        }
-
-        // Rounds: `T1` feeds both new words.
-        let mut v: [Word; 8] = core::array::from_fn(|i| state[i].clone());
-        for (t, &k) in K.iter().enumerate() {
-            let [a, b, cc, d, e, f, g, h] = &v;
-            let s1 = sigma3(&mut c, e, [6, 11, 25], false);
-            let ch = c.ch(e, f, g);
-            let k = c.literal(u64::from(k), 32);
-            let t1 = c.wrapping_sum(&[h, &s1, &ch, &k, &w[t]]);
-            let s0 = sigma3(&mut c, a, [2, 13, 22], false);
-            let maj = c.maj(a, b, cc);
-            let new_e = c.wrapping_sum(&[d, &t1]);
-            let new_a = c.wrapping_sum(&[&t1, &s0, &maj]);
-            // The words shift down a place; `a` and `e` take the new values.
-            v.rotate_right(1);
-            (v[0], v[4]) = (new_a, new_e);
-        }
-
-        // The feed-forward.
-        for (i, (s, x)) in state.iter().zip(&v).enumerate() {
-            let out = c.wrapping_sum(&[s, x]);
-            for (bit, &wire) in out.iter().enumerate() {
+        let state: [Word; 8] = Word::split_u32(c.input(0)).try_into().expect("eight words");
+        let block: [Word; 16] = Word::split_u32(c.input(1))
+            .try_into()
+            .expect("sixteen words");
+        let out = compress(&mut c, &state, &block);
+        for (i, word) in out.iter().enumerate() {
+            for (bit, &wire) in word.iter().enumerate() {
                 c.output(0, 32 * i + bit, wire);
             }
         }
@@ -151,4 +127,36 @@ impl Gadget for Sha256Compress {
     fn write_output(output: &[u32; 8], words: &mut [u64]) {
         pack_u32s(output, words);
     }
+}
+
+/// The compression on circuit words: the new chaining value from `state` and a block of big-endian words.
+pub fn compress(c: &mut Builder, state: &[Word; 8], block: &[Word; 16]) -> [Word; 8] {
+    // The schedule: one four-operand sum per word.
+    let mut w = block.to_vec();
+    for t in 16..64 {
+        let s0 = sigma3(c, &w[t - 15], [7, 18, 3], true);
+        let s1 = sigma3(c, &w[t - 2], [17, 19, 10], true);
+        let next = c.wrapping_sum(&[&s1, &w[t - 7], &s0, &w[t - 16]]);
+        w.push(next);
+    }
+
+    // Rounds: `T1` feeds both new words.
+    let mut v = state.clone();
+    for (t, &k) in K.iter().enumerate() {
+        let [a, b, cc, d, e, f, g, h] = &v;
+        let s1 = sigma3(c, e, [6, 11, 25], false);
+        let ch = c.ch(e, f, g);
+        let k = c.literal(u64::from(k), 32);
+        let t1 = c.wrapping_sum(&[h, &s1, &ch, &k, &w[t]]);
+        let s0 = sigma3(c, a, [2, 13, 22], false);
+        let maj = c.maj(a, b, cc);
+        let new_e = c.wrapping_sum(&[d, &t1]);
+        let new_a = c.wrapping_sum(&[&t1, &s0, &maj]);
+        // The words shift down a place; `a` and `e` take the new values.
+        v.rotate_right(1);
+        (v[0], v[4]) = (new_a, new_e);
+    }
+
+    // The feed-forward.
+    core::array::from_fn(|i| c.wrapping_sum(&[&state[i], &v[i]]))
 }
