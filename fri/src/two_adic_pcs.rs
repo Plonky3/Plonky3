@@ -1102,7 +1102,10 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
                 .for_each(|(xs, inverses)| {
                     // Heights are powers of two, so these blocks are all full. Scratch is
                     // 1024 extension elements per active callback, independent of height.
-                    let differences: [EF; BLOCK_SIZE] = core::array::from_fn(|i| z - xs[i]);
+                    let mut differences = [EF::ZERO; BLOCK_SIZE];
+                    for (difference, &x) in differences.iter_mut().zip(xs) {
+                        *difference = z - x;
+                    }
                     let differences = FieldArray::<EF, 4>::pack_slice(&differences);
                     let inverses = FieldArray::<EF, 4>::pack_slice_mut(inverses);
                     batch_multiplicative_inverse_general(differences, inverses, |product| {
