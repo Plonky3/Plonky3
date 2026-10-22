@@ -20,6 +20,7 @@ criterion.workspace = true
 parallel = ["p3-maybe-rayon/parallel"]
 
 [dependencies]
+hex-literal.workspace = true
 p3-binary-dft.workspace = true
 p3-binary-field.workspace = true
 p3-binary-pcs.workspace = true

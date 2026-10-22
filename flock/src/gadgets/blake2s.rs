@@ -4,8 +4,12 @@
 
 use alloc::vec::Vec;
 
-use super::arx::{G_LANES, IV, g};
+use hex_literal::hex;
+
+use super::arx::{G_LANES, IV, g, g_rows};
+use super::rows::Rows;
 use super::{Gadget, pack_u32s, unpack_u32s};
+use crate::Witness;
 use crate::circuit::{Builder, Circuit, Word};
 
 /// The message word order of each round (RFC 7693, Section 2.7).
@@ -24,6 +28,13 @@ pub(crate) const SIGMA: [[usize; 16]; 10] = [
 
 /// Input port widths in bits: the counter, the finalization word, four words of `h`, eight of `m`.
 const INPUT_BITS: [usize; 14] = [64, 32, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64];
+
+/// Slot of the constant: after 14 input and 4 output words.
+const CONST_POS: usize = 64 * 18;
+
+/// Digest of the circuit, so the word-level generator refuses any other.
+const CIRCUIT_DIGEST: [u8; 32] =
+    hex!("79114245a5dae2eb5a1fbcd2cc6e85e587ea433303b9baacad32ea0cff0755dc");
 
 /// One compression `compress(h, m, t, f0)`, with the last-node flag `f1` zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -97,5 +108,51 @@ impl Gadget for Blake2sCompress {
 
     fn write_output(output: &[u32; 8], words: &mut [u64]) {
         pack_u32s(output, words);
+    }
+
+    fn witness(circuit: &Circuit, log_instances: usize, rows: &[Self], padding: &Self) -> Witness {
+        assert_eq!(
+            circuit.digest(),
+            &CIRCUIT_DIGEST,
+            "the circuit is not this gadget's"
+        );
+        Witness::by_instance(14, log_instances, rows, padding, Self::rows)
+    }
+}
+
+impl Blake2sCompress {
+    /// One instance's `A z` and `B z`, computed on words.
+    fn rows(&self, az: &mut [u64], bz: &mut [u64]) {
+        let mut rows = Rows::new(az, bz, CONST_POS / 64);
+        rows.push(1, 1, 1);
+        let mut v: [u32; 16] = core::array::from_fn(|i| if i < 8 { self.h[i] } else { IV[i - 8] });
+        v[12] ^= self.t as u32;
+        v[13] ^= (self.t >> 32) as u32;
+        v[14] ^= self.f0;
+        // The last IV word stays a constant: the last-node flag is zero.
+        let mut literal = 0x8F00;
+        for sigma in &SIGMA {
+            for (i, &lanes) in G_LANES.iter().enumerate() {
+                let (mx, my) = (self.m[sigma[2 * i]], self.m[sigma[2 * i + 1]]);
+                g_rows(&mut rows, &mut v, &mut literal, lanes, mx, my);
+            }
+        }
+
+        // Ports: the input words, the finalization word only 32 bits wide, then the output words.
+        let mut words = [0; 14];
+        self.write_input(&mut words);
+        for (w, &word) in words.iter().enumerate() {
+            let mask = if w == 1 {
+                u64::from(u32::MAX)
+            } else {
+                u64::MAX
+            };
+            rows.port(w, word, mask);
+        }
+        for w in 0..4 {
+            let out = |i: usize| u64::from(self.h[i] ^ v[i] ^ v[i + 8]);
+            rows.port(14 + w, out(2 * w) | (out(2 * w + 1) << 32), u64::MAX);
+        }
+        rows.finish();
     }
 }
