@@ -1,6 +1,22 @@
 //! Multilinear arithmetic shared by product-tree proving and verification.
 
+use alloc::vec::Vec;
+
 use p3_field::Field;
+use p3_maybe_rayon::prelude::*;
+
+/// Sums adjacent endpoint pairs, eliminating the lowest-address variable.
+///
+/// The sums go to `spare`, which then swaps with `values`, so a halving sequence allocates once.
+pub(super) fn sum_adjacent<F: Field>(values: &mut Vec<F>, spare: &mut Vec<F>) {
+    spare.resize(values.len() / 2, F::ZERO);
+    spare
+        .par_iter_mut()
+        .zip(values.par_chunks_exact(2))
+        .with_min_task_bytes(3 * size_of::<F>())
+        .for_each(|(sum, pair)| *sum = pair[0] + pair[1]);
+    core::mem::swap(values, spare);
+}
 
 /// Combines one claim per tree with consecutive powers of one challenge.
 pub(super) fn combine<F: Field>(values: &[F], challenge: F) -> F {
