@@ -7,6 +7,7 @@ use crate::{AirBuilder, PermutationAirBuilder, WindowAccess};
 
 /// Builder input whose length can be checked against an [`AirLayout`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AirLayoutInput {
     /// Current main-trace row.
     MainCurrent,
@@ -76,18 +77,18 @@ const fn check_length(
 }
 
 impl AirLayout {
-    /// Check base input lengths against this explicit, caller-authoritative layout.
+    /// Check both main and preprocessed rows, public values, and periodic values against this explicit layout.
     ///
-    /// Checks both rows of the main and preprocessed windows, public values, and
-    /// periodic values. Returns the first mismatch. Zero widths and counts are valid.
-    /// The preprocessed width is compared with this layout, not an AIR declaration.
+    /// Returns the first mismatch; zero widths and counts are valid.
+    /// The preprocessed width comes from this layout, not an AIR declaration.
     /// Use [`Self::validate_against_permutation_builder`] to check permutation inputs too.
     ///
-    /// This is an opt-in setup/debug check. It acquires each input accessor at most
-    /// once; in particular, [`AirBuilder::main`] may construct or clone an owned
-    /// window. It does not evaluate an AIR or materialize its preprocessed or periodic
-    /// data. Successful validation only establishes input lengths and does not prove
-    /// that arbitrary AIR evaluation is panic-free.
+    /// This opt-in setup/debug check acquires each input accessor at most once and may construct or clone owned windows.
+    /// It checks lengths without evaluating an AIR or materializing preprocessed or periodic data.
+    ///
+    /// # Panics
+    ///
+    /// Panics from builder or window accessors propagate, so malformed windows may panic before returning a mismatch.
     pub fn validate_against_builder(
         &self,
         builder: &impl AirBuilder,
@@ -122,15 +123,13 @@ impl AirLayout {
 
     /// Check base and permutation input lengths against this explicit layout.
     ///
-    /// Performs [`Self::validate_against_builder`] first, then checks both
-    /// permutation rows, permutation randomness, and expected permutation values.
-    /// Returns the first mismatch. Zero widths and counts are valid.
+    /// Runs [`Self::validate_against_builder`], then checks both permutation rows, randomness, and expected values.
+    /// Returns the first mismatch; zero widths and counts are valid.
+    /// Each input accessor is acquired at most once, with the same setup/debug costs as the base check.
     ///
-    /// Like the base check, this is intended for opt-in setup/debug validation,
-    /// not a proving hot loop. Each input accessor is acquired at most once,
-    /// including [`PermutationAirBuilder::permutation`], which may construct or
-    /// clone an owned window. It does not evaluate an AIR or establish arbitrary
-    /// evaluation panic freedom.
+    /// # Panics
+    ///
+    /// Panics from builder or window accessors propagate, so malformed windows may panic before returning a mismatch.
     pub fn validate_against_permutation_builder(
         &self,
         builder: &impl PermutationAirBuilder,
