@@ -253,8 +253,8 @@ where
         bits,
         padding,
         &r,
-        lagrange_weights(z, SKIP_SIZE),
-        round1_at(z, &round1),
+        lagrange_weights(&z, SKIP_SIZE),
+        round1_at(&z, &round1),
     );
     let span = info_span!("rounds").entered();
     let rounds = (0..r.len())

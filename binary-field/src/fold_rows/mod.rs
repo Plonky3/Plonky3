@@ -29,7 +29,6 @@ mod gfni;
 )]
 mod portable;
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::PrimeCharacteristicRing;
@@ -132,14 +131,23 @@ pub fn fold_rows(
     portable::fold_tables(stripes, groups, weights)
 }
 
-/// The definition, bit by bit.
-fn fold_bits(z: &[u64], k_log: usize, eq_outer: &[Poly192]) -> Vec<Poly192> {
-    let mut out = vec![Poly192::ZERO; 1 << k_log];
-    for (o, &eq) in eq_outer.iter().enumerate() {
+/// The weighted sum over rows of every position, bit by bit, over any ring.
+///
+/// # Panics
+///
+/// - A row's bits run past `words`.
+#[must_use]
+pub fn fold_bits<E: PrimeCharacteristicRing>(
+    words: &[u64],
+    log_row_bits: usize,
+    weights: &[E],
+) -> Vec<E> {
+    let mut out = E::zero_vec(1 << log_row_bits);
+    for (o, eq) in weights.iter().enumerate() {
         for (i, out) in out.iter_mut().enumerate() {
-            let bit = (o << k_log) + i;
-            if (z[bit / 64] >> (bit % 64)) & 1 == 1 {
-                *out += eq;
+            let bit = (o << log_row_bits) + i;
+            if (words[bit / 64] >> (bit % 64)) & 1 == 1 {
+                *out += eq.dup();
             }
         }
     }

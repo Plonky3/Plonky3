@@ -6,10 +6,11 @@ use alloc::vec::Vec;
 use p3_binary_field::TowerLevel;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_commit::{ExtensionMmcs, Mmcs, MmcsArith};
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::ring_switch::bits::{BitRingSwitch, BitTensor, SuffixTensors};
+use p3_sumcheck::ring_switch::bits::{BitRingSwitch, BitTensor, BitTensorArith, SuffixTensors};
+use p3_verifier_arith::Lift;
 use p3_whir::WhirDomain;
 use tracing::instrument;
 
@@ -226,6 +227,28 @@ where
         self.inner.observe_commitment(commitment, challenger);
     }
 
+    /// As [`Self::observe`], within an arithmetic, `target` being the commitment there.
+    pub fn observe_in<A, C>(
+        &self,
+        arith: &mut A,
+        commitment: &<MT as Mmcs<F>>::Commitment,
+        target: &<MT as MmcsArith<A, A::F>>::Target,
+        challenger: &mut C,
+    ) where
+        A: Lift<Val = F, Challenge = EF>,
+        C: CanObserve<F> + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<A, A::F>,
+    {
+        self.inner
+            .observe_commitment_in(arith, commitment, target, challenger);
+    }
+
+    /// The Merkle scheme every round commits with.
+    #[must_use]
+    pub const fn mmcs(&self) -> &MT {
+        self.inner.mmcs()
+    }
+
     /// A claim's element split over the trailing coordinates the first fold binds, for the deferred switch.
     ///
     /// `folded` holds one value per bit of the inner coordinates, the leading `log_outer` of `high` folded away.
@@ -317,8 +340,47 @@ where
             .verify_weighted_deferred(commitment, claims, proof, challenger)?)
     }
 
+    /// As [`Self::verify`], within an arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify`].
+    #[instrument(skip_all, name = "bit verify")]
+    pub fn verify_in<'s, A, C>(
+        &'s self,
+        arith: &mut A,
+        commitment: &<MT as MmcsArith<A, A::F>>::Target,
+        claims: &[WeightedClaim<A::EF>],
+        proof: &BooleanWhirDeferredProof<F, EF, MT>,
+        challenger: &mut C,
+    ) -> Result<(), CommitmentError>
+    where
+        A: BitTensorArith + Lift<Val = F, Challenge = EF>,
+        C: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<
+                A,
+                A::F,
+                Commitment = <MT as Mmcs<F>>::Commitment,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+            >,
+        ExtensionMmcs<F, EF, &'s MT>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+                Target = <MT as MmcsArith<A, A::F>>::Target,
+            >,
+    {
+        self.check_arity(claims)?;
+        Ok(self
+            .inner
+            .verify_weighted_deferred_in(arith, commitment, claims, proof, challenger)?)
+    }
+
     /// Refuse more claims than were certified, or a point that does not name the kept coordinates, before the transcript moves.
-    fn check_arity(&self, claims: &[WeightedClaim<EF>]) -> Result<(), CommitmentError> {
+    fn check_arity<E>(&self, claims: &[WeightedClaim<E>]) -> Result<(), CommitmentError> {
         if claims.len() > self.max_claims {
             return Err(CommitmentError::TooManyClaims {
                 maximum: self.max_claims,

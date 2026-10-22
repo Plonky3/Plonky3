@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use p3_binary_dft::{BasisNtt, RijndaelLde};
 use p3_binary_field::{Poly64, Poly192, Rijndael8b};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, Field, PrimeCharacteristicRing};
 
 /// Variables the univariate skip binds at once: the bit inside a packed word.
 pub(crate) const K_SKIP: usize = 6;
@@ -70,19 +70,19 @@ fn subspace_denominator(n: usize) -> Poly64 {
 /// The Lagrange basis of the subspace `phi8(0..n)` at `z`, by prefix and suffix products.
 ///
 /// No inverse of `z + node` is taken, so `z` may be a node.
-pub(crate) fn lagrange_weights(z: Poly192, n: usize) -> Vec<Poly192> {
+pub(crate) fn lagrange_weights<E: Algebra<Poly192>>(z: &E, n: usize) -> Vec<E> {
     assert!(n.is_power_of_two() && n <= 128, "a subspace of the window");
     let d = Poly192::from(subspace_denominator(n));
     // Prefix pass: weight `i` holds the product over the nodes before it.
-    let mut weights = vec![d; n];
+    let mut weights = vec![E::from(d); n];
     for i in 1..n {
-        weights[i] = weights[i - 1] * (z + PHI8[i - 1]);
+        weights[i] = weights[i - 1].dup() * (z.dup() + Poly192::from(PHI8[i - 1]));
     }
     // Suffix pass: multiply in the product over the nodes after it.
-    let mut suffix = Poly192::ONE;
+    let mut suffix = E::ONE;
     for i in (0..n).rev() {
-        weights[i] *= suffix;
-        suffix *= z + PHI8[i];
+        weights[i] *= suffix.dup();
+        suffix *= z.dup() + Poly192::from(PHI8[i]);
     }
     weights
 }
@@ -92,22 +92,22 @@ pub(crate) fn lagrange_weights(z: Poly192, n: usize) -> Vec<Poly192> {
 /// # Panics
 ///
 /// - There is not a power of two of at most 128 values.
-pub(crate) fn interpolate(z: Poly192, values: &[Poly192]) -> Poly192 {
+pub(crate) fn interpolate<E: Algebra<Poly192>>(z: &E, values: &[E]) -> E {
     lagrange_weights(z, values.len())
         .into_iter()
         .zip(values)
-        .map(|(w, &v)| w * v)
+        .map(|(w, v)| w * v.dup())
         .sum()
 }
 
 /// The round-1 message at `z`: known on `Lambda`, zero on `S`, so one polynomial on the 128-point window.
-pub(crate) fn round1_at(z: Poly192, message: &[Poly192]) -> Poly192 {
+pub(crate) fn round1_at<E: Algebra<Poly192>>(z: &E, message: &[E]) -> E {
     assert_eq!(message.len(), SKIP_SIZE, "one value per coset point");
     let window = lagrange_weights(z, 2 * SKIP_SIZE);
     window[SKIP_SIZE..]
         .iter()
         .zip(message)
-        .map(|(&w, &v)| w * v)
+        .map(|(w, v)| w.dup() * v.dup())
         .sum()
 }
 
@@ -172,7 +172,7 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(0x1A6);
         for n in [1, 2, 8, 64, 128] {
             for (i, &node) in PHI8[..n].iter().enumerate() {
-                let w = lagrange_weights(Poly192::from(node), n);
+                let w = lagrange_weights(&Poly192::from(node), n);
                 for (j, &wj) in w.iter().enumerate() {
                     assert_eq!(
                         wj,
@@ -182,7 +182,7 @@ mod tests {
                 }
             }
             let z: Poly192 = rng.random();
-            let total: Poly192 = lagrange_weights(z, n).into_iter().sum();
+            let total: Poly192 = lagrange_weights(&z, n).into_iter().sum();
             assert_eq!(total, Poly192::ONE, "n={n}");
         }
     }
@@ -201,7 +201,7 @@ mod tests {
             .map(|i| p(Poly192::from(PHI8[SKIP_SIZE + i])))
             .collect();
         let z: Poly192 = rng.random();
-        assert_eq!(round1_at(z, &message), p(z));
+        assert_eq!(round1_at(&z, &message), p(z));
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
         let mut extended = on_s.clone();
         lde.extend(&mut extended);
         for (i, &e) in extended.iter().enumerate() {
-            let w = lagrange_weights(Poly192::from(PHI8[SKIP_SIZE + i]), SKIP_SIZE);
+            let w = lagrange_weights(&Poly192::from(PHI8[SKIP_SIZE + i]), SKIP_SIZE);
             let want: Poly192 = w.iter().zip(&on_s).map(|(&w, &v)| w * v).sum();
             assert_eq!(e, want, "point {i}");
         }

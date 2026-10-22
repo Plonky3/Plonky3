@@ -32,7 +32,7 @@ fn bit(words: &[u64], i: usize) -> bool {
 ///
 /// Lagrange over `S` for the six low bits, the MSB-first multilinear eq for the rest.
 fn quirky_eval(words: &[u64], point: &QuirkyPoint) -> Poly192 {
-    let lagrange = lagrange_weights(point.skip, SKIP_SIZE);
+    let lagrange = lagrange_weights(&point.skip, SKIP_SIZE);
     let eq = Poly::new_from_point(&point.rest, Poly192::ONE);
     assert_eq!(eq.as_slice().len(), words.len(), "one eq weight per row");
     eq.as_slice()
@@ -71,7 +71,7 @@ fn reference_prove(
     let reversed: Vec<Poly192> = r.iter().rev().copied().collect();
     let eq = Poly::new_from_point(&reversed, Poly192::ONE);
     let at_lambda: Vec<Vec<Poly192>> = (0..SKIP_SIZE)
-        .map(|i| lagrange_weights(Poly192::from(phi8((SKIP_SIZE + i) as u8)), SKIP_SIZE))
+        .map(|i| lagrange_weights(&Poly192::from(phi8((SKIP_SIZE + i) as u8)), SKIP_SIZE))
         .collect();
     let row_at = |words: &[u64], x: usize, weights: &[Poly192]| -> Poly192 {
         (0..SKIP_SIZE)
@@ -93,10 +93,10 @@ fn reference_prove(
     let (z, round1_pow) = transcript.round1(&round1);
 
     // The multilinear rounds on the tables folded at `z`.
-    let lagrange = lagrange_weights(z, SKIP_SIZE);
+    let lagrange = lagrange_weights(&z, SKIP_SIZE);
     let mut folded =
         tables.map(|t| Poly::new((0..n_rows).map(|x| row_at(t, x, &lagrange)).collect()));
-    let mut claim = round1_at(z, &round1);
+    let mut claim = round1_at(&z, &round1);
     let mut rounds = Vec::new();
     for j in 0..r.len() {
         let eq = Point::new(r[j + 1..].to_vec()).equality_weights_lsb();

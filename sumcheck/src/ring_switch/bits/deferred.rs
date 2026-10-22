@@ -11,16 +11,16 @@
 use alloc::vec::Vec;
 
 use p3_binary_field::{BitCoordinates, TowerLevel};
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
 
 use super::basis::{Coefficients, CoordinateSums};
-use super::claims::{BitRingSwitchClaims, ClaimElements};
+use super::claims::ClaimElements;
 use super::equality::FactoredEquality;
 use super::reduction::{BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError};
-use super::tensor::BitTensor;
+use super::tensor::{BitTensor, BitTensorArith};
 use crate::layout::InitialWeight;
 use crate::product_polynomial::ProductPolynomial;
 use crate::strategy::{SumcheckProver, VariableOrder};
@@ -194,32 +194,28 @@ where
 
 /// What a verifier keeps of a deferred batch: the sum it claims, and its combined weight.
 #[derive(Debug)]
-pub struct DeferredClosing<'a, F, EF = F> {
-    /// The claims the batch reduced.
-    claims: &'a BitRingSwitchClaims<F, EF>,
-    /// Every claim's second stage.
-    batches: Vec<BitRingSwitchBatch<'a, F, EF>>,
+pub struct DeferredClosing<EF> {
+    /// Every claim's kept coordinates.
+    highs: Vec<Vec<EF>>,
+    /// The batching point's equality table, one entry per row of an element.
+    eq_batch: Vec<EF>,
     /// `lambda^i`, one per claim.
     weights: Vec<EF>,
     /// `sum_i lambda^i * sigma_i`, derived from the elements' rows.
     sum: EF,
 }
 
-impl<'a, F, EF> DeferredClosing<'a, F, EF>
-where
-    F: TowerLevel + p3_challenger::fs::TranscriptField,
-    EF: BitCoordinates + ExtensionField<F>,
-{
+impl<EF: PrimeCharacteristicRing> DeferredClosing<EF> {
     /// Keep what the batch fixed for the commitment's run to close.
     pub(super) const fn new(
-        claims: &'a BitRingSwitchClaims<F, EF>,
-        batches: Vec<BitRingSwitchBatch<'a, F, EF>>,
+        highs: Vec<Vec<EF>>,
+        eq_batch: Vec<EF>,
         weights: Vec<EF>,
         sum: EF,
     ) -> Self {
         Self {
-            claims,
-            batches,
+            highs,
+            eq_batch,
             weights,
             sum,
         }
@@ -227,18 +223,40 @@ where
 
     /// The sum the combined weight claims against the packing.
     #[must_use]
-    pub const fn claimed_sum(&self) -> EF {
-        self.sum
+    pub fn claimed_sum(&self) -> EF {
+        self.sum.dup()
     }
 
     /// The combined weight's multilinear extension at a point naming every kept coordinate.
     ///
+    /// Each claim's weight is its equality element's rows, batched by the batching point.
+    ///
     /// # Errors
     ///
     /// Returns an error unless the point names the packing's variables.
-    pub fn weight_at(&self, point: &Point<EF>) -> Result<EF, BitRingSwitchError> {
-        self.claims
-            .closing_weight(&self.batches, &self.weights, 0, point)
+    pub fn weight_at<A: BitTensorArith<EF = EF>>(
+        &self,
+        arith: &mut A,
+        point: &Point<EF>,
+    ) -> Result<EF, BitRingSwitchError> {
+        let expected = self.highs[0].len();
+        if point.num_variables() != expected {
+            return Err(BitRingSwitchError::WidthMismatch {
+                expected,
+                actual: point.num_variables(),
+            });
+        }
+        let mut closing = A::EF::ZERO;
+        for (high, weight) in self.highs.iter().zip(&self.weights) {
+            let batched = arith
+                .equality_rows(high, point.as_slice())
+                .into_iter()
+                .zip(&self.eq_batch)
+                .map(|(row, eq)| row * eq.dup())
+                .sum::<EF>();
+            closing += weight.dup() * batched;
+        }
+        Ok(closing)
     }
 }
 
@@ -265,11 +283,12 @@ mod tests {
     use p3_challenger::{CanSample, HashChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_keccak::Keccak256Hash;
+    use p3_verifier_arith::Native;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::ring_switch::bits::{BitPacking, SuffixTensors};
+    use crate::ring_switch::bits::{BitPacking, BitRingSwitchClaims, SuffixTensors};
 
     type EF = BinaryField16;
     type Chal = BinaryChallenger<EF, HashChallenger<u8, Keccak256Hash, 32>>;
@@ -324,16 +343,18 @@ mod tests {
             .verify_deferred(&proof, &readings(&claims, &proof), &mut verifier)
             .unwrap();
 
-        // The dense combined weight, against which every message is a plain sumcheck.
-        let mut dense = Poly::<EF>::zero(packing.num_variables());
-        for (batch, &scale) in closing.batches.iter().zip(&closing.weights) {
-            for (entry, &value) in dense
-                .as_mut_slice()
-                .iter_mut()
-                .zip(batch.weights().as_slice())
-            {
-                *entry += scale * value;
-            }
+        // The dense combined weight, the closing weight at every corner.
+        let n = packing.num_variables();
+        let mut dense = Poly::<EF>::zero(n);
+        for (w, entry) in dense.as_mut_slice().iter_mut().enumerate() {
+            let corner = Point::new(
+                (0..n)
+                    .map(|j| EF::from_bool(w >> (n - 1 - j) & 1 == 1))
+                    .collect(),
+            );
+            *entry = closing
+                .weight_at(&mut Native::<EF, EF>::new(), &corner)
+                .unwrap();
         }
         let mut evals = Poly::new(packing.poly().as_slice().to_vec());
         let inner = |e: &Poly<EF>, w: &Poly<EF>| -> EF {
@@ -363,7 +384,12 @@ mod tests {
 
         // The closing weight is the dense weight's extension at any point.
         let point = Point::<EF>::rand(&mut rng, packing.num_variables());
-        assert_eq!(closing.weight_at(&point).unwrap(), dense.eval_base(&point));
+        assert_eq!(
+            closing
+                .weight_at(&mut Native::<EF, EF>::new(), &point)
+                .unwrap(),
+            dense.eval_base(&point)
+        );
     }
 
     #[test]

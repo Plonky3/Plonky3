@@ -4,15 +4,21 @@
 //!
 //! Without it the proof binds no input or output: a throughput benchmark that attests to no particular hash.
 //!
-//! Usage: `prove_hash <blake3|blake2s|sha256|keccak> <log_instances> [runs] [--public]`.
+//! With `--blake3` the transcript and the Merkle tree hash with BLAKE3 instead of Keccak-256.
+//!
+//! Usage: `prove_hash <blake3|blake2s|sha256|keccak> <log_instances> [runs] [--public] [--blake3]`.
 
 use std::time::{Duration, Instant};
 
+use p3_blake3::Blake3;
 use p3_flock::gadgets::blake2s::Blake2sCompress;
 use p3_flock::gadgets::blake3::Blake3Compress;
 use p3_flock::gadgets::keccak::KeccakF1600;
 use p3_flock::gadgets::sha256::Sha256Compress;
-use p3_flock::{Batch, FlockChallenger, FlockConfig, Gadget, Port, PublicPorts, prove, verify};
+use p3_flock::{
+    Batch, FlockChallenger, FlockConfig, FlockHash, FlockProof, Gadget, Port, PublicPorts, prove,
+    verify,
+};
 use p3_keccak::Keccak256Hash;
 use rand::rngs::SmallRng;
 use rand::{Rng, RngExt, SeedableRng};
@@ -33,8 +39,8 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 pub static malloc_conf: &[u8] = b"dirty_decay_ms:-1,thp:always,metadata_thp:always\0";
 
 /// A fresh sponge.
-fn sponge() -> FlockChallenger {
-    FlockChallenger::from_hasher(b"flock-bench".to_vec(), Keccak256Hash)
+fn sponge<H: FlockHash>() -> FlockChallenger<H> {
+    FlockChallenger::from_hasher(b"flock-bench".to_vec(), H::default())
 }
 
 /// Median of a run.
@@ -43,8 +49,8 @@ fn median(mut xs: Vec<Duration>) -> Duration {
     xs[xs.len() / 2]
 }
 
-/// Time witness, prove and verify of one gadget over `runs` runs.
-fn run<G: Gadget + Sync>(
+/// Time witness, prove and verify of one gadget over `runs` runs, hashing with `H`.
+fn run<G: Gadget + Sync, H: FlockHash>(
     name: &str,
     log_n: usize,
     runs: usize,
@@ -86,7 +92,7 @@ fn run<G: Gadget + Sync>(
         }
 
         let t = Instant::now();
-        let proof = prove(&config, &batch, &statement, witness, &mut sponge()).expect("prove");
+        let proof = prove(&config, &batch, &statement, witness, &mut sponge::<H>()).expect("prove");
         pro.push(t.elapsed());
 
         let t = Instant::now();
@@ -112,7 +118,7 @@ fn run<G: Gadget + Sync>(
 }
 
 /// Serialized proof size in bytes.
-fn postcard_len(proof: &p3_flock::FlockProof) -> usize {
+fn postcard_len<H: FlockHash>(proof: &FlockProof<H>) -> usize {
     postcard::to_allocvec(proof).expect("serialize").len()
 }
 
@@ -131,25 +137,34 @@ fn main() {
     let log_n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(16);
     let runs: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3);
     let public = args.iter().any(|a| a == "--public");
+    if args.iter().any(|a| a == "--blake3") {
+        dispatch::<Blake3>(hash, log_n, runs, public);
+    } else {
+        dispatch::<Keccak256Hash>(hash, log_n, runs, public);
+    }
+}
+
+/// Run the named gadget, the transcript and the Merkle tree hashing with `H`.
+fn dispatch<H: FlockHash>(hash: &str, log_n: usize, runs: usize, public: bool) {
     match hash {
-        "blake3" => run("blake3", log_n, runs, public, |rng| Blake3Compress {
+        "blake3" => run::<_, H>("blake3", log_n, runs, public, |rng| Blake3Compress {
             cv: rng.random(),
             block: rng.random(),
             counter: rng.next_u64(),
             block_len: 64,
             flags: 11,
         }),
-        "blake2s" => run("blake2s", log_n, runs, public, |rng| Blake2sCompress {
+        "blake2s" => run::<_, H>("blake2s", log_n, runs, public, |rng| Blake2sCompress {
             h: rng.random(),
             m: rng.random(),
             t: rng.next_u64(),
             f0: u32::MAX,
         }),
-        "sha256" => run("sha256", log_n, runs, public, |rng| Sha256Compress {
+        "sha256" => run::<_, H>("sha256", log_n, runs, public, |rng| Sha256Compress {
             state: rng.random(),
             block: rng.random(),
         }),
-        "keccak" => run("keccak", log_n, runs, public, |rng| {
+        "keccak" => run::<_, H>("keccak", log_n, runs, public, |rng| {
             KeccakF1600(core::array::from_fn(|_| rng.next_u64()))
         }),
         other => panic!("unknown hash {other}"),

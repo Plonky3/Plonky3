@@ -2,8 +2,10 @@
 
 use core::fmt;
 
+use p3_keccak::Keccak256Hash;
 use serde::{Deserialize, Serialize};
 
+use crate::config::FlockHash;
 use crate::opening::{Commitment, OpeningProof};
 use crate::piop::PiopProof;
 
@@ -11,16 +13,17 @@ use crate::piop::PiopProof;
 ///
 /// The proof is not zero-knowledge.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct FlockProof {
+#[serde(bound = "")]
+pub struct FlockProof<H: FlockHash = Keccak256Hash> {
     /// Commitment to the packed witness.
     pub commitment: Commitment,
     /// The reductions to one witness claim.
     pub piop: PiopProof,
     /// Opening of that claim.
-    pub opening: OpeningProof,
+    pub opening: OpeningProof<H>,
 }
 
-impl fmt::Debug for FlockProof {
+impl<H: FlockHash> fmt::Debug for FlockProof<H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // The opening proof has no `Debug` form.
         f.debug_struct("FlockProof")

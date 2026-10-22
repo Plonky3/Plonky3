@@ -7,7 +7,7 @@ use core::ops::Deref;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{ExtensionMmcs, Mmcs};
+use p3_commit::{ExtensionMmcs, Mmcs, MmcsArith};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
@@ -18,6 +18,7 @@ use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
 use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::{InitialWeight, Layout, SuffixProver, Verifier as LayoutVerifier};
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
+use p3_verifier_arith::{Lift, Native};
 use tracing::instrument;
 
 use crate::WhirConfigError;
@@ -579,11 +580,54 @@ where
         commitment: &MT::Commitment,
         proof: &WhirProof<F, EF, MT>,
         table_shapes: &[TableShape],
-        weight: InitialWeightCheck<'_, EF>,
+        weight: InitialWeightCheck<'_, Native<F, EF>>,
         challenger: &mut Challenger,
     ) -> Result<(), VerifierError> {
+        self.verify_with_initial_weight_in(
+            &mut Native::new(),
+            commitment,
+            proof,
+            table_shapes,
+            weight,
+            challenger,
+        )
+    }
+
+    /// As [`Self::verify_with_initial_weight`], within an arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify_with_initial_weight`].
+    pub fn verify_with_initial_weight_in<'s, A, Ch>(
+        &'s self,
+        arith: &mut A,
+        commitment: &<MT as MmcsArith<A, A::F>>::Target,
+        proof: &WhirProof<F, EF, MT>,
+        table_shapes: &[TableShape],
+        weight: InitialWeightCheck<'_, A>,
+        challenger: &mut Ch,
+    ) -> Result<(), VerifierError>
+    where
+        A: Lift<Val = F, Challenge = EF>,
+        Ch: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<
+                A,
+                A::F,
+                Commitment = <MT as Mmcs<F>>::Commitment,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+            >,
+        ExtensionMmcs<F, EF, &'s MT>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+                Target = <MT as MmcsArith<A, A::F>>::Target,
+            >,
+    {
         let strategy = <SuffixProver<F, EF> as Layout<F, EF>>::strategy();
-        let mut layout = LayoutVerifier::<F, EF>::new(table_shapes, strategy);
+        let mut layout = LayoutVerifier::<A::F, A::EF>::new(table_shapes, strategy);
         if proof.initial_ood_answers.len() != self.commitment_ood_samples {
             return Err(VerifierError::InitialOodAnswerCountMismatch {
                 expected: self.commitment_ood_samples,
@@ -591,14 +635,14 @@ where
             });
         }
         for &eval in &proof.initial_ood_answers {
-            layout.add_virtual_eval(eval, challenger);
+            layout.add_virtual_eval_in(arith, eval, challenger);
         }
         self.config
             .validate_initial_claims(self.commitment_ood_samples.saturating_add(1))?;
         let verifier =
             WhirVerifier::new(&self.config, &self.dft, &self.mmcs, strategy.variable_order);
         verifier
-            .verify_with_initial_weight(proof, challenger, commitment, &layout, weight)
+            .verify_with_initial_weight_in(arith, proof, challenger, commitment, &layout, weight)
             .map(|_| ())
     }
 }

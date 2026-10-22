@@ -123,6 +123,11 @@ impl<Val: Field, Challenge: ExtensionField<Val>> Arith for Native<Val, Challenge
         Poly::new(evals).eval_ext::<Val>(point)
     }
 
+    #[inline]
+    fn eq_table(&mut self, point: &[Challenge]) -> Vec<Challenge> {
+        Poly::new_from_point(point, Challenge::ONE).into_evals()
+    }
+
     fn insert_at(
         &mut self,
         index: &usize,

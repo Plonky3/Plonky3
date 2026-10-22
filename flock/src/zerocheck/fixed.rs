@@ -10,7 +10,7 @@
 use alloc::vec::Vec;
 
 use p3_binary_field::{Poly64, Poly192};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, Dup, Field, PrimeCharacteristicRing};
 
 use crate::skip::phi8;
 
@@ -86,10 +86,11 @@ pub(crate) fn gamma_powers() -> [Poly192; MEDIUM_VALUES] {
 }
 
 /// The eq coordinates past the skip, low variable first: the fixed ones, then the drawn ones.
-pub(crate) fn eq_coordinates(outer: &[Poly192]) -> Vec<Poly192> {
+pub(crate) fn eq_coordinates<E: Algebra<Poly192>>(outer: &[E]) -> Vec<E> {
     fixed_challenges()
         .into_iter()
-        .chain(outer.iter().copied())
+        .map(E::from)
+        .chain(outer.iter().map(Dup::dup))
         .collect()
 }
 

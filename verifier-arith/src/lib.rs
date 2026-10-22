@@ -14,7 +14,9 @@ pub mod two_adic;
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
-use p3_field::{Algebra, BasedVectorSpace, Dup, ExtensionField, Field, TwoAdicField};
+use p3_field::{
+    Algebra, BasedVectorSpace, Dup, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
+};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::eval_multilinear_recursive;
 
@@ -114,6 +116,21 @@ pub trait Arith {
     /// As [`Self::eval_multilinear`], for challenge-field values.
     fn eval_multilinear_ext(&mut self, evals: &[Self::EF], point: &Point<Self::EF>) -> Self::EF {
         eval_multilinear_recursive(evals, point.as_slice())
+    }
+
+    /// `eq(point, x)` for every hypercube point `x`, the first coordinate binding the most significant index bit.
+    fn eq_table(&mut self, point: &[Self::EF]) -> Vec<Self::EF> {
+        let mut table = alloc::vec![Self::EF::ONE];
+        for r in point {
+            table = table
+                .into_iter()
+                .flat_map(|t| {
+                    let high = t.dup() * r.dup();
+                    [t - high.dup(), high]
+                })
+                .collect();
+        }
+        table
     }
 
     /// The row holding `value` at the position the low `log_len` index bits name.
@@ -259,4 +276,72 @@ where
         .zip(lower_half)
         .map(|(then, otherwise)| arith.select(top, then, otherwise))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
+    use proptest::prelude::*;
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<BabyBear, 4>;
+
+    /// Native values without the native overrides, so the provided methods run.
+    struct Plain(Native<F, EF>);
+
+    impl Arith for Plain {
+        type Val = F;
+        type Challenge = EF;
+        type F = F;
+        type EF = EF;
+        type Bit = bool;
+        type Index = usize;
+
+        fn bit(&self, bit: &bool) -> F {
+            self.0.bit(bit)
+        }
+
+        fn index_bits(&mut self, index: &usize, count: usize) -> Vec<bool> {
+            self.0.index_bits(index, count)
+        }
+
+        fn index_shr(&self, index: &usize, shift: usize) -> usize {
+            self.0.index_shr(index, shift)
+        }
+
+        fn constant_index(&mut self, value: usize) -> usize {
+            value
+        }
+
+        fn index_with_high(&mut self, low: &usize, low_bits: usize, high: usize) -> usize {
+            self.0.index_with_high(low, low_bits, high)
+        }
+
+        fn batch_inverse<E>(
+            &mut self,
+            values: &[EF],
+            zero: impl FnOnce(usize) -> E,
+        ) -> Result<Vec<EF>, E> {
+            self.0.batch_inverse(values, zero)
+        }
+
+        fn assert_zero<E>(&mut self, value: EF, err: impl FnOnce() -> E) -> Result<(), E> {
+            self.0.assert_zero(value, err)
+        }
+
+        fn coefficients(&mut self, value: &EF) -> Vec<F> {
+            self.0.coefficients(value)
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn the_provided_eq_table_is_the_native_one(point in prop::collection::vec(any::<u32>(), 0..8)) {
+            let point: Vec<EF> = point.into_iter().map(|x| EF::from(F::new(x))).collect();
+            prop_assert_eq!(Plain(Native::new()).eq_table(&point), Native::<F, EF>::new().eq_table(&point));
+        }
+    }
 }

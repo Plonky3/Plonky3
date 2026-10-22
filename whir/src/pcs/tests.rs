@@ -1860,12 +1860,13 @@ mod initial_weight {
     use p3_sumcheck::TableShape;
     use p3_sumcheck::layout::{InitialWeight, Layout, SuffixProver, Table};
     use p3_sumcheck::strategy::VariableOrder;
+    use p3_verifier_arith::Native;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::{EF, F, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, challenger};
-    use crate::InitialWeightCheck;
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+    use crate::{InitialWeightCheck, WeightEval};
 
     type L = SuffixProver<F, EF>;
 
@@ -1968,8 +1969,8 @@ mod initial_weight {
             .open_with_initial_weight(data, weight, &mut prover)
             .unwrap();
 
-        let weight_at = |point: &Point<EF>| weights.eval_ext::<F>(point);
-        let verify = |sum: EF, weight_at: &dyn Fn(&Point<EF>) -> EF| {
+        let weight_at = |_: &mut Native<F, EF>, point: &Point<EF>| weights.eval_ext::<F>(point);
+        let verify = |sum: EF, weight_at: &WeightEval<'_, Native<F, EF>>| {
             let mut verifier = challenger();
             <TestWhirPcs<L> as MultilinearPcs<EF, _>>::observe_commitment(
                 &pcs,
@@ -1991,7 +1992,8 @@ mod initial_weight {
 
         // A wrong sum, or a weight read at another polynomial, is refused.
         assert!(verify(sum + EF::ONE, &weight_at).is_err());
-        let other = |point: &Point<EF>| weight_at(point) + EF::ONE;
+        let other =
+            |arith: &mut Native<F, EF>, point: &Point<EF>| weight_at(arith, point) + EF::ONE;
         assert!(verify(sum, &other).is_err());
     }
 }

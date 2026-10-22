@@ -16,7 +16,9 @@ tikv-jemallocator.workspace = true
 parallel = ["p3-maybe-rayon/parallel", "p3-flock/parallel"]
 
 [dependencies]
+p3-challenger.workspace = true
 p3-circuit.workspace = true
+p3-commit.workspace = true
 p3-field.workspace = true
 p3-flock.workspace = true
 p3-koala-bear.workspace = true
@@ -24,6 +26,7 @@ p3-maybe-rayon.workspace = true
 p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
+p3-verifier-arith.workspace = true
 
 blake3.workspace = true
 rand.workspace = true
@@ -32,8 +35,6 @@ thiserror.workspace = true
 [dev-dependencies]
 p3-air = { path = "../air" }
 p3-batch-stark = { path = "../batch-stark" }
-p3-challenger = { path = "../challenger" }
-p3-commit = { path = "../commit" }
 p3-dft = { path = "../dft" }
 p3-fri = { path = "../fri" }
 p3-keccak = { path = "../keccak" }

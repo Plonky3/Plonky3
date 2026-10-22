@@ -5,7 +5,9 @@ use core::marker::PhantomData;
 use core::ops::AddAssign;
 
 use p3_binary_field::BitCoordinates;
+use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::poly::Poly;
+use p3_verifier_arith::{Arith, Native};
 use serde::{Deserialize, Serialize};
 
 use super::basis::Coefficients;
@@ -473,6 +475,33 @@ pub struct MalformedBitTensor {
     pub expected: usize,
     /// The count the data supplied.
     pub actual: usize,
+}
+
+/// The tensor algebra `Challenge ⊗ Val` and `Challenge ⊗ Challenge`, within an arithmetic.
+pub trait BitTensorArith: Arith {
+    /// The columns of the element whose rows are `rows`.
+    fn tensor_columns(&mut self, rows: &[Self::F]) -> Vec<Self::EF>;
+
+    /// The rows of `prod_i (1 + a_i ⊗ 1 + 1 ⊗ b_i)`, the equality polynomial lifted into the algebra.
+    fn equality_rows(&mut self, a: &[Self::EF], b: &[Self::EF]) -> Vec<Self::EF>;
+}
+
+impl<F, EF> BitTensorArith for Native<F, EF>
+where
+    F: Field + BitCoordinates,
+    EF: ExtensionField<F> + BitCoordinates,
+{
+    fn tensor_columns(&mut self, rows: &[F]) -> Vec<EF> {
+        BitTensor::<EF, F>::from_rows(rows.to_vec()).columns()
+    }
+
+    fn equality_rows(&mut self, a: &[EF], b: &[EF]) -> Vec<EF> {
+        let mut element = BitTensor::<EF>::one();
+        for (&a, &b) in a.iter().zip(b) {
+            element.mul_equality_factor(a, b);
+        }
+        element.rows
+    }
 }
 
 #[cfg(test)]

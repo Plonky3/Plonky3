@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_binary_pcs::whir::preset::keccak64::{self, Commitment, OpeningProof};
+use p3_binary_pcs::whir::preset::keccak64::{self, Commitment, OpeningProof, WitnessCommitment};
 use p3_binary_pcs::whir::{CommitmentParams, RegionLayout, WeightedOpening};
 use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;

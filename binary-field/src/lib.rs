@@ -35,7 +35,7 @@ pub use bitslice::{
 };
 pub use challenger::BinaryChallenger;
 pub use coordinates::BitCoordinates;
-pub use fold_rows::fold_rows;
+pub use fold_rows::{fold_bits, fold_rows};
 pub use gf2::Gf2;
 pub use ghash::Ghash128;
 #[cfg(any(

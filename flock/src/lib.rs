@@ -10,6 +10,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+mod arith;
 mod batch;
 mod circuit;
 mod config;
@@ -31,16 +32,17 @@ pub mod zerocheck;
 #[cfg(test)]
 mod tests;
 
+pub use arith::FlockArith;
 pub use batch::{Batch, BatchError};
 pub use circuit::{Builder, Circuit, Port, Wire, Word};
-pub use config::{FlockChallenger, FlockConfig, PcsParams};
+pub use config::{FlockChallenger, FlockConfig, FlockHash, PcsParams};
 pub use error::{ProvingError, VerificationError};
 pub use gadgets::Gadget;
 pub use point::{QuirkyClaim, QuirkyPoint};
 pub use ports::PublicPorts;
 pub use proof::FlockProof;
 pub use prover::prove;
-pub use verifier::verify;
+pub use verifier::{verify, verify_in};
 pub use witness::Witness;
 
 /// The committed field: a witness packs 64 bits per element.

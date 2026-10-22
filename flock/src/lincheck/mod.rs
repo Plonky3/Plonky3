@@ -21,11 +21,12 @@ mod tests;
 use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptError;
+use p3_field::{Algebra, Dup};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use self::prover::{prove, prove_folded};
-pub use self::verifier::verify;
+pub use self::verifier::{verify, verify_in};
 use crate::point::{QuirkyClaim, QuirkyPoint};
 use crate::ports::PortsError;
 use crate::skip::{K_SKIP, interpolate};
@@ -84,10 +85,10 @@ pub enum LincheckError {
 /// # Errors
 ///
 /// The point does not name the batch's variables past the skip.
-fn split_point<'p>(
-    point: &'p QuirkyPoint,
+fn split_point<'p, E>(
+    point: &'p QuirkyPoint<E>,
     batch: &Batch<'_>,
-) -> Result<(&'p [Challenge], &'p [Challenge]), LincheckError> {
+) -> Result<(&'p [E], &'p [E]), LincheckError> {
     let expected = batch.log_n() - K_SKIP;
     if point.rest.len() != expected {
         return Err(LincheckError::PointArity {
@@ -99,17 +100,17 @@ fn split_point<'p>(
 }
 
 /// The claim the slices leave: their interpolant at a fresh skip coordinate, at the instance and sumcheck coordinates.
-fn slice_claim(
-    skip: Challenge,
-    outer: &[Challenge],
-    inner: &[Challenge],
-    slices: &[Challenge],
-) -> QuirkyClaim {
+fn slice_claim<E: Algebra<Challenge>>(
+    skip: E,
+    outer: &[E],
+    inner: &[E],
+    slices: &[E],
+) -> QuirkyClaim<E> {
     QuirkyClaim {
+        value: interpolate(&skip, slices),
         point: QuirkyPoint {
             skip,
-            rest: [outer, inner].concat(),
+            rest: outer.iter().chain(inner).map(Dup::dup).collect(),
         },
-        value: interpolate(skip, slices),
     }
 }

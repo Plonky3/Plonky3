@@ -4,21 +4,43 @@ use alloc::vec::Vec;
 
 use p3_binary_field::fold_rows;
 use p3_binary_pcs::whir::{WeightedClaim, WeightedOpening};
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Algebra, Dup, PrimeCharacteristicRing};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
+use p3_verifier_arith::{Arith, Native};
 
-use crate::Challenge;
 use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
+use crate::{Challenge, Val};
 
 /// A point: `skip` on the skip domain for the six low bits, `rest` multilinear, most significant first.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QuirkyPoint {
+pub struct QuirkyPoint<E = Challenge> {
     /// The univariate coordinate.
-    pub skip: Challenge,
+    pub skip: E,
     /// The multilinear coordinates, most significant first: instance bits, then inner bits.
-    pub rest: Vec<Challenge>,
+    pub rest: Vec<E>,
+}
+
+impl<E: Algebra<Challenge>> QuirkyPoint<E> {
+    /// As [`QuirkyPoint::eq_weights`], within an arithmetic.
+    ///
+    /// # Panics
+    ///
+    /// - The point has fewer than `vars` multilinear coordinates.
+    pub fn eq_weights_in<A: Arith<EF = E>>(&self, arith: &mut A, vars: usize) -> Vec<E> {
+        let lagrange = lagrange_weights(&self.skip, SKIP_SIZE);
+        arith
+            .eq_table(&self.rest[self.rest.len() - vars..])
+            .into_iter()
+            .flat_map(|e| lagrange.iter().map(move |l| e.dup() * l.dup()))
+            .collect()
+    }
+
+    /// The coordinates in transcript order: the univariate one, then the multilinear ones.
+    pub fn coordinates(&self) -> impl Iterator<Item = E> + '_ {
+        core::iter::once(self.skip.dup()).chain(self.rest.iter().map(Dup::dup))
+    }
 }
 
 impl QuirkyPoint {
@@ -29,11 +51,7 @@ impl QuirkyPoint {
     /// - The point has fewer than `vars` multilinear coordinates.
     #[must_use]
     pub fn eq_weights(&self, vars: usize) -> Vec<Challenge> {
-        let lagrange = lagrange_weights(self.skip, SKIP_SIZE);
-        Poly::new_from_point(&self.rest[self.rest.len() - vars..], Challenge::ONE)
-            .iter()
-            .flat_map(|&e| lagrange.iter().map(move |&l| e * l))
-            .collect()
+        self.eq_weights_in(&mut Native::<Val, Challenge>::new(), vars)
     }
 
     /// The extension of packed instance-major bits at this point, by one fold over the instances.
@@ -53,31 +71,26 @@ impl QuirkyPoint {
             .map(|(&w, &v)| w * v)
             .sum()
     }
-
-    /// The coordinates in transcript order: the univariate one, then the multilinear ones.
-    pub fn coordinates(&self) -> impl Iterator<Item = Challenge> + '_ {
-        core::iter::once(self.skip).chain(self.rest.iter().copied())
-    }
 }
 
 /// A claim on the witness extension at a quirky point.
 #[must_use = "the claim is sound only once opened against the witness commitment"]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QuirkyClaim {
+pub struct QuirkyClaim<E = Challenge> {
     /// The point.
-    pub point: QuirkyPoint,
+    pub point: QuirkyPoint<E>,
     /// The claimed value.
-    pub value: Challenge,
+    pub value: E,
 }
 
-impl QuirkyClaim {
+impl<E: Algebra<Challenge>> QuirkyClaim<E> {
     /// The claim as a weighted one: Lagrange weights at the skip coordinate on the absorbed bits.
     #[must_use]
-    pub fn into_weighted(self) -> WeightedClaim<Challenge> {
+    pub fn into_weighted(self) -> WeightedClaim<E> {
         WeightedClaim {
             opening: WeightedOpening {
                 high: Point::new(self.point.rest),
-                low_weights: lagrange_weights(self.point.skip, SKIP_SIZE),
+                low_weights: lagrange_weights(&self.point.skip, SKIP_SIZE),
             },
             value: self.value,
         }

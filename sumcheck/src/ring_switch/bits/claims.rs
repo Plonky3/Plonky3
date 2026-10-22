@@ -80,9 +80,10 @@ use core::borrow::Borrow;
 use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field};
+use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_verifier_arith::{Lift, Native};
 use serde::{Deserialize, Serialize};
 
 use super::deferred::{BitRingSwitchDeferredProof, DeferredClosing, DeferredWeight, check_depth};
@@ -91,7 +92,7 @@ use super::reduction::{
     BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError, BitRingSwitchProof,
     BitRingSwitchProofError, SuccessorTensors, check_no_grinding, slot_packing,
 };
-use super::tensor::{BitTensor, SuffixTensors};
+use super::tensor::{BitTensor, BitTensorArith, SuffixTensors};
 use super::transcript::{
     BitRingSwitchClaimsProverTranscript, BitRingSwitchClaimsShape,
     BitRingSwitchClaimsVerifierTranscript, ClaimStatement, ClaimsDraws,
@@ -120,6 +121,17 @@ pub struct ClaimElements<F, EF = F> {
     pub tensor: BitTensor<EF, F>,
     /// The carry and last elements, present exactly when the claim's setup sends them.
     pub successor: Option<SuccessorTensors<F, EF>>,
+}
+
+/// One claim of a batch as values of an arithmetic: what its setup binds, and the value it claims.
+#[derive(Clone, Debug)]
+pub struct ClaimReading<'a, EF> {
+    /// The point its setup binds.
+    pub point: &'a [EF],
+    /// Its low weights, when it supplies them.
+    pub low_weights: Option<&'a [EF]>,
+    /// The value it claims.
+    pub value: EF,
 }
 
 /// The messages a batch of claims puts on the wire.
@@ -590,12 +602,47 @@ where
         proof: &BitRingSwitchDeferredProof<F, EF>,
         readings: &[EF],
         challenger: &mut Challenger,
-    ) -> Result<DeferredClosing<'_, F, EF>, BitRingSwitchProofError>
+    ) -> Result<DeferredClosing<EF>, BitRingSwitchProofError>
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        let claims = self
+            .reductions
+            .iter()
+            .zip(readings)
+            .map(|(reduction, &value)| ClaimReading {
+                point: reduction.point().as_slice(),
+                low_weights: reduction.low_weights(),
+                value,
+            })
+            .collect::<Vec<_>>();
+        self.verify_deferred_in(&mut Native::new(), proof, &claims, challenger)
+    }
+
+    /// As [`Self::verify_deferred`], within an arithmetic.
+    ///
+    /// The setup holds the native values of `claims`, which the transcript absorbs.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify_deferred`].
+    ///
+    /// # Panics
+    ///
+    /// When a claim does not carry its setup's point or low weights.
+    pub fn verify_deferred_in<A, Challenger>(
+        &self,
+        arith: &mut A,
+        proof: &BitRingSwitchDeferredProof<F, EF>,
+        claims: &[ClaimReading<'_, A::EF>],
+        challenger: &mut Challenger,
+    ) -> Result<DeferredClosing<A::EF>, BitRingSwitchProofError>
+    where
+        A: BitTensorArith + Lift<Val = F, Challenge = EF>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
         let expected = self.reductions.len();
-        if let Some(actual) = [proof.claims.len(), readings.len()]
+        if let Some(actual) = [proof.claims.len(), claims.len()]
             .into_iter()
             .find(|&count| count != expected)
         {
@@ -609,41 +656,103 @@ where
             return Err(BitRingSwitchError::DeferredSuccessor.into());
         }
         // Every structural rejection runs before the challenger is touched.
-        for ((reduction, claim), &current) in
-            self.reductions.iter().zip(&proof.claims).zip(readings)
+        for (reduction, (elements, claim)) in
+            self.reductions.iter().zip(proof.claims.iter().zip(claims))
         {
+            assert_eq!(
+                claim.point.len(),
+                reduction.point().num_variables(),
+                "the setup's point"
+            );
+            assert_eq!(
+                claim.low_weights.map(<[_]>::len),
+                reduction.low_weights().map(<[_]>::len),
+                "the setup's low weights"
+            );
             reduction.check_elements(
-                &claim.tensor,
-                claim.successor.as_ref(),
-                Some(current),
+                &elements.tensor,
+                elements.successor.as_ref(),
+                Some(arith.value_ext(&claim.value)),
                 None,
             )?;
         }
 
-        let mut transcript = BitRingSwitchClaimsVerifierTranscript::<Challenger, F, EF>::new(
-            challenger,
-            self.deferred_shape(),
-        );
+        // Every claim's point, weights and rows are announced in the order the statement absorbs them.
+        let rows = proof
+            .claims
+            .iter()
+            .zip(claims)
+            .map(|(elements, claim)| {
+                for coordinate in claim
+                    .point
+                    .iter()
+                    .chain(claim.low_weights.into_iter().flatten())
+                {
+                    arith.will_observe_ext(coordinate);
+                }
+                let rows = arith.load_slice(elements.tensor.rows());
+                arith.will_observe(rows.to_vec());
+                rows
+            })
+            .collect::<Vec<_>>();
+        let mut transcript = arith.seeding(|| {
+            BitRingSwitchClaimsVerifierTranscript::<Challenger, F, EF>::new(
+                challenger,
+                self.deferred_shape(),
+            )
+        });
         let draws = transcript.statement(&self.statements(&proof.claims))?;
-        for ((reduction, claim), &current) in
-            self.reductions.iter().zip(&proof.claims).zip(readings)
-        {
-            if let Err(error) = reduction.check_element_readings(
-                &claim.tensor,
-                claim.successor.as_ref(),
-                Some(current),
-                None,
-            ) {
+        let batching_point = draws
+            .batching_point
+            .iter()
+            .map(|&coordinate| arith.sampled_ext(coordinate))
+            .collect::<Vec<_>>();
+        let lambda = arith.sampled_ext(draws.lambda);
+
+        // Each claim's columns, weighed by its low weights, must be its value.
+        for (reduction, (rows, claim)) in self.reductions.iter().zip(rows.iter().zip(claims)) {
+            let low = claim.low_weights.map_or_else(
+                || arith.eq_table(&claim.point[reduction.num_variables()..]),
+                <[_]>::to_vec,
+            );
+            let incoming = arith
+                .tensor_columns(rows)
+                .into_iter()
+                .zip(low)
+                .map(|(column, weight)| column * weight)
+                .sum::<A::EF>();
+            if let Err(error) = arith.assert_zero(incoming - claim.value.dup(), || {
+                BitRingSwitchProofError::ClaimMismatch
+            }) {
                 transcript.abort();
                 return Err(error);
             }
         }
         transcript.finish();
 
-        let batches = self.batches(&draws);
-        let weights = claim_weights(draws.lambda, self.reductions.len());
-        let sum = Self::batched_sum(&batches, &proof.claims, &weights);
-        Ok(DeferredClosing::new(self, batches, weights, sum))
+        // `sum_i lambda^i * sigma_i`, each claim's rows batched by the batching point's equality table.
+        let mut eq_batch = arith.eq_table(&batching_point);
+        eq_batch.truncate(BitTensor::<EF, F>::DIMENSION);
+        let mut weights = Vec::with_capacity(expected);
+        let mut weight = A::EF::ONE;
+        let mut sum = A::EF::ZERO;
+        for rows in &rows {
+            let batched = eq_batch
+                .iter()
+                .zip(rows.iter())
+                .map(|(eq, row)| eq.dup() * row.dup())
+                .sum::<A::EF>();
+            sum += weight.dup() * batched;
+            weights.push(weight.dup());
+            weight *= lambda.dup();
+        }
+        let highs = self
+            .reductions
+            .iter()
+            .zip(claims)
+            .map(|(reduction, claim)| claim.point[..reduction.num_variables()].to_vec())
+            .collect();
+        Ok(DeferredClosing::new(highs, eq_batch, weights, sum))
     }
 
     /// The transcript description a deferred batch plays, whatever its size.

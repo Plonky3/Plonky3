@@ -80,14 +80,14 @@ pub mod tensor;
 pub mod transcript;
 
 pub use basis::Coefficients;
-pub use claims::{BitRingSwitchClaims, BitRingSwitchClaimsProof, ClaimElements};
+pub use claims::{BitRingSwitchClaims, BitRingSwitchClaimsProof, ClaimElements, ClaimReading};
 pub use deferred::{BitRingSwitchDeferredProof, DeferredClosing, DeferredWeight};
 pub use packing::{BitPacking, BitPackingError, BitPackingView};
 pub use reduction::{
     BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError, BitRingSwitchProof,
     BitRingSwitchProofError, SuccessorTensors,
 };
-pub use tensor::{BitTensor, MalformedBitTensor, SuffixTensors};
+pub use tensor::{BitTensor, BitTensorArith, MalformedBitTensor, SuffixTensors};
 pub use transcript::{
     BitRingSwitchClaimsProverTranscript, BitRingSwitchClaimsShape,
     BitRingSwitchClaimsVerifierTranscript, BitRingSwitchProverTranscript, BitRingSwitchShape,

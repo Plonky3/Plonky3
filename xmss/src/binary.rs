@@ -8,12 +8,17 @@
 
 use alloc::vec::Vec;
 
+use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
+use p3_commit::{ExtensionMmcs, Mmcs, MmcsArith};
 use p3_flock::gadgets::blake3::compress;
+use p3_flock::opening::{Commitment, FlockMmcs};
 use p3_flock::{
-    Batch, BatchError, Builder, Circuit, FlockChallenger, FlockConfig, FlockProof, Port,
-    ProvingError, PublicPorts, VerificationError, Wire, Witness, Word,
+    Batch, BatchError, Builder, Challenge, Circuit, FlockArith, FlockChallenger, FlockConfig,
+    FlockHash, FlockProof, Port, ProvingError, PublicPorts, Val, VerificationError, Wire, Witness,
+    Word,
 };
 use p3_util::log2_ceil_usize;
+use p3_verifier_arith::Native;
 
 use crate::blake3_hash::{
     CHAIN, DIGEST_BYTES, LEAF, MESSAGE, MESSAGE_BYTES, NODE, RANDOMNESS_BYTES,
@@ -118,11 +123,11 @@ impl BinaryAggregator {
     /// # Panics
     ///
     /// When a signature does not have the shape the parameters give.
-    pub fn prove(
+    pub fn prove<H: FlockHash>(
         &self,
         claims: &[Claim<Blake3Hash>],
-        challenger: &mut FlockChallenger,
-    ) -> Result<FlockProof, AggregationError> {
+        challenger: &mut FlockChallenger<H>,
+    ) -> Result<FlockProof<H>, AggregationError> {
         let (last, batch) = self.batch(claims.len())?;
         for claim in claims {
             assert_eq!(
@@ -159,15 +164,51 @@ impl BinaryAggregator {
     /// # Errors
     ///
     /// When there is no statement, the batch is out of range, or the proof is rejected.
-    pub fn verify(
+    pub fn verify<H: FlockHash>(
         &self,
         statements: &[Statement<Blake3Hash>],
-        proof: &FlockProof,
-        challenger: &mut FlockChallenger,
+        proof: &FlockProof<H>,
+        challenger: &mut FlockChallenger<H>,
     ) -> Result<(), AggregationError> {
+        self.verify_in(&mut Native::new(), statements, proof, challenger)
+    }
+
+    /// As [`Self::verify`], within an arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify`].
+    pub fn verify_in<A, Ch, H>(
+        &self,
+        arith: &mut A,
+        statements: &[Statement<Blake3Hash>],
+        proof: &FlockProof<H>,
+        challenger: &mut Ch,
+    ) -> Result<(), AggregationError>
+    where
+        A: FlockArith,
+        Ch: FieldChallenger<Val>
+            + GrindingChallenger<Witness = Val>
+            + CanSampleUniformBits<Val>
+            + CanObserve<Commitment>,
+        H: FlockHash,
+        FlockMmcs<H>: MmcsArith<
+                A,
+                A::F,
+                Commitment = Commitment,
+                MultiProof = <FlockMmcs<H> as Mmcs<Val>>::MultiProof,
+            >,
+        for<'s> ExtensionMmcs<Val, Challenge, &'s FlockMmcs<H>>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <FlockMmcs<H> as Mmcs<Val>>::MultiProof,
+                Target = <FlockMmcs<H> as MmcsArith<A, A::F>>::Target,
+            >,
+    {
         let (_, batch) = self.batch(statements.len())?;
         let public = self.public(&batch, statements);
-        Ok(p3_flock::verify(
+        Ok(p3_flock::verify_in(
+            arith,
             &self.config,
             &batch,
             &public,

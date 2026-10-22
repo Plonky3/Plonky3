@@ -16,20 +16,19 @@ mod tests;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_binary_field::fold_rows;
 use p3_challenger::CanObserve;
 use p3_challenger::fs::{DomainSeparator, FieldUnit, InteractionPattern};
-use p3_field::PrimeCharacteristicRing;
+use p3_field::Dup;
 use p3_keccak::Keccak256Hash;
 use p3_maybe_rayon::prelude::*;
-use p3_multilinear_util::poly::Poly;
 use p3_symmetric::CryptographicHasher;
 use p3_util::log2_strict_usize;
+use p3_verifier_arith::Arith;
 use thiserror::Error;
 
 use crate::circuit::Port;
 use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
-use crate::{Batch, Challenge, Val};
+use crate::{Batch, FlockArith, Val};
 
 /// Instances a statement chunk hashes on its own.
 const DIGEST_INSTANCES: usize = 1 << 10;
@@ -267,40 +266,39 @@ impl PublicPorts {
     }
 
     /// Each public word with its weight `eq(region, w)`.
-    pub(crate) fn weights<'a>(
-        &'a self,
-        region: &[Challenge],
-    ) -> impl Iterator<Item = (usize, Challenge)> + 'a {
-        let eq = Poly::new_from_point(region, Challenge::ONE);
-        self.words.iter().map(move |&w| (w, eq.as_slice()[w]))
+    pub(crate) fn weights<A: Arith>(&self, arith: &mut A, region: &[A::EF]) -> Vec<(usize, A::EF)> {
+        let eq = arith.eq_table(region);
+        self.words.iter().map(|&w| (w, eq[w].dup())).collect()
     }
 
     /// The public table's weighted sum: each word folded over the instances, at the skip coordinate, under its weight.
     ///
     /// The cost is linear in the table.
-    pub(crate) fn evaluate(
+    pub(crate) fn evaluate<A: FlockArith>(
         &self,
-        outer: &[Challenge],
-        skip: Challenge,
-        region: &[Challenge],
-    ) -> Challenge {
-        let eq_outer = Poly::new_from_point(outer, Challenge::ONE);
-        let folded = fold_rows(
+        arith: &mut A,
+        outer: &[A::EF],
+        skip: &A::EF,
+        region: &[A::EF],
+    ) -> A::EF {
+        let eq_outer = arith.eq_table(outer);
+        let folded = arith.fold_bits(
             &self.values,
             log2_strict_usize(self.stride) + K_SKIP,
             SKIP_SIZE * self.words.len(),
-            eq_outer.as_slice(),
+            &eq_outer,
         );
         let lagrange = lagrange_weights(skip, SKIP_SIZE);
-        self.weights(region)
+        self.weights(arith, region)
+            .into_iter()
             .zip(folded.as_chunks::<SKIP_SIZE>().0)
             .map(|((_, weight), word)| {
                 weight
                     * word
                         .iter()
                         .zip(&lagrange)
-                        .map(|(&v, &l)| v * l)
-                        .sum::<Challenge>()
+                        .map(|(v, l)| v.dup() * l.dup())
+                        .sum::<A::EF>()
             })
             .sum()
     }

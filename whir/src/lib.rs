@@ -22,7 +22,7 @@ pub use pcs::WhirProverData;
 pub use pcs::proof::{PcsProof, QueryOpenings, SharedProofOpening, WhirProof, WhirRoundProof};
 pub use pcs::prover::WhirProver;
 pub use pcs::verifier::errors::VerifierError;
-pub use pcs::verifier::{InitialWeightCheck, WhirVerifier};
+pub use pcs::verifier::{InitialWeightCheck, WeightEval, WhirVerifier};
 pub use pcs::zk::{
     BaseCaseZkConfig, BaseCaseZkError, BaseCaseZkProof, BlindedMask, CodeSwitchError,
     HidingBaseCaseSecurityReport, HidingBoundClassification, HidingCodeRole,

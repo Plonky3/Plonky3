@@ -7,6 +7,7 @@ use p3_challenger::{CanObserve, CanSample};
 use p3_field::PrimeCharacteristicRing;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::lagrange::extrapolate_01inf;
+use p3_verifier_arith::Native;
 use tracing::{info_span, instrument};
 
 use super::sumcheck::ProductSumcheck;
@@ -85,9 +86,9 @@ where
 
     // Each public word's weight at its slots, at the port skip coordinate.
     if let Some((&skip, region)) = ports.split_first() {
-        let lagrange = lagrange_weights(skip, SKIP_SIZE);
+        let lagrange = lagrange_weights(&skip, SKIP_SIZE);
         let alpha_4 = alpha_sq.square();
-        for (w, weight) in public.weights(region) {
+        for (w, weight) in public.weights(&mut Native::<Val, Challenge>::new(), region) {
             for (c, &l) in comb[SKIP_SIZE * w..][..SKIP_SIZE].iter_mut().zip(&lagrange) {
                 *c += alpha_4 * weight * l;
             }

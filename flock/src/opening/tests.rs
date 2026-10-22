@@ -56,7 +56,7 @@ fn run(
     let k_log = circuit.k_log();
     let m = k_log + log_instances;
     // One opening carries the lincheck claim and the zerocheck's c-claim.
-    let pcs = WitnessPcs::with_claims(m, &PcsParams::default(), 2).unwrap();
+    let pcs = <WitnessPcs>::with_claims(m, &PcsParams::default(), 2).unwrap();
 
     // Commit, then draw the zerocheck point after the commitment.
     let mut sponge = challenger();
@@ -177,7 +177,7 @@ fn the_prover_refuses_a_claim_its_witness_does_not_satisfy() {
     let mut rng = SmallRng::seed_from_u64(4);
     let z: Vec<u64> = (0..1 << 8).map(|_| rng.random()).collect();
     let witness = Witness::from_tables(z.clone(), z.clone(), z.clone(), 6);
-    let pcs = WitnessPcs::new(14, &PcsParams::default()).unwrap();
+    let pcs = <WitnessPcs>::new(14, &PcsParams::default()).unwrap();
     let mut sponge = challenger();
     let (_, data) = pcs.commit(witness.z().to_vec(), &mut sponge).unwrap();
     let point = draw_point(&mut sponge, 14);
@@ -198,7 +198,7 @@ fn the_prover_refuses_a_claim_its_witness_does_not_satisfy() {
 #[test]
 fn a_witness_narrower_than_one_element_has_no_commitment() {
     assert!(matches!(
-        WitnessPcs::new(K_SKIP - 1, &PcsParams::default()),
+        <WitnessPcs>::new(K_SKIP - 1, &PcsParams::default()),
         Err(OpeningError::TooFewVariables { num_variables: 5 })
     ));
 }
@@ -216,7 +216,7 @@ fn a_split_from_the_folded_witness_reproduces_the_computed_opening() {
     });
     let k_log = circuit.k_log();
     let m = k_log + log_instances;
-    let pcs = WitnessPcs::new(m, &PcsParams::default()).unwrap();
+    let pcs = <WitnessPcs>::new(m, &PcsParams::default()).unwrap();
     let mut sponge = challenger();
     let (_, data) = pcs.commit(w.z().to_vec(), &mut sponge).unwrap();
     let point = draw_point(&mut sponge, m);

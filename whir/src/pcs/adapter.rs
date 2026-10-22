@@ -10,7 +10,9 @@ use p3_commit::{ExtensionMmcs, Mmcs, MmcsArith, MultilinearPcs};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
-use p3_sumcheck::layout::{Layout, Table, Verifier, Witness, observe_commitment};
+use p3_sumcheck::layout::{
+    Layout, Table, Verifier, Witness, observe_commitment, observe_commitment_in,
+};
 use p3_sumcheck::{OpeningEvals, OpeningProtocol, PrescribedPointPcs};
 use p3_verifier_arith::{Lift, Native};
 
@@ -337,6 +339,25 @@ where
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
     L: Layout<F, EF>,
 {
+    /// As [`MultilinearPcs::observe_commitment`], within an arithmetic.
+    ///
+    /// `target` is the commitment within the arithmetic, announced right before the root is absorbed.
+    pub fn observe_commitment_in<A, Ch>(
+        &self,
+        arith: &mut A,
+        commitment: &<MT as Mmcs<F>>::Commitment,
+        target: &<MT as MmcsArith<A, A::F>>::Target,
+        challenger: &mut Ch,
+    ) where
+        A: Lift<Val = F, Challenge = EF>,
+        Ch: CanObserve<F> + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<A, A::F>,
+    {
+        observe_commitment_in::<F, _, _, _>(arith, challenger, commitment.clone(), |arith| {
+            self.mmcs.will_observe(arith, target);
+        });
+    }
+
     /// As [`PrescribedPointPcs::verify_at`], within an arithmetic.
     ///
     /// The commitment and the points are values of the arithmetic, and so are the returned evaluations.

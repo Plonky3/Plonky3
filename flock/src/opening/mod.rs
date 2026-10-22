@@ -7,35 +7,42 @@ mod tests;
 
 use alloc::vec::Vec;
 
-use p3_binary_pcs::whir::preset::keccak64::{self, WitnessCommitment};
-use p3_binary_pcs::whir::{CommitmentError, SuffixTensors, WeightedClaim, preset};
+use p3_binary_pcs::whir::preset::{hash64, keccak64};
+use p3_binary_pcs::whir::{CommitmentError, SuffixTensors, WeightedClaim};
+use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
+use p3_commit::{ExtensionMmcs, Mmcs, MmcsArith};
+use p3_field::Algebra;
+use p3_keccak::Keccak256Hash;
 
-use crate::config::{FlockChallenger, PcsParams};
+use crate::config::{FlockChallenger, FlockHash, PcsParams};
 use crate::point::{QuirkyClaim, QuirkyPoint};
-use crate::{Challenge, Val};
+use crate::{Challenge, FlockArith, Val};
 
-/// Merkle commitment to committed elements.
-pub type FlockMmcs = keccak64::Mmcs;
+/// Merkle commitment to committed elements: leaves and nodes hashed by `H`, arity two.
+pub type FlockMmcs<H = Keccak256Hash> = hash64::Mmcs<H>;
 
-/// A witness commitment.
+/// A witness commitment, the same type for every hash.
 pub type Commitment = keccak64::Commitment;
 
+/// An opening of several Merkle rows.
+type MultiProof<H> = <FlockMmcs<H> as Mmcs<Val>>::MultiProof;
+
 /// What the prover keeps between committing and opening.
-pub type ProverData = keccak64::ProverData;
+pub type ProverData<H = Keccak256Hash> = hash64::ProverData<H>;
 
 /// One opening proof for every claim.
-pub type OpeningProof = keccak64::OpeningProof;
+pub type OpeningProof<H = Keccak256Hash> = hash64::OpeningProof<H>;
 
 /// Why committing or opening fails.
 pub type OpeningError = CommitmentError;
 
 /// The bit commitment of a batch's witness: 64 bits per element, WHIR over the additive domain.
-pub struct WitnessPcs(
+pub struct WitnessPcs<H: FlockHash = Keccak256Hash>(
     /// The shared bit commitment, opened at quirky claims.
-    WitnessCommitment,
+    hash64::WitnessCommitment<H>,
 );
 
-impl WitnessPcs {
+impl<H: FlockHash> WitnessPcs<H> {
     /// The bit commitment for a witness of `2^num_variables` bits.
     ///
     /// The bound is the one opening of one claim, which is what a Flock proof opens.
@@ -57,7 +64,7 @@ impl WitnessPcs {
         params: &PcsParams,
         claims: usize,
     ) -> Result<Self, OpeningError> {
-        preset::keccak64::witness_commitment(num_variables, params, claims).map(Self)
+        hash64::witness_commitment(num_variables, params, claims).map(Self)
     }
 
     /// Commit to a witness's packed words, taking them over, and observe the commitment.
@@ -70,20 +77,41 @@ impl WitnessPcs {
     pub fn commit(
         &self,
         z: Vec<u64>,
-        challenger: &mut FlockChallenger,
-    ) -> Result<(Commitment, ProverData), OpeningError> {
+        challenger: &mut FlockChallenger<H>,
+    ) -> Result<(Commitment, ProverData<H>), OpeningError> {
         self.0.commit(z, challenger)
     }
 
     /// The witness words a commitment holds.
     #[must_use]
-    pub fn committed_words(data: &ProverData) -> &[u64] {
-        WitnessCommitment::committed_words(data)
+    pub fn committed_words(data: &ProverData<H>) -> &[u64] {
+        hash64::WitnessCommitment::<H>::committed_words(data)
     }
 
     /// Observe a commitment on the verifier side, as committing does on the prover side.
-    pub fn observe(&self, commitment: &Commitment, challenger: &mut FlockChallenger) {
+    pub fn observe(&self, commitment: &Commitment, challenger: &mut FlockChallenger<H>) {
         self.0.observe(commitment, challenger);
+    }
+
+    /// As [`Self::observe`], within an arithmetic, `target` being the commitment there.
+    pub fn observe_in<A, Ch>(
+        &self,
+        arith: &mut A,
+        commitment: &Commitment,
+        target: &<FlockMmcs<H> as MmcsArith<A, A::F>>::Target,
+        challenger: &mut Ch,
+    ) where
+        A: FlockArith,
+        Ch: CanObserve<Val> + CanObserve<Commitment>,
+        FlockMmcs<H>: MmcsArith<A, A::F>,
+    {
+        self.0.observe_in(arith, commitment, target, challenger);
+    }
+
+    /// The Merkle scheme every round commits with.
+    #[must_use]
+    pub const fn mmcs(&self) -> &FlockMmcs<H> {
+        self.0.mmcs()
     }
 
     /// A claim's element split over the trailing coordinates the commitment's first fold binds.
@@ -112,11 +140,11 @@ impl WitnessPcs {
     /// A claim of the wrong width, a claim the witness does not satisfy, or a refused opening.
     pub fn open(
         &self,
-        data: ProverData,
+        data: ProverData<H>,
         claims: &[QuirkyClaim],
         splits: &[Option<&SuffixTensors<Challenge, Val>>],
-        challenger: &mut FlockChallenger,
-    ) -> Result<OpeningProof, OpeningError> {
+        challenger: &mut FlockChallenger<H>,
+    ) -> Result<OpeningProof<H>, OpeningError> {
         self.0.open(data, &weighted(claims), splits, challenger)
     }
 
@@ -129,16 +157,47 @@ impl WitnessPcs {
         &self,
         commitment: &Commitment,
         claims: &[QuirkyClaim],
-        proof: &OpeningProof,
-        challenger: &mut FlockChallenger,
+        proof: &OpeningProof<H>,
+        challenger: &mut FlockChallenger<H>,
     ) -> Result<(), OpeningError> {
         self.0
             .verify(commitment, &weighted(claims), proof, challenger)
     }
+
+    /// As [`Self::verify`], within an arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify`].
+    pub fn verify_in<'s, A, Ch>(
+        &'s self,
+        arith: &mut A,
+        commitment: &<FlockMmcs<H> as MmcsArith<A, A::F>>::Target,
+        claims: &[QuirkyClaim<A::EF>],
+        proof: &OpeningProof<H>,
+        challenger: &mut Ch,
+    ) -> Result<(), OpeningError>
+    where
+        A: FlockArith,
+        Ch: FieldChallenger<Val>
+            + GrindingChallenger<Witness = Val>
+            + CanSampleUniformBits<Val>
+            + CanObserve<Commitment>,
+        FlockMmcs<H>: MmcsArith<A, A::F, Commitment = Commitment, MultiProof = MultiProof<H>>,
+        ExtensionMmcs<Val, Challenge, &'s FlockMmcs<H>>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = MultiProof<H>,
+                Target = <FlockMmcs<H> as MmcsArith<A, A::F>>::Target,
+            >,
+    {
+        self.0
+            .verify_in(arith, commitment, &weighted(claims), proof, challenger)
+    }
 }
 
 /// Quirky claims as weighted claims.
-fn weighted(claims: &[QuirkyClaim]) -> Vec<WeightedClaim<Challenge>> {
+fn weighted<E: Algebra<Challenge>>(claims: &[QuirkyClaim<E>]) -> Vec<WeightedClaim<E>> {
     claims
         .iter()
         .map(|claim| claim.clone().into_weighted())

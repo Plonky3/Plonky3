@@ -151,7 +151,7 @@ fn finalize_slices<'a, S: Hasher>(
 
 /// The `Keccak` hash functions defined in
 /// [Keccak SHA3 submission](https://keccak.team/files/Keccak-submission-3.pdf).
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct Keccak256Hash;
 
 impl CryptographicHasher<u8, [u8; 32]> for Keccak256Hash {

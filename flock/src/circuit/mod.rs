@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 pub use builder::Builder;
-use p3_field::Field;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicHasher;
@@ -255,10 +255,14 @@ impl Circuit {
     /// # Panics
     ///
     /// - The vector has the wrong length.
-    pub(crate) fn walk_rows<V: Field>(&self, w: &[V], mut row: impl FnMut(usize, V, V)) {
+    pub(crate) fn walk_rows<V: PrimeCharacteristicRing>(
+        &self,
+        w: &[V],
+        mut row: impl FnMut(usize, V, V),
+    ) {
         assert_eq!(w.len(), 1 << self.k_log, "one entry per slot");
         // B reads the constant on port and copy rows.
-        let wc = w[self.const_pos];
+        let wc = &w[self.const_pos];
 
         // Each wire carries its column combination; a committed wire is its own column.
         let mut wires: Vec<V> = Vec::with_capacity(self.gates.len());
@@ -266,19 +270,19 @@ impl Circuit {
             let v = match gate {
                 Gate::Free(s) => {
                     let s = s as usize;
-                    row(s, w[s], wc);
-                    w[s]
+                    row(s, w[s].dup(), wc.dup());
+                    w[s].dup()
                 }
-                Gate::Xor(x, y) => wires[x as usize] + wires[y as usize],
+                Gate::Xor(x, y) => wires[x as usize].dup() + wires[y as usize].dup(),
                 Gate::And(x, y, s) => {
                     let s = s as usize;
-                    row(s, wires[x as usize], wires[y as usize]);
-                    w[s]
+                    row(s, wires[x as usize].dup(), wires[y as usize].dup());
+                    w[s].dup()
                 }
                 Gate::Copy(x, s) => {
                     let s = s as usize;
-                    row(s, wires[x as usize], wc);
-                    w[s]
+                    row(s, wires[x as usize].dup(), wc.dup());
+                    w[s].dup()
                 }
             };
             wires.push(v);

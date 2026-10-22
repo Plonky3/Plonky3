@@ -16,7 +16,7 @@ use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::Verifier as LayoutVerifier;
 use p3_sumcheck::strategy::{Basis, VariableOrder};
 use p3_sumcheck::verify_final_sumcheck_rounds_in;
-use p3_verifier_arith::{Lift, Native};
+use p3_verifier_arith::{Arith, Lift, Native};
 use tracing::instrument;
 
 use super::committer::reader::ParsedCommitment;
@@ -28,14 +28,16 @@ use crate::transcript::{WhirShape, WhirVerifierTranscript, lift_query_indices};
 
 pub mod errors;
 
+/// A weight's multilinear extension at a point, in natural variable order.
+pub type WeightEval<'a, A> = dyn Fn(&mut A, &Point<<A as Arith>::EF>) -> <A as Arith>::EF + 'a;
+
 /// An extra initial weight a verifier closes: its claimed sum, and its extension at a point.
-#[derive(Clone, Copy)]
 #[allow(missing_debug_implementations)]
-pub struct InitialWeightCheck<'a, EF> {
+pub struct InitialWeightCheck<'a, A: Arith> {
     /// The weight's claimed inner product with the committed polynomial.
-    pub sum: EF,
+    pub sum: A::EF,
     /// The weight's multilinear extension at a point, in natural variable order.
-    pub eval: &'a dyn Fn(&Point<EF>) -> EF,
+    pub eval: &'a WeightEval<'a, A>,
 }
 
 /// Replays a WHIR opening proof against a public commitment and the
@@ -195,16 +197,59 @@ where
         challenger: &mut Challenger,
         parsed_commitment: &MT::Commitment,
         layout: &LayoutVerifier<F, EF>,
-        weight: InitialWeightCheck<'_, EF>,
+        weight: InitialWeightCheck<'_, Native<F, EF>>,
     ) -> Result<Point<EF>, VerifierError>
     where
         Challenger: CanObserve<MT::Commitment>,
     {
-        self.verify_inner(
+        self.verify_with_initial_weight_in(
             &mut Native::new(),
             proof,
             challenger,
             parsed_commitment,
+            layout,
+            weight,
+        )
+    }
+
+    /// As [`Self::verify_with_initial_weight`], within an arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify`].
+    pub fn verify_with_initial_weight_in<A, Ch>(
+        &self,
+        arith: &mut A,
+        proof: &WhirProof<F, EF, MT>,
+        challenger: &mut Ch,
+        commitment: &<MT as MmcsArith<A, A::F>>::Target,
+        layout: &LayoutVerifier<A::F, A::EF>,
+        weight: InitialWeightCheck<'_, A>,
+    ) -> Result<Point<A::EF>, VerifierError>
+    where
+        A: Lift<Val = F, Challenge = EF>,
+        Ch: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<
+                A,
+                A::F,
+                Commitment = <MT as Mmcs<F>>::Commitment,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+            >,
+        ExtensionMmcs<F, EF, &'a MT>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+                Target = <MT as MmcsArith<A, A::F>>::Target,
+            >,
+    {
+        self.verify_inner(
+            arith,
+            proof,
+            challenger,
+            commitment,
             0,
             layout,
             Some(weight),
@@ -267,7 +312,7 @@ where
         commitment: &<MT as MmcsArith<A, A::F>>::Target,
         num_opening_claims: usize,
         layout: &LayoutVerifier<A::F, A::EF>,
-        weight: Option<InitialWeightCheck<'_, A::EF>>,
+        weight: Option<InitialWeightCheck<'_, A>>,
     ) -> Result<Point<A::EF>, VerifierError>
     where
         A: Lift<Val = F, Challenge = EF>,
@@ -359,7 +404,7 @@ where
         transcript: &mut WhirVerifierTranscript<'_, Ch, F, EF>,
         commitment: &<MT as MmcsArith<A, A::F>>::Target,
         layout: &LayoutVerifier<A::F, A::EF>,
-        weight: Option<InitialWeightCheck<'_, A::EF>>,
+        weight: Option<InitialWeightCheck<'_, A>>,
     ) -> Result<Point<A::EF>, VerifierError>
     where
         A: Lift<Val = F, Challenge = EF>,
@@ -560,8 +605,8 @@ where
             // Each round binds its variables in the binding order, so the natural point is read back.
             let reversed = (self.variable_order == VariableOrder::Suffix)
                 .then(|| folding_randomness.reversed());
-            evaluation_of_weights +=
-                weight_scale * (weight.eval)(reversed.as_ref().unwrap_or(&folding_randomness));
+            evaluation_of_weights += weight_scale
+                * (weight.eval)(arith, reversed.as_ref().unwrap_or(&folding_randomness));
         }
 
         // Final consistency check: claimed_eval == weight * f(r).

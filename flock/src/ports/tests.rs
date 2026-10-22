@@ -1,8 +1,13 @@
 //! Port check tests: honest statements verify, and every changed, swapped or unbound public word is rejected.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_blake3::Blake3;
+use p3_challenger::CanSample;
+use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;
+use p3_verifier_arith::Native;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -14,8 +19,8 @@ use crate::proof::FlockProof;
 use crate::tests::{random_circuit, random_rows};
 use crate::zerocheck::MIN_LOG_N;
 use crate::{
-    Batch, Circuit, FlockChallenger, FlockConfig, Port, ProvingError, VerificationError, Witness,
-    lincheck, prove, verify, zerocheck,
+    Batch, Challenge, Circuit, FlockChallenger, FlockConfig, Port, ProvingError, Val,
+    VerificationError, Witness, lincheck, prove, verify, verify_in, zerocheck,
 };
 
 /// A fresh sponge.
@@ -69,6 +74,52 @@ fn honest_statements_verify_for_every_choice_of_ports() {
         let proof = prove(&config, &batch, &public, w.clone(), &mut sponge()).unwrap();
         verify(&config, &batch, &public, &proof, &mut sponge()).unwrap();
     }
+}
+
+#[test]
+fn a_blake3_proof_verifies_within_the_native_arithmetic() {
+    let (c, w, log_n) = fixture(0xB1A3);
+    let batch = Batch::new(&c, log_n).unwrap();
+    let config = FlockConfig::default();
+    let public = from_witness(&batch, &w, &ALL);
+    let blake3 = || FlockChallenger::<Blake3>::from_hasher(Vec::new(), Blake3);
+    let mut prover = blake3();
+    let proof = prove(&config, &batch, &public, w.clone(), &mut prover).unwrap();
+
+    // The verifier's sponge ends where the prover's did, so the transcripts are one.
+    let mut verifier = blake3();
+    verify_in(
+        &mut Native::new(),
+        &config,
+        &batch,
+        &public,
+        &proof,
+        &mut verifier,
+    )
+    .unwrap();
+    let (p, v): (Val, Val) = (prover.sample(), verifier.sample());
+    assert_eq!(p, v);
+
+    // The hash moves the commitment, and a sponge seeded otherwise rejects.
+    let keccak = prove(&config, &batch, &public, w, &mut sponge()).unwrap();
+    assert_ne!(proof.commitment, keccak.commitment);
+    let mut other = FlockChallenger::<Blake3>::from_hasher(vec![1], Blake3);
+    assert!(
+        verify_in(
+            &mut Native::new(),
+            &config,
+            &batch,
+            &public,
+            &proof,
+            &mut other
+        )
+        .is_err()
+    );
+
+    // Mutation: one lincheck slice moved.
+    let mut moved = proof;
+    moved.piop.lincheck.slices[3] += Challenge::ONE;
+    assert!(verify(&config, &batch, &public, &moved, &mut blake3()).is_err());
 }
 
 #[test]

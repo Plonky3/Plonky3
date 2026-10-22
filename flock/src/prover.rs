@@ -1,9 +1,9 @@
 //! The Flock prover: bind the statement, commit, run the PIOP on the whole commitment, open.
 
-use p3_binary_pcs::whir::preset::keccak64;
+use p3_binary_pcs::whir::preset::hash64;
 use tracing::instrument;
 
-use crate::config::{FlockChallenger, FlockConfig};
+use crate::config::{FlockChallenger, FlockConfig, FlockHash};
 use crate::error::ProvingError;
 use crate::piop::{self, Placement};
 use crate::ports::PublicPorts;
@@ -17,18 +17,18 @@ use crate::{Batch, Witness};
 /// - The public words do not fit the batch, or the witness disagrees with them.
 /// - The parameters admit no commitment schedule, or the witness is not the batch's.
 #[instrument(skip_all, name = "flock prove", fields(log_n = batch.log_n()))]
-pub fn prove(
+pub fn prove<H: FlockHash>(
     config: &FlockConfig,
     batch: &Batch<'_>,
     public: &PublicPorts,
     mut witness: Witness,
-    challenger: &mut FlockChallenger,
-) -> Result<FlockProof, ProvingError> {
+    challenger: &mut FlockChallenger<H>,
+) -> Result<FlockProof<H>, ProvingError> {
     // The statement first, so every challenge depends on it.
     public.bind(batch, challenger)?;
 
     // Then the commitment, so every challenge depends on the witness.
-    let pcs = keccak64::witness_commitment(batch.log_n(), &config.pcs, 1)?;
+    let pcs = hash64::witness_commitment::<H>(batch.log_n(), &config.pcs, 1)?;
     // The words move into the commitment, which hands them back to the PIOP.
     let (commitment, data) = pcs.commit(witness.take_z(), challenger)?;
 

@@ -540,7 +540,7 @@ mod tests {
             let c: Vec<u8> = a.iter().zip(&b).map(|(x, y)| x & y).collect();
             let r: Vec<Poly192> = (0..m - 6).map(|_| rng.random()).collect();
             let rho: Vec<Poly192> = (0..m - 6).map(|_| rng.random()).collect();
-            let lagrange = lagrange_weights(rng.random(), SKIP_SIZE);
+            let lagrange = lagrange_weights(&rng.random(), SKIP_SIZE);
             let dense = Padding::dense(m);
             let bits = Bits { a: &a, b: &b };
 
@@ -637,7 +637,7 @@ mod tests {
                 k_log,
                 useful_bits: useful,
             };
-            let lagrange = lagrange_weights(rng.random(), SKIP_SIZE);
+            let lagrange = lagrange_weights(&rng.random(), SKIP_SIZE);
             let r: Vec<Poly192> = (0..m - 6).map(|_| rng.random()).collect();
             let rho: Vec<Poly192> = (0..4).map(|_| rng.random()).collect();
             for t in 0..=4 {

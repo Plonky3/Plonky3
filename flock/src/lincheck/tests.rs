@@ -41,7 +41,7 @@ fn sampled_point(seed: u8, m: usize) -> QuirkyPoint {
 
 /// The extension of packed bits at a quirky point, bit by bit from the definition.
 fn slow_eval(bits: &[u64], point: &QuirkyPoint) -> E {
-    let lagrange = lagrange_weights(point.skip, SKIP_SIZE);
+    let lagrange = lagrange_weights(&point.skip, SKIP_SIZE);
     let eq_rest = Poly::new_from_point(&point.rest, E::ONE);
     (0..64 * bits.len())
         .filter(|&x| (bits[x / 64] >> (x % 64)) & 1 == 1)

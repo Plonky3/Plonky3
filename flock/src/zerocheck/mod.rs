@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use self::prover::prove;
-pub use self::verifier::verify;
+pub use self::verifier::{verify, verify_in};
 use crate::point::QuirkyPoint;
 use crate::skip::K_SKIP;
 use crate::{Challenge, Val};
@@ -52,15 +52,15 @@ pub const MIN_LOG_N: usize = K_SKIP + fixed::N_FIXED;
 /// Claims on the quirky extensions of `a = A z`, `b = B z` and `c = z`, all at one point.
 #[must_use = "the claims prove nothing until the lincheck pins them to the witness"]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ZerocheckClaims {
+pub struct ZerocheckClaims<E = Challenge> {
     /// The point.
-    pub point: QuirkyPoint,
+    pub point: QuirkyPoint<E>,
     /// `a` at the point.
-    pub a: Challenge,
+    pub a: E,
     /// `b` at the point.
-    pub b: Challenge,
+    pub b: E,
     /// `c` at the point.
-    pub c: Challenge,
+    pub c: E,
 }
 
 /// One multilinear round of the proof.

@@ -34,20 +34,22 @@ use alloc::vec::Vec;
 use p3_binary_field::{BitCoordinates, PackedGf2, TowerLevel, Underlier};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
+use p3_commit::{ExtensionMmcs, Mmcs, MmcsArith};
+use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_security::multilinear::{bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term};
 use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::ring_switch::bits::{
-    BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims, SuffixTensors,
+    BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims, BitTensorArith, ClaimReading,
+    SuffixTensors,
 };
 use p3_sumcheck::{
     OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
     TableSpec,
 };
+use p3_verifier_arith::{Lift, Native};
 use p3_whir::{InitialWeightCheck, WhirDomain, WhirProver, WhirProverData};
 
 use crate::boolean::{BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs};
@@ -81,7 +83,9 @@ impl<EF: Field> WeightedOpening<EF> {
             low_weights: Poly::new_from_point(low.as_slice(), EF::ONE).into_evals(),
         }
     }
+}
 
+impl<EF: PrimeCharacteristicRing> WeightedOpening<EF> {
     /// The same claim on the region a Boolean prefix selects, most significant bit first.
     #[must_use]
     pub fn within(self, selector: &[bool]) -> Self {
@@ -89,7 +93,7 @@ impl<EF: Field> WeightedOpening<EF> {
             .iter()
             .map(|&bit| if bit { EF::ONE } else { EF::ZERO })
             .collect::<Vec<_>>();
-        high.extend_from_slice(self.high.as_slice());
+        high.extend(self.high);
         Self {
             high: Point::new(high),
             low_weights: self.low_weights,
@@ -179,6 +183,12 @@ where
     #[must_use]
     pub const fn num_variables(&self) -> usize {
         self.num_variables
+    }
+
+    /// The Merkle scheme every round commits with.
+    #[must_use]
+    pub const fn mmcs(&self) -> &MT {
+        self.inner.mmcs()
     }
 
     /// Bytes the commitment holds, which is one per eight bits of the witness.
@@ -550,6 +560,24 @@ where
         Ok((values, BooleanWhirDeferredProof { reduction, opening }))
     }
 
+    /// As [`BooleanMultilinearPcs::observe_commitment`], within an arithmetic.
+    ///
+    /// `target` is the commitment within the arithmetic, announced right before the root is absorbed.
+    pub fn observe_commitment_in<A, Ch>(
+        &self,
+        arith: &mut A,
+        commitment: &<MT as Mmcs<F>>::Commitment,
+        target: &<MT as MmcsArith<A, A::F>>::Target,
+        challenger: &mut Ch,
+    ) where
+        A: Lift<Val = F, Challenge = EF>,
+        Ch: CanObserve<F> + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<A, A::F>,
+    {
+        self.inner
+            .observe_commitment_in(arith, commitment, target, challenger);
+    }
+
     /// Check a deferred proof against every weighted claim.
     ///
     /// # Errors
@@ -567,16 +595,81 @@ where
     where
         Challenger: CanObserve<MT::Commitment>,
     {
-        let batch = self.weighted_claims(claims.iter().map(|claim| &claim.opening))?;
-        let values = claims.iter().map(|claim| claim.value).collect::<Vec<_>>();
+        self.verify_weighted_deferred_in(&mut Native::new(), commitment, claims, proof, challenger)
+    }
+
+    /// As [`Self::verify_weighted_deferred`], within an arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify_weighted_deferred`].
+    pub fn verify_weighted_deferred_in<'s, A, Ch>(
+        &'s self,
+        arith: &mut A,
+        commitment: &<MT as MmcsArith<A, A::F>>::Target,
+        claims: &[WeightedClaim<A::EF>],
+        proof: &BooleanWhirDeferredProof<F, EF, MT>,
+        challenger: &mut Ch,
+    ) -> Result<(), BooleanWhirError>
+    where
+        A: BitTensorArith + Lift<Val = F, Challenge = EF>,
+        Ch: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<
+                A,
+                A::F,
+                Commitment = <MT as Mmcs<F>>::Commitment,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+            >,
+        ExtensionMmcs<F, EF, &'s MT>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+                Target = <MT as MmcsArith<A, A::F>>::Target,
+            >,
+    {
+        // The setup holds the native values, which the transcripts absorb.
+        let native = claims
+            .iter()
+            .map(|claim| WeightedOpening {
+                high: Point::new(
+                    claim
+                        .opening
+                        .high
+                        .iter()
+                        .map(|c| arith.value_ext(c))
+                        .collect(),
+                ),
+                low_weights: claim
+                    .opening
+                    .low_weights
+                    .iter()
+                    .map(|w| arith.value_ext(w))
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        let batch = self.weighted_claims(native.iter())?;
+        let readings = claims
+            .iter()
+            .map(|claim| ClaimReading {
+                point: claim.opening.high.as_slice(),
+                low_weights: Some(&claim.opening.low_weights),
+                value: claim.value.dup(),
+            })
+            .collect::<Vec<_>>();
         let closing = batch
-            .verify_deferred(&proof.reduction, &values, challenger)
+            .verify_deferred_in(arith, &proof.reduction, &readings, challenger)
             .map_err(BooleanWhirError::ReductionProof)?;
         let shapes = [TableShape::new(self.inner.num_variables(), 1)];
         // The point always names the packing's variables, so a refusal only fails the check.
-        let weight_at = |point: &Point<EF>| closing.weight_at(point).unwrap_or(EF::ZERO);
+        let weight_at = |arith: &mut A, point: &Point<A::EF>| {
+            closing.weight_at(arith, point).unwrap_or(A::EF::ZERO)
+        };
         self.inner
-            .verify_with_initial_weight(
+            .verify_with_initial_weight_in(
+                arith,
                 commitment,
                 &proof.opening,
                 &shapes,

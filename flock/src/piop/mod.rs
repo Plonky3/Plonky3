@@ -5,19 +5,23 @@
 #[cfg(test)]
 mod tests;
 
-use p3_binary_pcs::whir::preset::keccak64::{ProverData, WitnessCommitment};
+use p3_binary_pcs::whir::preset::hash64::{ProverData, WitnessCommitment};
 use p3_binary_pcs::whir::{Region, SuffixTensors, WeightedClaim};
+use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
+use p3_field::Algebra;
+use p3_keccak::Keccak256Hash;
+use p3_verifier_arith::Native;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::config::FlockChallenger;
+use crate::config::{FlockChallenger, FlockHash};
 use crate::error::{ProvingError, VerificationError};
 use crate::lincheck::LincheckProof;
 use crate::point::QuirkyClaim;
 use crate::ports::PublicPorts;
 use crate::zerocheck::ZerocheckProof;
-use crate::{Batch, Challenge, Val, Witness, lincheck, zerocheck};
+use crate::{Batch, Challenge, FlockArith, Val, Witness, lincheck, zerocheck};
 
 /// The reductions of a Flock proof, from the circuit to one claim on the committed witness.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,10 +33,9 @@ pub struct PiopProof {
 }
 
 /// Where a batch's witness lies: a region of a shared bit commitment.
-#[derive(Clone, Copy)]
-pub struct Placement<'a> {
+pub struct Placement<'a, H: FlockHash = Keccak256Hash> {
     /// The shared commitment.
-    pub commitment: &'a WitnessCommitment,
+    pub commitment: &'a WitnessCommitment<H>,
     /// The region holding the witness bits.
     pub region: Region,
 }
@@ -59,10 +62,18 @@ pub struct RegionError {
     pub num_variables: usize,
 }
 
-impl<'a> Placement<'a> {
+impl<H: FlockHash> Clone for Placement<'_, H> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<H: FlockHash> Copy for Placement<'_, H> {}
+
+impl<'a, H: FlockHash> Placement<'a, H> {
     /// The whole commitment as the region.
     #[must_use]
-    pub const fn whole(commitment: &'a WitnessCommitment) -> Self {
+    pub const fn whole(commitment: &'a WitnessCommitment<H>) -> Self {
         Self {
             commitment,
             region: Region {
@@ -91,7 +102,7 @@ impl<'a> Placement<'a> {
     }
 
     /// A claim on the region's bits as the same claim on the whole commitment.
-    fn lift(&self, claim: QuirkyClaim) -> WeightedClaim<Challenge> {
+    fn lift<E: Algebra<Challenge>>(&self, claim: QuirkyClaim<E>) -> WeightedClaim<E> {
         let selector = self.region.selector(self.commitment.num_variables());
         let mut claim = claim.into_weighted();
         claim.opening = claim.opening.within(&selector);
@@ -112,19 +123,19 @@ impl<'a> Placement<'a> {
 ///
 /// - The prover data is not the placement commitment's, or the witness's `A z`, `B z` are not the batch's.
 #[instrument(skip_all, name = "flock piop prove", fields(log_n = batch.log_n()))]
-pub fn prove(
+pub fn prove<H: FlockHash>(
     pow_bits: usize,
     batch: &Batch<'_>,
     public: &PublicPorts,
     witness: &Witness,
-    placement: &Placement<'_>,
-    data: &ProverData,
-    challenger: &mut FlockChallenger,
+    placement: &Placement<'_, H>,
+    data: &ProverData<H>,
+    challenger: &mut FlockChallenger<H>,
 ) -> Result<(PiopProof, RegionClaim), ProvingError> {
     placement.check(batch)?;
     let z = placement
         .region
-        .words(WitnessCommitment::committed_words(data));
+        .words(WitnessCommitment::<H>::committed_words(data));
     public.check_words(batch, z)?;
 
     // a * b = c everywhere, reduced to claims at one point.
@@ -155,17 +166,46 @@ pub fn prove(
 /// # Errors
 ///
 /// The placement does not hold the batch, or the zerocheck, the lincheck or the public words reject.
-#[instrument(skip_all, name = "flock piop verify", fields(log_n = batch.log_n()))]
-pub fn verify(
+pub fn verify<H: FlockHash>(
     pow_bits: usize,
     batch: &Batch<'_>,
     public: &PublicPorts,
     proof: &PiopProof,
-    placement: &Placement<'_>,
-    challenger: &mut FlockChallenger,
+    placement: &Placement<'_, H>,
+    challenger: &mut FlockChallenger<H>,
 ) -> Result<WeightedClaim<Challenge>, VerificationError> {
+    verify_in(
+        &mut Native::new(),
+        pow_bits,
+        batch,
+        public,
+        proof,
+        placement,
+        challenger,
+    )
+}
+
+/// As [`verify`], within an arithmetic.
+///
+/// # Errors
+///
+/// As [`verify`].
+#[instrument(skip_all, name = "flock piop verify", fields(log_n = batch.log_n()))]
+pub fn verify_in<A, C, H: FlockHash>(
+    arith: &mut A,
+    pow_bits: usize,
+    batch: &Batch<'_>,
+    public: &PublicPorts,
+    proof: &PiopProof,
+    placement: &Placement<'_, H>,
+    challenger: &mut C,
+) -> Result<WeightedClaim<A::EF>, VerificationError>
+where
+    A: FlockArith,
+    C: CanObserve<Val> + CanSample<Val> + GrindingChallenger<Witness = Val>,
+{
     placement.check(batch)?;
-    let claims = zerocheck::verify(batch, &proof.zerocheck, pow_bits, challenger)?;
-    let claim = lincheck::verify(batch, &claims, public, &proof.lincheck, challenger)?;
+    let claims = zerocheck::verify_in(arith, batch, &proof.zerocheck, pow_bits, challenger)?;
+    let claim = lincheck::verify_in(arith, batch, &claims, public, &proof.lincheck, challenger)?;
     Ok(placement.lift(claim))
 }
