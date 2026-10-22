@@ -17,6 +17,7 @@ use p3_uni_stark::{
     Domain, InvalidProofShapeError, StarkConfig, VerificationError, recompose_quotient_from_chunks,
     verify_constraints,
 };
+use p3_verifier_arith::Native;
 
 type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
@@ -25,6 +26,7 @@ type MyChallenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel<Val>;
 type MyPcs = TrivialPcs<Val, Dft>;
 type MyConfig = StarkConfig<MyPcs, Challenge, MyChallenger>;
+type NativeArith = Native<Val, Challenge>;
 
 /// Two columns, three public values, reads the next row.
 struct Fib;
@@ -73,7 +75,8 @@ fn check(
     periodic_values: &[Challenge],
     public_values: &[Val],
 ) -> Result<(), VerificationError<()>> {
-    verify_constraints::<MyConfig, Fib, ()>(
+    verify_constraints::<MyConfig, Fib, NativeArith, ()>(
+        &mut NativeArith::new(),
         &Fib,
         0,
         trace_local,
@@ -83,8 +86,8 @@ fn check(
         periodic_values,
         public_values,
         trace_domain(),
-        Challenge::from(Val::from_u64(11)),
-        Challenge::from(Val::from_u64(7)),
+        &Challenge::from(Val::from_u64(11)),
+        &Challenge::from(Val::from_u64(7)),
         Challenge::ZERO,
     )
 }
@@ -263,7 +266,8 @@ impl<AB: AirBuilder> Air<AB> for PreprocessedAir {
 fn equally_wrong_preprocessed_widths_are_rejected() {
     for width in [0, 1, 3] {
         let row = vec![Challenge::ONE; width];
-        let result = verify_constraints::<MyConfig, PreprocessedAir, ()>(
+        let result = verify_constraints::<MyConfig, PreprocessedAir, NativeArith, ()>(
+            &mut NativeArith::new(),
             &PreprocessedAir,
             2,
             &[],
@@ -273,8 +277,8 @@ fn equally_wrong_preprocessed_widths_are_rejected() {
             &[],
             &[],
             trace_domain(),
-            Challenge::from(Val::from_u64(11)),
-            Challenge::ONE,
+            &Challenge::from(Val::from_u64(11)),
+            &Challenge::ONE,
             Challenge::ZERO,
         );
         assert!(matches!(shape_error(result),
@@ -287,7 +291,8 @@ fn equally_wrong_preprocessed_widths_are_rejected() {
 
 #[test]
 fn missing_preprocessed_rows_are_rejected() {
-    let result = verify_constraints::<MyConfig, PreprocessedAir, ()>(
+    let result = verify_constraints::<MyConfig, PreprocessedAir, NativeArith, ()>(
+        &mut NativeArith::new(),
         &PreprocessedAir,
         2,
         &[],
@@ -297,8 +302,8 @@ fn missing_preprocessed_rows_are_rejected() {
         &[],
         &[],
         trace_domain(),
-        Challenge::from(Val::from_u64(11)),
-        Challenge::ONE,
+        &Challenge::from(Val::from_u64(11)),
+        &Challenge::ONE,
         Challenge::ZERO,
     );
     assert!(matches!(
@@ -315,7 +320,8 @@ fn missing_preprocessed_rows_are_rejected() {
 #[test]
 fn a_constraint_point_on_the_trace_domain_is_rejected() {
     let row = [Challenge::ONE; 2];
-    let result = verify_constraints::<MyConfig, Fib, ()>(
+    let result = verify_constraints::<MyConfig, Fib, NativeArith, ()>(
+        &mut NativeArith::new(),
         &Fib,
         0,
         &row,
@@ -325,8 +331,8 @@ fn a_constraint_point_on_the_trace_domain_is_rejected() {
         &[],
         &PIS,
         trace_domain(),
-        Challenge::ONE,
-        Challenge::ONE,
+        &Challenge::ONE,
+        &Challenge::ONE,
         Challenge::ZERO,
     );
     assert!(matches!(result, Err(VerificationError::OodPointInDomain)));
@@ -337,7 +343,8 @@ fn preprocessed_width_can_come_from_a_verifier_key() {
     // The helper uses the explicit trusted width even if it differs from the AIR's default.
     let row = [Challenge::ONE; 3];
     assert!(
-        verify_constraints::<MyConfig, PreprocessedAir, ()>(
+        verify_constraints::<MyConfig, PreprocessedAir, NativeArith, ()>(
+            &mut NativeArith::new(),
             &PreprocessedAir,
             3,
             &[],
@@ -347,8 +354,8 @@ fn preprocessed_width_can_come_from_a_verifier_key() {
             &[],
             &[],
             trace_domain(),
-            Challenge::from(Val::from_u64(11)),
-            Challenge::ONE,
+            &Challenge::from(Val::from_u64(11)),
+            &Challenge::ONE,
             Challenge::ZERO,
         )
         .is_ok()

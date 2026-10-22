@@ -21,6 +21,7 @@ p3-fri.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+p3-verifier-arith.workspace = true
 
 itertools.workspace = true
 serde.workspace = true

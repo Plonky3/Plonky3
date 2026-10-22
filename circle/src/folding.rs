@@ -2,14 +2,14 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::PhantomData;
 
-use itertools::Itertools;
 use p3_commit::Mmcs;
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
+use p3_field::{Dup, ExtensionField, Field, batch_multiplicative_inverse};
 use p3_fri::FriFoldingStrategy;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len};
+use p3_verifier_arith::Arith;
 
 use crate::domain::CircleDomain;
 use crate::{CircleInputProof, InputError};
@@ -34,15 +34,41 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
         1
     }
 
-    fn fold_row(
+    fn fold_row<A: Arith<Val = F, Challenge = EF>>(
         &self,
-        index: usize,
+        arith: &mut A,
+        index: &A::Index,
         log_folded_height: usize,
         log_arity: usize,
-        beta: EF,
-        evals: impl Iterator<Item = EF>,
-    ) -> EF {
-        fold_x_row(index, log_folded_height, log_arity, beta, evals)
+        beta: A::EF,
+        evals: &[A::EF],
+    ) -> A::EF {
+        // Currently only arity 2 is supported for Circle PCS
+        assert_eq!(log_arity, 1, "Circle PCS currently only supports arity 2");
+        assert_eq!(evals.len(), 2);
+
+        // The twiddle is the x coordinate of `shift + g * rev(index)` on the circle.
+        //
+        // Each set exponent bit adds the matching doubling of `g`, so only selections remain.
+        let domain = CircleDomain::<F>::standard(log_folded_height + log_arity + 1);
+        let bits = arith.index_bits(index, log_folded_height);
+        let (mut x, mut y) = (A::F::from(domain.shift.x), A::F::from(domain.shift.y));
+        let mut step = domain.subgroup_generator();
+        for bit in bits.iter().rev() {
+            let added_x = x.dup() * step.x - y.dup() * step.y;
+            let added_y = x.dup() * step.y + y.dup() * step.x;
+            x = arith.select_base(bit, added_x, x);
+            y = arith.select_base(bit, added_y, y);
+            step = step.double();
+        }
+        let t = arith
+            .batch_inverse(&[A::EF::from(x)], |_| ())
+            .ok()
+            .and_then(|mut inverse| inverse.pop())
+            .expect("circle twiddles are nonzero");
+
+        let (e0, e1) = (evals[0].dup(), evals[1].dup());
+        (e0.dup() + e1.dup() + beta * (e0 - e1) * t) * A::F::from(F::ONE.halve())
     }
 
     fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, log_arity: usize, m: M) -> Vec<EF> {
@@ -103,7 +129,7 @@ pub(crate) fn fold_y_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     beta: EF,
     evals: impl Iterator<Item = EF>,
 ) -> EF {
-    let evals = evals.collect_vec();
+    let evals: Vec<EF> = evals.collect();
     assert_eq!(evals.len(), 2);
     let t = CircleDomain::<F>::standard(log_folded_height + 1)
         .nth_y_twiddle(index)
@@ -130,6 +156,7 @@ pub(crate) fn fold_x<F: ComplexExtendable, EF: ExtensionField<F>>(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn fold_x_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     index: usize,
     log_folded_height: usize,
@@ -139,7 +166,7 @@ pub(crate) fn fold_x_row<F: ComplexExtendable, EF: ExtensionField<F>>(
 ) -> EF {
     // Currently only arity 2 is supported for Circle PCS
     assert_eq!(log_arity, 1, "Circle PCS currently only supports arity 2");
-    let evals = evals.collect_vec();
+    let evals: Vec<EF> = evals.collect();
     assert_eq!(evals.len(), 2);
 
     let t = CircleDomain::<F>::standard(log_folded_height + log_arity + 1)
@@ -217,11 +244,12 @@ pub(crate) fn query_x_twiddles_inv<F: ComplexExtendable>(
 
 #[cfg(test)]
 mod tests {
-    use itertools::iproduct;
+    use itertools::{Itertools, iproduct};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
+    use p3_verifier_arith::Native;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -364,6 +392,23 @@ mod tests {
             })
             .collect_vec();
         assert_eq!(mat_x_folded, row_x_folded);
+
+        // The strategy's own fold, run natively, folds every row the same way.
+        let folding = CircleFriFolding::<F, (), ()>(PhantomData);
+        let strategy_folded = (0..(1 << log_folded_height))
+            .map(|i| {
+                FriFoldingStrategy::<F, EF>::fold_row(
+                    &folding,
+                    &mut Native::new(),
+                    &i,
+                    log_folded_height,
+                    log_arity,
+                    beta,
+                    &m.row(i).unwrap().into_iter().collect_vec(),
+                )
+            })
+            .collect_vec();
+        assert_eq!(mat_x_folded, strategy_folded);
     }
 
     #[test]

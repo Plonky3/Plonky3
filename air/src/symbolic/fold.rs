@@ -76,9 +76,12 @@ pub fn fold_symbolic_expressions<'a, A: 'a, V: SymbolicExprVisitor<'a, A>>(
         .collect()
 }
 
-// Callers keep every cached node borrowed for the whole cache lifetime. Reusing
-// the stack also avoids allocating one for every embedded base root.
-fn fold_symbolic_expression_cached<'a, A: 'a, V: SymbolicExprVisitor<'a, A>>(
+/// Fold one root against a cache and stack the caller keeps across folds.
+///
+/// Nodes shared between roots are then interpreted once.
+///
+/// Every cached node must stay borrowed for the whole cache lifetime.
+pub fn fold_symbolic_expression_cached<'a, A: 'a, V: SymbolicExprVisitor<'a, A>>(
     root: &'a SymbolicExpr<A>,
     visitor: &mut V,
     cache: &mut HashMap<*const SymbolicExpr<A>, V::Output>,

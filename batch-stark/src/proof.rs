@@ -52,6 +52,18 @@ pub struct BatchCommitments<Com> {
     pub random: Option<Com>,
 }
 
+impl<Com> BatchCommitments<Com> {
+    /// The same commitments mapped through `f`, in field order.
+    pub fn map<T>(&self, mut f: impl FnMut(&Com) -> T) -> BatchCommitments<T> {
+        BatchCommitments {
+            main: f(&self.main),
+            permutation: self.permutation.as_ref().map(&mut f),
+            quotient_chunks: f(&self.quotient_chunks),
+            random: self.random.as_ref().map(f),
+        }
+    }
+}
+
 /// Opened values for a single instance in a batch-STARK proof, including lookup-related values.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenedValuesWithLookups<Challenge> {
@@ -68,4 +80,21 @@ pub struct OpenedValuesWithLookups<Challenge> {
 pub struct BatchOpenedValues<Challenge> {
     /// Opened values for each instance, in the same order as provided to the prover.
     pub instances: Vec<OpenedValuesWithLookups<Challenge>>,
+}
+
+impl<Challenge> BatchOpenedValues<Challenge> {
+    /// The same openings with every value mapped through `f`, instance by instance.
+    pub fn map<T>(&self, mut f: impl FnMut(&Challenge) -> T) -> BatchOpenedValues<T> {
+        BatchOpenedValues {
+            instances: self
+                .instances
+                .iter()
+                .map(|instance| OpenedValuesWithLookups {
+                    base_opened_values: instance.base_opened_values.map(&mut f),
+                    permutation_local: instance.permutation_local.iter().map(&mut f).collect(),
+                    permutation_next: instance.permutation_next.iter().map(&mut f).collect(),
+                })
+                .collect(),
+        }
+    }
 }

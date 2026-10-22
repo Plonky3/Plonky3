@@ -3,7 +3,7 @@
 use alloc::boxed::Box;
 use core::iter::repeat_with;
 
-use p3_field::Field;
+use p3_field::PrimeCharacteristicRing;
 
 /// Bus-separated LogUp challenge table built from a single `(alpha, beta)` pair.
 ///
@@ -54,7 +54,7 @@ pub struct Challenges<EF> {
     pub bus_prefix: Box<[EF]>,
 }
 
-impl<EF: Field> Challenges<EF> {
+impl<EF: PrimeCharacteristicRing> Challenges<EF> {
     /// Build the table from one sampled challenge pair.
     ///
     /// # Arguments
@@ -75,10 +75,10 @@ impl<EF: Field> Challenges<EF> {
         let gamma = beta.exp_u64(max_message_width as u64);
 
         // prefix[i] = alpha + (i + 1) * gamma, accumulated to skip a multiply per bus.
-        let mut prefix = alpha;
+        let mut prefix = alpha.dup();
         let bus_prefix: Box<[EF]> = repeat_with(|| {
-            prefix += gamma;
-            prefix
+            prefix += gamma.dup();
+            prefix.dup()
         })
         .take(num_bus_ids)
         .collect();

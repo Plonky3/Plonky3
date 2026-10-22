@@ -7,6 +7,7 @@ mod adapters;
 mod domain;
 mod encoder;
 mod mmcs;
+mod mmcs_arith;
 mod pcs;
 mod periodic;
 
@@ -17,5 +18,6 @@ pub use adapters::*;
 pub use domain::*;
 pub use encoder::*;
 pub use mmcs::*;
+pub use mmcs_arith::*;
 pub use pcs::*;
 pub use periodic::*;

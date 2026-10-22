@@ -22,6 +22,7 @@ p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-uni-stark.workspace = true
 p3-util.workspace = true
+p3-verifier-arith.workspace = true
 
 hashbrown.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }

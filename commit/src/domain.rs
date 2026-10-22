@@ -8,30 +8,11 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::interpolation::Interpolate;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
+pub use p3_verifier_arith::LagrangeSelectors;
+use p3_verifier_arith::Native;
+use p3_verifier_arith::two_adic::{selectors_at, vanishing_at};
 
 use crate::PeriodicColumns;
-
-/// Given a `PolynomialSpace`, `S`, and a subset `R`, a Lagrange selector `P_R` is
-/// a polynomial which is not equal to `0` for every element in `R` but is equal
-/// to `0` for every element of `S` not in `R`.
-///
-/// This struct contains evaluations of several Lagrange selectors for a fixed
-/// `PolynomialSpace` over some collection of points disjoint from that
-/// `PolynomialSpace`.
-///
-/// The Lagrange selector is normalized if it is equal to `1` for every element in `R`.
-/// The LagrangeSelectors given here are not normalized.
-#[derive(Debug)]
-pub struct LagrangeSelectors<T> {
-    /// A Lagrange selector corresponding to the first point in the space.
-    pub is_first_row: T,
-    /// A Lagrange selector corresponding to the last point in the space.
-    pub is_last_row: T,
-    /// A Lagrange selector corresponding the subset of all but the last point.
-    pub is_transition: T,
-    /// The inverse of the vanishing polynomial which is a Lagrange selector corresponding to the empty set
-    pub inv_vanishing: T,
-}
 
 /// Fixing a field, `F`, `PolynomialSpace<Val = F>` denotes an indexed subset of `F^n`
 /// with some additional algebraic structure.
@@ -313,7 +294,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     ///
     /// `Z_{gH}(X) = g^{-|H|}\prod_{h \in H} (X - gh) = (g^{-1}X)^|H| - 1`
     fn vanishing_poly_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
-        (point * self.shift_inverse()).exp_power_of_2(self.log_size()) - Ext::ONE
+        vanishing_at::<Native<Val, Ext>>(self, &point)
     }
 
     /// Compute several Lagrange selectors at the given point:
@@ -323,15 +304,13 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// - `Z_{gH}(X)/(g^{-1}X - h^{-1})`: The Lagrange selector of the point `gh^{-1}` where `h` is the generator of `H`.
     /// - `(g^{-1}X - h^{-1})`: The Lagrange selector of the subset consisting of everything but the point `gh^{-1}`.
     /// - `1/Z_{gH}(X)`: The inverse of the vanishing polynomial.
+    ///
+    /// # Panics
+    ///
+    /// When `point` lies in the coset.
     fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
-        let unshifted_point = point * self.shift_inverse();
-        let z_h = unshifted_point.exp_power_of_2(self.log_size()) - Ext::ONE;
-        LagrangeSelectors {
-            is_first_row: z_h / (unshifted_point - Ext::ONE),
-            is_last_row: z_h / (unshifted_point - self.subgroup_generator().inverse()),
-            is_transition: unshifted_point - self.subgroup_generator().inverse(),
-            inv_vanishing: z_h.inverse(),
-        }
+        selectors_at(&mut Native::new(), self, &point, || ())
+            .unwrap_or_else(|()| panic!("selectors are undefined on the coset"))
     }
 
     /// Compute the Lagrange selectors of our space at every point in the coset.

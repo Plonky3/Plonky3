@@ -50,6 +50,7 @@ mod pruned;
 mod verify;
 
 pub use error::{MerkleTreeError, PrunedProofError};
+pub use geometry::{OpeningPlan, PlanLevel};
 pub(crate) use geometry::{check_widths, validate_commit_reachable_heights};
 pub use pruned::PrunedBatchOpening;
 
@@ -270,6 +271,67 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             });
         }
         Ok(())
+    }
+
+    /// How one opening of matrices with these dimensions folds into its cap entry.
+    ///
+    /// Verification and every circuit gadget walk this plan, so the tree geometry is defined once.
+    ///
+    /// # Errors
+    ///
+    /// When the dimensions do not form a tree the commitment can build.
+    pub fn opening_plan(&self, dimensions: &[Dimensions]) -> Result<OpeningPlan, MerkleTreeError>
+    where
+        P: PackedValue,
+        PW: PackedValue,
+    {
+        let max_height =
+            validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
+        let arity_schedule = self.proof_arity_schedule(dimensions)?;
+
+        let mut heights_tallest_first = dimensions
+            .iter()
+            .enumerate()
+            .sorted_by_key(|(_, dims)| Reverse(dims.height))
+            .peekable();
+
+        // The leaf hashes every matrix as tall as the tallest one, up to a power of two.
+        let leaf_height_npt = max_height.next_power_of_two();
+        let leaf = heights_tallest_first
+            .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == leaf_height_npt)
+            .map(|(i, _)| i)
+            .collect();
+
+        // After each level, the matrices of the next layer's height are injected.
+        let mut curr_height_padded = padded_len(max_height, N);
+        let levels = arity_schedule
+            .iter()
+            .map(|&arity| {
+                let logical_next = curr_height_padded / arity;
+                curr_height_padded = padded_len(logical_next, N);
+                let logical_next_npt = logical_next.next_power_of_two();
+                let next_height = heights_tallest_first
+                    .peek()
+                    .map(|(_, dims)| dims.height)
+                    .filter(|h| h.next_power_of_two() == logical_next_npt);
+                let inject = next_height.map_or_else(Vec::new, |next_height| {
+                    heights_tallest_first
+                        .peeking_take_while(|(_, dims)| dims.height == next_height)
+                        .map(|(i, _)| i)
+                        .collect()
+                });
+                PlanLevel { arity, inject }
+            })
+            .collect();
+
+        // The schedule reaches every injection for validated dimensions.
+        //
+        // Fail closed if this walk ever disagrees with it.
+        if heights_tallest_first.peek().is_some() {
+            return Err(CapMismatch);
+        }
+
+        Ok(OpeningPlan { leaf, levels })
     }
 
     /// The full arity schedule, leaves to root, and how many of its levels the proof walks.

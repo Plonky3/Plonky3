@@ -30,4 +30,4 @@ pub use security::num_batched_openings;
 pub use transcript::{
     BatchProverTranscript, BatchShape, BatchTranscriptFailure, BatchVerifierTranscript,
 };
-pub use verifier::{VerifierData, verify_batch};
+pub use verifier::{BatchArith, VerifierData, verify_batch, verify_batch_in};

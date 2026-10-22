@@ -5,26 +5,23 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_air::symbolic::SymbolicAirBuilder;
-use p3_air::{Air, RowWindow};
+use p3_air::{Air, BaseAir};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{
-    CommitmentWithOpeningPoints, Pcs, PeriodicColumns, PolynomialSpace, UnivariateStarkPcs,
-};
+use p3_commit::{CommitmentOpening, Pcs, PeriodicColumns, PolynomialSpace, UnivariateStarkPcs};
 use p3_field::{
     BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, batch_multiplicative_inverse,
 };
-use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::stack::VerticalPair;
 use p3_util::zip_eq::zip_eq;
 use p3_util::{checked_log_size_sum, checked_pow2};
+use p3_verifier_arith::Native;
 use tracing::instrument;
 
 use crate::error::{InvalidProofShapeError, VerificationError};
 use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 use crate::{
-    AirLayout, Com, Commitments, Domain, PcsError, PreprocessedOpenedValues,
-    PreprocessedVerifierKey, Proof, StarkGenericConfig, StarkShape, StarkVerifierTranscript, Val,
-    VerifierConstraintFolder,
+    AirLayout, Com, Commitments, ConstraintArith, ConstraintInputs, Domain, PcsError,
+    PreprocessedOpenedValues, PreprocessedVerifierKey, Proof, StarkArith, StarkGenericConfig,
+    StarkShape, StarkVerifierTranscript, Val, VerifierConstraintFolder,
 };
 
 pub fn validate_degree_bits(
@@ -183,29 +180,37 @@ where
 /// This evaluates the [`Air`] constraints at the out-of-domain point and checks
 /// that constraints(zeta) / Z_H(zeta) = quotient(zeta).
 ///
-/// `preprocessed_width` must come from the verifier key (when supplied), or the AIR,
-/// rather than from the opened rows. Both preprocessed rows must have that width;
-/// callers whose AIR does not read the next row supply a zero-filled next row.
-/// Returns a shape error for mismatched rows and [`VerificationError::OodPointInDomain`]
-/// when `zeta` is on `trace_domain`.
+/// `preprocessed_width` must come from the verifier key (when supplied), or the AIR, rather than from the opened rows.
+///
+/// Both preprocessed rows must have that width.
+///
+/// Callers whose AIR does not read the next row supply a zero-filled next row.
+///
+/// # Errors
+///
+/// - A shape error for mismatched rows.
+/// - [`VerificationError::OodPointInDomain`] when `zeta` is on `trace_domain`.
+/// - [`VerificationError::OodEvaluationMismatch`] when the constraints miss the quotient.
 #[allow(clippy::too_many_arguments)]
-pub fn verify_constraints<SC, A, PcsErr>(
+pub fn verify_constraints<SC, A, AR, PcsErr>(
+    arith: &mut AR,
     air: &A,
     preprocessed_width: usize,
-    trace_local: &[SC::Challenge],
-    trace_next: &[SC::Challenge],
-    preprocessed_local: Option<&[SC::Challenge]>,
-    preprocessed_next: Option<&[SC::Challenge]>,
-    periodic_values: &[SC::Challenge],
-    public_values: &[Val<SC>],
+    trace_local: &[AR::EF],
+    trace_next: &[AR::EF],
+    preprocessed_local: Option<&[AR::EF]>,
+    preprocessed_next: Option<&[AR::EF]>,
+    periodic_values: &[AR::EF],
+    public_values: &[AR::F],
     trace_domain: Domain<SC>,
-    zeta: SC::Challenge,
-    alpha: SC::Challenge,
-    quotient: SC::Challenge,
+    zeta: &AR::EF,
+    alpha: &AR::EF,
+    quotient: AR::EF,
 ) -> Result<(), VerificationError<PcsErr>>
 where
     SC: StarkGenericConfig,
-    A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    A: BaseAir<Val<SC>>,
+    AR: ConstraintArith<SC, A>,
     PcsErr: core::fmt::Debug,
 {
     // Public inputs reach this proof only through AIR constraints.
@@ -243,15 +248,9 @@ where
         return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch.into());
     }
 
-    if trace_domain.vanishing_poly_at_point(zeta).is_zero() {
-        return Err(VerificationError::OodPointInDomain);
-    }
-    let sels = trace_domain.selectors_at_point(zeta);
-
-    let main = VerticalPair::new(
-        RowMajorMatrixView::new_row(trace_local),
-        RowMajorMatrixView::new_row(trace_next),
-    );
+    let selectors = arith
+        .selectors(&trace_domain, zeta)
+        .ok_or(VerificationError::OodPointInDomain)?;
 
     // The width comes from trusted metadata, so two equally short rows cannot
     // pass validation and then panic when the AIR indexes preprocessed columns.
@@ -267,40 +266,23 @@ where
         .into());
     }
 
-    let preprocessed = match (preprocessed_local, preprocessed_next) {
-        (Some(local), Some(next)) => VerticalPair::new(
-            RowMajorMatrixView::new_row(local),
-            RowMajorMatrixView::new_row(next),
-        ),
-        _ => VerticalPair::new(
-            RowMajorMatrixView::new(&[], 0),
-            RowMajorMatrixView::new(&[], 0),
-        ),
-    };
-
-    let preprocessed_window =
-        RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
-    let mut folder = VerifierConstraintFolder {
-        main,
-        preprocessed,
-        preprocessed_window,
+    let inputs = ConstraintInputs {
+        trace_local,
+        trace_next,
+        preprocessed_local: preprocessed_local.unwrap_or(&[]),
+        preprocessed_next: preprocessed_next.unwrap_or(&[]),
         periodic_values,
         public_values,
-        is_first_row: sels.is_first_row,
-        is_last_row: sels.is_last_row,
-        is_transition: sels.is_transition,
-        alpha,
-        accumulator: SC::Challenge::ZERO,
+        selectors: &selectors,
+        alpha: alpha.clone(),
     };
-    air.eval(&mut folder);
-    let folded_constraints = folder.accumulator;
+    let folded_constraints = arith.fold_constraints(air, &inputs);
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
-    if folded_constraints * sels.inv_vanishing != quotient {
-        return Err(VerificationError::OodEvaluationMismatch { index: None });
-    }
-
-    Ok(())
+    arith.assert_zero(
+        folded_constraints * selectors.inv_vanishing.clone() - quotient,
+        || VerificationError::OodEvaluationMismatch { index: None },
+    )
 }
 
 /// Validates the preprocessed trace and pairs its commitment with its opening.
@@ -326,7 +308,7 @@ fn process_preprocessed_trace<'a, SC, A>(
 >
 where
     SC: StarkGenericConfig,
-    A: for<'b> Air<VerifierConstraintFolder<'b, SC>>,
+    A: BaseAir<Val<SC>>,
 {
     // Determine expected preprocessed width.
     // - If a verifier key is provided, trust its width.
@@ -414,11 +396,11 @@ where
 }
 
 /// Everything the opening argument needs, once the out-of-domain point is known.
-struct OpeningClaims<SC: StarkGenericConfig> {
+struct OpeningClaims<SC: StarkGenericConfig, AR: StarkArith<SC>> {
     /// The AIR's periodic columns evaluated at the out-of-domain point.
-    periodic_values: Vec<SC::Challenge>,
+    periodic_values: Vec<AR::EF>,
     /// One entry per commitment, with the points and values of each of its matrices.
-    claims: Vec<CommitmentWithOpeningPoints<SC::Challenge, Com<SC>, Domain<SC>>>,
+    claims: Vec<CommitmentOpening<AR::EF, AR::Commitment, Domain<SC>>>,
 }
 
 /// Assemble the claims the opening argument has to answer at `zeta`.
@@ -447,24 +429,26 @@ struct OpeningClaims<SC: StarkGenericConfig> {
 /// - A randomization opening is absent under a zero-knowledge PCS.
 /// - The quotient openings do not pair one for one with the quotient chunk domains.
 #[allow(clippy::too_many_arguments)]
-fn prepare_opening_claims<SC, A>(
+fn prepare_opening_claims<SC, A, AR>(
+    arith: &mut AR,
     air: &A,
-    commitments: &Commitments<Com<SC>>,
-    opened_values: &crate::proof::OpenedValues<SC::Challenge>,
-    preprocessed: Option<(Com<SC>, &PreprocessedOpenedValues<SC::Challenge>)>,
+    commitments: &Commitments<AR::Commitment>,
+    opened_values: &crate::proof::OpenedValues<AR::EF>,
+    preprocessed: Option<(AR::Commitment, &PreprocessedOpenedValues<AR::EF>)>,
     trace_domain: Domain<SC>,
     init_trace_domain: Domain<SC>,
     randomized_quotient_chunks_domains: &[Domain<SC>],
-    zeta: SC::Challenge,
-) -> Result<OpeningClaims<SC>, VerificationError<PcsError<SC>>>
+    zeta: &AR::EF,
+) -> Result<OpeningClaims<SC, AR>, VerificationError<PcsError<SC>>>
 where
     SC: StarkGenericConfig,
-    A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    A: BaseAir<Val<SC>>,
+    AR: StarkArith<SC>,
 {
     // The opening at zeta divides by the vanishing polynomial of the trace domain.
     // Reject any zeta on the domain, where that polynomial is zero and the inverse panics.
     // Honest Fiat-Shamir sampling reaches this only with probability |H| / |EF|.
-    if init_trace_domain.vanishing_poly_at_point(zeta).is_zero() {
+    if arith.selectors(&init_trace_domain, zeta).is_none() {
         return Err(VerificationError::OodPointInDomain);
     }
 
@@ -472,11 +456,10 @@ where
     let declared = air.periodic_columns();
     let periodic_columns = PeriodicColumns::new(&declared, init_trace_domain.size())?;
 
-    let periodic_values: Vec<SC::Challenge> =
-        init_trace_domain.evaluate_periodic_columns_at(periodic_columns, zeta);
+    let periodic_values = arith.periodic_values(&init_trace_domain, periodic_columns, zeta);
 
-    let zeta_next = init_trace_domain
-        .next_point(zeta)
+    let zeta_next = arith
+        .next_point(&init_trace_domain, zeta)
         .ok_or(VerificationError::NextPointUnavailable)?;
 
     // A randomization commitment is present exactly when the PCS is zero-knowledge.
@@ -488,17 +471,17 @@ where
             .ok_or(VerificationError::RandomizationError)?;
         vec![(
             random_commit.clone(),
-            vec![(trace_domain, vec![(zeta, random_values.clone())])],
+            vec![(trace_domain, vec![(zeta.clone(), random_values.clone())])],
         )]
     } else {
         vec![]
     };
 
     let trace_round = {
-        let mut trace_points = vec![(zeta, opened_values.trace_local.clone())];
+        let mut trace_points = vec![(zeta.clone(), opened_values.trace_local.clone())];
         if !air.main_next_row_columns().is_empty() {
             trace_points.push((
-                zeta_next,
+                zeta_next.clone(),
                 opened_values
                     .trace_next
                     .clone()
@@ -523,7 +506,7 @@ where
                     air: 0,
                 }),
             )?
-            .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
+            .map(|(domain, values)| (*domain, vec![(zeta.clone(), values.clone())]))
             .collect_vec(),
         ),
     ]);
@@ -532,7 +515,7 @@ where
     //
     // The shape check that produced this pair already matched the rows to the AIR.
     if let Some((preprocessed_commit, preprocessed)) = preprocessed {
-        let mut pre_points = vec![(zeta, preprocessed.local.clone())];
+        let mut pre_points = vec![(zeta.clone(), preprocessed.local.clone())];
         if let Some(next) = &preprocessed.next {
             pre_points.push((zeta_next, next.clone()));
         }
@@ -572,6 +555,39 @@ where
     SC: StarkGenericConfig,
     SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+{
+    verify_in(
+        &mut Native::new(),
+        config,
+        air,
+        proof,
+        public_values,
+        preprocessed_vk,
+    )
+}
+
+/// Verifies a STARK proof within an arithmetic.
+///
+/// The public values are lifted into the arithmetic.
+///
+/// Every shape check reads the native proof, so both arithmetics reject the same proofs.
+///
+/// # Errors
+///
+/// When the proof is malformed or does not verify.
+pub fn verify_in<AR, SC, A>(
+    arith: &mut AR,
+    config: &SC,
+    air: &A,
+    proof: &Proof<SC>,
+    public_values: &[AR::F],
+    preprocessed_vk: Option<&PreprocessedVerifierKey<SC>>,
+) -> Result<(), VerificationError<PcsError<SC>>>
+where
+    SC: StarkGenericConfig,
+    SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>>,
+    AR: ConstraintArith<SC, A>,
 {
     // Public inputs reach this proof only through AIR constraints.
     // A cell listed for backend binding would go completely unbound.
@@ -721,6 +737,37 @@ where
         return Err(InvalidProofShapeError::NonCanonicalOodPowWitness.into());
     }
 
+    // Lift the proof into the arithmetic, once.
+    //
+    // The shape checks above read the native proof, so every lifted value has a checked shape.
+    let lifted_commitments = Commitments {
+        trace: arith.load_commitment(pcs, &commitments.trace),
+        quotient_chunks: arith.load_commitment(pcs, &commitments.quotient_chunks),
+        random: commitments
+            .random
+            .as_ref()
+            .map(|random| arith.load_commitment(pcs, random)),
+    };
+    let lifted_opened = opened_values.map(|value| arith.load_ext(*value));
+    let lifted_preprocessed = preprocessed
+        .as_ref()
+        .map(|(commit, _)| arith.load_key_commitment(pcs, commit));
+
+    // Announce every value the transcript absorbs, in absorb order.
+    arith.will_observe_commitment(pcs, &lifted_commitments.trace);
+    if let Some(commit) = &lifted_preprocessed {
+        arith.will_observe_commitment(pcs, commit);
+    }
+    arith.will_observe(public_values.to_vec());
+    arith.will_observe_commitment(pcs, &lifted_commitments.quotient_chunks);
+    if let Some(random) = &lifted_commitments.random {
+        arith.will_observe_commitment(pcs, random);
+    }
+    if config.ood_proof_of_work_bits() > 0 {
+        let witness = arith.load(*ood_pow_witness);
+        arith.will_observe(vec![witness]);
+    }
+
     // The transcript binds the commitment alone.
     // The opening travels with the claims instead.
     let preprocessed_commit = preprocessed.as_ref().map(|(commit, _)| commit.clone());
@@ -732,28 +779,35 @@ where
     //
     // Every number comes from the configuration and from the AIR, never from the proof.
     // The two the proof does supply, both trace heights, are validated above first.
-    let mut challenger = config.initialise_challenger();
-    let mut transcript = StarkVerifierTranscript::<SC::Challenger, Val<SC>, SC::Challenge>::new(
-        &mut challenger,
-        StarkShape::new::<Val<SC>, A>(
-            air,
-            preprocessed_width,
-            degree_bits,
-            base_degree_bits,
-            num_quotient_chunks,
-            SC::Pcs::ZK,
-            config.ood_proof_of_work_bits(),
-        ),
-    );
+    let mut challenger = arith.challenger(config);
+    let mut transcript = arith.seeding(|| {
+        StarkVerifierTranscript::<AR::Challenger, Val<SC>, SC::Challenge>::new(
+            &mut challenger,
+            StarkShape::new::<Val<SC>, A>(
+                air,
+                preprocessed_width,
+                degree_bits,
+                base_degree_bits,
+                num_quotient_chunks,
+                SC::Pcs::ZK,
+                config.ood_proof_of_work_bits(),
+            ),
+        )
+    });
 
     // Replay both committed traces and the public values, then redraw the batching challenge.
     //
     // Soundness Error: n/|EF| where n is the number of constraints.
+    let native_public_values: Vec<Val<SC>> = public_values
+        .iter()
+        .map(|value| arith.value(value))
+        .collect();
     let alpha = transcript.constraint_phase::<Com<SC>>(
         commitments.trace.clone(),
         preprocessed_commit,
-        public_values,
+        &native_public_values,
     )?;
+    let alpha = arith.sampled_ext(alpha);
 
     // Replay the quotient commitment and the grind, then redraw the out-of-domain point.
     //
@@ -764,6 +818,7 @@ where
         commitments.random.clone(),
         *ood_pow_witness,
     )?;
+    let zeta = arith.sampled_ext(zeta);
 
     // Invariant: no early return may cross the span from here to the driver's `finish`.
     //
@@ -774,15 +829,17 @@ where
     //
     // Dropping a driver that has not replayed its pattern panics.
     // A panic raised while an error unwinds aborts the process instead of reporting it.
-    let prepared = prepare_opening_claims::<SC, A>(
+    let lifted_preprocessed_opening = lifted_opened.preprocessed.as_ref();
+    let prepared = prepare_opening_claims::<SC, A, AR>(
+        arith,
         air,
-        commitments,
-        opened_values,
-        preprocessed,
+        &lifted_commitments,
+        &lifted_opened,
+        lifted_preprocessed.zip(lifted_preprocessed_opening),
         trace_domain,
         init_trace_domain,
         &randomized_quotient_chunks_domains,
-        zeta,
+        &zeta,
     );
 
     // Run the opening argument inside the bracket, lending it the sponge.
@@ -791,7 +848,8 @@ where
             periodic_values,
             claims,
         } = prepared?;
-        pcs.verify_with_preprocessing(claims, opening_proof, challenger, preprocessed_index)
+        arith
+            .verify_opening(pcs, claims, opening_proof, challenger, preprocessed_index)
             .map_err(VerificationError::InvalidOpeningArgument)?;
         Ok(periodic_values)
     });
@@ -801,41 +859,34 @@ where
 
     let periodic_values = checked?;
 
-    let quotient = recompose_quotient_from_chunks::<SC>(
+    let quotient = arith.recompose_quotient(
         &quotient_chunks_domains,
-        &opened_values.quotient_chunks,
-        zeta,
+        &lifted_opened.quotient_chunks,
+        &zeta,
     )?;
 
-    let zeros;
-    let trace_next_slice = match &opened_values.trace_next {
-        Some(v) => v.as_slice(),
-        None => {
-            zeros = SC::Challenge::zero_vec(air_width);
-            &zeros
-        }
-    };
-    let pre_next_zeros;
-    let preprocessed_next_for_verify = match opened_values.preprocessed_next() {
-        Some(v) => Some(v),
-        None if preprocessed_width > 0 => {
-            pre_next_zeros = SC::Challenge::zero_vec(preprocessed_width);
-            Some(pre_next_zeros.as_slice())
-        }
+    let trace_next = lifted_opened
+        .trace_next
+        .clone()
+        .unwrap_or_else(|| vec![AR::EF::ZERO; air_width]);
+    let preprocessed_next = match lifted_opened.preprocessed_next() {
+        Some(next) => Some(next.to_vec()),
+        None if preprocessed_width > 0 => Some(vec![AR::EF::ZERO; preprocessed_width]),
         None => None,
     };
-    verify_constraints::<SC, A, PcsError<SC>>(
+    verify_constraints::<SC, A, AR, PcsError<SC>>(
+        arith,
         air,
         preprocessed_width,
-        &opened_values.trace_local,
-        trace_next_slice,
-        opened_values.preprocessed_local(),
-        preprocessed_next_for_verify,
+        &lifted_opened.trace_local,
+        &trace_next,
+        lifted_opened.preprocessed_local(),
+        preprocessed_next.as_deref(),
         &periodic_values,
         public_values,
         init_trace_domain,
-        zeta,
-        alpha,
+        &zeta,
+        &alpha,
         quotient,
     )?;
 
