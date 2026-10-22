@@ -2,6 +2,8 @@
 //!
 //! Maps `input[y * width + x]` to `output[x * height + y]` for any `Copy` type.
 
+use core::mem::MaybeUninit;
+
 /// Largest element count handled by the plain scalar copy.
 ///
 /// A matrix this small fits in L1, so tiling would only add loop-setup overhead.
@@ -77,7 +79,7 @@ const fn word_tiles<T>() -> bool {
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_block_tiled<T: Copy>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     total_cols: usize,
     total_rows: usize,
     start_x: usize,
@@ -96,7 +98,13 @@ unsafe fn transpose_block_tiled<T: Copy>(
     let dst = &mut output[out_col_start * total_rows + start_y..];
     // SAFETY: the word engine caller guarantees integer-word-compatible elements.
     unsafe {
-        super::rows::transpose_rows_strided_words(block_height, block_width, row, dst, total_rows);
+        super::rows::transpose_rows_strided_words_uninit(
+            block_height,
+            block_width,
+            row,
+            dst,
+            total_rows,
+        );
     };
 }
 
@@ -113,7 +121,7 @@ unsafe fn transpose_block_tiled<T: Copy>(
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_edge_tiled<T: Copy>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     total_cols: usize,
     total_rows: usize,
     start_x: usize,
@@ -143,13 +151,16 @@ unsafe fn transpose_edge_tiled<T: Copy>(
 /// - `input` is read as `height` rows of `width` columns.
 /// - `output` receives the transpose as `width` rows of `height` columns.
 ///
+/// Output may be uninitialized. Every slot receives a valid input copy before
+/// return; no existing slot is read or deinitialized, including on panic.
+///
 /// # Panics
 ///
 /// Panics if `width * height` overflows or differs from either slice length.
 #[inline]
-pub(crate) fn transpose<T: Copy + Send + Sync>(
+pub(super) fn transpose_uninit<T: Copy + Send + Sync>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     width: usize,
     height: usize,
 ) {
@@ -158,11 +169,11 @@ pub(crate) fn transpose<T: Copy + Send + Sync>(
 }
 
 /// # Safety
-/// Elements must satisfy the integer-word contract of `super::transpose_words`.
+/// Input elements must satisfy the integer-word contract of `super::transpose_words_owned`.
 #[inline]
-pub(super) unsafe fn transpose_words<T: Copy + Send + Sync>(
+pub(super) unsafe fn transpose_words_uninit<T: Copy + Send + Sync>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     width: usize,
     height: usize,
 ) {
@@ -175,7 +186,7 @@ pub(super) unsafe fn transpose_words<T: Copy + Send + Sync>(
 #[inline]
 unsafe fn transpose_impl<const WORDS: bool, T: Copy + Send + Sync>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     width: usize,
     height: usize,
 ) {
@@ -226,7 +237,12 @@ unsafe fn transpose_impl<const WORDS: bool, T: Copy + Send + Sync>(
 /// - Iterating the source row index innermost keeps the writes contiguous.
 /// - The strided reads are cheap while the whole matrix is L1-resident.
 #[inline]
-fn transpose_small<T: Copy>(input: &[T], output: &mut [T], width: usize, height: usize) {
+fn transpose_small<T: Copy>(
+    input: &[T],
+    output: &mut [MaybeUninit<T>],
+    width: usize,
+    height: usize,
+) {
     // Walk output rows (source columns) one at a time.
     for x in 0..width {
         // Walk down this output row, filling the contiguous run `[x*height ..][..height]`.
@@ -234,7 +250,9 @@ fn transpose_small<T: Copy>(input: &[T], output: &mut [T], width: usize, height:
             // SAFETY: `x < width` and `y < height`, so both indices are `< width*height`.
             unsafe {
                 // Source element (row y, col x) -> output element (row x, col y).
-                *output.get_unchecked_mut(x * height + y) = *input.get_unchecked(x + y * width);
+                output
+                    .get_unchecked_mut(x * height + y)
+                    .write(*input.get_unchecked(x + y * width));
             }
         }
     }
@@ -255,7 +273,7 @@ fn transpose_small<T: Copy>(input: &[T], output: &mut [T], width: usize, height:
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_block<T: Copy>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     total_cols: usize,
     total_rows: usize,
     start_x: usize,
@@ -273,8 +291,9 @@ unsafe fn transpose_block<T: Copy>(
             let out_base = (out_col_start + inner_x) * total_rows + start_y;
             // Stream down the column: contiguous stores, strided loads.
             for inner_y in 0..block_height {
-                *output.get_unchecked_mut(out_base + inner_y) =
-                    *input.get_unchecked(x + (start_y + inner_y) * total_cols);
+                output
+                    .get_unchecked_mut(out_base + inner_y)
+                    .write(*input.get_unchecked(x + (start_y + inner_y) * total_cols));
             }
         }
     }
@@ -291,7 +310,7 @@ unsafe fn transpose_block<T: Copy>(
 #[inline]
 unsafe fn transpose_tile_plain<T: Copy>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     total_cols: usize,
     total_rows: usize,
     start_x: usize,
@@ -304,8 +323,9 @@ unsafe fn transpose_tile_plain<T: Copy>(
             let x = start_x + inner_x;
             let out_base = (out_col_start + inner_x) * total_rows + start_y;
             for inner_y in 0..TILE {
-                *output.get_unchecked_mut(out_base + inner_y) =
-                    *input.get_unchecked(x + (start_y + inner_y) * total_cols);
+                output
+                    .get_unchecked_mut(out_base + inner_y)
+                    .write(*input.get_unchecked(x + (start_y + inner_y) * total_cols));
             }
         }
     }
@@ -322,7 +342,7 @@ unsafe fn transpose_tile_plain<T: Copy>(
 #[inline]
 unsafe fn transpose_tile_segmented<T: Copy>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     total_cols: usize,
     total_rows: usize,
     start_x: usize,
@@ -338,8 +358,9 @@ unsafe fn transpose_tile_segmented<T: Copy>(
                 let x = start_x + inner_x;
                 let out_base = (out_col_start + inner_x) * total_rows + seg_y;
                 for inner_y in 0..SEGMENT {
-                    *output.get_unchecked_mut(out_base + inner_y) =
-                        *input.get_unchecked(x + (seg_y + inner_y) * total_cols);
+                    output
+                        .get_unchecked_mut(out_base + inner_y)
+                        .write(*input.get_unchecked(x + (seg_y + inner_y) * total_cols));
                 }
             }
         }
@@ -373,7 +394,7 @@ unsafe fn transpose_tile_segmented<T: Copy>(
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_region<const SEGMENTED: bool, const WORDS: bool, T: Copy>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     row_start: usize,
     row_end: usize,
     col_start: usize,
@@ -556,7 +577,7 @@ unsafe fn transpose_region<const SEGMENTED: bool, const WORDS: bool, T: Copy>(
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_recursive<const WORDS: bool, T: Copy>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     row_start: usize,
     row_end: usize,
     col_start: usize,
@@ -667,7 +688,7 @@ unsafe fn transpose_recursive<const WORDS: bool, T: Copy>(
 #[cfg(feature = "parallel")]
 unsafe fn transpose_parallel<const WORDS: bool, T: Copy + Send + Sync>(
     input: &[T],
-    output: &mut [T],
+    output: &mut [MaybeUninit<T>],
     width: usize,
     height: usize,
 ) {
@@ -694,11 +715,19 @@ unsafe fn transpose_parallel<const WORDS: bool, T: Copy + Send + Sync>(
                         let row_start = task * rows_per_task;
                         // `band` exclusively owns this contiguous output run.
                         if width == 1 {
-                            band.copy_from_slice(&input[row_start..row_start + band.len()]);
+                            // SAFETY: the input run and exclusive output band have the
+                            // same length, and copying T also preserves padding/provenance.
+                            unsafe {
+                                core::ptr::copy_nonoverlapping(
+                                    input.as_ptr().add(row_start),
+                                    band.as_mut_ptr().cast::<T>(),
+                                    band.len(),
+                                );
+                            }
                         } else {
                             let src = input[row_start * width + x..].iter().step_by(width);
                             for (dst, &value) in band.iter_mut().zip(src) {
-                                *dst = value;
+                                dst.write(value);
                             }
                         }
                     });
@@ -740,6 +769,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::transpose::transpose;
 
     #[test]
     #[should_panic(expected = "transpose dimensions overflow")]
@@ -890,7 +920,14 @@ mod tests {
         let mut output = vec![zero; input.len()];
         // SAFETY: both buffers have the nonzero width * height shape used by
         // these tests, and the typed engine never reinterprets elements as words.
-        unsafe { transpose_parallel::<false, T>(&input, &mut output, width, height) };
+        unsafe {
+            transpose_parallel::<false, T>(
+                &input,
+                super::super::rectangular::initialized_output(&mut output),
+                width,
+                height,
+            );
+        };
         assert_eq!(output, reference(&input, width, height, zero));
 
         // These shapes are below the parallel threshold, so this also compares

@@ -197,6 +197,12 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
 
 impl<MP: MontyParameters> Packable for MontyField31<MP> {
     #[inline]
+    fn transpose_owned(input: &[Self], width: usize, height: usize) -> Vec<Self> {
+        // SAFETY: Self is repr(transparent) over an initialized u32 and PhantomData.
+        unsafe { p3_util::transpose::transpose_words_owned(input, width, height) }
+    }
+
+    #[inline]
     fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
         // SAFETY: Self is repr(transparent) over an initialized u32 and PhantomData.
         unsafe { p3_util::transpose::transpose_words(input, output, width, height) };

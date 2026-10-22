@@ -25,6 +25,7 @@
 //!
 //! Every other element size, and every target without a kernel, takes the scalar reference.
 
+use core::mem::MaybeUninit;
 #[cfg(any(
     all(target_arch = "x86_64", target_feature = "avx2"),
     all(target_arch = "aarch64", target_feature = "neon"),
@@ -156,6 +157,35 @@ pub(crate) unsafe fn transpose_rows_strided_words<'a, T, R>(
     T: Copy + 'a,
     R: Fn(usize) -> &'a [T],
 {
+    // SAFETY: valid output values can be viewed as MaybeUninit; the engine
+    // only writes valid copies and never deinitializes a slot, even on panic.
+    unsafe {
+        transpose_rows_strided_words_uninit(
+            rows,
+            cols,
+            row,
+            super::rectangular::initialized_output(dst),
+            stride,
+        );
+    }
+}
+
+/// Word transpose into possibly uninitialized output runs; gaps are untouched.
+///
+/// # Safety
+/// Input elements satisfy the word-copy contract. Each written slot receives a
+/// valid T copied from input; no output slot is read or deinitialized.
+#[inline]
+pub(crate) unsafe fn transpose_rows_strided_words_uninit<'a, T, R>(
+    rows: usize,
+    cols: usize,
+    row: R,
+    dst: &mut [MaybeUninit<T>],
+    stride: usize,
+) where
+    T: Copy + 'a,
+    R: Fn(usize) -> &'a [T],
+{
     assert!(stride >= rows, "transpose stride is below the row count");
     if rows == 0 || cols == 0 {
         return;
@@ -179,16 +209,19 @@ pub(crate) unsafe fn transpose_rows_strided_words<'a, T, R>(
     if size_of::<T>() == 4 && align_of::<T>() == 4 {
         // SAFETY: `T` has the size and alignment of `u32`.
         //
-        // So every row and the output reinterpret as 32-bit words over the same memory.
+        // Rows reinterpret as initialized words; output remains possibly uninitialized
+        // word slots over the same memory.
         //
-        // The caller guarantees initialized, padding-free, pointer-free elements.
+        // The caller guarantees initialized, padding-free, pointer-free inputs.
         //
         // So every word the kernel loads is an initialized integer.
         //
         // The kernel only copies whole elements to whole elements.
         //
         // So every value it writes is a bitwise copy of a valid `T`.
-        let dst = unsafe { slice::from_raw_parts_mut(dst.as_mut_ptr().cast(), dst.len()) };
+        let dst = unsafe {
+            slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<MaybeUninit<u32>>(), dst.len())
+        };
         let row = |r: usize| -> &'a [u32] {
             let src: &'a [T] = row(r);
             unsafe { slice::from_raw_parts(src.as_ptr().cast::<u32>(), src.len()) }
@@ -201,7 +234,9 @@ pub(crate) unsafe fn transpose_rows_strided_words<'a, T, R>(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     if size_of::<T>() == 8 && align_of::<T>() == 8 {
         // SAFETY: as above, with `u64` in place of `u32`.
-        let dst = unsafe { slice::from_raw_parts_mut(dst.as_mut_ptr().cast(), dst.len()) };
+        let dst = unsafe {
+            slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<MaybeUninit<u64>>(), dst.len())
+        };
         let row = |r: usize| -> &'a [u64] {
             let src: &'a [T] = row(r);
             unsafe { slice::from_raw_parts(src.as_ptr().cast::<u64>(), src.len()) }
@@ -210,7 +245,11 @@ pub(crate) unsafe fn transpose_rows_strided_words<'a, T, R>(
         return;
     }
 
-    transpose_rows_scalar(rows, cols, row, dst, stride);
+    for r in 0..rows {
+        for (c, &value) in row(r)[..cols].iter().enumerate() {
+            dst[c * stride + r].write(value);
+        }
+    }
 }
 
 /// Scalar reference transpose, with the contract of the strided entry point.
@@ -270,7 +309,7 @@ mod simd {
     use core::arch::x86_64::*;
     use core::array;
 
-    use super::for_each_tile;
+    use super::{MaybeUninit, for_each_tile};
 
     /// 32-bit elements per register, and the widest 32-bit tile side.
     const L: usize = 16;
@@ -288,7 +327,7 @@ mod simd {
         rows: usize,
         cols: usize,
         row: impl Fn(usize) -> &'a [u32],
-        dst: &mut [u32],
+        dst: &mut [MaybeUninit<u32>],
         stride: usize,
     ) {
         for_each_tile::<L>(rows, cols, |r0, c0, h, w| {
@@ -326,7 +365,7 @@ mod simd {
     unsafe fn tile<'a, const R: usize>(
         stride: usize,
         row: &impl Fn(usize) -> &'a [u32],
-        dst: &mut [u32],
+        dst: &mut [MaybeUninit<u32>],
         r0: usize,
         c0: usize,
         h: usize,
@@ -422,7 +461,7 @@ mod simd {
         rows: usize,
         cols: usize,
         row: impl Fn(usize) -> &'a [u64],
-        dst: &mut [u64],
+        dst: &mut [MaybeUninit<u64>],
         stride: usize,
     ) {
         for_each_tile::<L64>(rows, cols, |r0, c0, h, w| {
@@ -650,7 +689,7 @@ mod simd {
     use core::arch::x86_64::*;
     use core::array;
 
-    use super::for_each_tile;
+    use super::{MaybeUninit, for_each_tile};
 
     /// Elements per register, and the side of one square tile.
     const L: usize = 8;
@@ -667,7 +706,7 @@ mod simd {
         rows: usize,
         cols: usize,
         row: impl Fn(usize) -> &'a [u32],
-        dst: &mut [u32],
+        dst: &mut [MaybeUninit<u32>],
         stride: usize,
     ) {
         for_each_tile::<L>(rows, cols, |r0, c0, h, w| {
@@ -675,7 +714,7 @@ mod simd {
                 // Edge tile: copy element by element with the reference indexing.
                 for i in 0..h {
                     for (j, &x) in row(r0 + i)[c0..c0 + w].iter().enumerate() {
-                        dst[(c0 + j) * stride + r0 + i] = x;
+                        dst[(c0 + j) * stride + r0 + i].write(x);
                     }
                 }
                 return;
@@ -713,7 +752,7 @@ mod simd {
         rows: usize,
         cols: usize,
         row: impl Fn(usize) -> &'a [u64],
-        dst: &mut [u64],
+        dst: &mut [MaybeUninit<u64>],
         stride: usize,
     ) {
         for_each_tile::<4>(rows, cols, |r0, c0, h, w| {
@@ -721,7 +760,7 @@ mod simd {
                 // Edge tile: copy element by element with the reference indexing.
                 for i in 0..h {
                     for (j, &x) in row(r0 + i)[c0..c0 + w].iter().enumerate() {
-                        dst[(c0 + j) * stride + r0 + i] = x;
+                        dst[(c0 + j) * stride + r0 + i].write(x);
                     }
                 }
                 return;
@@ -808,7 +847,7 @@ mod simd {
     use core::arch::aarch64::*;
     use core::array;
 
-    use super::for_each_tile;
+    use super::{MaybeUninit, for_each_tile};
 
     /// Elements per register, and the side of one square tile.
     const L: usize = 4;
@@ -823,7 +862,7 @@ mod simd {
         rows: usize,
         cols: usize,
         row: impl Fn(usize) -> &'a [u32],
-        dst: &mut [u32],
+        dst: &mut [MaybeUninit<u32>],
         stride: usize,
     ) {
         for_each_tile::<L>(rows, cols, |r0, c0, h, w| {
@@ -831,7 +870,7 @@ mod simd {
                 // Edge tile: copy element by element with the reference indexing.
                 for i in 0..h {
                     for (j, &x) in row(r0 + i)[c0..c0 + w].iter().enumerate() {
-                        dst[(c0 + j) * stride + r0 + i] = x;
+                        dst[(c0 + j) * stride + r0 + i].write(x);
                     }
                 }
                 return;
@@ -878,7 +917,7 @@ mod simd {
                 let out = &mut dst[start..start + L];
 
                 // SAFETY: the slice holds exactly the four words stored.
-                unsafe { vst1q_u32(out.as_mut_ptr(), *reg) };
+                unsafe { vst1q_u32(out.as_mut_ptr().cast::<u32>(), *reg) };
             }
         });
     }
@@ -897,6 +936,35 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn initialized_word_output_remains_valid_when_callback_panics() {
+        use core::cell::Cell;
+        let calls = Cell::new(0);
+        let row = [7u32; 17];
+        let mut output = [91u32; 16 * 17];
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: both inputs and initially valid outputs are integer words.
+            unsafe {
+                transpose_rows_words(
+                    16,
+                    17,
+                    |_| {
+                        calls.set(calls.get() + 1);
+                        if calls.get() == 6 {
+                            panic!("interrupted callback");
+                        }
+                        &row
+                    },
+                    &mut output,
+                );
+            }
+        }));
+        assert!(result.is_err());
+        // Reading every slot also catches deinitialization under Miri. Different
+        // kernel tile sizes may have committed different subsets before panic.
+        assert!(output.iter().all(|&value| value == 7 || value == 91));
+    }
 
     #[test]
     #[should_panic(expected = "transpose dimensions overflow")]
