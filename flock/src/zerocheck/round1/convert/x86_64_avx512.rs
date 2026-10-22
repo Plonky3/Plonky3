@@ -1,8 +1,8 @@
 //! The convert byte-sliced against GFNI matrices, the eq weight baked into them per window.
 
 use p3_binary_field::Poly192;
+use p3_binary_field::byteslice::{Native, OUT_BYTES, SliceRegister, plane_matrices, store_f192};
 
-use crate::byteslice::{Native, OUT_BYTES, SliceRegister, plane_matrices, store_f192};
 use crate::skip::{SKIP_SIZE, phi8};
 use crate::zerocheck::fixed::{MEDIUM_VALUES, gamma_powers};
 use crate::zerocheck::planar::F192x8;

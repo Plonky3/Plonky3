@@ -181,3 +181,57 @@ pub enum ProfileError {
     #[error("the derived schedule opens no position, so it accepts any codeword")]
     ZeroQueries,
 }
+
+/// Why a bit commitment could not be built, committed to, or opened.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CommitmentError {
+    /// The witness is narrower than one committed element.
+    #[error("a witness of {num_variables} variables is narrower than one committed element")]
+    TooFewVariables {
+        /// The witness's variables.
+        num_variables: usize,
+    },
+    /// The parameters admit no WHIR schedule.
+    #[error(transparent)]
+    Profile(#[from] ProfileError),
+    /// No per-term target composes to the requested bound.
+    #[error("no WHIR schedule composes to {target} bits")]
+    Security {
+        /// Bits requested.
+        target: usize,
+    },
+    /// The commitment refused.
+    #[error(transparent)]
+    Pcs(#[from] BooleanWhirError),
+    /// The witness does not have the committed variables.
+    #[error("the witness has {actual} words, the commitment {expected}")]
+    WitnessLength {
+        /// Words the commitment holds.
+        expected: usize,
+        /// Supplied.
+        actual: usize,
+    },
+    /// An opening batches more claims than the security bound was certified for.
+    #[error("{actual} claims exceed the {maximum} the commitment was certified for")]
+    TooManyClaims {
+        /// Claims the commitment was certified for.
+        maximum: usize,
+        /// Supplied.
+        actual: usize,
+    },
+    /// A claim's point does not name the committed variables.
+    #[error("a claim names {actual} kept coordinates, expected {expected}")]
+    PointArity {
+        /// The committed variables less the absorbed ones.
+        expected: usize,
+        /// Supplied.
+        actual: usize,
+    },
+    /// The prover was asked to open a claim the witness does not satisfy.
+    #[error("claim {index} is not the witness's value")]
+    FalseClaim {
+        /// The claim's position.
+        index: usize,
+    },
+}

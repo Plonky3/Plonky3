@@ -25,6 +25,7 @@ mod x86_64_avx512;
 use alloc::boxed::Box;
 use core::mem::MaybeUninit;
 
+use p3_binary_field::byteslice::BLOCK;
 use p3_binary_field::{Poly192, Poly192Unreduced};
 use p3_field::PrimeCharacteristicRing;
 use p3_maybe_rayon::prelude::*;
@@ -34,7 +35,6 @@ use p3_util::log2_strict_usize;
 
 use super::fold::BitFold;
 use super::{EqHalves, Padding};
-use crate::byteslice::BLOCK;
 use crate::stream::Stream;
 
 /// Eq variables in the per-task half of a bit pass's split eq table.
