@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_field::Field;
+use p3_security::gkr::ProductGkrSecurityProfile;
 
 use super::{ProductGkrError, ProductGkrShapeError};
 
@@ -57,6 +58,8 @@ pub struct ProductGkrShape {
     pub(super) num_trees: usize,
     /// Encoding of the root claims.
     pub(super) root_shape: ProductGkrRootShape,
+    /// Leading coordinates indexing a batch of trees laid out in one table, zero for separate trees.
+    pub(super) batch_variables: usize,
 }
 
 impl ProductGkrShape {
@@ -100,6 +103,33 @@ impl ProductGkrShape {
             log_height,
             num_trees,
             root_shape,
+            batch_variables: 0,
+        })
+    }
+
+    /// Dimensions of `2^batch_variables` trees of height `log_height` held in one table, the batch index most significant.
+    ///
+    /// The roots form a table of their own, compared at a random point; every layer then sums over the batch coordinates too.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the table cannot be addressed by one machine word.
+    pub const fn batched(
+        log_height: usize,
+        batch_variables: usize,
+    ) -> Result<Self, ProductGkrShapeError> {
+        let total = log_height.saturating_add(batch_variables);
+        if total >= usize::BITS as usize {
+            return Err(ProductGkrShapeError::HeightOverflow {
+                log_height: total,
+                maximum: usize::BITS as usize - 1,
+            });
+        }
+        Ok(Self {
+            log_height,
+            num_trees: 1,
+            root_shape: ProductGkrRootShape::Distinct,
+            batch_variables,
         })
     }
 
@@ -115,6 +145,12 @@ impl ProductGkrShape {
         self.num_trees
     }
 
+    /// Leading coordinates of a batched table, zero for separate trees.
+    #[must_use]
+    pub const fn batch_variables(&self) -> usize {
+        self.batch_variables
+    }
+
     /// Root encoding fixed by the statement.
     #[must_use]
     pub const fn root_shape(&self) -> ProductGkrRootShape {
@@ -123,6 +159,9 @@ impl ProductGkrShape {
 
     /// Number of root values carried by the proof.
     pub const fn root_message_len(&self) -> usize {
+        if self.batch_variables > 0 {
+            return 1 << self.batch_variables;
+        }
         match self.root_shape {
             ProductGkrRootShape::Distinct => self.num_trees,
             ProductGkrRootShape::FirstTwoShared => self.num_trees - 1,
@@ -131,8 +170,8 @@ impl ProductGkrShape {
 
     /// Root-to-leaf arity and sumcheck-round count of each layer.
     pub fn layers(&self) -> Vec<(usize, usize)> {
-        // The point starts empty at the root.
-        let mut point_len = 0;
+        // The point starts at the batch coordinates, empty for separate trees.
+        let mut point_len = self.batch_variables;
         let mut remaining = self.log_height;
         let mut layers = Vec::with_capacity(self.log_height.div_ceil(2));
 
@@ -151,6 +190,26 @@ impl ProductGkrShape {
         }
 
         layers
+    }
+
+    /// The soundness counts of this schedule, for `p3_security`.
+    #[must_use]
+    pub fn security_profile(&self) -> ProductGkrSecurityProfile {
+        let layers = self.layers();
+        let sumcheck_rounds = layers.iter().map(|(_, rounds)| rounds).sum();
+        let collapse_challenges = layers
+            .iter()
+            .map(|(arity, _)| arity.trailing_zeros() as usize)
+            .sum();
+        ProductGkrSecurityProfile::new(
+            self.log_height,
+            self.num_trees,
+            sumcheck_rounds,
+            layers.len(),
+            collapse_challenges,
+        )
+        .expect("a checked product shape has valid security dimensions")
+        .with_batch_variables(self.batch_variables)
     }
 
     /// Evaluates the constant-one suffix after an explicit prefix.

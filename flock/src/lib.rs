@@ -11,13 +11,13 @@ extern crate alloc;
 extern crate std;
 
 mod batch;
-mod byteslice;
 mod circuit;
 mod config;
 mod error;
 pub mod gadgets;
 pub mod lincheck;
 pub mod opening;
+pub mod piop;
 mod point;
 pub mod ports;
 mod proof;
