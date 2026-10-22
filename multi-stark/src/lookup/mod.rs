@@ -27,7 +27,7 @@ use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr};
 use p3_air::{Air, BaseAir, SymbolicExpression};
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
-use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
+use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_lookup::{
     Challenges, InteractionSymbolicBuilder, Kind, Lookups, check_multiplicity_height_bound,
 };
@@ -36,11 +36,12 @@ use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_sumcheck::layout::Table;
 use p3_util::log2_ceil_usize;
+use p3_verifier_arith::Lift;
 use thiserror::Error;
 
 use crate::fractional_gkr::{
     Fraction, FractionGkrError, FractionGkrOutput, FractionGkrProof, LeafNumerator,
-    prove_fractional_gkr, verify_fractional_gkr,
+    prove_fractional_gkr, verify_fractional_gkr_in,
 };
 use crate::lookup::transcript::{LookupProverTranscript, LookupShape, LookupVerifierTranscript};
 
@@ -84,7 +85,11 @@ pub(crate) struct LookupInstancePlan<F: Field> {
     /// First scalar leaf owned by this instance in the materialized lookup arrays.
     pub(crate) base_offset: usize,
     /// Symbolic lookup declarations extracted from this AIR, in protocol order.
+    ///
+    /// Each exclusive branch's count already carries its flag.
     pub(crate) lookups: Lookups<F>,
+    /// How many trailing declarations are exclusive groups.
+    pub(crate) num_exclusive_lookups: usize,
     /// Bus identifier for each declaration, in the same order.
     /// Empty local declarations retain a dummy zero slot for AIR emission counters.
     pub(crate) bus_ids: Vec<usize>,
@@ -134,7 +139,6 @@ impl<F: Field> LookupPlan<F> {
     ///
     /// # Panics
     ///
-    /// Panics if an AIR declares mutually-exclusive interactions.
     /// Panics if a lookup expression reads a periodic column.
     /// Panics if two declarations share a bus name but disagree on payload width.
     /// Panics if no declaration carries a payload element.
@@ -180,10 +184,6 @@ impl<F: Field> LookupPlan<F> {
         }
         for lookup in lookups.iter().flat_map(|lookups| lookups.iter()) {
             assert!(
-                lookup.flags.is_none(),
-                "multi-STARK lookups do not support exclusive interactions"
-            );
-            assert!(
                 !lookup
                     .elements
                     .iter()
@@ -206,13 +206,19 @@ impl<F: Field> LookupPlan<F> {
             .zip(num_variables.iter().copied())
             .enumerate()
             .filter_map(|(air_index, (lookups, num_variables))| {
+                // Every tuple owns its own fraction, so an exclusive branch is a tuple whose count carries its flag.
+                let num_exclusive_lookups = lookups
+                    .iter()
+                    .filter(|lookup| lookup.flags.is_some())
+                    .count();
                 lookups
                     .iter()
                     .any(|lookup| !lookup.elements.is_empty())
-                    .then_some(LookupInstancePlan {
+                    .then(|| LookupInstancePlan {
                         air_index,
                         num_variables,
-                        lookups,
+                        lookups: lookups.ungated(),
+                        num_exclusive_lookups,
                         base_offset: 0,
                         bus_ids: Vec::new(),
                     })
@@ -371,11 +377,13 @@ pub(crate) struct AirLinkInstance<EF> {
     ///
     /// The global declarations start right after them.
     pub(crate) num_local_lookups: usize,
-    /// One entry per lookup declaration, locals before globals.
+    /// How many of the stored declarations are exclusive groups, stored last.
+    pub(crate) num_exclusive_lookups: usize,
+    /// One entry per lookup declaration: locals, then globals, then exclusive groups.
     pub(crate) lookups: Vec<AirLinkLookup<EF>>,
 }
 
-impl<EF: Copy> AirLinkInstance<EF> {
+impl<EF> AirLinkInstance<EF> {
     /// Whether this AIR contributes no lookup expressions to zerocheck.
     pub(crate) const fn is_empty(&self) -> bool {
         self.lookups.is_empty()
@@ -388,9 +396,16 @@ impl<EF: Copy> AirLinkInstance<EF> {
 
     /// Global lookup declarations in AIR emission order.
     pub(crate) fn global_lookups(&self) -> &[AirLinkLookup<EF>] {
-        &self.lookups[self.num_local_lookups..]
+        &self.lookups[self.num_local_lookups..self.lookups.len() - self.num_exclusive_lookups]
     }
 
+    /// Exclusive lookup groups in AIR emission order.
+    pub(crate) fn exclusive_lookups(&self) -> &[AirLinkLookup<EF>] {
+        &self.lookups[self.lookups.len() - self.num_exclusive_lookups..]
+    }
+}
+
+impl<EF: Copy> AirLinkInstance<EF> {
     /// Rebuild the same coefficients in another representation.
     ///
     /// The packed round kernels lift every scalar into a SIMD lane group once with this.
@@ -398,6 +413,7 @@ impl<EF: Copy> AirLinkInstance<EF> {
     pub(crate) fn map<T>(&self, mut f: impl FnMut(EF) -> T) -> AirLinkInstance<T> {
         AirLinkInstance {
             num_local_lookups: self.num_local_lookups,
+            num_exclusive_lookups: self.num_exclusive_lookups,
             lookups: self
                 .lookups
                 .iter()
@@ -421,7 +437,7 @@ pub(crate) struct AirLinkLookup<EF> {
     pub(crate) block_weights: Vec<EF>,
 }
 
-impl<EF: Field> AirLinkClaim<EF> {
+impl<EF: PrimeCharacteristicRing> AirLinkClaim<EF> {
     /// Turn the reduction's output into the claim and coefficients the AIR sumcheck needs.
     ///
     /// Both sides run this identically.
@@ -429,19 +445,16 @@ impl<EF: Field> AirLinkClaim<EF> {
     fn new<F: Field>(
         plan: &LookupPlan<F>,
         alpha: EF,
-        beta: EF,
+        beta: &EF,
         output: FractionGkrOutput<EF>,
-        theta: EF,
-    ) -> Self
-    where
-        EF: ExtensionField<F>,
-    {
+        theta: &EF,
+    ) -> Self {
         // Reconstruct the scalar challenges used by the AIR-side lookup expressions.
-        let challenges = Challenges::new(alpha, beta, plan.max_width, plan.num_buses);
+        let challenges = Challenges::new(alpha, beta.dup(), plan.max_width, plan.num_buses);
         let theta_beta_powers = beta
             .powers()
             .take(plan.max_width)
-            .map(|beta_i| theta * beta_i)
+            .map(|beta_i| theta.dup() * beta_i)
             .collect();
 
         let num_variables = plan.num_variables;
@@ -464,19 +477,30 @@ impl<EF: Field> AirLinkClaim<EF> {
                     .zip(&planned.bus_ids)
                     .map(|(lookup, &bus_id)| {
                         // Every atomic tuple occupies the next exact-height block.
-                        // Its equality weight selects that block at the GKR point.
+                        // Its equality weight at the GKR point selects that block, one factor per bit.
                         let block_weights = lookup
                             .elements
                             .iter()
                             .map(|_| {
-                                let vertex = Point::<F>::hypercube(block_index, prefix_len);
+                                let weight = point_prefix
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, r)| {
+                                        if (block_index >> (prefix_len - 1 - i)) & 1 == 1 {
+                                            r.dup()
+                                        } else {
+                                            EF::ONE - r.dup()
+                                        }
+                                    })
+                                    .product();
                                 block_index += 1;
-                                Point::eval_eq(vertex.as_slice(), point_prefix)
+                                weight
                             })
                             .collect();
                         AirLinkLookup {
                             // Keep only what the AIR folder still has to rebuild.
-                            theta_bus_offset: theta * (challenges.bus_prefix[bus_id] - EF::ONE),
+                            theta_bus_offset: theta.dup()
+                                * (challenges.bus_prefix[bus_id].dup() - EF::ONE),
                             block_weights,
                         }
                     })
@@ -492,6 +516,7 @@ impl<EF: Field> AirLinkClaim<EF> {
                             .iter()
                             .take_while(|lookup| lookup.kind == Kind::Local)
                             .count(),
+                        num_exclusive_lookups: planned.num_exclusive_lookups,
                         lookups,
                     },
                 )
@@ -501,12 +526,14 @@ impl<EF: Field> AirLinkClaim<EF> {
         // Combine the two GKR openings into the initial AIR-link claim.
         Self {
             point: output.point,
-            claimed_sum: output.numerator + theta * (output.denominator - EF::ONE),
+            claimed_sum: output.numerator + theta.dup() * (output.denominator - EF::ONE),
             theta_beta_powers,
             links_by_air,
         }
     }
+}
 
+impl<EF: Field> AirLinkClaim<EF> {
     /// Split the single folded claim into one private per-AIR share.
     ///
     /// The verifier only ever sees the total.
@@ -748,7 +775,7 @@ where
     let theta = transcript.link_challenge();
     transcript.finish();
 
-    let air_link = AirLinkClaim::new(&plan, alpha, beta, output, theta);
+    let air_link = AirLinkClaim::new(&plan, alpha, &beta, output, &theta);
 
     // Split that claim into the private per-AIR shares each zerocheck stage starts from.
     // The shares are prover bookkeeping only, since the sumcheck starts from their sum.
@@ -783,16 +810,16 @@ where
 /// # Panics
 ///
 /// Panics if the lookups and the trace heights disagree on length.
-pub(crate) fn verify_lookup<F, EF, Challenger>(
-    lookups: Vec<Lookups<F>>,
+pub(crate) fn verify_lookup<A, Challenger>(
+    arith: &mut A,
+    lookups: Vec<Lookups<A::Val>>,
     num_variables: &[usize],
-    proof: Option<&FractionGkrProof<EF>>,
+    proof: Option<&FractionGkrProof<A::Challenge>>,
     challenger: &mut Challenger,
-) -> Result<Option<AirLinkClaim<EF>>, LookupError>
+) -> Result<Option<AirLinkClaim<A::EF>>, LookupError>
 where
-    F: TranscriptField,
-    EF: ExtensionField<F>,
-    Challenger: FieldChallenger<F>,
+    A: Lift<Val: TranscriptField>,
+    Challenger: FieldChallenger<A::Val>,
 {
     // Rebuild the layout from the verifier's own AIRs and trace heights.
     // No layout metadata from the proof is trusted.
@@ -809,9 +836,14 @@ where
     // Replay the lookup challenges from the statement-bound transcript.
     //
     // One driver covers the whole argument, from alpha through to theta.
-    let mut transcript =
-        LookupVerifierTranscript::<Challenger, F, EF>::new(challenger, &LookupShape::new(&plan));
+    let mut transcript = arith.seeding(|| {
+        LookupVerifierTranscript::<Challenger, A::Val, A::Challenge>::new(
+            challenger,
+            &LookupShape::new(&plan),
+        )
+    });
     let (alpha, beta) = transcript.fingerprint_challenges();
+    let (alpha, beta) = (arith.sampled_ext(alpha), arith.sampled_ext(beta));
 
     // Check the reduction over the padded layout.
     // It yields the numerator and denominator openings at its output point.
@@ -819,15 +851,17 @@ where
     // A rejected reduction is carried past theta rather than returned from inside the
     // bracket, so this driver reaches finalisation on every path out of the function.
     let output = transcript.reduction(|challenger| {
-        verify_fractional_gkr::<F, EF, _>(proof, plan.num_variables, challenger)
+        verify_fractional_gkr_in(arith, proof, plan.num_variables, challenger)
     });
 
     // As on the prover side, theta is drawn only after the reduction fixes its output.
     // It folds the two openings into the one claim the zerocheck carries.
-    let theta = transcript.link_challenge();
+    let theta = arith.sampled_ext(transcript.link_challenge());
     transcript.finish();
 
-    Ok(Some(AirLinkClaim::new(&plan, alpha, beta, output?, theta)))
+    Ok(Some(AirLinkClaim::new(
+        &plan, alpha, &beta, output?, &theta,
+    )))
 }
 
 #[cfg(test)]
@@ -846,6 +880,7 @@ mod tests {
     use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
     use p3_sumcheck::generic_degree::GenericDegreeProof;
     use p3_util::log2_strict_usize;
+    use p3_verifier_arith::Native;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -1213,12 +1248,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "multi-STARK lookups do not support exclusive interactions")]
-    fn lookup_plan_rejects_exclusive_interactions() {
-        // A mutually-exclusive interaction multiplexes several branches into one denominator,
-        // which the block layout here has no place for. Reject it rather than mislay it.
+    fn lookup_plan_gives_every_exclusive_branch_its_own_block() {
+        // Each branch is a tuple of its own, its count gated by its flag.
         let air = ExclusiveLookupAir;
-        let _ = LookupPlan::build::<EF, _>(&[&air], &[test_lookup_num_variables()]);
+        let plan = LookupPlan::build::<EF, _>(&[&air], &[test_lookup_num_variables()])
+            .unwrap()
+            .unwrap();
+        let planned = &plan.instances[0];
+        assert_eq!(planned.num_exclusive_lookups, 1);
+        assert!(planned.lookups.iter().all(|lookup| lookup.flags.is_none()));
+        assert_eq!(planned.lookups[0].elements.len(), 1);
     }
 
     #[test]
@@ -1242,7 +1281,8 @@ mod tests {
         let air = ExcessiveMultiplicityAir;
         let mut challenger = challenger();
         assert!(matches!(
-            verify_lookup::<F, EF, _>(
+            verify_lookup(
+                &mut Native::<F, EF>::new(),
                 declared(&[&air]),
                 &[test_lookup_num_variables()],
                 Some(&FractionGkrProof {
@@ -1280,7 +1320,8 @@ mod tests {
         let lookup_proof = lookup_proof.unwrap();
 
         let mut verifier_challenger = challenger();
-        let verifier = verify_lookup::<F, EF, _>(
+        let verifier = verify_lookup(
+            &mut Native::<F, EF>::new(),
             declared(&[&air]),
             &[main.num_variables()],
             Some(&lookup_proof),
@@ -1333,7 +1374,7 @@ mod tests {
             denominator: denom.eval(&point),
             point,
         };
-        let air_link = AirLinkClaim::new(&plan, alpha, beta, output.clone(), theta);
+        let air_link = AirLinkClaim::new(&plan, alpha, &beta, output.clone(), &theta);
 
         let planned = &plan.instances[0];
         let linked = &air_link.links_by_air[&planned.air_index];
@@ -1402,7 +1443,8 @@ mod tests {
         );
 
         let mut verifier_challenger = challenger();
-        let verifier_lookup = verify_lookup::<F, EF, _>(
+        let verifier_lookup = verify_lookup(
+            &mut Native::<F, EF>::new(),
             declared(&[&air]),
             &[main.num_variables()],
             Some(&lookup_proof),
@@ -1525,7 +1567,8 @@ mod tests {
 
         let check = |air: &PermutationSumAir| {
             let mut verifier_challenger = challenger();
-            let lookup = verify_lookup::<F, EF, _>(
+            let lookup = verify_lookup(
+                &mut Native::<F, EF>::new(),
                 declared(&[air]),
                 &[main.num_variables()],
                 Some(&lookup_proof),
@@ -1595,7 +1638,8 @@ mod tests {
 
         let log_heights = tables.iter().map(Table::num_variables).collect::<Vec<_>>();
         let mut verifier_challenger = challenger();
-        let verifier_lookup = verify_lookup::<F, EF, _>(
+        let verifier_lookup = verify_lookup(
+            &mut Native::<F, EF>::new(),
             declared(&air_refs),
             &log_heights,
             Some(&lookup_proof),
@@ -1643,7 +1687,8 @@ mod tests {
                 runtime.claims_by_air.values().copied().sum::<EF>(),
                 runtime.air_link.claimed_sum
             );
-            verify_lookup::<F, EF, _>(
+            verify_lookup(
+                &mut Native::<F, EF>::new(),
                 declared(&airs),
                 &[short_log, 6, short_log],
                 proof.as_ref(),
@@ -1687,7 +1732,8 @@ mod tests {
         );
 
         let mut verifier_challenger = challenger();
-        let verifier_lookup = verify_lookup::<F, EF, _>(
+        let verifier_lookup = verify_lookup(
+            &mut Native::<F, EF>::new(),
             declared(&airs),
             &[tall.num_variables(), short.num_variables()],
             Some(&lookup_proof),
@@ -1782,7 +1828,8 @@ mod tests {
         // Mutation: the perturbed claim must come back as a rejection, not a panic.
         let mut verifier_challenger = challenger();
         assert!(matches!(
-            verify_lookup::<F, EF, _>(
+            verify_lookup(
+                &mut Native::<F, EF>::new(),
                 declared(&[&air]),
                 &[main.num_variables()],
                 Some(&proof),

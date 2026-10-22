@@ -2,9 +2,8 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{Field, batch_multiplicative_inverse};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::interpolation::{InterpolateArbitrary, barycentric_weights};
+use p3_field::{Algebra, Dup, Field};
+use p3_matrix::interpolation::barycentric_weights;
 
 /// Evaluates each round polynomial at the sampled challenge.
 ///
@@ -12,7 +11,7 @@ use p3_matrix::interpolation::{InterpolateArbitrary, barycentric_weights};
 ///
 /// - The barycentric weights depend only on that domain.
 /// - They are precomputed once and reused across all rounds.
-/// - Each round then contributes only the per-challenge difference inverses.
+/// - Each round then contributes only the per-challenge difference products.
 pub struct RoundPolyInterpolator<EF> {
     /// Integer domain nodes `0, 1, …, degree`, lifted into the field.
     x_coords: Vec<EF>,
@@ -55,36 +54,39 @@ impl<EF: Field> RoundPolyInterpolator<EF> {
     ///
     /// # Returns
     ///
-    /// `h(r)`, computed by barycentric Lagrange interpolation over the precomputed domain.
+    /// `h(r)`, computed by Lagrange interpolation over the precomputed domain.
     pub fn eval(&self, evals: &[EF], sum_constraint: EF, r: EF) -> EF {
+        self.eval_in(evals, sum_constraint, &r)
+    }
+
+    /// As [`Self::eval`], over any algebra of the field.
+    ///
+    /// The Lagrange basis is formed from prefix and suffix products of `r - x_j`, so nothing is inverted.
+    pub fn eval_in<E: Algebra<EF> + Dup>(&self, evals: &[E], sum_constraint: E, r: &E) -> E {
         // Width contract, enforced upstream by the round polynomial's fixed-length step.
         // A bounded length there would replace that rejection with a silent mis-interpolation.
         debug_assert_eq!(evals.len() + 1, self.x_coords.len());
 
-        // Reconstruct the full evaluation vector at the integer nodes 0, 1, …, degree.
-        //
-        //     evals[0] = h(0)
-        //     evals[i] = h(i + 1) for i in 1..degree
-        //     h(1)     = sum_constraint - h(0)        (sumcheck invariant)
-        let mut full: Vec<EF> = Vec::with_capacity(self.x_coords.len());
-        full.push(evals[0]);
-        full.push(sum_constraint - evals[0]);
-        full.extend_from_slice(&evals[1..]);
+        // The evaluations at the integer nodes 0, 1, …, degree, where h(1) = sum_constraint - h(0).
+        let h1 = sum_constraint - evals[0].dup();
+        let full = core::iter::once(&evals[0])
+            .chain(core::iter::once(&h1))
+            .chain(&evals[1..]);
 
-        // Distance from the challenge to each domain node.
-        let diffs: Vec<EF> = self.x_coords.iter().map(|&x| r - x).collect();
-
-        // A challenge that lands on a domain node is evaluated exactly there.
-        //
-        // This both returns the right answer and avoids inverting a zero below.
-        if let Some(i) = diffs.iter().position(|d| d.is_zero()) {
-            return full[i];
+        // L_i(r) = w_i * prod_{j < i} (r - x_j) * prod_{j > i} (r - x_j).
+        let diffs: Vec<E> = self.x_coords.iter().map(|&x| r.dup() - x).collect();
+        let mut suffix = Vec::with_capacity(diffs.len());
+        suffix.push(E::ONE);
+        for diff in diffs.iter().rev() {
+            suffix.push(suffix[suffix.len() - 1].dup() * diff.dup());
         }
-
-        // Off-domain: invert the differences and apply the precomputed weights.
-        let diff_invs = batch_multiplicative_inverse(&diffs);
-        RowMajorMatrix::new_col(full)
-            .interpolate_arbitrary_with_precomputation(&self.weights, &diff_invs)[0]
+        let mut prefix = E::ONE;
+        let mut value = E::ZERO;
+        for (i, (h, (&weight, diff))) in full.zip(self.weights.iter().zip(&diffs)).enumerate() {
+            value += prefix.dup() * suffix[diffs.len() - 1 - i].dup() * (h.dup() * weight);
+            prefix *= diff.dup();
+        }
+        value
     }
 
     /// Extend a round polynomial's transmitted evaluations up to `target_len` entries.
@@ -162,7 +164,7 @@ mod tests {
 
     #[test]
     fn round_poly_eval_on_domain_node_is_exact() {
-        // Invariant: a challenge on a domain node returns that node's value via the zero-difference shortcut, not the inversion path.
+        // Invariant: a challenge on a domain node returns that node's value.
         //
         // Fixture state: random degree-3 polynomial.
         //

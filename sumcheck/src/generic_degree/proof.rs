@@ -2,12 +2,14 @@
 //! - produced by the generic-degree sumcheck prover,
 //! - consumed by the corresponding verifier.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
+use p3_verifier_arith::{Lift, Native};
 use serde::{Deserialize, Serialize};
 
 use super::error::GenericDegreeError;
@@ -135,6 +137,39 @@ impl<F, EF> GenericDegreeProof<F, EF> {
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        let claimed_sum = self.claimed_sum;
+        self.verify_in(
+            &mut Native::new(),
+            claimed_sum,
+            challenger,
+            num_rounds,
+            degree,
+            pow_bits,
+        )
+    }
+
+    /// As [`Self::verify`], within an arithmetic.
+    ///
+    /// `claimed_sum` is the proof's claimed sum, lifted into the arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify`].
+    pub fn verify_in<A, Challenger>(
+        &self,
+        arith: &mut A,
+        claimed_sum: A::EF,
+        challenger: &mut Challenger,
+        num_rounds: usize,
+        degree: usize,
+        pow_bits: usize,
+    ) -> Result<(Point<A::EF>, A::EF), GenericDegreeError>
+    where
+        A: Lift<Val = F, Challenge = EF>,
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
         // Phase 1: check the proof's shape.
         //
         // Nothing is absorbed yet, so every rejection here is a clean error.
@@ -188,12 +223,14 @@ impl<F, EF> GenericDegreeProof<F, EF> {
         // A retry on this borrow is therefore unsound: it lets a prover pick its own challenges.
         let shape = GenericDegreeShape::new(num_rounds, degree, pow_bits);
         let mut transcript =
-            VerifierTranscript::<Challenger, F, EF>::new(challenger, shape, self.claimed_sum);
+            arith.seeding(|| VerifierTranscript::<Challenger, F, EF>::new(challenger, shape));
+        arith.will_observe_ext(&claimed_sum);
+        transcript.claimed_sum(&self.claimed_sum);
 
         // Barycentric weights for the integer domain 0, 1, …, degree are shared by every round.
-        let interpolator = RoundPolyInterpolator::new(degree);
+        let interpolator = RoundPolyInterpolator::<EF>::new(degree);
 
-        let mut running_sum = self.claimed_sum;
+        let mut running_sum = claimed_sum;
         let mut challenges = Vec::with_capacity(num_rounds);
 
         // Driven by the same number the description was built from, not by the proof's length.
@@ -205,12 +242,22 @@ impl<F, EF> GenericDegreeProof<F, EF> {
         for round in 0..num_rounds {
             let evals = &self.round_polys[round];
 
-            // One call binds the polynomial, re-checks the grind, and draws the challenge.
+            // Announce what the round absorbs, in absorb order.
             let witness = (pow_bits > 0).then(|| self.pow_witnesses[round]);
-            let challenge = transcript.round(evals, witness)?;
+            let lifted = arith.load_ext_slice(evals);
+            for eval in lifted.iter() {
+                arith.will_observe_ext(eval);
+            }
+            if let Some(witness) = witness {
+                let witness = arith.load(witness);
+                arith.will_observe(vec![witness]);
+            }
+
+            // One call binds the polynomial, re-checks the grind, and draws the challenge.
+            let challenge = arith.sampled_ext(transcript.round(evals, witness)?);
 
             // Reduce the running claim through the challenge just drawn.
-            running_sum = interpolator.eval(evals, running_sum, challenge);
+            running_sum = interpolator.eval_in(&lifted, running_sum, &challenge);
             challenges.push(challenge);
         }
 

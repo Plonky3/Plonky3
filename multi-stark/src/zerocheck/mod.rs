@@ -27,7 +27,7 @@ use p3_air::{Air, AirLayout, BaseAir};
 use p3_bus::{BusArgumentError, BusReductionOutput};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field};
+use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_lookup::InteractionSymbolicBuilder as SymbolicAirBuilder;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -36,21 +36,19 @@ use p3_sumcheck::generic_degree::{
     RoundPolyInterpolator, RoundProver,
 };
 use p3_sumcheck::layout::Table;
+use p3_verifier_arith::{Lift, Native};
 use thiserror::Error;
 
+use crate::arith::{AirArith, AirInputs};
 use crate::backend::{GenericBackend, ZerocheckBackend};
 use crate::bus::composition::BusCompositionProver;
 use crate::bus::{BusBindingError, BusContext};
 use crate::config::DEFAULT_SLICED_ROUNDS;
-use crate::folder::{
-    InteractionMultilinearFolder, MultilinearFolder, ProverAir, VerifierAir, boundary_io_pins,
-};
+use crate::folder::{ProverAir, VerifierAir, boundary_io_pins};
 use crate::lookup::{ActiveLookupRuntime, AirLinkClaim, LookupRuntime};
 use crate::opening::{OpeningClaims, TableOpening};
 use crate::rounds::{AirDegrees, AirOpenings, AirProfile, RoundStateBase, Stage, StageCoupling};
-use crate::selectors::{
-    BoundaryEvals, PeriodicError, air_periodic_evals_at, periodic_num_variables,
-};
+use crate::selectors::{BoundaryEvals, PeriodicError, periodic_num_variables};
 use crate::zerocheck::transcript::{
     ZerocheckChallenges, ZerocheckProverTranscript, ZerocheckShape, ZerocheckVerifierTranscript,
 };
@@ -218,7 +216,6 @@ where
 ///
 /// # Panics
 ///
-/// Panics if the AIR declares mutually-exclusive interactions.
 /// Panics if a declared family is constant and no listed cell lifts it,
 /// since a constant has no round polynomial of its own.
 /// Panics if the AIR declares neither constraints nor lookup interactions.
@@ -246,11 +243,6 @@ where
     EF: ExtensionField<F>,
     A: BaseAir<F>,
 {
-    assert!(
-        builder.exclusive_interactions().is_empty(),
-        "multi-STARK zerocheck does not support exclusive lookup interactions"
-    );
-
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     validate_successor_columns(air, builder, &base_constraints, &extension_constraints);
@@ -281,6 +273,7 @@ where
     let constraint_degree = own_constraint_degree.max(pins.degree);
 
     let has_interactions = !builder.global_interactions().is_empty()
+        || !builder.exclusive_interactions().is_empty()
         || builder
             .local_interactions()
             .iter()
@@ -312,7 +305,26 @@ where
         })
         .max()
         .unwrap_or(0);
-    let interaction_degree = global_interaction_degree.max(local_interaction_degree);
+    // An exclusive branch is a tuple whose count carries its flag.
+    let exclusive_interaction_degree = builder
+        .exclusive_interactions()
+        .iter()
+        .flat_map(|interaction| &interaction.branches)
+        .map(|branch| {
+            let fields_degree = branch
+                .fields
+                .iter()
+                .map(|expression| expression.poly_degree(2, &[]))
+                .max()
+                .unwrap_or(0);
+            let count_degree = branch.flag.poly_degree(2, &[]) + branch.count.poly_degree(2, &[]);
+            fields_degree.max(count_degree)
+        })
+        .max()
+        .unwrap_or(0);
+    let interaction_degree = global_interaction_degree
+        .max(local_interaction_degree)
+        .max(exclusive_interaction_degree);
 
     assert!(
         !has_constraints || constraint_degree > 0,
@@ -337,7 +349,8 @@ where
         // The folder batches every asserted constraint, then one pin per listed cell.
         num_constraints: base_constraints.len() + extension_constraints.len() + pins.count,
         declares_lookups: !builder.global_interactions().is_empty()
-            || !builder.local_interactions().is_empty(),
+            || !builder.local_interactions().is_empty()
+            || !builder.exclusive_interactions().is_empty(),
         declares_indexed: !builder.indexed_reads().is_empty()
             || !builder.indexed_tables().is_empty(),
     }
@@ -471,7 +484,7 @@ fn validate_successor_columns<F: Field, EF: ExtensionField<F>, A: BaseAir<F>>(
 /// # Errors
 ///
 /// Returns the position of the first AIR whose declarations and link disagree.
-fn validate_lookup_links<EF: Field>(
+fn validate_lookup_links<EF>(
     degrees: &[AirDegrees],
     lookup: Option<&AirLinkClaim<EF>>,
 ) -> Result<(), ZerocheckError> {
@@ -1345,10 +1358,15 @@ impl<'a, A> AirZerocheck<'a, A> {
         A: Air<SymbolicAirBuilder<F, EF>>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        assert_eq!(
+            self.airs.len(),
+            public_values.len(),
+            "one public-value group is required for each AIR"
+        );
         self.verify_reduction_with_lookup_and_bus(
+            &mut Native::new(),
             sumcheck,
             log_heights,
-            public_values,
             lookup,
             None,
             challenger,
@@ -1367,27 +1385,21 @@ impl<'a, A> AirZerocheck<'a, A> {
     ///
     /// Every reason [`Self::verify_reduction_with_lookup`] rejects for.
     /// Returns an error when the product-tree output carries the wrong number of claims.
-    pub(crate) fn verify_reduction_with_lookup_and_bus<F, EF, Challenger>(
+    pub(crate) fn verify_reduction_with_lookup_and_bus<AR, Challenger>(
         &self,
-        sumcheck: &GenericDegreeProof<F, EF>,
+        arith: &mut AR,
+        sumcheck: &GenericDegreeProof<AR::Val, AR::Challenge>,
         log_heights: &[usize],
-        public_values: &[&[F]],
-        lookup: Option<&AirLinkClaim<EF>>,
-        bus: Option<BusFamily<'_, F, EF>>,
+        lookup: Option<&AirLinkClaim<AR::EF>>,
+        bus: Option<BusFamily<'_, AR::Val, AR::Challenge>>,
         challenger: &mut Challenger,
-    ) -> Result<ZerocheckReduction<EF>, ZerocheckError>
+    ) -> Result<ZerocheckReduction<AR::EF>, ZerocheckError>
     where
-        F: TranscriptField,
-        EF: ExtensionField<F>,
-        A: Air<SymbolicAirBuilder<F, EF>>,
-        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+        AR: Lift<Val: TranscriptField>,
+        A: Air<SymbolicAirBuilder<AR::Val, AR::Challenge>>,
+        Challenger: FieldChallenger<AR::Val> + GrindingChallenger<Witness = AR::Val>,
     {
         assert!(!self.airs.is_empty(), "zerocheck requires at least one AIR");
-        assert_eq!(
-            self.airs.len(),
-            public_values.len(),
-            "one public-value group is required for each AIR"
-        );
         assert_eq!(
             self.airs.len(),
             log_heights.len(),
@@ -1408,7 +1420,7 @@ impl<'a, A> AirZerocheck<'a, A> {
             || {
                 self.airs
                     .iter()
-                    .map(|&air| get_air_degrees::<F, EF, A>(air))
+                    .map(|&air| get_air_degrees::<AR::Val, AR::Challenge, A>(air))
                     .collect::<Vec<_>>()
             },
             |profiles| profiles.iter().map(|profile| profile.degrees).collect(),
@@ -1421,12 +1433,17 @@ impl<'a, A> AirZerocheck<'a, A> {
         let air_degree = degrees.iter().copied().map(AirDegrees::max).max().unwrap() + 1;
         let degree = bus_degree.map_or(air_degree, |bus_degree| air_degree.max(bus_degree));
 
-        if lookup.is_none() && bus.is_none() && sumcheck.claimed_sum != EF::ZERO {
-            return Err(ZerocheckError::NonZeroClaimedSum);
+        let claimed_sum = arith.load_ext(sumcheck.claimed_sum);
+        if lookup.is_none() && bus.is_none() {
+            arith.assert_zero(claimed_sum.dup(), || ZerocheckError::NonZeroClaimedSum)?;
         }
 
         // The reduction point of the lookup argument becomes the tail of the zerocheck point.
         let lookup_tail = lookup.map_or(&[][..], |lookup| lookup.point.as_slice());
+        let native_tail = lookup_tail
+            .iter()
+            .map(|coordinate| arith.value_ext(coordinate))
+            .collect::<Vec<_>>();
 
         // One driver covers the whole zerocheck, challenges and delegated sumcheck alike.
         let mut shape =
@@ -1434,41 +1451,80 @@ impl<'a, A> AirZerocheck<'a, A> {
         if let Some(bus_degree) = bus_degree {
             shape = shape.with_bus(bus_degree);
         }
-        let mut transcript =
-            ZerocheckVerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
+        let mut transcript = arith.seeding(|| {
+            ZerocheckVerifierTranscript::<Challenger, AR::Val, AR::Challenge>::new(
+                challenger, shape,
+            )
+        });
         let ZerocheckChallenges {
             alpha,
             beta,
             eta,
             lambda,
             tau,
-        } = transcript.challenges(lookup_tail);
+        } = transcript.challenges(&native_tail);
+
+        // The challenges lift in draw order, the free coordinates of tau last.
+        let alpha = arith.sampled_ext(alpha);
+        let beta = arith.sampled_ext(beta);
+        let eta = if lookup.is_some() {
+            arith.sampled_ext(eta)
+        } else {
+            AR::EF::ZERO
+        };
+        let lambda_native = lambda;
+        let lambda = if bus.is_some() {
+            arith.sampled_ext(lambda)
+        } else {
+            AR::EF::ZERO
+        };
+        let free = tau.len() - lookup_tail.len();
+        let tau = tau[..free]
+            .iter()
+            .map(|&coordinate| arith.sampled_ext(coordinate))
+            .chain(lookup_tail.iter().map(Dup::dup))
+            .collect::<Vec<_>>();
 
         // Lambda is drawn after the product tree fixed both terminal claims.
         // A malformed output is rejected before any sumcheck work.
-        let bus_claim = match bus.map(|family| family.output.batched_terminal_claim(lambda)) {
-            Some(Ok(claim)) => claim,
+        //
+        // The bus verifies natively only, so its claim is a native value.
+        let bus_claim = match bus.map(|family| family.output.batched_terminal_claim(lambda_native))
+        {
+            Some(Ok(claim)) => arith.load_ext(claim),
             Some(Err(error)) => {
                 transcript.abort();
                 return Err(ZerocheckError::BusClaim(error));
             }
-            None => EF::ZERO,
+            None => AR::EF::ZERO,
         };
 
         // The claim the sumcheck starts from is fixed by the reductions, so it is checked here.
         //
         // Releasing the completeness check keeps this rejection the only failure.
-        let expected_claim =
-            lookup.map_or(EF::ZERO, |lookup| eta * lookup.claimed_sum) + lambda * bus_claim;
-        if sumcheck.claimed_sum != expected_claim {
-            transcript.abort();
-            return Err(ZerocheckError::ClaimedSumMismatch);
+        if lookup.is_some() || bus.is_some() {
+            let expected_claim = lookup
+                .map_or(AR::EF::ZERO, |lookup| eta.dup() * lookup.claimed_sum.dup())
+                + lambda.dup() * bus_claim;
+            if let Err(error) = arith.assert_zero(claimed_sum.dup() - expected_claim, || {
+                ZerocheckError::ClaimedSumMismatch
+            }) {
+                transcript.abort();
+                return Err(error);
+            }
         }
 
         // The bracket is the last described step, so a rejected sumcheck still closes it.
         let reduced = transcript
             .constraint_sumcheck(|challenger| {
-                sumcheck.verify(challenger, max_log_height, degree, self.pow_bits)
+                sumcheck.verify_in(
+                    arith,
+                    claimed_sum,
+                    challenger,
+                    max_log_height,
+                    degree,
+                    self.pow_bits,
+                )
             })
             .map_err(ZerocheckError::Sumcheck);
         transcript.finish();
@@ -1546,6 +1602,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         A: VerifierAir<F, EF>,
     {
         self.check_constraint_with_lookup_and_bus(
+            &mut Native::new(),
             reduction,
             main,
             preprocessed,
@@ -1572,20 +1629,20 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// Every reason [`Self::check_constraint_with_lookup`] rejects for.
     /// Returns an error when a bus declaration cannot be evaluated from the openings.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn check_constraint_with_lookup_and_bus<F, EF>(
+    pub(crate) fn check_constraint_with_lookup_and_bus<AR>(
         &self,
-        reduction: &ZerocheckReduction<EF>,
-        main: &[TableOpening<'_, EF>],
-        preprocessed: &[TableOpening<'_, EF>],
+        arith: &mut AR,
+        reduction: &ZerocheckReduction<AR::EF>,
+        main: &[TableOpening<'_, AR::EF>],
+        preprocessed: &[TableOpening<'_, AR::EF>],
         log_heights: &[usize],
-        public_values: &[&[F]],
-        lookup: Option<&AirLinkClaim<EF>>,
-        bus: Option<BusFamily<'_, F, EF>>,
+        public_values: &[&[AR::F]],
+        lookup: Option<&AirLinkClaim<AR::EF>>,
+        bus: Option<BusFamily<'_, AR::Val, AR::Challenge>>,
     ) -> Result<(), ZerocheckError>
     where
-        F: Field,
-        EF: ExtensionField<F>,
-        A: VerifierAir<F, EF>,
+        AR: Lift + AirArith<A>,
+        A: BaseAir<AR::Val>,
     {
         assert!(!self.airs.is_empty(), "zerocheck requires at least one AIR");
         assert_eq!(
@@ -1619,18 +1676,18 @@ impl<'a, A> AirZerocheck<'a, A> {
         let max_log_height = reduction.tau.len();
         assert_eq!(reduction.point.as_slice().len(), max_log_height);
 
-        let mut g = EF::ZERO;
+        let mut g = AR::EF::ZERO;
+        let mut beta = AR::EF::ONE;
         let mut periodic_by_air = Vec::with_capacity(self.airs.len());
-        for (air_index, ((((&air, &log_height), main), preprocessed), beta)) in self
+        for (air_index, (((&air, &log_height), main), preprocessed)) in self
             .airs
             .iter()
             .zip(log_heights.iter())
             .zip(main.iter())
             .zip(preprocessed.iter())
-            .zip(reduction.beta.powers())
             .enumerate()
         {
-            let layout = AirLayout::from_air::<F>(air);
+            let layout = AirLayout::from_air::<AR::Val>(air);
             assert_ne!(layout.main_width, 0);
             assert_eq!(public_values[air_index].len(), air.num_public_values());
 
@@ -1660,93 +1717,108 @@ impl<'a, A> AirZerocheck<'a, A> {
             }
 
             let activation_round = max_log_height - log_height;
-            let point = Point::new(reduction.point.as_slice()[activation_round..].to_vec());
-            let boundary = BoundaryEvals::at(point.as_slice());
-            let claims = OpeningClaims::new(
-                point.clone(),
-                main.local.to_vec(),
+            let point = &reduction.point.as_slice()[activation_round..];
+            let boundary = BoundaryEvals::at(point);
+            let next_row = OpeningClaims::new(
+                Point::new(Vec::new()),
+                Vec::new(),
                 main.next_columns,
                 main.next_values,
-            );
-            let next_row = claims.next_row(layout.main_width);
-            let preprocessed_claims = OpeningClaims::new(
-                point,
-                preprocessed.local.to_vec(),
+            )
+            .next_row(layout.main_width);
+            let preprocessed_next_row = OpeningClaims::new(
+                Point::new(Vec::new()),
+                Vec::new(),
                 preprocessed.next_columns,
                 preprocessed.next_values,
-            );
-            let preprocessed_next_row = preprocessed_claims.next_row(layout.preprocessed_width);
+            )
+            .next_row(layout.preprocessed_width);
 
             // Periodic columns are not committed and nothing opens them.
             // Recompute each column's multilinear extension at the bound point instead.
             // An AIR with a closed form, such as a sparse image, supplies it itself.
             //
             //     declaration too large for this AIR's height → rejected here
-            let periodic = air_periodic_evals_at::<F, EF, _>(air, claims.point.as_slice())?;
-
-            let folder = MultilinearFolder::new(
-                &claims.local,
-                &next_row,
-                boundary,
-                public_values[air_index],
-                reduction.alpha,
-            )
-            .with_preprocessed(&preprocessed_claims.local, &preprocessed_next_row)
-            .with_periodic(&periodic);
+            let periodic = arith.periodic_values(air, point)?;
 
             // A linked AIR contributes both families from one evaluation, batched apart:
             // beta separates the AIRs, eta separates the lookup link from the constraints.
-            match lookup.and_then(|lookup| Some((lookup, lookup.links_by_air.get(&air_index)?))) {
-                Some((lookup, link)) => {
-                    let evaluations = InteractionMultilinearFolder::new(
-                        folder,
-                        link,
-                        &lookup.theta_beta_powers,
-                        true,
-                    )
-                    .eval_air(air);
-                    g += beta * evaluations.constraints + reduction.eta * evaluations.interactions;
-                }
-                // Declaring no lookup was already checked against having no link.
-                None => g += beta * folder.eval_air(air),
+            //
+            // Declaring no lookup was already checked against having no link.
+            let link = lookup.and_then(|lookup| lookup.links_by_air.get(&air_index));
+            let evaluations = arith.eval_air(
+                air,
+                &AirInputs {
+                    main_local: main.local,
+                    main_next: &next_row,
+                    preprocessed_local: preprocessed.local,
+                    preprocessed_next: &preprocessed_next_row,
+                    periodic: &periodic,
+                    public_values: public_values[air_index],
+                    boundary: &boundary,
+                    alpha: &reduction.alpha,
+                    link,
+                    theta_beta_powers: lookup.map_or(&[], |lookup| &lookup.theta_beta_powers),
+                },
+            );
+            g += beta.dup() * evaluations.constraints;
+            if link.is_some() {
+                g += reduction.eta.dup() * evaluations.interactions;
             }
+            beta *= reduction.beta.dup();
             periodic_by_air.push(periodic);
         }
 
         // Every opening group was checked against its declared width above.
         // The bus evaluator can therefore index any column a declaration names.
+        //
+        // The bus verifies natively only, so it reads native values.
         let bus_term = match bus {
             Some(family) => {
-                let main = main.iter().map(|opening| opening.local).collect::<Vec<_>>();
+                let native = |arith: &AR, values: &[AR::EF]| {
+                    values
+                        .iter()
+                        .map(|value| arith.value_ext(value))
+                        .collect::<Vec<_>>()
+                };
+                let main = main
+                    .iter()
+                    .map(|opening| native(arith, opening.local))
+                    .collect::<Vec<_>>();
                 let preprocessed = preprocessed
                     .iter()
-                    .map(|opening| opening.local)
+                    .map(|opening| native(arith, opening.local))
                     .collect::<Vec<_>>();
                 let periodic = periodic_by_air
                     .iter()
-                    .map(Vec::as_slice)
+                    .map(|values| native(arith, values))
                     .collect::<Vec<_>>();
-                family
+                let public_values = public_values
+                    .iter()
+                    .map(|values| values.iter().map(|value| arith.value(value)).collect())
+                    .collect::<Vec<Vec<_>>>();
+                let term = family
                     .context
                     .terminal_composition(
                         family.output,
-                        reduction.lambda,
-                        &reduction.point,
-                        &main,
-                        &preprocessed,
-                        &periodic,
-                        public_values,
+                        arith.value_ext(&reduction.lambda),
+                        &Point::new(native(arith, reduction.point.as_slice())),
+                        &main.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                        &preprocessed.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                        &periodic.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                        &public_values.iter().map(Vec::as_slice).collect::<Vec<_>>(),
                     )
-                    .map_err(ZerocheckError::BusBinding)?
+                    .map_err(ZerocheckError::BusBinding)?;
+                arith.load_ext(term)
             }
-            None => EF::ZERO,
+            None => AR::EF::ZERO,
         };
 
         let eq_at_point = Point::eval_eq(&reduction.tau, reduction.point.as_slice());
-        if reduction.final_sum != eq_at_point * g + reduction.lambda * bus_term {
-            return Err(ZerocheckError::FinalSumMismatch);
-        }
-        Ok(())
+        let expected = eq_at_point * g + reduction.lambda.dup() * bus_term;
+        arith.assert_zero(reduction.final_sum.dup() - expected, || {
+            ZerocheckError::FinalSumMismatch
+        })
     }
 }
 

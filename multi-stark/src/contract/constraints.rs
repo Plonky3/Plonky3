@@ -27,7 +27,11 @@ use p3_lookup::{InteractionSymbolicBuilder, TraceWindow};
 ///
 /// The contents of a fixed trace stay out, because the verifying key is what binds those.
 ///
-/// Mutually exclusive interactions are left out, because this backend refuses them outright.
+/// The encoding has no place for mutually exclusive interactions, so a table declaring one is refused.
+///
+/// # Panics
+///
+/// When the table declares a mutually exclusive interaction.
 pub(super) fn encode<F, EF, A>(
     air: &A,
     builder: &InteractionSymbolicBuilder<F, EF>,
@@ -38,6 +42,10 @@ where
     EF: ExtensionField<F>,
     A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
 {
+    assert!(
+        builder.exclusive_interactions().is_empty(),
+        "a machine declaration does not bind exclusive interactions"
+    );
     let mut arena = Arena::default();
     arena.blob(&F::order().to_bytes_le());
     arena.count(EF::DIMENSION);

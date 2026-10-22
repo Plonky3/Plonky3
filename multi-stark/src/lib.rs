@@ -16,6 +16,7 @@
 
 extern crate alloc;
 
+pub mod arith;
 pub mod backend;
 mod bus;
 pub mod config;
@@ -51,4 +52,4 @@ pub use p3_air::BoundaryIoError;
 pub use proof::MultiStarkProof;
 pub use prover::{ProvingError, prove, prove_with_backend, prove_with_security};
 pub use security::{MultiStarkSecurityReport, SecurityError, security_report};
-pub use verifier::{VerificationError, verify, verify_with_security};
+pub use verifier::{VerificationError, verify, verify_in, verify_with_security};

@@ -14,7 +14,7 @@ mod value;
 
 use alloc::vec::Vec;
 
-use p3_air::{Air, BaseAir, PermutationAirBuilder};
+use p3_air::{Air, BaseAir};
 use p3_field::extension::{BinomialExtensionField, BinomiallyExtendable, binomial_mul};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_lookup::{Count, InteractionBuilder};
@@ -151,8 +151,7 @@ impl<F: Field, EF: Sync, P: PermutationChip<F>> BaseAir<F> for CircuitAir<F, EF,
 
 impl<AB, EF, P> Air<AB> for CircuitAir<AB::F, EF, P>
 where
-    AB: PermutationAirBuilder + InteractionBuilder,
-    AB::F: Field,
+    AB: InteractionBuilder<F: Field>,
     EF: CircuitExtension<AB::F>,
     P: PermutationChip<AB::F>,
     P::Air: for<'b> Air<SubAirBuilder<'b, AB, P::Air, AB::Var>>,

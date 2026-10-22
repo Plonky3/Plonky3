@@ -84,7 +84,7 @@ pub use opening::{
 };
 pub use plan::plan_stacked_layout;
 pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver, SuffixResidualProver};
-pub use transcript::{commitment_domain_separator, observe_commitment};
+pub use transcript::{commitment_domain_separator, observe_commitment, observe_commitment_in};
 pub use verifier::Verifier;
 pub use weight::InitialWeight;
 pub use witness::{

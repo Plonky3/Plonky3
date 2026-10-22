@@ -11,7 +11,7 @@
 
 use alloc::vec::Vec;
 
-use p3_field::Field;
+use p3_field::{Dup, PrimeCharacteristicRing};
 use p3_multilinear_util::point::Point;
 
 /// One table's opened column values at the bound point, split into the two views the folder reads.
@@ -75,7 +75,7 @@ pub struct OpeningClaims<EF> {
     pub next: Vec<(usize, EF)>,
 }
 
-impl<EF: Field> OpeningClaims<EF> {
+impl<EF: PrimeCharacteristicRing> OpeningClaims<EF> {
     /// Bundle the reduced claims from the bound point and the opened column values.
     ///
     /// # Arguments
@@ -102,7 +102,7 @@ impl<EF: Field> OpeningClaims<EF> {
         let next = next_columns
             .iter()
             .copied()
-            .zip(next_values.iter().copied())
+            .zip(next_values.iter().map(Dup::dup))
             .collect();
 
         Self { point, local, next }
@@ -121,8 +121,8 @@ impl<EF: Field> OpeningClaims<EF> {
         let mut row = EF::zero_vec(width);
 
         // Scatter each claimed successor value into its column slot.
-        for &(column, value) in &self.next {
-            row[column] = value;
+        for (column, value) in &self.next {
+            row[*column] = value.dup();
         }
 
         row

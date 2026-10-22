@@ -2780,3 +2780,83 @@ fn a_row_naming_an_entry_its_table_does_not_have_is_rejected() {
     )
     .expect_err("a row naming an entry outside its table must be rejected");
 }
+
+/// An exclusive group whose two branches split the rows, balanced by one plain interaction.
+///
+/// Every row reads its value through whichever branch its flag selects, and provides it once.
+struct ExclusiveBalanceAir;
+
+impl BaseAir<F> for ExclusiveBalanceAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB> Air<AB> for ExclusiveBalanceAir
+where
+    AB: AirBuilder<F = F> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        let local = builder.main().current_slice().to_vec();
+        let (flag, value) = (local[0], local[1]);
+        builder.assert_bool(flag);
+        builder.push_exclusive_interaction(
+            "exclusive",
+            [
+                (
+                    flag.into(),
+                    Count::bounded(AB::Expr::ONE, 1),
+                    vec![value.into()],
+                ),
+                (
+                    AB::Expr::ONE - flag,
+                    Count::bounded(AB::Expr::ONE, 1),
+                    vec![value.into()],
+                ),
+            ],
+        );
+        builder.push_interaction("exclusive", [value], Count::provided(-AB::Expr::ONE));
+    }
+}
+
+#[test]
+fn prove_verify_exclusive_lookup_roundtrips() {
+    // Each branch owns its own block of fractions, its count gated by its flag.
+    let n = 64;
+    let log_height = log2_strict_usize(n);
+    let air = ExclusiveBalanceAir;
+    let trace = RowMajorMatrix::new(
+        (0..n)
+            .flat_map(|row| [F::from_bool(row % 3 == 0), F::from_usize(5 * row + 2)])
+            .collect(),
+        2,
+    );
+    let config = config_for(log_height, air.width());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    assert!(proof.lookup.is_some());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect("an honest exclusive lookup proof must verify");
+}

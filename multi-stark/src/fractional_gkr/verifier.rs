@@ -2,13 +2,14 @@ use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
-use p3_field::ExtensionField;
+use p3_field::{Dup, ExtensionField, PrimeCharacteristicRing};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
+use p3_verifier_arith::{Lift, Native};
 use thiserror::Error;
 
 use super::transcript::{FractionGkrShape, FractionGkrVerifierTranscript, ROUND_POLY_LEN};
-use super::{FractionGkrOutput, FractionGkrProof};
+use super::{FractionGkrOutput, FractionGkrProof, SplitFraction};
 
 /// Malformed fractional-GKR proofs rejected by the verifier.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
@@ -79,6 +80,24 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F>,
 {
+    verify_fractional_gkr_in(&mut Native::new(), proof, num_variables, challenger)
+}
+
+/// As [`verify_fractional_gkr`], within an arithmetic.
+///
+/// # Errors
+///
+/// As [`verify_fractional_gkr`].
+pub fn verify_fractional_gkr_in<A, Challenger>(
+    arith: &mut A,
+    proof: &FractionGkrProof<A::Challenge>,
+    num_variables: usize,
+    challenger: &mut Challenger,
+) -> Result<FractionGkrOutput<A::EF>, FractionGkrError>
+where
+    A: Lift<Val: TranscriptField>,
+    Challenger: FieldChallenger<A::Val>,
+{
     if num_variables < 1 {
         return Err(FractionGkrError::InvalidVariableCount);
     }
@@ -103,20 +122,25 @@ where
         }
     }
 
-    if proof.root_denominator == EF::ZERO {
-        return Err(FractionGkrError::ZeroRootDenominator);
-    }
+    // A zero root denominator has no inverse, which the arithmetic witnesses.
+    let root_denominator = arith.load_ext(proof.root_denominator);
+    arith.batch_inverse(core::slice::from_ref(&root_denominator), |_| {
+        FractionGkrError::ZeroRootDenominator
+    })?;
 
-    let mut transcript = FractionGkrVerifierTranscript::<Challenger, F, EF>::new(
-        challenger,
-        FractionGkrShape { num_variables },
-        proof.root_denominator,
-    );
+    let mut transcript = arith.seeding(|| {
+        FractionGkrVerifierTranscript::<Challenger, A::Val, A::Challenge>::new(
+            challenger,
+            FractionGkrShape { num_variables },
+        )
+    });
+    arith.will_observe_ext(&root_denominator);
+    transcript.root_denominator(&proof.root_denominator);
 
-    let mut point = Point::<EF>::new(Vec::new());
-    let mut numerator = EF::ZERO;
-    let mut denominator = proof.root_denominator;
-    let interpolator = RoundPolyInterpolator::new(ROUND_POLY_LEN);
+    let mut point = Point::<A::EF>::new(Vec::new());
+    let mut numerator = A::EF::ZERO;
+    let mut denominator = root_denominator;
+    let interpolator = RoundPolyInterpolator::<A::Challenge>::new(ROUND_POLY_LEN);
 
     // Position of the first layer whose sumcheck did not close, if any.
     //
@@ -126,31 +150,47 @@ where
     let mut inconsistent_layer = None;
 
     for (layer_index, layer) in proof.layers.iter().enumerate() {
-        let lambda = transcript.begin_layer();
-        let mut running_sum = numerator + lambda * denominator;
+        let lambda = arith.sampled_ext(transcript.begin_layer());
+        let mut running_sum = numerator + lambda.dup() * denominator;
         let mut round_point = Vec::with_capacity(layer_index + 1);
         for round_poly in &layer.round_polys {
-            let r = transcript.round(round_poly);
-            running_sum = interpolator.eval(round_poly, running_sum, r);
+            let lifted = arith.load_ext_slice(round_poly);
+            for eval in lifted.iter() {
+                arith.will_observe_ext(eval);
+            }
+            let r = arith.sampled_ext(transcript.round(round_poly));
+            running_sum = interpolator.eval_in(&lifted, running_sum, &r);
             round_point.push(r);
         }
 
-        let expected = Point::eval_eq(point.as_slice(), &round_point) * layer.claims.gate(lambda);
-        if running_sum != expected {
-            inconsistent_layer.get_or_insert(layer_index);
+        let claims = &layer.claims;
+        let [n0, d0, n1, d1] =
+            [claims.n0, claims.d0, claims.n1, claims.d1].map(|value| arith.load_ext(value));
+        for value in [&n0, &d0, &n1, &d1] {
+            arith.will_observe_ext(value);
+        }
+        let lifted = SplitFraction { n0, d0, n1, d1 };
+
+        // The first inconsistent layer is reported once the whole transcript is replayed.
+        let expected = Point::eval_eq(point.as_slice(), &round_point) * lifted.gate(lambda);
+        if let Err(error) = arith.assert_zero(running_sum - expected, || {
+            FractionGkrError::LayerConsistency { layer: layer_index }
+        }) {
+            inconsistent_layer.get_or_insert(error);
         }
 
-        let branch = transcript.end_layer(&layer.claims);
-        numerator = layer.claims.n0 + branch * (layer.claims.n1 - layer.claims.n0);
-        denominator = layer.claims.d0 + branch * (layer.claims.d1 - layer.claims.d0);
+        let branch = arith.sampled_ext(transcript.end_layer(claims));
+        let SplitFraction { n0, d0, n1, d1 } = lifted;
+        numerator = n0.dup() + branch.dup() * (n1 - n0);
+        denominator = d0.dup() + branch.dup() * (d1 - d0);
         round_point.insert(0, branch);
         point = Point::new(round_point);
     }
 
     transcript.finish();
 
-    if let Some(layer) = inconsistent_layer {
-        return Err(FractionGkrError::LayerConsistency { layer });
+    if let Some(error) = inconsistent_layer {
+        return Err(error);
     }
 
     Ok(FractionGkrOutput {

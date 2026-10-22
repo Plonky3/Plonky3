@@ -106,7 +106,7 @@ where
     }
 }
 
-impl<EF: Field> BoundaryEvals<EF> {
+impl<EF: PrimeCharacteristicRing> BoundaryEvals<EF> {
     /// Evaluate all three boundary selectors at the same challenge point.
     ///
     /// # Arguments
@@ -119,17 +119,19 @@ impl<EF: Field> BoundaryEvals<EF> {
         //     last  := last  * r
         let mut first = EF::ONE;
         let mut last = EF::ONE;
-        for &r in rs {
-            first *= EF::ONE - r;
-            last *= r;
+        for r in rs {
+            first *= EF::ONE - r.dup();
+            last *= r.dup();
         }
         Self {
             first,
+            transition: EF::ONE - last.dup(),
             last,
-            transition: EF::ONE - last,
         }
     }
+}
 
+impl<EF: Field> BoundaryEvals<EF> {
     /// Fold one more bound coordinate into the running prefix accumulator.
     ///
     /// The accumulator tracks the partial products over the coordinates bound so far:

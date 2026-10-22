@@ -20,11 +20,16 @@ p3-fri.workspace = true
 p3-lookup.workspace = true
 p3-matrix.workspace = true
 p3-merkle-tree.workspace = true
+p3-multi-stark.workspace = true
+p3-multilinear-util.workspace = true
 p3-poseidon2.workspace = true
 p3-poseidon2-air.workspace = true
+p3-sumcheck.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
+p3-util.workspace = true
 p3-verifier-arith.workspace = true
+p3-whir.workspace = true
 
 hashbrown.workspace = true
 serde.workspace = true
@@ -34,9 +39,6 @@ spin.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-dft = { path = "../dft" }
 p3-koala-bear = { path = "../koala-bear" }
-p3-multilinear-util = { path = "../multilinear-util" }
-p3-sumcheck = { path = "../sumcheck" }
-p3-whir = { path = "../whir" }
 
 proptest.workspace = true
 

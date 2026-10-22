@@ -8,7 +8,6 @@ use alloc::vec::Vec;
 use core::ops::Deref;
 
 use p3_air::BaseAir;
-use p3_field::Field;
 use p3_lookup::TraceWindow;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
@@ -17,7 +16,6 @@ use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use crate::config::MultiStarkConfig;
 use crate::indexed::IndexedPlan;
 pub use crate::keys::{ProvingKey, VerifyingKey, setup};
-use crate::logup_star::LogupStarOutput;
 pub use crate::proof::MultiStarkProof;
 pub use crate::prover::prove;
 pub use crate::verifier::{VerificationError, verify};
@@ -29,8 +27,8 @@ pub use crate::verifier::{VerificationError, verify};
 /// A short table also carries fewer row coordinates than a tall one.
 ///
 /// Only the trailing coordinates addressing this table's rows are opened.
-pub(super) fn trace_suffix<EF: Field>(point: &Point<EF>, num_variables: usize) -> Point<EF> {
-    point.split_at(point.num_variables() - num_variables).1
+pub(super) fn trace_suffix<EF: Clone>(point: &Point<EF>, num_variables: usize) -> Point<EF> {
+    point.get_subpoint_over_range(point.num_variables() - num_variables..)
 }
 
 /// The points one run reached.
@@ -41,15 +39,15 @@ pub(super) fn trace_suffix<EF: Field>(point: &Point<EF>, num_variables: usize) -
 pub(super) struct RunPoints<'a, EF> {
     /// Where the zerocheck landed.
     bound: &'a Point<EF>,
-    /// What the indexed reduction closed on, when the batch declared one.
-    indexed: Option<&'a LogupStarOutput<EF>>,
+    /// The position and table points the indexed reduction closed on, when the batch declared one.
+    indexed: Option<(&'a Point<EF>, &'a Point<EF>)>,
 }
 
 impl<'a, EF> RunPoints<'a, EF> {
     /// Record what this run reached.
     pub(super) const fn new(
         bound: &'a Point<EF>,
-        indexed: Option<&'a LogupStarOutput<EF>>,
+        indexed: Option<(&'a Point<EF>, &'a Point<EF>)>,
     ) -> Self {
         Self { bound, indexed }
     }
@@ -66,8 +64,8 @@ impl<'a, EF> RunPoints<'a, EF> {
         };
         match role {
             BatchRole::Air => self.bound,
-            BatchRole::Position { .. } => &indexed().position_point,
-            BatchRole::TableColumns { .. } => &indexed().table_point,
+            BatchRole::Position { .. } => indexed().0,
+            BatchRole::TableColumns { .. } => indexed().1,
         }
     }
 }

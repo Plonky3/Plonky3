@@ -567,9 +567,6 @@ where
 
         let layout = AirLayout::from_air::<C::Val>(air);
         let builder = InteractionSymbolicBuilder::<C::Val, C::Challenge>::from_air(air, layout);
-        if !builder.exclusive_interactions().is_empty() {
-            return Err(invalid("exclusive lookups are unsupported"));
-        }
         let own_constraints = builder
             .base_constraints()
             .len()
@@ -614,9 +611,14 @@ where
         let tuples = builder
             .local_interactions()
             .iter()
-            .try_fold(builder.global_interactions().len(), |total, local| {
-                total.checked_add(local.tuples.len())
-            })
+            .map(|local| local.tuples.len())
+            .chain(
+                builder
+                    .exclusive_interactions()
+                    .iter()
+                    .map(|exclusive| exclusive.branches.len()),
+            )
+            .try_fold(builder.global_interactions().len(), usize::checked_add)
             .ok_or_else(|| invalid("lookup tuple count overflow"))?;
         num_fractions = rows
             .checked_mul(tuples)
@@ -631,6 +633,7 @@ where
         lookup_interactions.push((
             builder.global_interactions().to_vec(),
             builder.local_interactions().to_vec(),
+            builder.exclusive_interactions().to_vec(),
         ));
         // Extraction is fallible, but its errors follow the ordinary lookup plan's errors.
         declared.push(IndexedLookups::from_builder(&builder, &layout));
@@ -647,7 +650,7 @@ where
     // Every consumer shares the interaction pass already used to score this AIR.
     let lookups = lookup_interactions
         .into_iter()
-        .map(|(global, local)| Lookups::from_interactions(&global, &local, &[]))
+        .map(|(global, local, exclusive)| Lookups::from_interactions(&global, &local, &exclusive))
         .collect();
     let plan = LookupPlan::from_lookups(lookups, &heights)?;
     let lookup = plan.map(|plan| MultilinearLookupParams {

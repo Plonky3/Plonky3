@@ -104,6 +104,7 @@ pub(in crate::rounds) fn no_lookups() -> StageCoupling<Tower> {
 pub(in crate::rounds) fn link_coupling() -> StageCoupling<Tower> {
     let link = AirLinkInstance {
         num_local_lookups: 1,
+        num_exclusive_lookups: 0,
         lookups: vec![AirLinkLookup {
             theta_bus_offset: gf4(1),
             block_weights: vec![gf4(2), gf4(3)],

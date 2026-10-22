@@ -607,7 +607,12 @@ where
     // A table's first batch reads its AIR's columns at the suffix of the bound point.
     // The zerocheck folded each of those columns down to exactly that value, so the scheme is
     // handed them rather than left to evaluate the table again.
-    let points = RunPoints::new(&point, indexed_output.as_ref());
+    let points = RunPoints::new(
+        &point,
+        indexed_output
+            .as_ref()
+            .map(|output| (&output.position_point, &output.table_point)),
+    );
     let opening = transcript.main_opening(|challenger| {
         let schedule = instances.main_schedule(indexed_plan.as_ref(), |role, rows| {
             trace_suffix(points.at(role), rows)
@@ -2227,10 +2232,10 @@ mod tests {
         let airs = [&push, &pull];
         let zerocheck = AirZerocheck::new(&airs, 0);
         let error = zerocheck
-            .verify_reduction_with_lookup_and_bus::<F, EF, _>(
+            .verify_reduction_with_lookup_and_bus(
+                &mut p3_verifier_arith::Native::<F, EF>::new(),
                 &proof.sumcheck,
                 &[2, 2],
-                &[&[], &[]],
                 None,
                 Some(BusFamily {
                     context: &context,

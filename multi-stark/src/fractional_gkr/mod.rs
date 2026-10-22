@@ -22,7 +22,7 @@ mod test;
 pub use prover::prove_fractional_gkr;
 pub use transcript::FractionGkrShape;
 /// Verification errors and the verifier for a fractional-GKR proof.
-pub use verifier::{FractionGkrError, verify_fractional_gkr};
+pub use verifier::{FractionGkrError, verify_fractional_gkr, verify_fractional_gkr_in};
 
 /// A numerator and denominator pair with independently chosen storage types.
 #[derive(Clone, Copy, Debug)]
@@ -97,9 +97,11 @@ pub struct SplitFraction<T> {
     pub d1: T,
 }
 
-impl<A: PrimeCharacteristicRing + Copy> SplitFraction<A> {
+impl<A: PrimeCharacteristicRing> SplitFraction<A> {
     pub(crate) fn gate(&self, lambda: A) -> A {
-        self.d1 * self.n0 + self.d0 * self.n1 + lambda * self.d0 * self.d1
+        self.d1.dup() * self.n0.dup()
+            + self.d0.dup() * self.n1.dup()
+            + lambda * self.d0.dup() * self.d1.dup()
     }
 }
 

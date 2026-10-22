@@ -345,20 +345,21 @@ where
     EF: ExtensionField<F>,
     C: CanObserve<F> + CanSample<F>,
 {
-    /// Seed the transcript from the shape and bind the root denominator.
+    /// Seed the transcript from the shape.
     ///
-    /// The arguments match the prover's, so both sides seed identically.
-    pub fn new(challenger: &'a mut C, shape: FractionGkrShape, root_denominator: EF) -> Self {
+    /// The root denominator is bound next, through [`Self::root_denominator`].
+    pub fn new(challenger: &'a mut C, shape: FractionGkrShape) -> Self {
         let separator = shape.domain_separator::<F, EF>();
-        let mut state = VerifierState::new(challenger, &separator, &[]);
-
-        // Absorbed from the proof, exactly as the prover absorbed it.
-        state.observe_extension::<F, EF, FieldToFieldCodec<F>>(ROOT_DENOMINATOR, &root_denominator);
-
         Self {
-            state,
+            state: VerifierState::new(challenger, &separator, &[]),
             _ef: PhantomData,
         }
+    }
+
+    /// Bind the root denominator, absorbed from the proof exactly as the prover absorbed it.
+    pub fn root_denominator(&mut self, root_denominator: &EF) {
+        self.state
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(ROOT_DENOMINATOR, root_denominator);
     }
 
     /// Open one reduction layer and redraw the challenge batching its two claims.
@@ -469,7 +470,8 @@ mod tests {
         let mut pc = ZeroThenOne::default();
         let mut vc = ZeroThenOne::default();
         let mut prover = FractionGkrProverTranscript::<_, F, F>::new(&mut pc, shape, F::ONE);
-        let mut verifier = FractionGkrVerifierTranscript::<_, F, F>::new(&mut vc, shape, F::ONE);
+        let mut verifier = FractionGkrVerifierTranscript::<_, F, F>::new(&mut vc, shape);
+        verifier.root_denominator(&F::ONE);
         let mut coordinates = Vec::new();
         for layer in 0..3 {
             assert_eq!(prover.begin_layer(), verifier.begin_layer());

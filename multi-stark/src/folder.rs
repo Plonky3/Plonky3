@@ -11,7 +11,7 @@ use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, RowWindow, W
 use p3_bus::{
     BusActivation, BusDirection, BusInteractionRecorder, BusName, BusSymbolicBuilder, RecordToken,
 };
-use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
+use p3_field::{Algebra, Dup, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_lookup::{
     Count, IndexedLookupBuilder, InteractionBuilder, InteractionSymbolicBuilder, TraceWindow,
 };
@@ -146,11 +146,28 @@ const ALPHA_BATCH: usize = 8;
 
 /// The two independently batched expression families emitted by one AIR evaluation.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct FolderEvaluations<Acc> {
+pub struct FolderEvaluations<Acc> {
     /// Alpha-batched ordinary AIR constraints.
-    pub(crate) constraints: Acc,
+    pub constraints: Acc,
     /// Lookup-link expressions accumulated with their static GKR coefficients.
-    pub(crate) interactions: Acc,
+    pub interactions: Acc,
+}
+
+/// One tuple's share of the lookup link, `w * (m + theta * (bus - 1) - theta * sum_k beta^k * payload_k)`.
+#[inline]
+pub(crate) fn link_term<Acc, Var>(
+    weight: Acc,
+    multiplicity: Var,
+    theta_bus_offset: Acc,
+    theta_beta_powers: &[Acc],
+    fields: impl IntoIterator<Item = Var>,
+) -> Acc
+where
+    Acc: Algebra<Var>,
+{
+    let theta_fingerprint: Acc =
+        dot_product(theta_beta_powers.iter().map(Dup::dup), fields.into_iter());
+    weight * (Acc::from(multiplicity) + theta_bus_offset - theta_fingerprint)
 }
 
 /// Folder shared by the prover and the verifier.
@@ -710,6 +727,8 @@ pub struct InteractionMultilinearFolder<'a, F, Var, Acc> {
     local_seen: usize,
     /// Number of cross-AIR lookups consumed, which indexes the next one.
     global_seen: usize,
+    /// Number of exclusive groups consumed, which indexes the next one.
+    exclusive_seen: usize,
 }
 
 impl<'a, F, Var, Acc> InteractionMultilinearFolder<'a, F, Var, Acc>
@@ -740,6 +759,7 @@ where
             constraints_enabled,
             local_seen: 0,
             global_seen: 0,
+            exclusive_seen: 0,
         }
     }
 
@@ -897,15 +917,14 @@ where
         // The per-row magnitude bound is a planning input, so only the signed count is folded.
         let (multiplicity, _) = count.into().into_parts();
 
-        // theta * sum_k beta^k * payload_k, with the bus offset added by the caller-side constant.
-        let theta_fingerprint: Acc = dot_product(
-            self.theta_beta_powers.iter().copied(),
+        // A cross-AIR lookup carries exactly one tuple, hence one block.
+        self.interaction_accumulator += link_term(
+            lookup.block_weights[0],
+            multiplicity,
+            lookup.theta_bus_offset,
+            self.theta_beta_powers,
             fields.into_iter().map(Into::into),
         );
-
-        // A cross-AIR lookup carries exactly one tuple, hence one block.
-        self.interaction_accumulator += lookup.block_weights[0]
-            * (Acc::from(multiplicity) + lookup.theta_bus_offset - theta_fingerprint);
     }
 
     fn push_local_interaction(
@@ -924,15 +943,39 @@ where
             tuples.into_iter().zip(lookup.block_weights.iter().copied())
         {
             let (multiplicity, _) = count.into_parts();
-            let theta_fingerprint: Acc =
-                dot_product(self.theta_beta_powers.iter().copied(), fields.into_iter());
-            self.interaction_accumulator +=
-                weight * (Acc::from(multiplicity) + lookup.theta_bus_offset - theta_fingerprint);
+            self.interaction_accumulator += link_term(
+                weight,
+                multiplicity,
+                lookup.theta_bus_offset,
+                self.theta_beta_powers,
+                fields,
+            );
             paired += 1;
         }
 
         // Zipping would silently drop tuples if the AIR emitted a different count this pass.
         debug_assert_eq!(paired, lookup.block_weights.len());
+    }
+
+    fn push_exclusive_interaction(
+        &mut self,
+        _bus_name: &str,
+        branches: impl IntoIterator<Item = (Self::Expr, Count<Self::Expr>, Vec<Self::Expr>)>,
+    ) {
+        let lookup = &self.link.exclusive_lookups()[self.exclusive_seen];
+        self.exclusive_seen += 1;
+
+        // Every branch owns its own block, its count gated by its flag.
+        for ((flag, count, fields), &weight) in branches.into_iter().zip(&lookup.block_weights) {
+            let (multiplicity, _) = count.into_parts();
+            self.interaction_accumulator += link_term(
+                weight,
+                flag * multiplicity,
+                lookup.theta_bus_offset,
+                self.theta_beta_powers,
+                fields,
+            );
+        }
     }
 
     fn num_global_interactions(&self) -> usize {
@@ -941,6 +984,10 @@ where
 
     fn num_local_interactions(&self) -> usize {
         self.local_seen
+    }
+
+    fn num_exclusive_interactions(&self) -> usize {
+        self.exclusive_seen
     }
 }
 
@@ -1261,6 +1308,7 @@ mod tests {
         // partial batch too. The AIR declares no lookup, so the link carries none.
         let link = AirLinkInstance {
             num_local_lookups: 0,
+            num_exclusive_lookups: 0,
             lookups: Vec::new(),
         };
         let folder = MultilinearFolder::<BF, R, R>::new(local, &next, boundary, &pis, alpha)
@@ -1407,6 +1455,7 @@ mod tests {
         let theta_bus_offset = EF::from_u64(13);
         let link = AirLinkInstance {
             num_local_lookups: 1,
+            num_exclusive_lookups: 0,
             lookups: vec![AirLinkLookup {
                 theta_bus_offset,
                 block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
@@ -1448,6 +1497,7 @@ mod tests {
         // so the folder is told to leave the constraint accumulator untouched.
         let link = AirLinkInstance {
             num_local_lookups: 1,
+            num_exclusive_lookups: 0,
             lookups: vec![AirLinkLookup {
                 theta_bus_offset: EF::from_u64(13),
                 block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
@@ -1511,6 +1561,7 @@ mod tests {
         //     injected pin   : is_first_row * (a - 6)   = -1
         let link = AirLinkInstance {
             num_local_lookups: 1,
+            num_exclusive_lookups: 0,
             lookups: vec![AirLinkLookup {
                 theta_bus_offset: EF::from_u64(13),
                 block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
@@ -1561,6 +1612,7 @@ mod tests {
         // Two batched constraints take the powers `alpha^1, alpha^0`.
         let link = AirLinkInstance {
             num_local_lookups: 1,
+            num_exclusive_lookups: 0,
             lookups: vec![AirLinkLookup {
                 theta_bus_offset: EF::from_u64(13),
                 block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
@@ -1603,6 +1655,7 @@ mod tests {
     fn eval_linked_io_with_powers(alpha_powers: &[EF]) -> FolderEvaluations<EF> {
         let link = AirLinkInstance {
             num_local_lookups: 1,
+            num_exclusive_lookups: 0,
             lookups: vec![AirLinkLookup {
                 theta_bus_offset: EF::from_u64(13),
                 block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
@@ -1720,6 +1773,7 @@ mod tests {
             }
             let link = AirLinkInstance {
                 num_local_lookups: 0,
+                num_exclusive_lookups: 0,
                 lookups: Vec::new(),
             };
             let inner = MultilinearFolder::<BF, Var, Acc>::new(&[], &[], boundary, &[], alpha)

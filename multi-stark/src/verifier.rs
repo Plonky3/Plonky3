@@ -6,15 +6,16 @@ use core::fmt::Debug;
 use p3_air::symbolic::AirLayout;
 use p3_air::{Air, BoundaryIoError, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
 use p3_lookup::{
     IndexedLookupError, IndexedLookups, InteractionSymbolicBuilder, Lookups, TraceWindow,
 };
-use p3_sumcheck::{OpeningEvals, PrescribedPointPcs};
+use p3_multilinear_util::point::Point;
+use p3_sumcheck::PrescribedPointPcs;
+use p3_verifier_arith::Native;
 use thiserror::Error;
 
-use crate::VerifierInstances;
+use crate::arith::{AirArith, MultiStarkArith};
 use crate::bus::{BusBindingError, BusContext};
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::VerifierAir;
@@ -28,6 +29,7 @@ use crate::transcript::{
     MultiStarkShape, MultiStarkTranscriptFailure, MultiStarkVerifierTranscript,
 };
 use crate::zerocheck::{AirZerocheck, BusFamily, ZerocheckError};
+use crate::{VerifierInstance, VerifierInstances};
 
 /// Reasons the multilinear AIR verifier rejects a proof.
 #[derive(Debug, Error)]
@@ -88,6 +90,9 @@ where
     /// The proof and AIRs disagree on whether a binary-native bus exists.
     #[error("binary-bus proof present but not expected, or absent but described")]
     UnexpectedBus,
+    /// The binary bus or the indexed reduction was asked of an arithmetic that is not native.
+    #[error("the binary bus and indexed lookups verify natively only")]
+    NativeOnly,
     /// An AIR names a public boundary cell or public value it does not have.
     #[error("instance {instance} boundary IO: {error}")]
     BoundaryIo {
@@ -225,6 +230,53 @@ where
     Commitment<C>: Clone,
     A: VerifierAir<C::Val, C::Challenge>,
 {
+    let public_values = instances
+        .iter()
+        .map(VerifierInstance::public_values)
+        .collect::<Vec<_>>();
+    verify_in(
+        &mut Native::new(),
+        config,
+        instances,
+        &public_values,
+        proof,
+        pow_bits,
+        challenger,
+    )
+}
+
+/// As [`verify`], within an arithmetic.
+///
+/// `public_values` are the instances' public values, lifted into the arithmetic.
+///
+/// The binary bus and the indexed reduction verify natively only.
+///
+/// # Errors
+///
+/// As [`verify`], and [`VerificationError::NativeOnly`] for a bus or an indexed reduction off [`Native`].
+///
+/// # Panics
+///
+/// As [`verify`], and when the lifted public values do not number one group per instance.
+pub fn verify_in<'a, AR, C, A>(
+    arith: &mut AR,
+    config: &C,
+    instances: VerifierInstances<'a, C, A>,
+    public_values: &[&[AR::F]],
+    proof: &MultiStarkProof<C>,
+    pow_bits: usize,
+    challenger: &mut AR::Challenger,
+) -> Result<(), VerificationError<PcsError<C>>>
+where
+    C: MultiStarkConfig,
+    C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
+    C::Challenger: FieldChallenger<C::Val>
+        + GrindingChallenger<Witness = C::Val>
+        + CanSampleUniformBits<C::Val>
+        + CanObserve<Commitment<C>>,
+    AR: MultiStarkArith<C> + AirArith<A>,
+    A: VerifierAir<C::Val, C::Challenge>,
+{
     assert!(!instances.is_empty());
 
     let (verifying_key, instances) = instances.into_parts();
@@ -247,7 +299,12 @@ where
     // Nothing is read out of the proof.
     let airs = instances.airs();
     let log_heights = instances.num_variables();
-    let public_values = instances.public_values();
+    let native_public_values = instances.public_values();
+    assert_eq!(
+        public_values.len(),
+        native_public_values.len(),
+        "one lifted public-value group per instance"
+    );
 
     // The preprocessed commitment binds the stacked tables, not which AIR owns each one.
     //
@@ -312,19 +369,33 @@ where
         .map_err(VerificationError::IndexedLookup)?;
     let bus = BusContext::<C::Val, C::Challenge>::build(&airs, &log_heights)?;
 
-    let mut transcript = MultiStarkVerifierTranscript::<C::Challenger, C::Val>::new(
-        challenger,
-        MultiStarkShape::new::<C::Val, A>(
-            &airs,
-            &log_heights,
-            pow_bits,
-            indexed_plan.is_some(),
-            bus.is_some(),
-        ),
-    );
+    // The bus and indexed reductions compute on native values.
+    if (bus.is_some() || indexed_plan.is_some()) && !AR::NATIVE {
+        return Err(VerificationError::NativeOnly);
+    }
+
+    let mut transcript = arith.seeding(|| {
+        MultiStarkVerifierTranscript::<AR::Challenger, C::Val>::new(
+            challenger,
+            MultiStarkShape::new::<C::Val, A>(
+                &airs,
+                &log_heights,
+                pow_bits,
+                indexed_plan.is_some(),
+                bus.is_some(),
+            ),
+        )
+    });
 
     // 1. Replay the reusable batched preprocessed commitment before any challenge
     // depends on it.
+    //
+    // Both schemes share one commitment format, and the preprocessed one is reached only to open.
+    let preprocessed_target = preprocessed_commitment.map(|commitment| {
+        let target = arith.load_key_commitment(config.pcs(), commitment);
+        arith.will_observe_commitment(config.pcs(), &target);
+        target
+    });
     transcript
         .preprocessed_commitment(preprocessed_commitment.cloned())
         .map_err(VerificationError::Transcript)?;
@@ -334,15 +405,17 @@ where
     // The scheme owns that binding, and asking it is what keeps the two sides together.
     //
     // A scheme whose commitment rides a typed phase replays that same phase here.
+    let main_target = arith.load_commitment(config.pcs(), &proof.commitment);
     transcript.main_commitment(|challenger| {
-        config
-            .pcs()
-            .observe_commitment(&proof.commitment, challenger);
+        arith.observe_commitment(config.pcs(), &proof.commitment, &main_target, challenger);
     });
 
     // 3. Replay the public values, one step per instance.
+    for lifted in public_values {
+        arith.will_observe(lifted.to_vec());
+    }
     transcript
-        .public_values(&public_values)
+        .public_values(&native_public_values)
         .map_err(VerificationError::Transcript)?;
 
     // 4. Reduce the bus products to their two terminal claims.
@@ -374,7 +447,8 @@ where
     // 5. Verify the lookup reduction, inside the delegation bracket.
     // Its claim feeds the coupled AIR sumcheck below, so a rejection stops the replay here.
     let lookup = match transcript.lookup_argument(|challenger| {
-        verify_lookup::<C::Val, C::Challenge, _>(
+        verify_lookup(
+            arith,
             lookups,
             &log_heights,
             proof.lookup.as_ref(),
@@ -397,10 +471,10 @@ where
         .map(|(context, output)| BusFamily { context, output });
     let zerocheck = AirZerocheck::with_profiles(&airs, &verifying_key.air_profiles, pow_bits);
     let reduction = match transcript.zerocheck(|challenger| {
-        zerocheck.verify_reduction_with_lookup_and_bus::<C::Val, C::Challenge, _>(
+        zerocheck.verify_reduction_with_lookup_and_bus(
+            arith,
             &proof.sumcheck,
             &log_heights,
-            &public_values,
             lookup.as_ref(),
             bus_family,
             challenger,
@@ -418,20 +492,25 @@ where
     // The claims come from the proof, since only the opening supplies committed values.
     //
     // The closing check below is what ties them to the commitment.
+    //
+    // The reduction runs on native values, which only a native arithmetic reaches.
+    let native_point = |arith: &AR, point: &Point<AR::EF>| {
+        Point::new(point.iter().map(|c| arith.value_ext(c)).collect())
+    };
     let indexed = match (indexed_plan.as_ref(), proof.indexed.as_ref()) {
         (Some(plan), Some(round)) => {
             // Proof data decides no count here.
             //
             // A list of the wrong shape is rejected rather than measured against.
-            let statement =
-                match plan.statement_from_claims(&reduction.point, round.reader_claims.clone()) {
-                    Ok(statement) => statement,
-                    // The driver refuses to be dropped mid-pattern, so it is released first.
-                    Err(error) => {
-                        transcript.abort();
-                        return Err(VerificationError::IndexedLookup(error));
-                    }
-                };
+            let bound = native_point(arith, &reduction.point);
+            let statement = match plan.statement_from_claims(&bound, round.reader_claims.clone()) {
+                Ok(statement) => statement,
+                // The driver refuses to be dropped mid-pattern, so it is released first.
+                Err(error) => {
+                    transcript.abort();
+                    return Err(VerificationError::IndexedLookup(error));
+                }
+            };
             let readers = statement.readers();
             let lookups = statement.lookups(&readers);
 
@@ -470,14 +549,28 @@ where
 
     // 8. Open the committed main trace tables at every point a claim was left at.
     // The returned values are bound to the main commitment.
-    let indexed_output = indexed.as_ref().map(|(_, output)| output);
-    let points = RunPoints::new(&reduction.point, indexed_output);
+    let lift = |arith: &mut AR, point: &Point<C::Challenge>| {
+        Point::new(point.iter().map(|&c| arith.load_ext(c)).collect())
+    };
+    let indexed_points = indexed.as_ref().map(|(_, output)| {
+        (
+            lift(arith, &output.position_point),
+            lift(arith, &output.table_point),
+        )
+    });
+    let points = RunPoints::new(
+        &reduction.point,
+        indexed_points
+            .as_ref()
+            .map(|(position, table)| (position, table)),
+    );
     let main_schedule = instances.main_schedule(indexed_plan.as_ref(), |role, rows| {
         trace_suffix(points.at(role), rows)
     });
     let main_evals = match transcript.main_opening(|challenger| {
-        config.pcs().verify_at(
-            &proof.commitment,
+        arith.verify_at(
+            config.pcs(),
+            &main_target,
             &proof.opening,
             main_schedule.protocol(),
             &main_schedule.against(),
@@ -499,13 +592,15 @@ where
             trace_suffix(points.at(role), rows)
         });
     let opened_preprocessed = transcript.preprocessed_opening(|challenger| {
-        let commitment = preprocessed_commitment
+        let commitment = preprocessed_target
+            .as_ref()
             .expect("a described preprocessed commitment is checked before the replay");
         let opening = proof
             .preprocessed_opening
             .as_ref()
             .expect("missing preprocessed opening rejected before verification");
-        config.preprocessed_pcs().verify_at(
+        arith.verify_at(
+            config.preprocessed_pcs(),
             commitment,
             opening,
             preprocessed_schedule.protocol(),
@@ -551,7 +646,27 @@ where
         // point.
         //
         // Skipping this lets a prover claim values its trace never held.
-        let opened = plan.statement(&reduction.point, &main_openings);
+        let native = |arith: &AR, values: &[AR::EF]| {
+            values
+                .iter()
+                .map(|value| arith.value_ext(value))
+                .collect::<Vec<_>>()
+        };
+        let native_main = main_openings
+            .iter()
+            .map(|opening| {
+                (
+                    native(arith, opening.local),
+                    native(arith, opening.next_values),
+                )
+            })
+            .collect::<Vec<_>>();
+        let native_openings = native_main
+            .iter()
+            .zip(&main_openings)
+            .map(|((local, next), opening)| TableOpening::new(local, opening.next_columns, next))
+            .collect::<Vec<_>>();
+        let opened = plan.statement(&native_point(arith, &reduction.point), &native_openings);
         if statement.claims() != opened.claims() {
             return Err(VerificationError::IndexedClaimsUnopened);
         }
@@ -567,8 +682,9 @@ where
                 let opened = main_schedule
                     .batch_answering(role)
                     .and_then(|batch| main_evals.get(batch))
-                    .and_then(|batch| batch.current().first());
-                if opened != Some(claimed) {
+                    .and_then(|batch| batch.current().first())
+                    .map(|value| arith.value_ext(value));
+                if opened != Some(*claimed) {
                     return Err(VerificationError::IndexedClaimsUnopened);
                 }
             }
@@ -579,13 +695,13 @@ where
                 TraceWindow::Main => main_schedule
                     .batch_answering(role)
                     .and_then(|batch| main_evals.get(batch))
-                    .map(OpeningEvals::current),
+                    .map(|batch| native(arith, batch.current())),
                 TraceWindow::Preprocessed => preprocessed_schedule
                     .batch_answering(role)
                     .and_then(|batch| preprocessed_evals.iter().flatten().nth(batch))
-                    .map(OpeningEvals::current),
+                    .map(|batch| native(arith, batch.current())),
             };
-            if opened != Some(claims.column_claims.as_slice()) {
+            if opened.as_ref() != Some(&claims.column_claims) {
                 return Err(VerificationError::IndexedClaimsUnopened);
             }
         }
@@ -625,11 +741,12 @@ where
     // ProductGKR terminal values are authenticated only by this check.
     zerocheck
         .check_constraint_with_lookup_and_bus(
+            arith,
             &reduction,
             &main_openings,
             &preprocessed_openings,
             &log_heights,
-            &public_values,
+            public_values,
             lookup.as_ref(),
             bus_family,
         )

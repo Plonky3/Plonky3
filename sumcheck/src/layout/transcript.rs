@@ -130,6 +130,7 @@ use p3_challenger::fs::{
 use p3_challenger::{CanObserve, CanSample};
 use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
+use p3_verifier_arith::{Lift, Native};
 
 use crate::error::SumcheckError;
 use crate::layout::LayoutStrategy;
@@ -252,9 +253,27 @@ where
     C: CanObserve<F> + CanObserve<Com>,
     Com: Clone,
 {
+    observe_commitment_in::<F, _, _, _>(&mut Native::<F, F>::new(), challenger, root, |_| {});
+}
+
+/// As [`observe_commitment`], within an arithmetic.
+///
+/// `announce` announces the root to the arithmetic, between the seed and the absorb.
+pub fn observe_commitment_in<F, A, C, Com>(
+    arith: &mut A,
+    challenger: &mut C,
+    root: Com,
+    announce: impl FnOnce(&mut A),
+) where
+    F: TranscriptField,
+    A: Lift,
+    C: CanObserve<F> + CanObserve<Com>,
+    Com: Clone,
+{
     // Seeding folds this phase's identity into the sponge before the root lands.
     let separator = commitment_domain_separator::<F>();
-    let mut state = ProverState::new(challenger, &separator);
+    let mut state = arith.seeding(|| ProverState::new(challenger, &separator));
+    announce(arith);
 
     state.observe_opaque(COMMITMENT, root);
 

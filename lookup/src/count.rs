@@ -49,6 +49,11 @@ impl<E> Count<E> {
         Self { expr, weight: 0 }
     }
 
+    /// The signed multiplicity expression.
+    pub const fn expr(&self) -> &E {
+        &self.expr
+    }
+
     /// Per-row upper bound on the absolute value of the count.
     pub const fn weight(&self) -> u32 {
         self.weight

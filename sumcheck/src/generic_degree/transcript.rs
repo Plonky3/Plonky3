@@ -282,23 +282,24 @@ where
     EF: ExtensionField<F>,
     C: CanObserve<F> + CanSample<F> + GrindingChallenger<Witness = F>,
 {
-    /// Seed the transcript and bind the claimed sum.
+    /// Seed the transcript from the shape.
     ///
-    /// The arguments match the prover's, so both sides seed identically.
-    pub fn new(challenger: &'a mut C, shape: GenericDegreeShape, claimed_sum: EF) -> Self {
+    /// The claimed sum is bound next, through [`Self::claimed_sum`].
+    pub fn new(challenger: &'a mut C, shape: GenericDegreeShape) -> Self {
         // Seeding folds the shape fingerprint into the sponge before any step.
         let separator = shape.domain_separator::<F, EF>();
-        let mut state = VerifierState::new(challenger, &separator, &[]);
-
-        // Absorbed from the proof, exactly as the prover absorbed it.
-        state.observe_extension::<F, EF, FieldToFieldCodec<F>>(CLAIMED_SUM, &claimed_sum);
-
         Self {
-            state,
+            state: VerifierState::new(challenger, &separator, &[]),
             shape,
             round: 0,
             _ef: PhantomData,
         }
+    }
+
+    /// Bind the claimed sum, absorbed from the proof exactly as the prover absorbed it.
+    pub fn claimed_sum(&mut self, claimed_sum: &EF) {
+        self.state
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(CLAIMED_SUM, claimed_sum);
     }
 
     /// Replay one round: bind the polynomial, re-check the grind, draw the challenge.
@@ -426,7 +427,8 @@ mod tests {
         //     proof holds:  2        -> rejected on round 0
         let mut challenger = fresh_challenger();
         let shape = GenericDegreeShape::new(2, 3, 0);
-        let mut transcript = VerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape, EF::ZERO);
+        let mut transcript = VerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape);
+        transcript.claimed_sum(&EF::ZERO);
 
         let err = transcript
             .round(&[EF::ONE, EF::ONE], None)
@@ -455,7 +457,8 @@ mod tests {
         // A described grinding step cannot be replayed with no witness to feed it.
         let mut challenger = fresh_challenger();
         let shape = GenericDegreeShape::new(2, 3, 4);
-        let mut transcript = VerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape, EF::ZERO);
+        let mut transcript = VerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape);
+        transcript.claimed_sum(&EF::ZERO);
 
         let err = transcript
             .round(&[EF::ONE; 3], None)

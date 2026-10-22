@@ -5,8 +5,17 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_batch_stark::{StarkGenericConfig, StarkInstance, Val};
+use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_multi_stark::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
+use p3_multi_stark::folder::ProverAir;
+use p3_multi_stark::{
+    MultiStarkProof, ProverInstance, ProverInstances, ProvingError, ProvingKey, prove,
+};
+use p3_sumcheck::PrescribedPointPcs;
+use p3_sumcheck::layout::Table;
+use p3_util::log2_strict_usize;
 
 use crate::builder::{Kind, Op};
 use crate::tables::{
@@ -341,6 +350,99 @@ where
                 public_values,
             })
             .collect()
+    }
+}
+
+impl<F, EF, P> Circuit<F, EF, P>
+where
+    F: PrimeField64,
+    EF: ExtensionField<F>,
+    P: PermutationChip<F>,
+{
+    /// Pad every table with inert rows to at least `2^log_height` rows.
+    ///
+    /// An all-zero row reads and writes nothing, and a permutation row permutes the zero state.
+    pub fn pad(&mut self, log_height: usize) {
+        let height = 1 << log_height;
+        for (air, trace) in self.airs.iter_mut().zip(&mut self.traces) {
+            let rows = trace.values.len() / trace.width;
+            if rows >= height {
+                continue;
+            }
+            let preprocessed = match air {
+                CircuitAir::Value(air) => &mut air.preprocessed,
+                CircuitAir::Public(air) => &mut air.preprocessed,
+                CircuitAir::BaseAlu(air) | CircuitAir::ExtAlu(air) => &mut air.preprocessed,
+                CircuitAir::Recompose(air) => &mut air.preprocessed,
+                CircuitAir::Permute(air) => {
+                    let padding = air.chip.trace(vec![vec![F::ZERO; P::WIDTH]; height - rows]);
+                    for row in padding.values.chunks(padding.width).take(height - rows) {
+                        trace.values.extend_from_slice(row);
+                        trace.values.extend([F::ZERO; 2]);
+                    }
+                    &mut air.preprocessed
+                }
+            };
+            trace.values.resize(height * trace.width, F::ZERO);
+            preprocessed
+                .values
+                .resize(height * preprocessed.width, F::ZERO);
+        }
+    }
+
+    /// Base-two logarithm of every table's height.
+    pub fn log_heights(&self) -> Vec<usize> {
+        self.traces
+            .iter()
+            .map(|trace| log2_strict_usize(trace.values.len() / trace.width))
+            .collect()
+    }
+
+    /// A proof of the circuit as one multi-STARK batch, under the key `setup` gave for its tables.
+    ///
+    /// # Errors
+    ///
+    /// When the commitment scheme rejects a table or an opening.
+    ///
+    /// # Panics
+    ///
+    /// When a table is shorter than the configuration's minimum, see [`Self::pad`].
+    pub fn prove_multi_stark<C>(
+        &self,
+        config: &C,
+        key: &ProvingKey<C>,
+        challenger: &mut C::Challenger,
+    ) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
+    where
+        C: MultiStarkConfig<Val = F, Challenge = EF>,
+        C::Pcs: PrescribedPointPcs<EF, C::Challenger>,
+        C::Challenger: Clone
+            + FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<Commitment<C>>,
+        Commitment<C>: Clone,
+        ProverData<C>: Clone,
+        CircuitAir<F, EF, P>: ProverAir<F, EF>,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
+    {
+        assert!(
+            self.log_heights()
+                .iter()
+                .all(|&log_height| log_height >= config.min_num_variables()),
+            "every table meets the configuration's minimum height"
+        );
+        let publics = self.public_values();
+        let instances = self
+            .airs
+            .iter()
+            .zip(&self.traces)
+            .zip(&publics)
+            .map(|((air, trace), publics)| {
+                ProverInstance::new(air, Table::new(trace.transpose()), key, publics)
+            })
+            .collect();
+        prove(config, ProverInstances::new(instances), 0, challenger)
     }
 }
 

@@ -175,6 +175,7 @@ fn link_runtime(air_index: usize, num_variables: usize, rng: &mut SmallRng) -> L
     let claim = rng.random();
     let link = AirLinkInstance {
         num_local_lookups: 1,
+        num_exclusive_lookups: 0,
         lookups: vec![AirLinkLookup {
             theta_bus_offset: rng.random(),
             block_weights: vec![rng.random(), rng.random()],

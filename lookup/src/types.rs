@@ -162,6 +162,26 @@ impl<F: Field> Lookups<F> {
         )
     }
 
+    /// The same fractions, each flagged branch's count multiplied by its flag.
+    ///
+    /// An argument that gives every tuple its own fraction needs no multiplexing.
+    #[must_use]
+    pub fn ungated(self) -> Self {
+        Self(
+            self.0
+                .into_iter()
+                .map(|mut lookup| {
+                    if let Some(flags) = lookup.flags.take() {
+                        for (count, flag) in lookup.multiplicities.iter_mut().zip(flags) {
+                            *count = flag * count.clone();
+                        }
+                    }
+                    lookup
+                })
+                .collect(),
+        )
+    }
+
     /// Build from raw symbolic interactions.
     ///
     /// Local interactions first, then global, then exclusive — matching the LogUp column order.

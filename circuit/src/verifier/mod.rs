@@ -9,6 +9,7 @@
 mod challenger;
 mod constraints;
 mod mmcs;
+mod multi_stark;
 mod stark;
 
 use alloc::collections::VecDeque;
