@@ -28,8 +28,9 @@ use p3_commit::{
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, PrimeField64,
-    TwoAdicField, batch_multiplicative_inverse, dot_product,
+    ExtensionField, FieldArray, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    PrimeField64, TwoAdicField, batch_multiplicative_inverse, batch_multiplicative_inverse_general,
+    dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -1083,17 +1084,36 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
     max_log_height_for_point
         .into_iter()
         .map(|(z, log_height)| {
-            (
-                z,
-                batch_multiplicative_inverse(
-                    // As coset is stored in bit-reversed order,
-                    // we can just take the first `2^log_height` elements.
-                    &coset[..(1 << log_height)]
-                        .iter()
-                        .map(|&x| z - x)
-                        .collect_vec(),
-                ),
-            )
+            // As coset is stored in bit-reversed order, the prefix is the right subgroup.
+            let xs = &coset[..(1 << log_height)];
+            // Match the block size and four independent Montgomery chains used by
+            // batch_multiplicative_inverse, without materializing every difference at once.
+            const BLOCK_SIZE: usize = 1024;
+            if xs.len() < BLOCK_SIZE {
+                return (
+                    z,
+                    batch_multiplicative_inverse(&xs.iter().map(|&x| z - x).collect_vec()),
+                );
+            }
+            let mut inverses = EF::zero_vec(xs.len());
+            xs.par_chunks(BLOCK_SIZE)
+                .zip(inverses.par_chunks_mut(BLOCK_SIZE))
+                .with_min_task_bytes(5 * BLOCK_SIZE * size_of::<EF>())
+                .for_each(|(xs, inverses)| {
+                    // Heights are powers of two, so these blocks are all full. Scratch is
+                    // 1024 extension elements per active callback, independent of height.
+                    let differences: [EF; BLOCK_SIZE] = core::array::from_fn(|i| z - xs[i]);
+                    let differences = FieldArray::<EF, 4>::pack_slice(&differences);
+                    let inverses = FieldArray::<EF, 4>::pack_slice_mut(inverses);
+                    batch_multiplicative_inverse_general(differences, inverses, |product| {
+                        let mut inverse = FieldArray::<EF, 4>::ZERO;
+                        batch_multiplicative_inverse_general(&product.0, &mut inverse.0, |x| {
+                            x.inverse()
+                        });
+                        inverse
+                    });
+                });
+            (z, inverses)
         })
         .collect()
 }
@@ -1135,6 +1155,96 @@ mod tests {
     type Claims = Vec<CommitmentWithOpeningPoints<EF, Commitment, Domain>>;
     type MyProof = <MyPcs as Pcs<EF, Challenger>>::Proof;
     type TestError = FriError<<ChallengeMmcs as Mmcs<EF>>::Error, <ValMmcs as Mmcs<F>>::Error>;
+
+    // A wrong coset prefix, reused block offset, sign, or per-point height must disagree
+    // with independently inverted elements of the point's own subgroup.
+    #[test]
+    fn inverse_denominators_match_individual_inverses() {
+        fn check<Base: TwoAdicField, Ext: ExtensionField<Base>>()
+        where
+            StandardUniform: Distribution<Ext>,
+        {
+            let mut rng = SmallRng::seed_from_u64(23);
+            let log_heights = [0, 1, 2, 3, 9, 10, 11, 12];
+            for shift in [Base::ONE, Base::GENERATOR, Base::GENERATOR.square()] {
+                let mut coset = Base::two_adic_generator(12)
+                    .shifted_powers(shift)
+                    .take(1 << 12)
+                    .collect_vec();
+                reverse_slice_index_bits(&mut coset);
+                let points = (0..=log_heights.len())
+                    .map(|_| {
+                        loop {
+                            let z: Ext = rng.random();
+                            if coset.iter().all(|&x| z != Ext::from(x)) {
+                                break z;
+                            }
+                        }
+                    })
+                    .collect_vec();
+                let point_lists = log_heights
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| vec![points[i], points[8], points[8]])
+                    .collect_vec();
+                let first_points = point_lists[..4].to_vec();
+                let last_points = point_lists[4..].to_vec();
+                let mats = log_heights
+                    .iter()
+                    .map(|&log_height| RowMajorMatrix::new(vec![Base::ZERO; 1 << log_height], 1))
+                    .collect_vec();
+                let rounds = vec![
+                    (mats[..4].to_vec(), &first_points),
+                    (mats[4..].to_vec(), &last_points),
+                ];
+                let inverses = compute_inverse_denominators(&rounds, &coset);
+                for (i, &z) in points.iter().enumerate() {
+                    let log_height = log_heights[i.min(7)];
+                    let expected = (0..1 << log_height)
+                        .map(|j| {
+                            let x = shift
+                                * Base::two_adic_generator(log_height)
+                                    .exp_u64(reverse_bits_len(j, log_height) as u64);
+                            (z - x).inverse()
+                        })
+                        .collect_vec();
+                    assert_eq!(inverses.get(&z), Some(&expected));
+                }
+                let keys = inverses.into_iter().map(|(z, _)| z).collect_vec();
+                let expected_keys = [points[0], points[8]]
+                    .into_iter()
+                    .chain(points[1..8].iter().copied())
+                    .collect_vec();
+                assert_eq!(keys, expected_keys);
+            }
+        }
+        check::<F, EF>();
+        check::<F, F>();
+        check::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>();
+    }
+
+    #[test]
+    #[should_panic]
+    fn inverse_denominators_reject_zero_in_a_small_domain() {
+        let points = vec![vec![EF::ONE]];
+        let rounds = vec![(vec![RowMajorMatrix::new(vec![F::ZERO], 1)], &points)];
+        compute_inverse_denominators(&rounds, &[F::ONE]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn inverse_denominators_reject_zero_in_a_later_block() {
+        let coset = F::two_adic_generator(11)
+            .shifted_powers(F::GENERATOR)
+            .take(1 << 11)
+            .collect_vec();
+        let points = vec![vec![EF::from(coset[1025])]];
+        let rounds = vec![(
+            vec![RowMajorMatrix::new(vec![F::ZERO; 1 << 11], 1)],
+            &points,
+        )];
+        compute_inverse_denominators(&rounds, &coset);
+    }
 
     /// Grinding difficulty the roundtrip fixture proves at.
     ///
