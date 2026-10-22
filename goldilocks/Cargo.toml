@@ -9,15 +9,15 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# criterion pulls rayon transitively and rayon does not build on wasi.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion.workspace = true
+
 [package.metadata.plonky3.ci]
 test-features = ["constant-time"]
 
 [features]
 constant-time = ["dep:subtle"]
-
-# criterion pulls rayon transitively and rayon does not build on wasi.
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion.workspace = true
 
 [dependencies]
 p3-dft.workspace = true
