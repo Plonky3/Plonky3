@@ -307,8 +307,14 @@ impl PrimeCharacteristicRing for Mersenne31 {
     #[inline]
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
         // Accumulate products as u64 to avoid per-multiply reductions.
-        // For M31: each value < P < 2^31, so product < P^2 < 2^62.
-        // Sum of 4 products < 4 * (P-1)^2 = 2^64 - 2^35 + 16 < 2^64, which fits in u64.
+        // Each stored value is at most P < 2^31, so each product is at most P^2 < 2^62.
+        // A sum of 4 products is at most 4 * P^2 = 2^64 - 2^34 + 4, which fits in u64.
+        //
+        // The general path adds one partial reduction, below 2^34, per 4 terms.
+        // With N <= 2^30 that accumulator stays below 2^64.
+        const {
+            assert!(N <= 1 << 30);
+        }
         match N {
             0 => Self::ZERO,
             1 => lhs[0] * rhs[0],
@@ -779,6 +785,22 @@ mod tests {
         assert!(F::from_canonical_checked(-bound).is_none());
         assert!(F::from_canonical_checked(bound as i128).is_none());
         assert!(F::from_canonical_checked(-(bound as i128)).is_none());
+    }
+
+    #[test]
+    fn dot_product_extreme_values() {
+        // P is a valid stored value, the second representation of zero.
+        //
+        // Each product is then P^2, the largest possible, and the dot product is zero.
+        let p = F::new_reduced((1 << 31) - 1);
+        assert_eq!(F::dot_product(&[p; 4], &[p; 4]), F::ZERO);
+        assert_eq!(F::dot_product(&[p; 9], &[p; 9]), F::ZERO);
+        assert_eq!(F::dot_product(&[p; 64], &[p; 64]), F::ZERO);
+
+        // The largest canonical value, -1, squares to 1, so N terms sum to N.
+        let m = F::NEG_ONE;
+        assert_eq!(F::dot_product(&[m; 9], &[m; 9]), F::from_u8(9));
+        assert_eq!(F::dot_product(&[m; 64], &[m; 64]), F::from_u8(64));
     }
 
     /// Repeated maximal products exercise the accumulator bound, including redundant zero.
