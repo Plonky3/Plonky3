@@ -21,6 +21,7 @@ p3-challenger.workspace = true
 p3-field.workspace = true
 p3-maybe-rayon.workspace = true
 p3-multilinear-util.workspace = true
+p3-security.workspace = true
 p3-sumcheck.workspace = true
 
 serde = { workspace = true, features = ["derive", "alloc"] }

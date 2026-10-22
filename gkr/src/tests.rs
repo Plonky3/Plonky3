@@ -601,3 +601,92 @@ fn large_proofs_are_pinned_byte_for_byte() {
         ]
     );
 }
+
+/// Keccak-256 of batched and separate-tree proofs over tables large enough to pack, chunk and compact.
+fn large_batched_proof_digest() -> [u8; 32] {
+    use p3_binary_field::{Poly64, Poly192};
+    use p3_challenger::CanSample;
+    use p3_symmetric::CryptographicHasher;
+    use serde::Serialize;
+
+    use crate::DenseLeaves;
+
+    fn absorb<EF: Serialize, F: Serialize>(
+        bytes: &mut Vec<u8>,
+        proof: &ProductGkrProof<EF>,
+        output: crate::ProductGkrOutput<EF>,
+        next: F,
+    ) {
+        bytes.extend(postcard::to_allocvec(proof).unwrap());
+        bytes.extend(postcard::to_allocvec(&(output.roots, output.point, output.values)).unwrap());
+        bytes.extend(postcard::to_allocvec(&next).unwrap());
+    }
+
+    let mut bytes = Vec::new();
+    let mut rng = Xoroshiro128Plus::seed_from_u64(0x91AE_0006);
+
+    // Batched tables, full or with an identity suffix, at even and odd heights.
+    for (log_height, batch_variables) in [(7, 6), (8, 7), (9, 5)] {
+        let capacity = 1usize << (log_height + batch_variables);
+        for len in [capacity, capacity - 37, capacity / 2 + 5] {
+            let leaves = (0..len)
+                .map(|_| rng.random::<Poly192>())
+                .collect::<Vec<_>>();
+            let shape = ProductGkrShape::batched(log_height, batch_variables).unwrap();
+            let mut challenger =
+                BinaryChallenger::<Poly64, _>::from_hasher(Vec::new(), Keccak256Hash);
+            let (proof, output) = ProductGkrProof::prove_batched::<Poly64, _, _>(
+                &DenseLeaves(leaves),
+                shape,
+                &mut challenger,
+            );
+            let next: Poly64 = CanSample::sample(&mut challenger);
+            absorb(&mut bytes, &proof, output, next);
+        }
+    }
+
+    // Separate prime-field trees with unequal prefixes.
+    for log_height in [12, 13] {
+        let capacity = 1usize << log_height;
+        let inputs = [capacity, 3 * capacity / 4 + 3, capacity / 2 - 1].map(|len| {
+            (0..len)
+                .map(|_| rng.random::<PrimeChallenge>())
+                .collect::<Vec<_>>()
+        });
+        let borrowed = inputs.each_ref().map(Vec::as_slice);
+        let shape = ProductGkrShape::new(log_height, 3, ProductGkrRootShape::Distinct).unwrap();
+        let mut challenger = prime_challenger();
+        let (proof, output) =
+            ProductGkrProof::prove::<PrimeBase, _>(&borrowed, shape, &mut challenger);
+        let next: PrimeBase = CanSample::sample(&mut challenger);
+        absorb(&mut bytes, &proof, output, next);
+    }
+
+    // Separate binary trees, one with a long identity tail.
+    for log_height in [12, 13] {
+        let capacity = 1usize << log_height;
+        let inputs = [capacity - 1, capacity / 3]
+            .map(|len| (0..len).map(|_| rng.random::<Binary>()).collect::<Vec<_>>());
+        let borrowed = inputs.each_ref().map(Vec::as_slice);
+        let shape = ProductGkrShape::new(log_height, 2, ProductGkrRootShape::Distinct).unwrap();
+        let mut challenger = binary_challenger();
+        let (proof, output) =
+            ProductGkrProof::prove::<Binary, _>(&borrowed, shape, &mut challenger);
+        let next: Binary = CanSample::sample(&mut challenger);
+        absorb(&mut bytes, &proof, output, next);
+    }
+    Keccak256Hash.hash_iter(bytes)
+}
+
+#[test]
+fn large_batched_proofs_are_pinned_byte_for_byte() {
+    // Computed on the scalar prover before packing; any transcript change moves it.
+    assert_eq!(
+        large_batched_proof_digest(),
+        [
+            0x73, 0x43, 0x7f, 0x7d, 0x27, 0x43, 0x44, 0x32, 0x31, 0x3a, 0x51, 0x0a, 0x4b, 0x8f,
+            0x95, 0x90, 0x08, 0x8f, 0x5a, 0x2a, 0x20, 0x57, 0x54, 0x6c, 0x81, 0x31, 0x1f, 0x74,
+            0x21, 0x91, 0x70, 0x88,
+        ]
+    );
+}
