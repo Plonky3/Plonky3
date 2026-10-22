@@ -21,7 +21,7 @@ pub(crate) enum Kind {
 
 /// One circuit operation, naming the wires it reads and writes.
 #[derive(Clone, Debug)]
-pub(crate) enum Op {
+pub(crate) enum Op<F> {
     /// Writes a constant.
     Const { out: Wire },
     /// Writes the public input at `index`.
@@ -54,6 +54,15 @@ pub(crate) enum Op {
         inputs: Vec<Wire>,
         outputs: Vec<Option<Wire>>,
     },
+    /// One Merkle compression of `digest` with a sibling only this row holds.
+    ///
+    /// `digest` is the right child when `bit` is one, and the left child otherwise.
+    MerkleStep {
+        digest: Vec<Wire>,
+        sibling: Vec<F>,
+        bit: Wire,
+        outputs: Vec<Wire>,
+    },
 }
 
 /// A circuit under construction, with the value of every wire.
@@ -68,7 +77,7 @@ pub struct CircuitBuilder<F, EF, P> {
     /// The value of every wire.
     pub(crate) values: Vec<EF>,
     /// Operations in creation order.
-    pub(crate) ops: Vec<Op>,
+    pub(crate) ops: Vec<Op<F>>,
     /// Public inputs, in index order.
     pub(crate) publics: Vec<F>,
     /// Constant wires, one per distinct value.
@@ -81,6 +90,150 @@ pub struct CircuitBuilder<F, EF, P> {
 
 /// Lowered nodes with their wires, keyed by address and kept alive so addresses stay unique.
 type Lowered<V> = HashMap<usize, (Arc<Node<V>>, Wire)>;
+
+/// The address that identifies a node while it is alive.
+fn key<V>(node: &Arc<Node<V>>) -> usize {
+    Arc::as_ptr(node) as usize
+}
+
+/// A value kind the builder lowers into rows of its ALU table.
+pub(crate) trait Lowerable<F, EF, P>: Sized {
+    /// Whether the rows belong to the challenge-field table.
+    const EXT: bool;
+
+    /// The graph node behind the value, unless it is a constant or a lifted base value.
+    fn node(&self) -> Option<&Arc<Node<Self>>>;
+
+    /// The wire of the value.
+    fn wire(&self, builder: &mut CircuitBuilder<F, EF, P>) -> Wire;
+
+    /// The value, in the challenge field.
+    fn value(&self, builder: &CircuitBuilder<F, EF, P>) -> EF;
+
+    /// The nodes of this kind that have a wire.
+    fn lowered(builder: &CircuitBuilder<F, EF, P>) -> &Lowered<Self>;
+
+    /// The nodes of this kind that have a wire, for insertion.
+    fn lowered_mut(builder: &mut CircuitBuilder<F, EF, P>) -> &mut Lowered<Self>;
+}
+
+impl<F: PrimeField64, EF: ExtensionField<F>, P: PermutationChip<F>> Lowerable<F, EF, P>
+    for Base<F>
+{
+    const EXT: bool = false;
+
+    fn node(&self) -> Option<&Arc<Node<Self>>> {
+        match &self.0 {
+            BaseRepr::Node(node) => Some(node),
+            BaseRepr::Const(_) => None,
+        }
+    }
+
+    fn wire(&self, builder: &mut CircuitBuilder<F, EF, P>) -> Wire {
+        builder.base_wire(self)
+    }
+
+    fn value(&self, builder: &CircuitBuilder<F, EF, P>) -> EF {
+        EF::from(builder.value(self))
+    }
+
+    fn lowered(builder: &CircuitBuilder<F, EF, P>) -> &Lowered<Self> {
+        &builder.lowered_base
+    }
+
+    fn lowered_mut(builder: &mut CircuitBuilder<F, EF, P>) -> &mut Lowered<Self> {
+        &mut builder.lowered_base
+    }
+}
+
+impl<F: PrimeField64, EF: ExtensionField<F>, P: PermutationChip<F>> Lowerable<F, EF, P>
+    for Ext<F, EF>
+{
+    const EXT: bool = true;
+
+    fn node(&self) -> Option<&Arc<Node<Self>>> {
+        match &self.0 {
+            ExtRepr::Node(node) => Some(node),
+            ExtRepr::Const(_) | ExtRepr::Base(_) => None,
+        }
+    }
+
+    fn wire(&self, builder: &mut CircuitBuilder<F, EF, P>) -> Wire {
+        builder.ext_wire(self)
+    }
+
+    fn value(&self, builder: &CircuitBuilder<F, EF, P>) -> EF {
+        builder.value_ext(self)
+    }
+
+    fn lowered(builder: &CircuitBuilder<F, EF, P>) -> &Lowered<Self> {
+        &builder.lowered_ext
+    }
+
+    fn lowered_mut(builder: &mut CircuitBuilder<F, EF, P>) -> &mut Lowered<Self> {
+        &mut builder.lowered_ext
+    }
+}
+
+/// The ALU rows that lower one node.
+enum Row<'a, V> {
+    /// The node is a wire already.
+    Wire(Wire),
+    /// `a * b`.
+    Mul(&'a V, &'a V),
+    /// `a - b`.
+    Sub(&'a V, &'a V),
+    /// A sum, flattened through every inner sum and product that nothing else holds.
+    ///
+    /// Each product costs one row, and each plain term after the first costs one row.
+    Sum {
+        /// The plain terms.
+        plain: Vec<&'a V>,
+        /// The products, as their two factors.
+        products: Vec<(&'a V, &'a V)>,
+    },
+}
+
+impl<'a, V> Row<'a, V> {
+    /// The rows of a node.
+    fn of<F, EF, P>(node: &'a Node<V>) -> Self
+    where
+        V: Lowerable<F, EF, P>,
+    {
+        // A node held by nothing but its parent has no other reader, so it needs no wire.
+        let sole = |v: &'a V| v.node().filter(|n| Arc::strong_count(n) == 1).map(|n| &**n);
+        match node {
+            Node::Wire(wire) => Self::Wire(*wire),
+            Node::Mul(a, b) => Self::Mul(a, b),
+            Node::Sub(a, b) => Self::Sub(a, b),
+            Node::Add(x, y) => {
+                let (mut plain, mut products) = (Vec::new(), Vec::new());
+                let mut terms = vec![y, x];
+                while let Some(term) = terms.pop() {
+                    match sole(term) {
+                        Some(Node::Add(a, b)) => terms.extend([b, a]),
+                        Some(Node::Mul(a, b)) => products.push((a, b)),
+                        _ => plain.push(term),
+                    }
+                }
+                Self::Sum { plain, products }
+            }
+        }
+    }
+
+    /// The values the rows read.
+    fn operands(&self) -> Vec<&'a V> {
+        match self {
+            Self::Wire(_) => Vec::new(),
+            Self::Mul(a, b) | Self::Sub(a, b) => vec![a, b],
+            Self::Sum { plain, products } => plain
+                .iter()
+                .copied()
+                .chain(products.iter().flat_map(|&(a, b)| [a, b]))
+                .collect(),
+        }
+    }
+}
 
 /// A failed circuit check, found while the witness was being computed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,7 +329,7 @@ where
     pub fn base_wire(&mut self, value: &Base<F>) -> Wire {
         match &value.0 {
             BaseRepr::Const(c) => self.constant_wire(EF::from(*c), Kind::Base),
-            BaseRepr::Node(node) => self.lower_base_node(node, None),
+            BaseRepr::Node(node) => self.lower(node, None),
         }
     }
 
@@ -185,120 +338,72 @@ where
         match &value.0 {
             ExtRepr::Const(c) => self.constant_wire(*c, Kind::Ext),
             ExtRepr::Base(base) => self.base_wire(base),
-            ExtRepr::Node(node) => self.lower_ext_node(node, None),
+            ExtRepr::Node(node) => self.lower(node, None),
         }
     }
 
     // A graph can be deep, so lowering keeps its own stack instead of recursing.
-    fn lower_base_node(&mut self, root: &Arc<Node<Base<F>>>, out: Option<Wire>) -> Wire {
-        let key = |node: &Arc<Node<Base<F>>>| Arc::as_ptr(node) as usize;
+    fn lower<V: Lowerable<F, EF, P>>(&mut self, root: &Arc<Node<V>>, out: Option<Wire>) -> Wire {
         let mut stack = vec![(Arc::clone(root), false)];
         while let Some((node, ready)) = stack.pop() {
-            if self.lowered_base.contains_key(&key(&node)) {
+            if V::lowered(self).contains_key(&key(&node)) {
                 continue;
             }
-            let children: Vec<&Base<F>> = match &*node {
-                Node::Wire(_) => Vec::new(),
-                Node::Add(a, b) | Node::Sub(a, b) | Node::Mul(a, b) => vec![a, b],
-            };
-            let pending: Vec<_> = children
-                .iter()
-                .filter_map(|child| match &child.0 {
-                    BaseRepr::Node(n) if !self.lowered_base.contains_key(&key(n)) => {
-                        Some(Arc::clone(n))
-                    }
-                    _ => None,
-                })
-                .collect();
-            if !ready && !pending.is_empty() {
-                stack.push((node, true));
-                stack.extend(pending.into_iter().map(|n| (n, false)));
-                continue;
+            if !ready {
+                let pending: Vec<_> = Row::of(&node)
+                    .operands()
+                    .into_iter()
+                    .filter_map(V::node)
+                    .filter(|n| !V::lowered(self).contains_key(&key(n)))
+                    .cloned()
+                    .collect();
+                if !pending.is_empty() {
+                    stack.push((node, true));
+                    stack.extend(pending.into_iter().map(|n| (n, false)));
+                    continue;
+                }
             }
+            let op = Row::of(&node);
             // Only the root may write into a wire the caller names.
             let target = if Arc::ptr_eq(&node, root) { out } else { None };
-            let wire = match &*node {
-                Node::Wire(wire) => {
+            let wire = match op {
+                Row::Wire(wire) => {
                     if let Some(target) = target {
                         let (zero, one) = (self.zero(), self.one());
-                        self.alu(false, *wire, one, zero, Some(target));
+                        self.alu(V::EXT, wire, one, zero, Some(target));
                     }
-                    *wire
+                    wire
                 }
-                Node::Add(a, b) => {
-                    let (a, b) = (self.base_wire(a), self.base_wire(b));
+                Row::Mul(a, b) => {
+                    let (a, b, zero) = (a.wire(self), b.wire(self), self.zero());
+                    self.alu(V::EXT, a, b, zero, target)
+                }
+                Row::Sum { plain, products } => {
+                    // The first plain term seeds the sum, and every other term adds one row.
                     let one = self.one();
-                    self.alu(false, a, one, b, target)
-                }
-                Node::Sub(a, b) => {
-                    let (a, b) = (self.base_wire(a), self.base_wire(b));
-                    let neg_one = self.constant_wire(EF::NEG_ONE, Kind::Base);
-                    self.alu(false, b, neg_one, a, target)
-                }
-                Node::Mul(a, b) => {
-                    let (a, b) = (self.base_wire(a), self.base_wire(b));
-                    let zero = self.zero();
-                    self.alu(false, a, b, zero, target)
-                }
-            };
-            self.lowered_base.insert(key(&node), (node, wire));
-        }
-        self.lowered_base[&key(root)].1
-    }
-
-    fn lower_ext_node(&mut self, root: &Arc<Node<Ext<F, EF>>>, out: Option<Wire>) -> Wire {
-        let key = |node: &Arc<Node<Ext<F, EF>>>| Arc::as_ptr(node) as usize;
-        let mut stack = vec![(Arc::clone(root), false)];
-        while let Some((node, ready)) = stack.pop() {
-            if self.lowered_ext.contains_key(&key(&node)) {
-                continue;
-            }
-            let children: Vec<&Ext<F, EF>> = match &*node {
-                Node::Wire(_) => Vec::new(),
-                Node::Add(a, b) | Node::Sub(a, b) | Node::Mul(a, b) => vec![a, b],
-            };
-            let pending: Vec<_> = children
-                .iter()
-                .filter_map(|child| match &child.0 {
-                    ExtRepr::Node(n) if !self.lowered_ext.contains_key(&key(n)) => {
-                        Some(Arc::clone(n))
+                    let mut plain = plain.into_iter().map(|term| term.wire(self));
+                    let mut sum = plain.next();
+                    let mut steps: Vec<(Wire, Wire)> = plain.map(|term| (term, one)).collect();
+                    for (a, b) in products {
+                        steps.push((a.wire(self), b.wire(self)));
                     }
-                    _ => None,
-                })
-                .collect();
-            if !ready && !pending.is_empty() {
-                stack.push((node, true));
-                stack.extend(pending.into_iter().map(|n| (n, false)));
-                continue;
-            }
-            let target = if Arc::ptr_eq(&node, root) { out } else { None };
-            let wire = match &*node {
-                Node::Wire(wire) => {
-                    if let Some(target) = target {
-                        let (zero, one) = (self.zero(), self.one());
-                        self.alu(true, *wire, one, zero, Some(target));
+                    let last = steps.len().checked_sub(1);
+                    for (i, (a, b)) in steps.into_iter().enumerate() {
+                        let c = sum.unwrap_or_else(|| self.zero());
+                        let out = if Some(i) == last { target } else { None };
+                        sum = Some(self.alu(V::EXT, a, b, c, out));
                     }
-                    *wire
+                    sum.expect("a sum has two terms")
                 }
-                Node::Add(a, b) => {
-                    let (a, b) = (self.ext_wire(a), self.ext_wire(b));
-                    let one = self.one();
-                    self.alu(true, a, one, b, target)
-                }
-                Node::Sub(a, b) => {
-                    let (a, b) = (self.ext_wire(a), self.ext_wire(b));
+                Row::Sub(a, b) => {
+                    let (a, b) = (a.wire(self), b.wire(self));
                     let neg_one = self.constant_wire(EF::NEG_ONE, Kind::Base);
-                    self.alu(true, b, neg_one, a, target)
-                }
-                Node::Mul(a, b) => {
-                    let (a, b) = (self.ext_wire(a), self.ext_wire(b));
-                    let zero = self.zero();
-                    self.alu(true, a, b, zero, target)
+                    self.alu(V::EXT, b, neg_one, a, target)
                 }
             };
-            self.lowered_ext.insert(key(&node), (node, wire));
+            V::lowered_mut(self).insert(key(&node), (node, wire));
         }
-        self.lowered_ext[&key(root)].1
+        V::lowered(self)[&key(root)].1
     }
 
     fn zero(&mut self) -> Wire {
@@ -313,7 +418,7 @@ where
     pub fn value(&self, value: &Base<F>) -> F {
         match &value.0 {
             BaseRepr::Const(c) => *c,
-            BaseRepr::Node(node) => self.eval_base(node),
+            BaseRepr::Node(node) => self.eval(node).as_basis_coefficients_slice()[0],
         }
     }
 
@@ -322,73 +427,25 @@ where
         match &value.0 {
             ExtRepr::Const(c) => *c,
             ExtRepr::Base(base) => EF::from(self.value(base)),
-            ExtRepr::Node(node) => self.eval_ext(node),
+            ExtRepr::Node(node) => self.eval(node),
         }
     }
 
     // A lowered node already carries its value on its wire.
-    fn eval_base(&self, root: &Arc<Node<Base<F>>>) -> F {
-        let mut memo: HashMap<usize, F> = HashMap::new();
-        let mut stack = vec![(Arc::clone(root), false)];
-        let key = |node: &Arc<Node<Base<F>>>| Arc::as_ptr(node) as usize;
-        while let Some((node, ready)) = stack.pop() {
-            if memo.contains_key(&key(&node)) {
-                continue;
-            }
-            if let Some((_, wire)) = self.lowered_base.get(&key(&node)) {
-                memo.insert(key(&node), self.base_value_of(*wire));
-                continue;
-            }
-            let operand = |memo: &HashMap<usize, F>, v: &Base<F>| match &v.0 {
-                BaseRepr::Const(c) => Some(*c),
-                BaseRepr::Node(n) => memo.get(&key(n)).copied(),
-            };
-            let value = match &*node {
-                Node::Wire(wire) => Some(self.base_value_of(*wire)),
-                Node::Add(a, b) | Node::Sub(a, b) | Node::Mul(a, b) => {
-                    match (operand(&memo, a), operand(&memo, b)) {
-                        (Some(x), Some(y)) => Some(match &*node {
-                            Node::Add(..) => x + y,
-                            Node::Sub(..) => x - y,
-                            _ => x * y,
-                        }),
-                        _ => None,
-                    }
-                }
-            };
-            if let Some(value) = value {
-                memo.insert(key(&node), value);
-            } else {
-                assert!(!ready, "children are evaluated before their parent");
-                stack.push((Arc::clone(&node), true));
-                if let Node::Add(a, b) | Node::Sub(a, b) | Node::Mul(a, b) = &*node {
-                    for child in [a, b] {
-                        if let BaseRepr::Node(n) = &child.0 {
-                            stack.push((Arc::clone(n), false));
-                        }
-                    }
-                }
-            }
-        }
-        memo[&key(root)]
-    }
-
-    fn eval_ext(&self, root: &Arc<Node<Ext<F, EF>>>) -> EF {
+    fn eval<V: Lowerable<F, EF, P>>(&self, root: &Arc<Node<V>>) -> EF {
         let mut memo: HashMap<usize, EF> = HashMap::new();
         let mut stack = vec![(Arc::clone(root), false)];
-        let key = |node: &Arc<Node<Ext<F, EF>>>| Arc::as_ptr(node) as usize;
         while let Some((node, ready)) = stack.pop() {
             if memo.contains_key(&key(&node)) {
                 continue;
             }
-            if let Some((_, wire)) = self.lowered_ext.get(&key(&node)) {
+            if let Some((_, wire)) = V::lowered(self).get(&key(&node)) {
                 memo.insert(key(&node), self.values[wire.index()]);
                 continue;
             }
-            let operand = |memo: &HashMap<usize, EF>, v: &Ext<F, EF>| match &v.0 {
-                ExtRepr::Const(c) => Some(*c),
-                ExtRepr::Base(base) => Some(EF::from(self.value(base))),
-                ExtRepr::Node(n) => memo.get(&key(n)).copied(),
+            let operand = |memo: &HashMap<usize, EF>, v: &V| {
+                v.node()
+                    .map_or_else(|| Some(v.value(self)), |n| memo.get(&key(n)).copied())
             };
             let value = match &*node {
                 Node::Wire(wire) => Some(self.values[wire.index()]),
@@ -409,19 +466,17 @@ where
                 assert!(!ready, "children are evaluated before their parent");
                 stack.push((Arc::clone(&node), true));
                 if let Node::Add(a, b) | Node::Sub(a, b) | Node::Mul(a, b) = &*node {
-                    for child in [a, b] {
-                        if let ExtRepr::Node(n) = &child.0 {
-                            stack.push((Arc::clone(n), false));
-                        }
-                    }
+                    stack.extend(
+                        [a, b]
+                            .into_iter()
+                            .filter_map(V::node)
+                            .cloned()
+                            .map(|n| (n, false)),
+                    );
                 }
             }
         }
         memo[&key(root)]
-    }
-
-    fn base_value_of(&self, wire: Wire) -> F {
-        self.values[wire.index()].as_basis_coefficients_slice()[0]
     }
 
     /// Require a base-field value to be zero.
@@ -444,7 +499,7 @@ where
                     let (wire, one) = (self.base_wire(value), self.one());
                     self.alu(false, wire, one, zero, Some(zero));
                 } else {
-                    self.lower_base_node(node, Some(zero));
+                    self.lower(node, Some(zero));
                 }
             }
         }
@@ -467,7 +522,7 @@ where
                     let (wire, one) = (self.ext_wire(value), self.one());
                     self.alu(true, wire, one, zero, Some(zero));
                 } else {
-                    self.lower_ext_node(node, Some(zero));
+                    self.lower(node, Some(zero));
                 }
             }
         }
@@ -607,8 +662,133 @@ where
         outputs.into_iter().map(Base::wire).collect()
     }
 
+    /// The parent digest of `digest` and `sibling`, compressed by the permutation.
+    ///
+    /// `digest` is the right child when `bit` is one, and the left child otherwise.
+    ///
+    /// The sibling is a prover-chosen value that only this row reads, so it costs no other row.
+    ///
+    /// # Panics
+    ///
+    /// When `bit` is not boolean, or the children do not fit in the state.
+    pub fn merkle_step(
+        &mut self,
+        digest: &[Base<F>],
+        sibling: &[F],
+        bit: &Base<F>,
+    ) -> Vec<Base<F>> {
+        let size = digest.len();
+        assert_eq!(sibling.len(), size, "both children have the digest size");
+        assert!(2 * size <= P::WIDTH, "both children fit in the state");
+        let digest_values: Vec<F> = digest.iter().map(|x| self.value(x)).collect();
+        let right = match self.value(bit) {
+            b if b == F::ZERO => false,
+            b if b == F::ONE => true,
+            _ => panic!("a direction bit is boolean"),
+        };
+
+        // The state is `left || right`, padded with zeros, as a truncated permutation lays it out.
+        let (left, right) = if right {
+            (sibling, &digest_values[..])
+        } else {
+            (&digest_values[..], sibling)
+        };
+        let mut state = vec![F::ZERO; P::WIDTH];
+        state[..size].copy_from_slice(left);
+        state[size..2 * size].copy_from_slice(right);
+
+        let digest: Vec<Wire> = digest.iter().map(|x| self.base_wire(x)).collect();
+        let bit = self.base_wire(bit);
+        let outputs: Vec<Wire> = self.chip.permute(&state)[..size]
+            .iter()
+            .map(|&value| self.new_wire(Kind::Base, EF::from(value)))
+            .collect();
+        self.ops.push(Op::MerkleStep {
+            digest,
+            sibling: sibling.to_vec(),
+            bit,
+            outputs: outputs.clone(),
+        });
+        outputs.into_iter().map(Base::wire).collect()
+    }
+
     /// The finished circuit, together with the witness of this run.
     pub fn build(self) -> Circuit<F, EF, P> {
         Circuit::new(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_field::extension::BinomialExtensionField;
+    use p3_koala_bear::{
+        GenericPoseidon2LinearLayersKoalaBear, KOALABEAR_POSEIDON2_RC_16_EXTERNAL_FINAL,
+        KOALABEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL, KOALABEAR_POSEIDON2_RC_16_INTERNAL, KoalaBear,
+        Poseidon2KoalaBear, default_koalabear_poseidon2_16,
+    };
+    use p3_poseidon2_air::RoundConstants;
+
+    use super::*;
+    use crate::Poseidon2Chip;
+
+    type F = KoalaBear;
+    type Chip = Poseidon2Chip<
+        F,
+        GenericPoseidon2LinearLayersKoalaBear,
+        Poseidon2KoalaBear<16>,
+        16,
+        3,
+        0,
+        4,
+        20,
+    >;
+
+    fn builder() -> CircuitBuilder<F, BinomialExtensionField<F, 4>, Chip> {
+        let constants = RoundConstants::new(
+            KOALABEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL,
+            KOALABEAR_POSEIDON2_RC_16_INTERNAL,
+            KOALABEAR_POSEIDON2_RC_16_EXTERNAL_FINAL,
+        );
+        CircuitBuilder::new(Chip::new(default_koalabear_poseidon2_16(), constants))
+    }
+
+    fn alu_rows<P>(builder: &CircuitBuilder<F, BinomialExtensionField<F, 4>, P>) -> usize {
+        builder
+            .ops
+            .iter()
+            .filter(|op| matches!(op, Op::Alu { .. }))
+            .count()
+    }
+
+    #[test]
+    fn a_sum_of_products_takes_one_row_per_product() {
+        let mut builder = builder();
+        let values: Vec<Base<F>> = (1..=17).map(|i| builder.witness(F::new(i))).collect();
+
+        // 1 + sum_i a_i * b_i over eight pairs, then one row asserting the known total.
+        let sum = values[1..].chunks(2).fold(values[0].clone(), |acc, pair| {
+            acc + pair[0].clone() * pair[1].clone()
+        });
+        let total = 1 + (0..8).map(|i| (2 * i + 2) * (2 * i + 3)).sum::<u32>();
+        builder.assert_zero(&(sum - F::new(total))).unwrap();
+        assert_eq!(alu_rows(&builder), 8 + 1);
+    }
+
+    #[test]
+    fn a_shared_product_keeps_its_own_row() {
+        let mut builder = builder();
+        let (a, b, c) = (
+            builder.witness(F::new(2)),
+            builder.witness(F::new(3)),
+            builder.witness(F::new(4)),
+        );
+
+        // The product is read twice, so it gets a wire, and each sum adds one row.
+        let product = a * b;
+        builder
+            .assert_zero(&(product.clone() + c.clone() - F::new(10)))
+            .unwrap();
+        builder.assert_zero(&(product + c - F::new(10))).unwrap();
+        assert_eq!(alu_rows(&builder), 1 + 2 * 2);
     }
 }

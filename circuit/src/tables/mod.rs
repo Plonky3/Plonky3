@@ -19,6 +19,7 @@ use p3_field::extension::{BinomialExtensionField, BinomiallyExtendable, binomial
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_lookup::{Count, InteractionBuilder};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_uni_stark::SubAirBuilder;
 
 pub use self::alu::AluAir;
 pub use self::permute::PermuteAir;
@@ -58,11 +59,20 @@ pub(crate) fn send<AB: InteractionBuilder>(
     dimension: usize,
     count: Count<AB::Expr>,
 ) {
-    let mut fields: Vec<AB::Expr> = Vec::with_capacity(dimension + 1);
+    builder.push_interaction(WIRE_BUS, message(id, limbs, dimension), count);
+}
+
+/// The fields of one wire message: the wire id, then its limbs padded with zeros.
+pub(crate) fn message<E: PrimeCharacteristicRing>(
+    id: E,
+    limbs: impl IntoIterator<Item = E>,
+    dimension: usize,
+) -> Vec<E> {
+    let mut fields: Vec<E> = Vec::with_capacity(dimension + 1);
     fields.push(id);
     fields.extend(limbs);
-    fields.resize(dimension + 1, AB::Expr::ZERO);
-    builder.push_interaction(WIRE_BUS, fields, count);
+    fields.resize(dimension + 1, E::ZERO);
+    fields
 }
 
 /// A row reading a wire, when its flag is set.
@@ -145,7 +155,7 @@ where
     AB::F: Field,
     EF: CircuitExtension<AB::F>,
     P: PermutationChip<AB::F>,
-    P::Air: Air<AB>,
+    P::Air: for<'b> Air<SubAirBuilder<'b, AB, P::Air, AB::Var>>,
 {
     fn eval(&self, builder: &mut AB) {
         match self {

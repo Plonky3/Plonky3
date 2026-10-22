@@ -172,18 +172,10 @@ where
                 builder.permute(state)
             });
             for ((depth, level), sibling) in plan.levels.iter().enumerate().zip(&path.siblings) {
-                // In a binary level, the index bit says whether the digest is the right child.
+                // A binary level: the index bit says whether the running digest is the right child.
                 debug_assert_eq!(level.arity, 2, "a binary tree compresses pairs");
-                let sibling: Vec<Base<F>> = sibling.iter().map(|&v| builder.witness(v)).collect();
                 let bit = bits.get(depth).cloned().unwrap_or(Base::ZERO);
-                let left = select_all(&bit, &sibling, &digest);
-                let right: Vec<Base<F>> = digest
-                    .iter()
-                    .zip(&sibling)
-                    .zip(&left)
-                    .map(|((d, s), l)| d.clone() + s.clone() - l.clone())
-                    .collect();
-                digest = compress(builder, &left, &right);
+                digest = builder.merkle_step(&digest, sibling, &bit);
 
                 // Hash in the rows the plan injects at the next height.
                 if !level.inject.is_empty() {
