@@ -3,7 +3,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use p3_field::{Field, PackedValue};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -49,7 +49,7 @@ impl Selector {
 
     /// Returns the hypercube point that addresses this slot.
     #[inline(always)]
-    pub fn point<F: Field>(&self) -> Point<F> {
+    pub fn point<F: PrimeCharacteristicRing>(&self) -> Point<F> {
         Point::hypercube(self.index, self.num_variables)
     }
 
@@ -73,7 +73,7 @@ impl Selector {
 
     /// Prefixes `other` with the selector bits.
     #[inline(always)]
-    pub fn lift_prefix<Ext: Field>(&self, other: &Point<Ext>) -> Point<Ext> {
+    pub fn lift_prefix<Ext: PrimeCharacteristicRing>(&self, other: &Point<Ext>) -> Point<Ext> {
         // Expand the slot index as selector bits; single allocation.
         let mut out: Point<Ext> = self.point();
         // Append the local coordinates to finish the stacked-space point.
@@ -83,7 +83,7 @@ impl Selector {
 
     /// Appends the selector bits after the local coordinates.
     #[inline(always)]
-    pub fn lift_suffix<Ext: Field>(&self, other: &Point<Ext>) -> Point<Ext> {
+    pub fn lift_suffix<Ext: PrimeCharacteristicRing>(&self, other: &Point<Ext>) -> Point<Ext> {
         let mut out = other.clone();
         out.extend(&self.point());
         out

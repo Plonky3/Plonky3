@@ -1,9 +1,11 @@
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger, GrindingChallenger};
-use p3_field::ExtensionField;
+use p3_field::{Dup, ExtensionField};
 use p3_multilinear_util::point::Point;
+use p3_verifier_arith::{Lift, Native};
 use serde::{Deserialize, Serialize};
 
 use crate::SumcheckError;
@@ -135,6 +137,36 @@ impl<F, EF> SumcheckData<F, EF> {
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        self.verify_rounds_in(
+            &mut Native::new(),
+            challenger,
+            claimed_sum,
+            expected_rounds,
+            pow_bits,
+            basis,
+        )
+    }
+
+    /// As [`Self::verify_rounds`], within an arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify_rounds`].
+    pub fn verify_rounds_in<A, Challenger>(
+        &self,
+        arith: &mut A,
+        challenger: &mut Challenger,
+        claimed_sum: &mut A::EF,
+        expected_rounds: usize,
+        pow_bits: usize,
+        basis: Basis,
+    ) -> Result<Point<A::EF>, SumcheckError>
+    where
+        A: Lift<Val = F, Challenge = EF>,
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
         // Bind the round count to the protocol-fixed value before folding anything.
         //
         // Centralizing the check here makes the safe path the only path:
@@ -161,7 +193,8 @@ impl<F, EF> SumcheckData<F, EF> {
 
         // Seeded from the same numbers the prover seeded with.
         let shape = SumcheckShape::new(expected_rounds, pow_bits, basis);
-        let mut transcript = VerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
+        let mut transcript =
+            arith.seeding(|| VerifierTranscript::<Challenger, F, EF>::new(challenger, shape));
 
         let mut randomness = Vec::with_capacity(expected_rounds);
 
@@ -176,16 +209,25 @@ impl<F, EF> SumcheckData<F, EF> {
         // Both indices below are in bounds by the two checks above.
         for round in 0..expected_rounds {
             let [c_a, c_inf] = self.polynomial_evaluations[round];
+            let witness = (pow_bits > 0).then(|| self.pow_witnesses[round]);
+
+            // Announce what the round absorbs, in absorb order.
+            let (lifted_a, lifted_inf) = (arith.load_ext(c_a), arith.load_ext(c_inf));
+            arith.will_observe_ext(&lifted_a);
+            arith.will_observe_ext(&lifted_inf);
+            if let Some(witness) = witness {
+                let witness = arith.load(witness);
+                arith.will_observe(vec![witness]);
+            }
 
             // One call binds both values, re-checks the grind, and draws the challenge.
             //
             // A rejection here releases the driver's completeness check on its way out.
-            let witness = (pow_bits > 0).then(|| self.pow_witnesses[round]);
-            let r = transcript.round(c_a, c_inf, witness)?;
+            let r = arith.sampled_ext(transcript.round(c_a, c_inf, witness)?);
 
             // Reconstruct h(r); the basis-dependent round identity supplies the
             // third quadratic value (shared with the prover via `Basis::reduce_claim`).
-            *claimed_sum = basis.reduce_claim(c_a, c_inf, r, *claimed_sum);
+            *claimed_sum = basis.reduce_claim(lifted_a, lifted_inf, r.dup(), claimed_sum.dup());
             randomness.push(r);
         }
 
@@ -221,6 +263,35 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
+    verify_final_sumcheck_rounds_in(
+        &mut Native::new(),
+        final_sumcheck,
+        challenger,
+        claimed_sum,
+        rounds,
+        pow_bits,
+        basis,
+    )
+}
+
+/// As [`verify_final_sumcheck_rounds`], within an arithmetic.
+///
+/// # Errors
+///
+/// As [`verify_final_sumcheck_rounds`].
+pub fn verify_final_sumcheck_rounds_in<A, Challenger>(
+    arith: &mut A,
+    final_sumcheck: Option<&SumcheckData<A::Val, A::Challenge>>,
+    challenger: &mut Challenger,
+    claimed_sum: &mut A::EF,
+    rounds: usize,
+    pow_bits: usize,
+    basis: Basis,
+) -> Result<Point<A::EF>, SumcheckError>
+where
+    A: Lift<Val: TranscriptField>,
+    Challenger: FieldChallenger<A::Val> + GrindingChallenger<Witness = A::Val>,
+{
     if rounds == 0 {
         return Ok(Point::new(Vec::new()));
     }
@@ -229,6 +300,6 @@ where
         expected_rounds: rounds,
     })?;
 
-    // `verify_rounds` binds the round count to `rounds`.
-    sumcheck.verify_rounds(challenger, claimed_sum, rounds, pow_bits, basis)
+    // `verify_rounds_in` binds the round count to `rounds`.
+    sumcheck.verify_rounds_in(arith, challenger, claimed_sum, rounds, pow_bits, basis)
 }

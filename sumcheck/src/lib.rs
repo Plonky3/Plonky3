@@ -48,7 +48,7 @@ pub mod transcript;
 pub mod univariate_skip;
 pub mod zk;
 
-pub use data::{SumcheckData, verify_final_sumcheck_rounds};
+pub use data::{SumcheckData, verify_final_sumcheck_rounds, verify_final_sumcheck_rounds_in};
 pub use error::SumcheckError;
 pub(crate) use lagrange::extrapolate_01inf;
 use p3_field::Field;

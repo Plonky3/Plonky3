@@ -309,8 +309,10 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
                 let (selector_part, local_part) = point.split_at(selector.num_variables());
 
                 // Scalar weight: eq(selector, selector_part) for this column.
-                let weight =
-                    Point::eval_eq::<EF>(selector.point().as_slice(), selector_part.as_slice());
+                let weight = Point::eval_eq::<EF>(
+                    selector.point::<F>().as_slice(),
+                    selector_part.as_slice(),
+                );
 
                 // Factorise the local part with the suffix split, then evaluate.
                 let local_svo =

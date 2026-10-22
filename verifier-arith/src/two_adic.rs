@@ -109,6 +109,28 @@ pub fn reversed_index_power_by_bits<A: Arith + ?Sized>(
     result
 }
 
+/// `generator^index`, built from the low `bits` index bits and selections alone.
+///
+/// This is how [`Arith::index_power`] computes it by default.
+pub fn index_power_by_bits<A: Arith + ?Sized>(
+    arith: &mut A,
+    generator: A::Val,
+    index: &A::Index,
+    bits: usize,
+) -> A::F {
+    let index_bits = arith.index_bits(index, bits);
+
+    //     generator^index = prod_i (bit_i ? generator^(2^i) : 1)
+    let mut power = generator;
+    let mut result = A::F::ONE;
+    for bit in &index_bits {
+        let factor = arith.select_base(bit, A::F::from(power), A::F::ONE);
+        result *= factor;
+        power = power.square();
+    }
+    result
+}
+
 /// The vanishing polynomial `(x / shift)^|H| - 1` of a coset `shift * H`, at `point`.
 pub fn vanishing_at<A>(coset: &TwoAdicMultiplicativeCoset<A::Val>, point: &A::EF) -> A::EF
 where
@@ -263,6 +285,16 @@ mod tests {
                 reversed_index_power_by_bits(&mut N::new(), generator, &index, log_size),
                 expected
             );
+        }
+
+        #[test]
+        fn index_power_matches_exponentiation(log_size in 0usize..=20, index: u32) {
+            let index = index as usize & ((1 << log_size) - 1);
+            let generator = F::two_adic_generator(log_size);
+            let expected = generator.exp_u64(index as u64);
+
+            prop_assert_eq!(N::new().index_power(generator, &index, log_size), expected);
+            prop_assert_eq!(index_power_by_bits(&mut N::new(), generator, &index, log_size), expected);
         }
 
         #[test]

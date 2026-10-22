@@ -6,12 +6,13 @@ use core::marker::PhantomData;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, MultilinearPcs};
+use p3_commit::{ExtensionMmcs, Mmcs, MmcsArith, MultilinearPcs};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::{Layout, Table, Verifier, Witness, observe_commitment};
 use p3_sumcheck::{OpeningEvals, OpeningProtocol, PrescribedPointPcs};
+use p3_verifier_arith::{Lift, Native};
 
 use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
@@ -316,10 +317,69 @@ where
         points: &[Point<EF>],
         challenger: &mut Challenger,
     ) -> Result<Vec<OpeningEvals<EF>>, Self::Error> {
+        self.verify_at_in(
+            &mut Native::new(),
+            commitment,
+            proof,
+            protocol,
+            points,
+            challenger,
+        )
+    }
+}
+
+impl<EF, F, Dft, MT, Challenger, L> WhirProver<EF, F, Dft, MT, Challenger, L>
+where
+    F: Field + TranscriptField + Ord,
+    EF: ExtensionField<F>,
+    Dft: WhirDomain<F, EF>,
+    MT: Mmcs<F>,
+    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
+    L: Layout<F, EF>,
+{
+    /// As [`PrescribedPointPcs::verify_at`], within an arithmetic.
+    ///
+    /// The commitment and the points are values of the arithmetic, and so are the returned evaluations.
+    ///
+    /// # Errors
+    ///
+    /// As [`PrescribedPointPcs::verify_at`].
+    ///
+    /// # Panics
+    ///
+    /// When the protocol does not carry one opening batch per point.
+    pub fn verify_at_in<'s, A, Ch>(
+        &'s self,
+        arith: &mut A,
+        commitment: &<MT as MmcsArith<A, A::F>>::Target,
+        proof: &PcsProof<F, EF, MT>,
+        protocol: &OpeningProtocol,
+        points: &[Point<A::EF>],
+        challenger: &mut Ch,
+    ) -> Result<Vec<OpeningEvals<A::EF>>, VerifierError>
+    where
+        A: Lift<Val = F, Challenge = EF>,
+        Ch: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<
+                A,
+                A::F,
+                Commitment = <MT as Mmcs<F>>::Commitment,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+            >,
+        ExtensionMmcs<F, EF, &'s MT>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+                Target = <MT as MmcsArith<A, A::F>>::Target,
+            >,
+    {
         // One prescribed point per opening batch.
         assert_eq!(protocol.num_openings(), points.len());
 
-        let mut layout_verifier = Verifier::<F, EF>::new(&protocol.table_shapes(), L::strategy());
+        let mut layout_verifier = Verifier::new(&protocol.table_shapes(), L::strategy());
 
         // The commitment fixes how many initial OOD answers exist.
         // A wrong count desyncs Fiat-Shamir.
@@ -330,7 +390,7 @@ where
             });
         }
         for &eval in &proof.whir.initial_ood_answers {
-            layout_verifier.add_virtual_eval(eval, challenger);
+            layout_verifier.add_virtual_eval_in(arith, eval, challenger);
         }
         if protocol.num_openings() != proof.evals.len() {
             return Err(VerifierError::OpeningBatchCountMismatch {
@@ -338,6 +398,7 @@ where
                 actual: proof.evals.len(),
             });
         }
+        let mut opened = Vec::with_capacity(points.len());
         for (((table_idx, batch), evals), point) in
             protocol.iter_openings().zip(&proof.evals).zip(points)
         {
@@ -349,7 +410,10 @@ where
                     actual: evals.len(),
                 });
             }
-            layout_verifier.add_claim_at(table_idx, batch, point, evals, challenger)?;
+            opened.push(
+                layout_verifier
+                    .add_claim_at_in(arith, table_idx, batch, point, evals, challenger)?,
+            );
         }
 
         // The claims are bound and the WHIR run starts here.
@@ -365,7 +429,8 @@ where
         )?;
         let verifier = WhirVerifier::new(&self.config, &self.dft, &self.mmcs, L::variable_order());
         // The run closes its own terminal check, so its folding point is informational.
-        let _ = verifier.verify(
+        let _ = verifier.verify_in(
+            arith,
             &proof.whir,
             challenger,
             commitment,
@@ -375,6 +440,6 @@ where
 
         // The opening verified.
         // Hand back the values bound to the commitment.
-        Ok(proof.evals.clone())
+        Ok(opened)
     }
 }

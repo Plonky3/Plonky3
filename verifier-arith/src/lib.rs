@@ -15,6 +15,8 @@ use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
 use p3_field::{Algebra, BasedVectorSpace, Dup, ExtensionField, Field, TwoAdicField};
+use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::eval_multilinear_recursive;
 
 pub use crate::native::Native;
 pub use crate::two_adic::LagrangeSelectors;
@@ -89,6 +91,29 @@ pub trait Arith {
         Self::Val: TwoAdicField,
     {
         two_adic::fold_coset_row_by_halving(self, index, log_height, log_arity, point, evals)
+    }
+
+    /// `generator^index`, for an index of `bits` bits.
+    fn index_power(&mut self, generator: Self::Val, index: &Self::Index, bits: usize) -> Self::F {
+        two_adic::index_power_by_bits(self, generator, index, bits)
+    }
+
+    /// The index `value`, a constant of the verifier.
+    fn constant_index(&mut self, value: usize) -> Self::Index;
+
+    /// The index `high * 2^low_bits + low`, for an index `low` below `2^low_bits` and a constant `high`.
+    fn index_with_high(&mut self, low: &Self::Index, low_bits: usize, high: usize) -> Self::Index;
+
+    /// The multilinear polynomial with the given hypercube values, at `point`.
+    ///
+    /// The first coordinate binds the most significant index bit.
+    fn eval_multilinear(&mut self, evals: &[Self::F], point: &Point<Self::EF>) -> Self::EF {
+        eval_multilinear_recursive(evals, point.as_slice())
+    }
+
+    /// As [`Self::eval_multilinear`], for challenge-field values.
+    fn eval_multilinear_ext(&mut self, evals: &[Self::EF], point: &Point<Self::EF>) -> Self::EF {
+        eval_multilinear_recursive(evals, point.as_slice())
     }
 
     /// The row holding `value` at the position the low `log_len` index bits name.

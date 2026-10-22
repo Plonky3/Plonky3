@@ -36,6 +36,7 @@ use p3_sumcheck::{
     OpeningBatch, OpeningProtocol, PrescribedPointPcs, SumcheckData, TableShape, TableSpec,
 };
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+use p3_verifier_arith::Arith;
 use p3_whir::{SecurityAssumption, VerifierError, WhirDomain, WhirQueryPoint};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -881,13 +882,14 @@ impl WhirDomain<EF, EF> for PermissiveDomain {
         WhirDomain::<EF, EF>::encode_extension_batch_padded(&self.0, message, log_inv_rate)
     }
 
-    fn query_point(
+    fn query_point_in<A: Arith<Val = EF>>(
         &self,
+        arith: &mut A,
         log_domain_size: usize,
         num_variables: usize,
-        index: usize,
-    ) -> WhirQueryPoint<EF> {
-        WhirDomain::<EF, EF>::query_point(&self.0, log_domain_size, num_variables, index)
+        index: &A::Index,
+    ) -> WhirQueryPoint<A::F> {
+        WhirDomain::<EF, EF>::query_point_in(&self.0, arith, log_domain_size, num_variables, index)
     }
 }
 

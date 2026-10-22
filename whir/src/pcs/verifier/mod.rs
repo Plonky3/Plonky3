@@ -1,3 +1,4 @@
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::fmt::Debug;
@@ -6,16 +7,16 @@ use core::ops::Deref;
 use errors::VerifierError;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_field::{ExtensionField, Field};
+use p3_commit::{ExtensionMmcs, Mmcs, MmcsArith};
+use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::constraints::statement::SelectStatement;
 use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::Verifier as LayoutVerifier;
 use p3_sumcheck::strategy::{Basis, VariableOrder};
-use p3_sumcheck::verify_final_sumcheck_rounds;
+use p3_sumcheck::verify_final_sumcheck_rounds_in;
+use p3_verifier_arith::{Lift, Native};
 use tracing::instrument;
 
 use super::committer::reader::ParsedCommitment;
@@ -23,7 +24,7 @@ use crate::alloc::string::ToString;
 use crate::domain::{WhirDomain, WhirQueryPoint};
 use crate::parameters::{RoundConfig, WhirConfig};
 use crate::pcs::proof::{QueryOpenings, WhirProof};
-use crate::transcript::{WhirShape, WhirVerifierTranscript};
+use crate::transcript::{WhirShape, WhirVerifierTranscript, lift_query_indices};
 
 pub mod errors;
 
@@ -171,13 +172,13 @@ where
     where
         Challenger: CanObserve<MT::Commitment>,
     {
-        self.verify_inner(
+        self.verify_in(
+            &mut Native::new(),
             proof,
             challenger,
             parsed_commitment,
             num_opening_claims,
             layout,
-            None,
         )
     }
 
@@ -200,6 +201,7 @@ where
         Challenger: CanObserve<MT::Commitment>,
     {
         self.verify_inner(
+            &mut Native::new(),
             proof,
             challenger,
             parsed_commitment,
@@ -209,18 +211,82 @@ where
         )
     }
 
-    /// The verification both entry points share, with an optional extra initial weight.
-    fn verify_inner(
+    /// As [`Self::verify`], within an arithmetic.
+    ///
+    /// The commitment and the layout's claims are values of the arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::verify`].
+    pub fn verify_in<A, Ch>(
         &self,
+        arith: &mut A,
         proof: &WhirProof<F, EF, MT>,
-        challenger: &mut Challenger,
-        parsed_commitment: &MT::Commitment,
+        challenger: &mut Ch,
+        commitment: &<MT as MmcsArith<A, A::F>>::Target,
         num_opening_claims: usize,
-        layout: &LayoutVerifier<F, EF>,
-        weight: Option<InitialWeightCheck<'_, EF>>,
-    ) -> Result<Point<EF>, VerifierError>
+        layout: &LayoutVerifier<A::F, A::EF>,
+    ) -> Result<Point<A::EF>, VerifierError>
     where
-        Challenger: CanObserve<MT::Commitment>,
+        A: Lift<Val = F, Challenge = EF>,
+        Ch: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<
+                A,
+                A::F,
+                Commitment = <MT as Mmcs<F>>::Commitment,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+            >,
+        ExtensionMmcs<F, EF, &'a MT>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+                Target = <MT as MmcsArith<A, A::F>>::Target,
+            >,
+    {
+        self.verify_inner(
+            arith,
+            proof,
+            challenger,
+            commitment,
+            num_opening_claims,
+            layout,
+            None,
+        )
+    }
+
+    /// The verification every entry point shares, with an optional extra initial weight.
+    #[allow(clippy::too_many_arguments)]
+    fn verify_inner<A, Ch>(
+        &self,
+        arith: &mut A,
+        proof: &WhirProof<F, EF, MT>,
+        challenger: &mut Ch,
+        commitment: &<MT as MmcsArith<A, A::F>>::Target,
+        num_opening_claims: usize,
+        layout: &LayoutVerifier<A::F, A::EF>,
+        weight: Option<InitialWeightCheck<'_, A::EF>>,
+    ) -> Result<Point<A::EF>, VerifierError>
+    where
+        A: Lift<Val = F, Challenge = EF>,
+        Ch: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<
+                A,
+                A::F,
+                Commitment = <MT as Mmcs<F>>::Commitment,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+            >,
+        ExtensionMmcs<F, EF, &'a MT>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+                Target = <MT as MmcsArith<A, A::F>>::Target,
+            >,
     {
         // Reject a proof that carries the wrong number of rounds before any
         // transcript work. The per-round commitment slot is checked further
@@ -263,11 +329,12 @@ where
 
         // One driver spans the whole run, so the description is walked exactly once.
         let shape = WhirShape::new(self.config, num_opening_claims);
-        let mut transcript = WhirVerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
+        let mut transcript =
+            arith.seeding(|| WhirVerifierTranscript::<Ch, F, EF>::new(challenger, shape));
 
         // A rejection releases the driver's completeness check on its way out.
         // Dropping an unfinished driver otherwise panics on top of the error.
-        match self.replay(proof, &mut transcript, parsed_commitment, layout, weight) {
+        match self.replay(arith, proof, &mut transcript, commitment, layout, weight) {
             Ok(randomness) => {
                 transcript.finish();
                 Ok(randomness)
@@ -285,20 +352,37 @@ where
     ///
     /// Any rejection a step raises, or any consistency check that fails.
     #[allow(clippy::too_many_lines)]
-    fn replay(
+    fn replay<A, Ch>(
         &self,
+        arith: &mut A,
         proof: &WhirProof<F, EF, MT>,
-        transcript: &mut WhirVerifierTranscript<'_, Challenger, F, EF>,
-        parsed_commitment: &MT::Commitment,
-        layout: &LayoutVerifier<F, EF>,
-        weight: Option<InitialWeightCheck<'_, EF>>,
-    ) -> Result<Point<EF>, VerifierError>
+        transcript: &mut WhirVerifierTranscript<'_, Ch, F, EF>,
+        commitment: &<MT as MmcsArith<A, A::F>>::Target,
+        layout: &LayoutVerifier<A::F, A::EF>,
+        weight: Option<InitialWeightCheck<'_, A::EF>>,
+    ) -> Result<Point<A::EF>, VerifierError>
     where
-        Challenger: CanObserve<MT::Commitment>,
+        A: Lift<Val = F, Challenge = EF>,
+        Ch: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<
+                A,
+                A::F,
+                Commitment = <MT as Mmcs<F>>::Commitment,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+            >,
+        ExtensionMmcs<F, EF, &'a MT>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+                Target = <MT as MmcsArith<A, A::F>>::Target,
+            >,
     {
         let mut constraints = Vec::new();
         let mut round_folding_randomness = Vec::new();
-        let mut prev_commitment = parsed_commitment.clone();
+        let mut prev_commitment = commitment.clone();
 
         // The delegate draws the claim-batching challenge, then replays its own rounds.
         //
@@ -307,20 +391,21 @@ where
         // Both it and the rounds after it seed sub-transcripts inside this bracket.
         //
         // Initial sumcheck rounds == first-round folding factor.
-        // `verify_rounds` rejects a proof that carries the wrong number of rounds.
-        let mut weight_scale = EF::ZERO;
+        // `verify_rounds_in` rejects a proof that carries the wrong number of rounds.
+        let mut weight_scale = A::EF::ZERO;
         let (constraint, mut claimed_eval, folding_randomness) =
             transcript.delegate_initial_fold(|challenger| {
-                let alpha = layout.batching_challenge(challenger);
-                let constraint = layout.constraint(alpha);
-                let mut claimed_eval = EF::ZERO;
+                let alpha = layout.batching_challenge_in(arith, challenger);
+                let constraint = layout.constraint(alpha.dup());
+                let mut claimed_eval = A::EF::ZERO;
                 constraint.combine_evals(&mut claimed_eval);
                 // An extra weight takes the power after every recorded claim.
-                if let Some(weight) = weight {
-                    weight_scale = layout.extra_weight_scale(alpha);
-                    claimed_eval += weight_scale * weight.sum;
+                if let Some(weight) = &weight {
+                    weight_scale = layout.extra_weight_scale(&alpha);
+                    claimed_eval += weight_scale.dup() * weight.sum.dup();
                 }
-                let randomness = proof.initial_sumcheck.verify_rounds(
+                let randomness = proof.initial_sumcheck.verify_rounds_in(
+                    arith,
                     challenger,
                     &mut claimed_eval,
                     self.round_folding_factor(0),
@@ -338,7 +423,12 @@ where
 
             // Index is in bounds thanks to the length check at function entry,
             // so only a missing commitment slot can fail here.
-            let new_commitment = ParsedCommitment::<_, MT::Commitment>::parse_with_round(
+            let ParsedCommitment {
+                root,
+                ood_statement,
+            } = ParsedCommitment::parse_with_round(
+                arith,
+                self.mmcs,
                 proof,
                 transcript,
                 round_params.num_variables,
@@ -351,6 +441,7 @@ where
                 .last()
                 .ok_or(VerifierError::MissingFoldingRandomness { round: round_index })?;
             let stir_statement = self.verify_stir_challenges(
+                arith,
                 proof,
                 transcript,
                 round_params,
@@ -371,10 +462,10 @@ where
             // The carried claim keeps the constant coefficient, so a fresh group
             // never shares a power with it.
             let constraint = Constraint::new_with_existing_claim(
-                transcript.round_batching(),
-                new_commitment.ood_statement.num_variables(),
+                arith.sampled_ext(transcript.round_batching()),
+                ood_statement.num_variables(),
                 vec![
-                    Statements::Eq(new_commitment.ood_statement.clone()),
+                    Statements::Eq(ood_statement),
                     Statements::Select(stir_statement),
                 ],
             );
@@ -382,9 +473,10 @@ where
             constraints.push(constraint);
 
             // Intermediate-round sumcheck rounds == next-round folding factor.
-            // `verify_rounds` rejects a wrong count instead of desyncing Fiat-Shamir.
+            // `verify_rounds_in` rejects a wrong count instead of desyncing Fiat-Shamir.
             let folding_randomness = transcript.delegate_round_fold(|challenger| {
-                proof.rounds[round_index].sumcheck.verify_rounds(
+                proof.rounds[round_index].sumcheck.verify_rounds_in(
+                    arith,
                     challenger,
                     &mut claimed_eval,
                     self.round_folding_factor(round_index + 1),
@@ -394,7 +486,7 @@ where
             })?;
             round_folding_randomness.push(folding_randomness);
 
-            prev_commitment = new_commitment.root;
+            prev_commitment = root;
         }
 
         // Final round: receive the polynomial in the clear.
@@ -406,6 +498,12 @@ where
             .as_ref()
             .ok_or(VerifierError::MissingFinalPoly)?;
         let final_round_config = self.final_round_config();
+        let final_poly = arith
+            .load_ext_slice(final_evaluations.as_slice())
+            .into_owned();
+        for value in &final_poly {
+            arith.will_observe_ext(value);
+        }
         transcript.final_poly(final_evaluations.as_slice())?;
 
         // Verify final STIR challenges.
@@ -415,6 +513,7 @@ where
             }
         })?;
         let stir_statement = self.verify_stir_challenges(
+            arith,
             proof,
             transcript,
             &final_round_config,
@@ -423,18 +522,16 @@ where
             self.n_rounds(),
         )?;
 
-        stir_statement
-            .verify(final_evaluations)
-            .then_some(())
-            .ok_or_else(|| VerifierError::StirChallengeFailed {
-                challenge_id: 0,
-                details: "STIR constraint verification failed on final polynomial".to_string(),
-            })?;
+        stir_statement.verify_in(arith, &final_poly, || VerifierError::StirChallengeFailed {
+            challenge_id: 0,
+            details: "STIR constraint verification failed on final polynomial".to_string(),
+        })?;
 
         // A run with no closing rounds delegates nothing, so no bracket is played.
         let final_sumcheck_randomness = transcript
             .delegate_final_fold(|challenger| {
-                verify_final_sumcheck_rounds(
+                verify_final_sumcheck_rounds_in(
+                    arith,
                     proof.final_sumcheck.as_ref(),
                     challenger,
                     &mut claimed_eval,
@@ -469,18 +566,21 @@ where
 
         // Final consistency check: claimed_eval == weight * f(r).
         let final_value = match self.variable_order {
-            VariableOrder::Prefix => final_evaluations.eval_ext::<F>(&final_sumcheck_randomness),
+            VariableOrder::Prefix => {
+                arith.eval_multilinear_ext(&final_poly, &final_sumcheck_randomness)
+            }
             VariableOrder::Suffix => {
-                final_evaluations.eval_ext::<F>(&final_sumcheck_randomness.reversed())
+                arith.eval_multilinear_ext(&final_poly, &final_sumcheck_randomness.reversed())
             }
         };
-        if claimed_eval != evaluation_of_weights * final_value {
-            return Err(VerifierError::SumcheckFailed {
-                round: self.final_sumcheck_rounds,
-                expected: (evaluation_of_weights * final_value).to_string(),
-                actual: claimed_eval.to_string(),
-            });
-        }
+        let expected = evaluation_of_weights * final_value;
+        let (expected_value, actual_value) =
+            (arith.value_ext(&expected), arith.value_ext(&claimed_eval));
+        arith.assert_zero(claimed_eval - expected, || VerifierError::SumcheckFailed {
+            round: self.final_sumcheck_rounds,
+            expected: expected_value.to_string(),
+            actual: actual_value.to_string(),
+        })?;
 
         Ok(folding_randomness)
     }
@@ -489,15 +589,36 @@ where
     ///
     /// Checks PoW witness, generates query indices, verifies Merkle proofs,
     /// and evaluates folded polynomials at the queried positions.
-    fn verify_stir_challenges(
+    #[allow(clippy::too_many_arguments)]
+    fn verify_stir_challenges<A, Ch>(
         &self,
+        arith: &mut A,
         proof: &WhirProof<F, EF, MT>,
-        transcript: &mut WhirVerifierTranscript<'_, Challenger, F, EF>,
+        transcript: &mut WhirVerifierTranscript<'_, Ch, F, EF>,
         params: &RoundConfig,
-        commitment: &MT::Commitment,
-        folding_randomness: &Point<EF>,
+        commitment: &<MT as MmcsArith<A, A::F>>::Target,
+        folding_randomness: &Point<A::EF>,
         round_index: usize,
-    ) -> Result<SelectStatement<F, EF>, VerifierError> {
+    ) -> Result<SelectStatement<A::F, A::EF>, VerifierError>
+    where
+        A: Lift<Val = F, Challenge = EF>,
+        Ch: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<<MT as Mmcs<F>>::Commitment>,
+        MT: MmcsArith<
+                A,
+                A::F,
+                Commitment = <MT as Mmcs<F>>::Commitment,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+            >,
+        ExtensionMmcs<F, EF, &'a MT>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+                Target = <MT as MmcsArith<A, A::F>>::Target,
+            >,
+    {
         // Verify PoW witness before generating challenges.
         let pow_witness = if round_index < self.n_rounds() {
             proof
@@ -506,10 +627,15 @@ where
         } else {
             proof.final_pow_witness
         };
+        if transcript.shape().query_pow_site(round_index).1 > 0 {
+            let witness = arith.load(pow_witness);
+            arith.will_observe(vec![witness]);
+        }
         transcript.query_pow(round_index, pow_witness)?;
 
         // Sample STIR query positions.
-        let stir_challenges_indexes = transcript.query_indices(round_index);
+        let drawn = transcript.query_indices(round_index);
+        let indices = lift_query_indices(arith, transcript.shape(), round_index, &drawn);
 
         let dimensions = vec![Dimensions {
             height: params.domain_size >> params.folding_factor,
@@ -520,17 +646,19 @@ where
             VariableOrder::Suffix => folding_randomness.reversed(),
         };
         let folds = self.verify_and_fold_leaves(
+            arith,
             proof,
             commitment,
-            &stir_challenges_indexes,
+            &indices,
             &dimensions,
             round_index,
             &query_randomness,
         )?;
 
         let mut statement = SelectStatement::initialize(params.num_variables);
-        for (&index, evaluation) in stir_challenges_indexes.iter().zip(folds) {
-            match self.domain.query_point(
+        for (index, evaluation) in indices.iter().zip(folds) {
+            match self.domain.query_point_in(
+                arith,
                 params.log_folded_domain_size,
                 params.num_variables,
                 index,
@@ -546,18 +674,35 @@ where
         Ok(statement)
     }
 
-    /// Verify the Merkle multi-opening and fold each borrowed row at the given point.
+    /// Verify the Merkle multi-opening and fold each opened row at the given point.
     ///
     /// Base-field rows use mixed-field evaluation without materializing a lift.
-    fn verify_and_fold_leaves(
+    #[allow(clippy::too_many_arguments)]
+    fn verify_and_fold_leaves<A>(
         &self,
+        arith: &mut A,
         proof: &WhirProof<F, EF, MT>,
-        root: &MT::Commitment,
-        indices: &[usize],
+        root: &<MT as MmcsArith<A, A::F>>::Target,
+        indices: &[A::Index],
         dimensions: &[Dimensions],
         round_index: usize,
-        randomness: &Point<EF>,
-    ) -> Result<Vec<EF>, VerifierError> {
+        randomness: &Point<A::EF>,
+    ) -> Result<Vec<A::EF>, VerifierError>
+    where
+        A: Lift<Val = F, Challenge = EF>,
+        MT: MmcsArith<
+                A,
+                A::F,
+                Commitment = <MT as Mmcs<F>>::Commitment,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+            >,
+        ExtensionMmcs<F, EF, &'a MT>: MmcsArith<
+                A,
+                A::EF,
+                MultiProof = <MT as Mmcs<F>>::MultiProof,
+                Target = <MT as MmcsArith<A, A::F>>::Target,
+            >,
+    {
         let openings = if round_index == self.n_rounds() {
             &proof.final_openings
         } else {
@@ -582,16 +727,21 @@ where
                         actual: opening.rows.len(),
                     });
                 }
-                opening
-                    .verify(self.mmcs, root, dimensions, indices)
+                // WHIR commits one matrix per round, so each query opens one row.
+                let rows: Vec<Vec<Cow<'_, [A::F]>>> = opening
+                    .rows
+                    .iter()
+                    .map(|row| vec![arith.load_slice(row)])
+                    .collect();
+                self.mmcs
+                    .verify_rows(arith, root, dimensions, indices, &rows, &opening.proof)
                     .map_err(|_| VerifierError::MerkleProofInvalid {
                         position: 0,
                         reason: "Base field Merkle multiproof verification failed".to_string(),
                     })?;
-                Ok(opening
-                    .rows
+                Ok(rows
                     .iter()
-                    .map(|row| Poly::new(row.as_slice()).eval_base(randomness))
+                    .map(|row| arith.eval_multilinear(&row[0], randomness))
                     .collect())
             }
             (QueryOpenings::Extension(opening), false) => {
@@ -602,17 +752,20 @@ where
                         actual: opening.rows.len(),
                     });
                 }
-                let extension_mmcs = ExtensionMmcs::new(self.mmcs);
-                opening
-                    .verify(&extension_mmcs, root, dimensions, indices)
+                let rows: Vec<Vec<Cow<'_, [A::EF]>>> = opening
+                    .rows
+                    .iter()
+                    .map(|row| vec![arith.load_ext_slice(row)])
+                    .collect();
+                ExtensionMmcs::<F, EF, &'a MT>::new(self.mmcs)
+                    .verify_rows(arith, root, dimensions, indices, &rows, &opening.proof)
                     .map_err(|_| VerifierError::MerkleProofInvalid {
                         position: 0,
                         reason: "Extension field Merkle multiproof verification failed".to_string(),
                     })?;
-                Ok(opening
-                    .rows
+                Ok(rows
                     .iter()
-                    .map(|row| Poly::new(row.as_slice()).eval_ext::<F>(randomness))
+                    .map(|row| arith.eval_multilinear_ext(&row[0], randomness))
                     .collect())
             }
             _ => Err(VerifierError::MerkleProofInvalid {

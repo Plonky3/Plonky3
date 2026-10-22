@@ -34,6 +34,9 @@ spin.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-dft = { path = "../dft" }
 p3-koala-bear = { path = "../koala-bear" }
+p3-multilinear-util = { path = "../multilinear-util" }
+p3-sumcheck = { path = "../sumcheck" }
+p3-whir = { path = "../whir" }
 
 proptest.workspace = true
 

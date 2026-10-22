@@ -80,8 +80,7 @@ mod witness;
 
 pub use opening::{
     EqPartials, EqSvoPartials, MultiClaim, NextPartials, NextSvoPartials, Opening,
-    ProverMultiClaim, ProverVirtualClaim, VerifierMultiClaim, VerifierOpening,
-    VerifierVirtualClaim,
+    ProverMultiClaim, ProverVirtualClaim,
 };
 pub use plan::plan_stacked_layout;
 pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver, SuffixResidualProver};

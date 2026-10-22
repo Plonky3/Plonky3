@@ -200,6 +200,61 @@ where
     }
 }
 
+impl<F, EF, P, Perm, const WIDTH: usize, const RATE: usize, const DIGEST: usize>
+    MmcsArith<CircuitArith<F, EF, P>, Base<F>>
+    for &MerkleTreeMmcs<
+        F::Packing,
+        F::Packing,
+        PaddingFreeSponge<Perm, WIDTH, RATE, DIGEST>,
+        TruncatedPermutation<Perm, 2, DIGEST, WIDTH>,
+        2,
+        DIGEST,
+    >
+where
+    F: PrimeField64,
+    EF: ExtensionField<F>,
+    P: PermutationChip<F>,
+    Perm: CryptographicPermutation<[F; WIDTH]> + CryptographicPermutation<[F::Packing; WIDTH]>,
+    [F; DIGEST]: Serialize + for<'de> Deserialize<'de>,
+{
+    type Commitment = MerkleCap<F, [F; DIGEST]>;
+    type MultiProof = <Self as Mmcs<F>>::MultiProof;
+    type Target = CapTarget<F>;
+    type Error = MerkleTreeError;
+
+    fn load_commitment(
+        &self,
+        arith: &mut CircuitArith<F, EF, P>,
+        commitment: &MerkleCap<F, [F; DIGEST]>,
+    ) -> CapTarget<F> {
+        (*self).load_commitment(arith, commitment)
+    }
+
+    fn load_key_commitment(
+        &self,
+        arith: &mut CircuitArith<F, EF, P>,
+        commitment: &MerkleCap<F, [F; DIGEST]>,
+    ) -> CapTarget<F> {
+        (*self).load_key_commitment(arith, commitment)
+    }
+
+    fn will_observe(&self, arith: &mut CircuitArith<F, EF, P>, commitment: &CapTarget<F>) {
+        (*self).will_observe(arith, commitment);
+    }
+
+    fn verify_rows(
+        &self,
+        arith: &mut CircuitArith<F, EF, P>,
+        commitment: &CapTarget<F>,
+        dimensions: &[Dimensions],
+        indices: &[Vec<Base<F>>],
+        rows: &[Vec<Cow<'_, [Base<F>]>>],
+        proof: &Self::MultiProof,
+    ) -> Result<(), MerkleTreeError> {
+        (*self).verify_rows(arith, commitment, dimensions, indices, rows, proof)
+    }
+}
+
 impl<F, EF, P, Inner> MmcsArith<CircuitArith<F, EF, P>, Ext<F, EF>> for ExtensionMmcs<F, EF, Inner>
 where
     F: PrimeField64,

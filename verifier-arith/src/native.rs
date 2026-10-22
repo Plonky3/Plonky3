@@ -3,6 +3,8 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, batch_multiplicative_inverse};
+use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
 use p3_util::reverse_bits_len;
 
 use crate::{Arith, Lift};
@@ -94,6 +96,31 @@ impl<Val: Field, Challenge: ExtensionField<Val>> Arith for Native<Val, Challenge
                 self, index, log_height, log_arity, point, evals,
             ),
         }
+    }
+
+    #[inline]
+    fn index_power(&mut self, generator: Val, index: &usize, _bits: usize) -> Val {
+        generator.exp_u64(*index as u64)
+    }
+
+    #[inline]
+    fn constant_index(&mut self, value: usize) -> usize {
+        value
+    }
+
+    #[inline]
+    fn index_with_high(&mut self, low: &usize, low_bits: usize, high: usize) -> usize {
+        (high << low_bits) | low
+    }
+
+    #[inline]
+    fn eval_multilinear(&mut self, evals: &[Val], point: &Point<Challenge>) -> Challenge {
+        Poly::new(evals).eval_base(point)
+    }
+
+    #[inline]
+    fn eval_multilinear_ext(&mut self, evals: &[Challenge], point: &Point<Challenge>) -> Challenge {
+        Poly::new(evals).eval_ext::<Val>(point)
     }
 
     fn insert_at(

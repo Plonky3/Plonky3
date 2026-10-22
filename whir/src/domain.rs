@@ -9,6 +9,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_security::SecurityAssumption;
 use p3_util::log2_strict_usize;
+use p3_verifier_arith::{Arith, Native};
 
 /// Selector coordinates for one queried codeword position.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,7 +78,25 @@ where
         log_domain_size: usize,
         num_variables: usize,
         index: usize,
-    ) -> WhirQueryPoint<F>;
+    ) -> WhirQueryPoint<F> {
+        self.query_point_in(
+            &mut Native::<F, EF>::new(),
+            log_domain_size,
+            num_variables,
+            &index,
+        )
+    }
+
+    /// Returns selector coordinates for a queried position, within an arithmetic.
+    ///
+    /// The index has `log_domain_size` bits.
+    fn query_point_in<A: Arith<Val = F>>(
+        &self,
+        arith: &mut A,
+        log_domain_size: usize,
+        num_variables: usize,
+        index: &A::Index,
+    ) -> WhirQueryPoint<A::F>;
 }
 
 impl<F, EF, Dft> WhirDomain<F, EF> for Dft
@@ -167,13 +186,15 @@ where
         RowMajorMatrix::new(EF::reconstitute_from_base(encoded.values), width)
     }
 
-    fn query_point(
+    fn query_point_in<A: Arith<Val = F>>(
         &self,
+        arith: &mut A,
         log_domain_size: usize,
         _num_variables: usize,
-        index: usize,
-    ) -> WhirQueryPoint<F> {
-        WhirQueryPoint::Univariate(F::two_adic_generator(log_domain_size).exp_u64(index as u64))
+        index: &A::Index,
+    ) -> WhirQueryPoint<A::F> {
+        let generator = F::two_adic_generator(log_domain_size);
+        WhirQueryPoint::Univariate(arith.index_power(generator, index, log_domain_size))
     }
 }
 

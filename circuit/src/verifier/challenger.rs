@@ -2,13 +2,14 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use p3_challenger::{
-    CanObserve, CanSample, CanSampleBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
+    CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, DuplexChallenger, FieldChallenger,
+    GrindingChallenger, ResamplingError, UniformSamplingField,
 };
-use p3_field::{BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField64};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Hash, MerkleCap};
 use spin::Mutex;
 
-use super::Shared;
+use super::{Sample, Shared};
 use crate::{Base, PermutationChip};
 
 /// A [`DuplexChallenger`] that mirrors every absorb and squeeze onto circuit wires.
@@ -78,8 +79,44 @@ where
         let shared = Arc::clone(&self.shared);
         let mut shared = shared.lock();
         let sample = self.squeeze(&mut shared, value);
-        shared.push_sample(sample);
+        shared.push_sample(Sample::Value(sample));
         value
+    }
+
+    /// Draw base samples until one lies below `bound`, as the native resample loop does.
+    ///
+    /// Each draw is constrained to the side of the bound it fell on, so the accepted draw is the native one.
+    ///
+    /// # Errors
+    ///
+    /// When a draw is rejected and `resample` is false.
+    fn accepted_bits(
+        &mut self,
+        bound: u64,
+        bits: usize,
+        resample: bool,
+    ) -> Result<Vec<Base<F>>, ResamplingError> {
+        let shared = Arc::clone(&self.shared);
+        let mut shared = shared.lock();
+        loop {
+            let value: F = self.native.sample();
+            let sample = self.squeeze(&mut shared, value);
+            let sample_bits = shared.builder.canonical_bits(&sample);
+            let below = below(&sample_bits, bound);
+            let accepted = value.as_canonical_u64() < bound;
+            // A draw on the wrong side of the bound leaves the circuit unsatisfiable.
+            let side = if accepted { Base::ONE - below } else { below };
+            shared
+                .builder
+                .assert_zero(&side)
+                .expect("a draw lies on the side of the bound the native loop saw");
+            if accepted {
+                return Ok(sample_bits[..bits].to_vec());
+            }
+            if !resample {
+                return Err(ResamplingError::new(value.as_canonical_u64(), bound));
+            }
+        }
     }
 
     /// Squeeze one wire, as the native challenger squeezes its value.
@@ -187,6 +224,67 @@ where
         assert!((1 << bits) < F::ORDER_U64);
         let value = self.sample_base();
         value.as_canonical_u64() as usize & ((1 << bits) - 1)
+    }
+}
+
+/// Whether the integer of `bits`, least significant first, lies below the constant `bound`, as a bit.
+fn below<F: Field>(bits: &[Base<F>], bound: u64) -> Base<F> {
+    // From the top bit down, the first bit where the integer and the bound differ decides.
+    let (mut below, mut equal) = (Base::ZERO, Base::ONE);
+    for (i, bit) in bits.iter().enumerate().rev() {
+        if (bound >> i) & 1 == 1 {
+            below += equal.clone() * (Base::ONE - bit.clone());
+            equal *= bit.clone();
+        } else {
+            equal *= Base::ONE - bit.clone();
+        }
+    }
+    below
+}
+
+impl<F, EF, P, Perm, const WIDTH: usize, const RATE: usize> CanSampleUniformBits<F>
+    for DuplexMirror<F, EF, P, Perm, WIDTH, RATE>
+where
+    F: UniformSamplingField + PrimeField64,
+    EF: ExtensionField<F>,
+    P: PermutationChip<F>,
+    Perm: CryptographicPermutation<[F; WIDTH]>,
+{
+    /// Mirrors the native rejection sampling squeeze for squeeze.
+    ///
+    /// The circuit's shape depends on how many draws were rejected, each draw being rejected with probability below `2^-24`.
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError> {
+        let index = if bits == 0 {
+            Vec::new()
+        } else {
+            assert!(bits < usize::BITS as usize, "bit count must be valid");
+            assert!(
+                (1u64 << bits) < F::ORDER_U64,
+                "bit count exceeds field order"
+            );
+            if bits <= F::MAX_SINGLE_SAMPLE_BITS {
+                self.accepted_bits(F::SAMPLING_BITS_M[bits], bits, RESAMPLE)?
+            } else {
+                // Two draws of half the bits each, the first one holding the low half.
+                let low = bits / 2;
+                let mut index = self.accepted_bits(F::SAMPLING_BITS_M[low], low, RESAMPLE)?;
+                let high = bits - low;
+                index.extend(self.accepted_bits(F::SAMPLING_BITS_M[high], high, RESAMPLE)?);
+                index
+            }
+        };
+        let mut shared = self.shared.lock();
+        let value = index
+            .iter()
+            .enumerate()
+            .filter(|(_, bit)| shared.builder.value(bit).is_one())
+            .map(|(i, _)| 1usize << i)
+            .sum();
+        shared.push_sample(Sample::Index(index));
+        Ok(value)
     }
 }
 

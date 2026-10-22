@@ -1,12 +1,13 @@
 //! Binary-field evaluation domains for the WHIR commitment scheme.
 
-use p3_binary_dft::{AdditiveRsEncoder, LchNtt, PolyBasisNtt, domain_point};
+use p3_binary_dft::{AdditiveRsEncoder, LchNtt, PolyBasisNtt};
 use p3_binary_field::{BinaryField32, BinaryField128, Poly64, TowerLevel};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, RowSink, zero_padded};
-use p3_field::{BasedVectorSpace, ExtensionField, Field};
+use p3_field::{BasedVectorSpace, Dup, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_multilinear_util::point::Point;
+use p3_verifier_arith::Arith;
 use p3_whir::{SecurityAssumption, WhirConfig, WhirDomain, WhirQueryPoint};
 
 /// Widest domain a machine word can index.
@@ -136,28 +137,29 @@ where
     RowMajorMatrix::new(EF::reconstitute_from_base(encoded.values), width)
 }
 
-fn query_point<F: TowerLevel>(
+fn query_point_in<F: TowerLevel, A: Arith<Val = F>>(
+    arith: &mut A,
     log_domain_size: usize,
     num_variables: usize,
-    index: usize,
-) -> WhirQueryPoint<F> {
+    index: &A::Index,
+) -> WhirQueryPoint<A::F> {
     assert!(
         log_domain_size <= max_log_domain_size::<F>(),
         "additive domain exceeds the alphabet dimension"
     );
-    assert!(
-        log_domain_size == MAX_LOG_DOMAIN_SIZE || index < 1usize << log_domain_size,
-        "domain index is out of range"
-    );
-    let point = domain_point(index);
-    let mut coordinates = F::zero_vec(num_variables);
+    // The domain point is linear in its index: the sum of the basis vectors its set bits name.
+    let mut point = A::F::ZERO;
+    for (r, bit) in arith.index_bits(index, log_domain_size).iter().enumerate() {
+        point += arith.select_base(bit, A::F::from(F::cantor_basis(r)), A::F::ZERO);
+    }
+    let mut coordinates = A::F::zero_vec(num_variables);
     if let Some((last, prefix)) = coordinates.split_last_mut() {
-        *last = point;
+        *last = point.dup();
         // Coordinates run from W_(n-1) back to W_0; share the recurrence between them.
         let mut value = point;
         for coordinate in prefix.iter_mut().rev() {
             value = value.square() + value;
-            *coordinate = value;
+            *coordinate = value.dup();
         }
     }
     WhirQueryPoint::Multilinear(Point::new(coordinates))
@@ -247,13 +249,14 @@ where
         encode_extension_borrowed::<Poly64, EF, _>(&self.encoder, message, log_inv_rate)
     }
 
-    fn query_point(
+    fn query_point_in<A: Arith<Val = Poly64>>(
         &self,
+        arith: &mut A,
         log_domain_size: usize,
         num_variables: usize,
-        index: usize,
-    ) -> WhirQueryPoint<Poly64> {
-        query_point::<Poly64>(log_domain_size, num_variables, index)
+        index: &A::Index,
+    ) -> WhirQueryPoint<A::F> {
+        query_point_in::<Poly64, A>(arith, log_domain_size, num_variables, index)
     }
 }
 
@@ -316,13 +319,14 @@ where
         encode_extension::<BinaryField32, EF, _>(&self.encoder, message, log_inv_rate)
     }
 
-    fn query_point(
+    fn query_point_in<A: Arith<Val = BinaryField32>>(
         &self,
+        arith: &mut A,
         log_domain_size: usize,
         num_variables: usize,
-        index: usize,
-    ) -> WhirQueryPoint<BinaryField32> {
-        query_point::<BinaryField32>(log_domain_size, num_variables, index)
+        index: &A::Index,
+    ) -> WhirQueryPoint<A::F> {
+        query_point_in::<BinaryField32, A>(arith, log_domain_size, num_variables, index)
     }
 }
 
@@ -385,13 +389,14 @@ where
         encode_extension::<BinaryField128, EF, _>(&self.encoder, message, log_inv_rate)
     }
 
-    fn query_point(
+    fn query_point_in<A: Arith<Val = BinaryField128>>(
         &self,
+        arith: &mut A,
         log_domain_size: usize,
         num_variables: usize,
-        index: usize,
-    ) -> WhirQueryPoint<BinaryField128> {
-        query_point::<BinaryField128>(log_domain_size, num_variables, index)
+        index: &A::Index,
+    ) -> WhirQueryPoint<A::F> {
+        query_point_in::<BinaryField128, A>(arith, log_domain_size, num_variables, index)
     }
 }
 
@@ -410,6 +415,7 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::constraints::statement::SelectStatement;
+    use p3_verifier_arith::Native;
     use p3_whir::{WhirDomain, WhirQueryPoint};
 
     use super::{BinaryField32, BinaryField128, BinaryWhirDomain, Poly64};
@@ -472,9 +478,12 @@ mod tests {
                 let log_domain_size = (num_variables + 1).max(3);
                 let last = (1usize << log_domain_size) - 1;
                 for index in [0, 1, 2, 1 << (log_domain_size - 1), 0xA529 & last, last] {
-                    let WhirQueryPoint::Multilinear(point) =
-                        super::query_point::<F>(log_domain_size, num_variables, index)
-                    else {
+                    let WhirQueryPoint::Multilinear(point) = super::query_point_in::<F, _>(
+                        &mut Native::<F, F>::new(),
+                        log_domain_size,
+                        num_variables,
+                        &index,
+                    ) else {
                         panic!("binary domains expose multilinear selector coordinates");
                     };
                     assert_eq!(point.num_variables(), num_variables);

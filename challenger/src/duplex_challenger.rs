@@ -306,6 +306,14 @@ pub struct ResamplingError {
     m: u64,
 }
 
+impl ResamplingError {
+    /// The error for a sampled `value` at or above the rejection bound `m`.
+    #[must_use]
+    pub const fn new(value: u64, m: u64) -> Self {
+        Self { value, m }
+    }
+}
+
 /// A trait that defines a strategy for handling out-of-range samples.
 pub(super) trait BitSamplingStrategy<F, P, const W: usize, const R: usize>
 where

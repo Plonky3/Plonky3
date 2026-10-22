@@ -23,6 +23,15 @@ pub use self::challenger::DuplexMirror;
 pub use self::stark::{CircuitConfig, CircuitPcs, MirrorChallenger};
 use crate::{Base, Circuit, CircuitBuilder, Ext, PermutationChip};
 
+/// A draw of the native transcript, as the wires the verifier takes it as.
+#[derive(Debug)]
+pub(crate) enum Sample<F> {
+    /// One base-field sample.
+    Value(Base<F>),
+    /// A query index, as its bits, least significant first.
+    Index(Vec<Base<F>>),
+}
+
 /// The circuit being built, shared with the challenger that mirrors the native transcript.
 #[derive(Debug)]
 pub(crate) struct Shared<F, EF, P> {
@@ -31,7 +40,7 @@ pub(crate) struct Shared<F, EF, P> {
     /// Values the native transcript absorbs next, in absorb order.
     pending: VecDeque<Base<F>>,
     /// Samples the native transcript drew and the verifier has not yet taken.
-    sampled: VecDeque<Base<F>>,
+    sampled: VecDeque<Sample<F>>,
     /// Whether the transcript under construction is absorbing its seed.
     seeding: bool,
 }
@@ -66,7 +75,7 @@ where
     }
 
     /// Hand a sample the native transcript drew to the verifier.
-    pub(crate) fn push_sample(&mut self, sample: Base<F>) {
+    pub(crate) fn push_sample(&mut self, sample: Sample<F>) {
         self.sampled.push_back(sample);
     }
 }
@@ -188,6 +197,23 @@ where
         index.iter().skip(shift).cloned().collect()
     }
 
+    fn constant_index(&mut self, value: usize) -> Vec<Base<F>> {
+        (0..usize::BITS - value.leading_zeros())
+            .map(|i| Base::from(F::from_bool((value >> i) & 1 == 1)))
+            .collect()
+    }
+
+    fn index_with_high(
+        &mut self,
+        low: &Vec<Base<F>>,
+        low_bits: usize,
+        high: usize,
+    ) -> Vec<Base<F>> {
+        let mut bits = self.index_bits(low, low_bits);
+        bits.extend(self.constant_index(high));
+        bits
+    }
+
     fn batch_inverse<E>(
         &mut self,
         values: &[Ext<F, EF>],
@@ -253,11 +279,9 @@ where
     fn sampled_ext(&mut self, value: EF) -> Ext<F, EF> {
         let mut shared = self.shared.lock();
         let limbs: Vec<Base<F>> = (0..EF::DIMENSION)
-            .map(|_| {
-                shared
-                    .sampled
-                    .pop_front()
-                    .expect("a challenge-field sample was drawn")
+            .map(|_| match shared.sampled.pop_front() {
+                Some(Sample::Value(limb)) => limb,
+                _ => panic!("a challenge-field sample was drawn"),
             })
             .collect();
         let sample = shared.builder.compose(&limbs);
@@ -271,16 +295,14 @@ where
 
     fn sampled_index(&mut self, value: usize, bits: usize) -> Vec<Base<F>> {
         let mut shared = self.shared.lock();
-        let sample = shared
-            .sampled
-            .pop_front()
-            .expect("a query index sample was drawn");
-        let index: Vec<Base<F>> = shared
-            .builder
-            .canonical_bits(&sample)
-            .into_iter()
-            .take(bits)
-            .collect();
+        let index: Vec<Base<F>> = match shared.sampled.pop_front() {
+            Some(Sample::Value(sample)) => shared.builder.canonical_bits(&sample),
+            Some(Sample::Index(index)) => index,
+            None => panic!("a query index sample was drawn"),
+        }
+        .into_iter()
+        .take(bits)
+        .collect();
         let recomposed = index
             .iter()
             .enumerate()

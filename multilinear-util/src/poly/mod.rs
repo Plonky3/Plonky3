@@ -909,11 +909,12 @@ impl<F> IntoIterator for Poly<F> {
 }
 
 /// Evaluates a multilinear polynomial `evals` at `point` using a recursive strategy.
+///
 /// For small numbers of variables (<=4) it switches to the unrolled strategy.
-fn eval_multilinear_recursive<F, EF>(evals: &[F], point: &[EF]) -> EF
+pub fn eval_multilinear_recursive<F, EF>(evals: &[F], point: &[EF]) -> EF
 where
-    F: Field,
-    EF: ExtensionField<F>,
+    F: PrimeCharacteristicRing,
+    EF: Algebra<F>,
 {
     // Ensure that the number of evaluations matches the number of variables in the point.
     //
@@ -925,24 +926,24 @@ where
         // Case: 0 Variables (Constant Polynomial)
         //
         // A polynomial with zero variables is just a constant.
-        [] => evals[0].into(),
+        [] => evals[0].dup().into(),
 
         // Case: 1 Variable (Linear Interpolation)
         //
         // This is the base case for the recursion: f(x) = f(0) * (1-x) + f(1) * x.
         // The expression is an optimized form: f(0) + x * (f(1) - f(0)).
-        [x] => *x * (evals[1] - evals[0]) + evals[0],
+        [x] => x.dup() * (evals[1].dup() - evals[0].dup()) + evals[0].dup(),
 
         // Case: 2 Variables (Bilinear Interpolation)
         //
         // This is a fully unrolled version for 2 variables, avoiding recursive calls.
         [x0, x1] => {
             // Interpolate along the x1-axis for x0=0 to get `a0`.
-            let a0 = *x1 * (evals[1] - evals[0]) + evals[0];
+            let a0 = x1.dup() * (evals[1].dup() - evals[0].dup()) + evals[0].dup();
             // Interpolate along the x1-axis for x0=1 to get `a1`.
-            let a1 = *x1 * (evals[3] - evals[2]) + evals[2];
+            let a1 = x1.dup() * (evals[3].dup() - evals[2].dup()) + evals[2].dup();
             // Finally, interpolate between `a0` and `a1` along the x0-axis.
-            a0 + (a1 - a0) * *x0
+            a0.dup() + (a1 - a0) * x0.dup()
         }
 
         // Cases: 3 and 4 Variables
@@ -950,30 +951,30 @@ where
         // These are further unrolled versions for 3 and 4 variables for maximum speed.
         // The logic is the same as the 2-variable case, just with more steps.
         [x0, x1, x2] => {
-            let a00 = *x2 * (evals[1] - evals[0]) + evals[0];
-            let a01 = *x2 * (evals[3] - evals[2]) + evals[2];
-            let a10 = *x2 * (evals[5] - evals[4]) + evals[4];
-            let a11 = *x2 * (evals[7] - evals[6]) + evals[6];
-            let a0 = a00 + *x1 * (a01 - a00);
-            let a1 = a10 + *x1 * (a11 - a10);
-            a0 + (a1 - a0) * *x0
+            let a00 = x2.dup() * (evals[1].dup() - evals[0].dup()) + evals[0].dup();
+            let a01 = x2.dup() * (evals[3].dup() - evals[2].dup()) + evals[2].dup();
+            let a10 = x2.dup() * (evals[5].dup() - evals[4].dup()) + evals[4].dup();
+            let a11 = x2.dup() * (evals[7].dup() - evals[6].dup()) + evals[6].dup();
+            let a0 = a00.dup() + x1.dup() * (a01 - a00);
+            let a1 = a10.dup() + x1.dup() * (a11 - a10);
+            a0.dup() + (a1 - a0) * x0.dup()
         }
         [x0, x1, x2, x3] => {
-            let a000 = *x3 * (evals[1] - evals[0]) + evals[0];
-            let a001 = *x3 * (evals[3] - evals[2]) + evals[2];
-            let a010 = *x3 * (evals[5] - evals[4]) + evals[4];
-            let a011 = *x3 * (evals[7] - evals[6]) + evals[6];
-            let a100 = *x3 * (evals[9] - evals[8]) + evals[8];
-            let a101 = *x3 * (evals[11] - evals[10]) + evals[10];
-            let a110 = *x3 * (evals[13] - evals[12]) + evals[12];
-            let a111 = *x3 * (evals[15] - evals[14]) + evals[14];
-            let a00 = a000 + *x2 * (a001 - a000);
-            let a01 = a010 + *x2 * (a011 - a010);
-            let a10 = a100 + *x2 * (a101 - a100);
-            let a11 = a110 + *x2 * (a111 - a110);
-            let a0 = a00 + *x1 * (a01 - a00);
-            let a1 = a10 + *x1 * (a11 - a10);
-            a0 + (a1 - a0) * *x0
+            let a000 = x3.dup() * (evals[1].dup() - evals[0].dup()) + evals[0].dup();
+            let a001 = x3.dup() * (evals[3].dup() - evals[2].dup()) + evals[2].dup();
+            let a010 = x3.dup() * (evals[5].dup() - evals[4].dup()) + evals[4].dup();
+            let a011 = x3.dup() * (evals[7].dup() - evals[6].dup()) + evals[6].dup();
+            let a100 = x3.dup() * (evals[9].dup() - evals[8].dup()) + evals[8].dup();
+            let a101 = x3.dup() * (evals[11].dup() - evals[10].dup()) + evals[10].dup();
+            let a110 = x3.dup() * (evals[13].dup() - evals[12].dup()) + evals[12].dup();
+            let a111 = x3.dup() * (evals[15].dup() - evals[14].dup()) + evals[14].dup();
+            let a00 = a000.dup() + x2.dup() * (a001 - a000);
+            let a01 = a010.dup() + x2.dup() * (a011 - a010);
+            let a10 = a100.dup() + x2.dup() * (a101 - a100);
+            let a11 = a110.dup() + x2.dup() * (a111 - a110);
+            let a0 = a00.dup() + x1.dup() * (a01 - a00);
+            let a1 = a10.dup() + x1.dup() * (a11 - a10);
+            a0.dup() + (a1 - a0) * x0.dup()
         }
         // General Case (5+ Variables)
         //
@@ -982,14 +983,14 @@ where
             // Split the evaluations into two halves, corresponding to the first variable being 0 or 1.
             let (f0, f1) = evals.split_at(evals.len() / 2);
 
-            // Sequential recurse: callers gate this below `mle_recursion_threshold` variables.
+            // Sequential recurse: native callers gate this below `mle_recursion_threshold` variables.
             //
             // The table is then small enough that a rayon `join` would cost more than it saves.
             let f0_eval = eval_multilinear_recursive(f0, sub_point);
             let f1_eval = eval_multilinear_recursive(f1, sub_point);
 
             // Perform the final linear interpolation for the first variable `x`.
-            f0_eval + (f1_eval - f0_eval) * *x
+            f0_eval.dup() + (f1_eval - f0_eval) * x.dup()
         }
     }
 }

@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::{
-    Algebra, ExtensionField, Field, HornerIter, PackedFieldExtension, PackedValue,
+    Algebra, ExtensionField, Field, HornerIter, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, dot_product,
 };
 use p3_matrix::Matrix;
@@ -12,6 +12,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
+use p3_verifier_arith::{Arith, Native};
 use tracing::instrument;
 
 /// Expand powers-of-two seeds into the full power table via butterfly.
@@ -174,7 +175,7 @@ pub struct SelectStatement<F, EF> {
     evaluations: Vec<EF>,
 }
 
-impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
+impl<F: PrimeCharacteristicRing, EF: Algebra<F>> SelectStatement<F, EF> {
     /// Creates an empty select statement for polynomials over `{0,1}^k`.
     ///
     /// # Parameters
@@ -258,54 +259,58 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // Scalar selectors use the monomial power map.
         self.vars
             .iter()
-            .map(|&var| Point::eval_select(var, row.as_slice()))
+            .map(|var| Point::eval_select(var.dup(), row.as_slice()))
             // Direct selectors evaluate their multilinear equality polynomial.
             .chain(self.points.iter().map(|point| {
                 point
                     .iter()
                     .zip(row.iter())
-                    .map(|(&coordinate, &row)| row * (coordinate - F::ONE) + EF::ONE)
+                    .map(|(coordinate, row)| row.dup() * (coordinate.dup() - F::ONE) + EF::ONE)
                     .product()
             }))
     }
 
-    /// Checks every claimed evaluation against a coefficient table.
+    /// Requires every claimed evaluation of a coefficient table, within an arithmetic.
     ///
     /// Scalar points use Horner evaluation.
+    ///
     /// Direct points fold the multilinear table coordinate by coordinate.
-    #[must_use]
-    pub fn verify(&self, poly: &Poly<EF>) -> bool {
-        let univariate = self.iter().all(|(&var, &expected_eval)| {
+    ///
+    /// # Errors
+    ///
+    /// `err()` at the first claim the table misses.
+    pub fn verify_in<A, E>(&self, arith: &mut A, poly: &[EF], err: impl Fn() -> E) -> Result<(), E>
+    where
+        A: Arith<F = F, EF = EF> + ?Sized,
+    {
+        for (var, expected) in self.iter() {
             // Evaluate the polynomial at `var` using Horner's method.
             // This computes: p(var) = c_0 + var(c_1 + var(c_2 + ...))
-            poly.iter().copied().horner::<EF, _>(var) == expected_eval
-        });
-        if !univariate {
-            return false;
+            let eval: EF = poly.iter().cloned().horner(var.dup());
+            arith.assert_zero(eval - expected.dup(), &err)?;
         }
 
         // Two-adic statements contain only scalar points.
         // Avoid copying the polynomial when direct folding is unnecessary.
         if self.points.is_empty() {
-            return true;
+            return Ok(());
         }
 
         // Reuse one scratch allocation across every direct-point fold.
-        let mut scratch = poly.as_slice().to_vec();
-        self.points
-            .iter()
-            .zip(&self.evaluations)
-            .all(|(point, &expected)| {
-                scratch.copy_from_slice(poly.as_slice());
-                let mut len = scratch.len();
-                for &coordinate in point.iter().rev() {
-                    for index in 0..len / 2 {
-                        scratch[index] = scratch[2 * index] + scratch[2 * index + 1] * coordinate;
-                    }
-                    len /= 2;
+        let mut scratch = poly.to_vec();
+        for (point, expected) in self.points.iter().zip(&self.evaluations) {
+            scratch.clone_from_slice(poly);
+            let mut len = scratch.len();
+            for coordinate in point.iter().rev() {
+                for index in 0..len / 2 {
+                    scratch[index] =
+                        scratch[2 * index].dup() + scratch[2 * index + 1].dup() * coordinate.dup();
                 }
-                scratch[0] == expected
-            })
+                len /= 2;
+            }
+            arith.assert_zero(scratch[0].dup() - expected.dup(), &err)?;
+        }
+        Ok(())
     }
 
     /// Adds a single evaluation constraint `p(z) = s` to the statement.
@@ -335,6 +340,46 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         assert_eq!(point.num_variables(), self.num_variables);
         self.points.push(point);
         self.evaluations.push(eval);
+    }
+
+    /// Batches expected evaluation values into a single target sum using challenge powers.
+    ///
+    /// Computes and adds to `claimed_eval`:
+    ///
+    /// ```text
+    /// S = Σ_i γ^{i+shift} · s_i
+    /// ```
+    ///
+    /// where `s_i` are the expected evaluation values in `self.evaluations`.
+    ///
+    /// # Parameters
+    ///
+    /// - `claimed_eval`: Accumulator for the target sum. This method **adds** the batched
+    ///   evaluations to the existing value.
+    ///
+    /// - `challenge`: Random challenge `γ ∈ EF` used for batching.
+    ///
+    /// - `shift`: Power offset. Constraint `i` uses weight `γ^{i+shift}`.
+    pub fn combine_evals(&self, claimed_eval: &mut EF, challenge: EF, shift: usize) {
+        // Compute: Σ_i γ^{i+shift} · s_i
+        // This is equivalent to dot_product(evaluations, [γ^shift, γ^{shift+1}, ...])
+        *claimed_eval += dot_product::<EF, _, _>(
+            self.evaluations.iter().cloned(),
+            Powers {
+                current: challenge.exp_u64(shift as u64),
+                base: challenge,
+            }
+            .take(self.len()),
+        );
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
+    /// Checks every claimed evaluation against a coefficient table.
+    #[must_use]
+    pub fn verify(&self, poly: &Poly<EF>) -> bool {
+        self.verify_in(&mut Native::new(), poly.as_slice(), || ())
+            .is_ok()
     }
 
     /// Batches every constraint into one weight polynomial and target sum.
@@ -583,35 +628,6 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
                     });
                 },
             );
-    }
-
-    /// Batches expected evaluation values into a single target sum using challenge powers.
-    ///
-    /// Computes and adds to `claimed_eval`:
-    ///
-    /// ```text
-    /// S = Σ_i γ^{i+shift} · s_i
-    /// ```
-    ///
-    /// where `s_i` are the expected evaluation values in `self.evaluations`.
-    ///
-    /// # Parameters
-    ///
-    /// - `claimed_eval`: Accumulator for the target sum. This method **adds** the batched
-    ///   evaluations to the existing value.
-    ///
-    /// - `challenge`: Random challenge `γ ∈ EF` used for batching.
-    ///
-    /// - `shift`: Power offset. Constraint `i` uses weight `γ^{i+shift}`.
-    pub fn combine_evals(&self, claimed_eval: &mut EF, challenge: EF, shift: usize) {
-        // Compute: Σ_i γ^{i+shift} · s_i
-        // This is equivalent to dot_product(evaluations, [γ^shift, γ^{shift+1}, ...])
-        *claimed_eval += dot_product::<EF, _, _>(
-            self.evaluations.iter().copied(),
-            challenge
-                .shifted_powers(challenge.exp_u64(shift as u64))
-                .take(self.len()),
-        );
     }
 }
 

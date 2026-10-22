@@ -2,7 +2,8 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::{
-    ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
+    ExtensionField, Field, PackedFieldExtension, PackedValue, Powers, PrimeCharacteristicRing,
+    dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -167,7 +168,7 @@ pub struct EqStatement<F> {
     evaluations: Vec<F>,
 }
 
-impl<F: Field> EqStatement<F> {
+impl<F: PrimeCharacteristicRing> EqStatement<F> {
     /// Creates an empty `EqStatement<F>` for polynomials with `num_variables` variables.
     #[must_use]
     pub const fn initialize(num_variables: usize) -> Self {
@@ -222,6 +223,43 @@ impl<F: Field> EqStatement<F> {
             .map(|point| Point::eval_eq(point.as_slice(), row.as_slice()))
     }
 
+    /// Adds an evaluation constraint `p(z) = s` to the system.
+    ///
+    /// Assumes the evaluation `s` is already known.
+    ///
+    /// # Panics
+    /// Panics if the number of variables in the `point` does not match the statement.
+    pub fn add_evaluated_constraint(&mut self, point: Point<F>, eval: F) {
+        assert_eq!(point.num_variables(), self.num_variables());
+        self.points.push(point);
+        self.evaluations.push(eval);
+    }
+
+    /// Accumulates the challenge-weighted sum of this group's expected evaluations.
+    ///
+    /// # Overview
+    ///
+    /// The first stored value is weighted by the challenge raised to the shift, the next by the following power, and so on.
+    ///
+    /// # Arguments
+    ///
+    /// - `claimed_eval`: scalar accumulator updated in place.
+    /// - `gamma`: the batching challenge whose powers weight each stored value.
+    /// - `shift`: offset of the first challenge power, so this group follows earlier groups.
+    pub fn combine_evals(&self, claimed_eval: &mut F, gamma: F, shift: usize) {
+        // Dot the stored expected values against gamma^shift, gamma^{shift+1}, ...
+        // Starting at the shift keeps this group's powers disjoint from earlier groups.
+        *claimed_eval += dot_product(
+            self.evaluations.iter().cloned(),
+            Powers {
+                current: gamma.exp_u64(shift as u64),
+                base: gamma,
+            },
+        );
+    }
+}
+
+impl<F: Field> EqStatement<F> {
     /// Verifies that a given polynomial satisfies all constraints in the statement.
     #[must_use]
     pub fn verify(&self, poly: &Poly<F>) -> bool {
@@ -234,18 +272,6 @@ impl<F: Field> EqStatement<F> {
         assert_eq!(self.num_variables, other.num_variables);
         self.points.extend_from_slice(&other.points);
         self.evaluations.extend_from_slice(&other.evaluations);
-    }
-
-    /// Adds an evaluation constraint `p(z) = s` to the system.
-    ///
-    /// Assumes the evaluation `s` is already known.
-    ///
-    /// # Panics
-    /// Panics if the number of variables in the `point` does not match the statement.
-    pub fn add_evaluated_constraint(&mut self, point: Point<F>, eval: F) {
-        assert_eq!(point.num_variables(), self.num_variables());
-        self.points.push(point);
-        self.evaluations.push(eval);
     }
 
     /// Folds every constraint into one weight polynomial and one expected sum.
@@ -404,26 +430,6 @@ impl<F: Field> EqStatement<F> {
                     }
                 });
             });
-    }
-
-    /// Accumulates the challenge-weighted sum of this group's expected evaluations.
-    ///
-    /// # Overview
-    ///
-    /// The first stored value is weighted by the challenge raised to the shift, the next by the following power, and so on.
-    ///
-    /// # Arguments
-    ///
-    /// - `claimed_eval`: scalar accumulator updated in place.
-    /// - `gamma`: the batching challenge whose powers weight each stored value.
-    /// - `shift`: offset of the first challenge power, so this group follows earlier groups.
-    pub fn combine_evals(&self, claimed_eval: &mut F, gamma: F, shift: usize) {
-        // Dot the stored expected values against gamma^shift, gamma^{shift+1}, ...
-        // Starting at the shift keeps this group's powers disjoint from earlier groups.
-        *claimed_eval += dot_product(
-            self.evaluations.iter().copied(),
-            gamma.shifted_powers(gamma.exp_u64(shift as u64)),
-        );
     }
 }
 

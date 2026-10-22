@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::{ExtensionField, Field, PackedValue};
+use p3_field::{Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
 
@@ -16,7 +16,7 @@ pub mod statement;
 /// The combiner treats each group as one unit and advances the challenge power by the group's constraint count.
 /// The wrapped kind decides how the group's weight polynomial is built.
 #[derive(Clone, Debug)]
-pub enum Statements<F: Field, EF: ExtensionField<F>> {
+pub enum Statements<F, EF> {
     /// Plain multilinear evaluations at concrete points.
     Eq(EqStatement<EF>),
     /// Slot-local repeat-last successor evaluations.
@@ -25,7 +25,7 @@ pub enum Statements<F: Field, EF: ExtensionField<F>> {
     Select(SelectStatement<F, EF>),
 }
 
-impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
+impl<F: PrimeCharacteristicRing, EF: Algebra<F>> Statements<F, EF> {
     /// Returns the multilinear arity of the wrapped group.
     #[must_use]
     pub const fn num_variables(&self) -> usize {
@@ -78,7 +78,9 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
             Self::Select(statement) => statement.combine_evals(eval, challenge, shift),
         }
     }
+}
 
+impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
     /// Folds the wrapped group into a dense weight polynomial and an expected sum.
     ///
     /// # Arguments
@@ -207,7 +209,7 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
 /// S    = sum_i gamma^i * eval_i
 /// ```
 #[derive(Clone, Debug)]
-pub struct Constraint<F: Field, EF: ExtensionField<F>> {
+pub struct Constraint<F, EF> {
     /// Number of variables shared by every statement group.
     num_variables: usize,
 
@@ -221,7 +223,7 @@ pub struct Constraint<F: Field, EF: ExtensionField<F>> {
     initial_power: usize,
 }
 
-impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
+impl<F: PrimeCharacteristicRing, EF: Algebra<F>> Constraint<F, EF> {
     /// Builds a batch from explicitly ordered statement groups.
     ///
     /// # Arguments
@@ -314,12 +316,14 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         let mut shift = self.initial_power;
         for statement in &self.statements {
             // Fold this group's expected values starting at the current exponent.
-            statement.combine_evals(eval, self.challenge, shift);
+            statement.combine_evals(eval, self.challenge.dup(), shift);
             // Advance past this group's constraints so the next group's powers stay disjoint.
             shift += statement.len();
         }
     }
+}
 
+impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     /// Adds the batched weight polynomial and expected value onto existing accumulators.
     ///
     /// # Overview

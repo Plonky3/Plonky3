@@ -1336,10 +1336,16 @@ impl Basis {
     /// Both reconstruct the quadratic through `{0, 1, inf}` and evaluate it
     /// at `r`. Pairing a message with the wrong basis reduces to the wrong
     /// claim, so this is the only place either identity is written down.
-    pub fn reduce_claim<EF: Field>(self, c_a: EF, c_inf: EF, r: EF, claimed_sum: EF) -> EF {
+    pub fn reduce_claim<EF: PrimeCharacteristicRing>(
+        self,
+        c_a: EF,
+        c_inf: EF,
+        r: EF,
+        claimed_sum: EF,
+    ) -> EF {
         match self {
-            Self::Evaluation => extrapolate_01inf(c_a, claimed_sum - c_a, c_inf, r),
-            Self::Projective => extrapolate_01inf(claimed_sum - c_inf, c_a, c_inf, r),
+            Self::Evaluation => extrapolate_01inf(c_a.dup(), claimed_sum - c_a, c_inf, r),
+            Self::Projective => extrapolate_01inf(claimed_sum - c_inf.dup(), c_a, c_inf, r),
         }
     }
 }
@@ -1401,8 +1407,8 @@ impl VariableOrder {
         challenge: &Point<EF>,
     ) -> EF
     where
-        F: Field,
-        EF: ExtensionField<F>,
+        F: PrimeCharacteristicRing,
+        EF: Algebra<F>,
     {
         // Reverse once outside the per-constraint loop; both branches reuse it.
         let reversed = challenge.reversed();

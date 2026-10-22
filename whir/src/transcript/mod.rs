@@ -94,6 +94,7 @@ use p3_challenger::{
 };
 use p3_field::{ExtensionField, Field};
 use p3_util::log2_strict_usize;
+use p3_verifier_arith::Lift;
 use thiserror::Error;
 
 use crate::parameters::{FoldingFactor, SecurityAssumption, WhirConfig};
@@ -207,31 +208,37 @@ const fn stratified_index(width: usize, depth: usize, stratum: usize, low: usize
     (stratum << (width - depth)) | low
 }
 
-/// Assemble one query phase's indices from a caller-supplied draw.
+/// Assemble one query phase's indices from caller-supplied steps.
 ///
-/// Both drivers share this body, so their index schedules cannot drift apart.
-fn assemble_query_indices(
+/// Both drivers and the lift into an arithmetic share this body, so their index schedules cannot drift apart.
+///
+/// - `draw(state, bits, count)` draws `count` indices of `bits` bits.
+/// - `constant(state, position)` names a position of a saturated phase.
+/// - `stratum(state, low, low_bits, high)` places a drawn index under the fixed high bits of its stratum.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assemble_query_indices<S, T>(
+    state: &mut S,
     width: usize,
     draws: usize,
     stratified: bool,
     depths: &[usize],
-    mut draw: impl FnMut(usize, usize) -> Vec<usize>,
-) -> Vec<usize> {
+    mut draw: impl FnMut(&mut S, usize, usize) -> Vec<T>,
+    mut constant: impl FnMut(&mut S, usize) -> T,
+    mut stratum: impl FnMut(&mut S, T, usize, usize) -> T,
+) -> Vec<T> {
     // A saturated phase has nothing left to decide, so it opens every position.
     if draws == 0 {
-        return (0..1usize << width).collect();
+        return (0..1usize << width).map(|i| constant(state, i)).collect();
     }
     if !stratified {
-        return draw(width, draws);
+        return draw(state, width, draws);
     }
     let mut indices = Vec::with_capacity(draws);
     for &depth in depths {
-        let lows = draw(width - depth, 1usize << depth);
-        indices.extend(
-            lows.into_iter()
-                .enumerate()
-                .map(|(stratum, low)| stratified_index(width, depth, stratum, low)),
-        );
+        let lows = draw(state, width - depth, 1usize << depth);
+        for (high, low) in lows.into_iter().enumerate() {
+            indices.push(stratum(state, low, width - depth, high));
+        }
     }
     indices
 }
@@ -246,13 +253,51 @@ where
     S::Challenger: CanSampleUniformBits<F>,
 {
     let (label, width, draws, stratified, depths) = shape.query_index_site(round);
-    assemble_query_indices(width, draws, stratified, depths, |bits, count| {
-        state
-            .challenge_uniform_bits::<F>(label, bits, count)
-            .into_iter()
-            .map(TranscriptBound::into_inner)
-            .collect()
-    })
+    assemble_query_indices(
+        state,
+        width,
+        draws,
+        stratified,
+        depths,
+        |state, bits, count| {
+            state
+                .challenge_uniform_bits::<F>(label, bits, count)
+                .into_iter()
+                .map(TranscriptBound::into_inner)
+                .collect()
+        },
+        |_, position| position,
+        |_, low, low_bits, high| stratified_index(width, width - low_bits, high, low),
+    )
+}
+
+/// Lift the query indices one site drew natively into an arithmetic.
+///
+/// The site is walked as the drivers walk it, so each draw is lifted where it was drawn.
+pub(crate) fn lift_query_indices<A: Lift>(
+    arith: &mut A,
+    shape: &WhirShape,
+    round: usize,
+    drawn: &[usize],
+) -> Vec<A::Index> {
+    let (_, width, draws, stratified, depths) = shape.query_index_site(round);
+    let mut drawn = drawn.iter();
+    assemble_query_indices(
+        arith,
+        width,
+        draws,
+        stratified,
+        depths,
+        |arith, bits, count| {
+            // A stratified index carries its stratum above the drawn bits.
+            (&mut drawn)
+                .take(count)
+                .map(|&index| arith.sampled_index(index & ((1 << bits) - 1), bits))
+                .collect()
+        },
+        |arith, position| arith.constant_index(position),
+        |arith, low, low_bits, high| arith.index_with_high(&low, low_bits, high),
+    )
 }
 
 /// Append `value` as eight big-endian bytes to the instance label.
@@ -616,7 +661,7 @@ impl WhirShape {
     ///     round <  n_rounds  ->  that round's own site
     ///     round >= n_rounds  ->  the final site
     /// ```
-    fn query_pow_site(&self, round: usize) -> (&'static str, usize) {
+    pub(crate) fn query_pow_site(&self, round: usize) -> (&'static str, usize) {
         if round < self.rounds.len() {
             (QUERY_POW, self.rounds[round].query_pow_bits)
         } else {
@@ -627,7 +672,10 @@ impl WhirShape {
     /// Index label, index width, and draw count of the query site of `round`.
     ///
     /// A draw count of zero means the phase opens every position instead.
-    fn query_index_site(&self, round: usize) -> (&'static str, usize, usize, bool, &[usize]) {
+    pub(crate) fn query_index_site(
+        &self,
+        round: usize,
+    ) -> (&'static str, usize, usize, bool, &[usize]) {
         if round < self.rounds.len() {
             let shape = &self.rounds[round];
             (

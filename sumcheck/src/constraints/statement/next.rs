@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
 use p3_field::{
-    ExtensionField, Field, PackedFieldExtension, PackedValue, add_scaled_slice_in_place,
-    dot_product,
+    ExtensionField, Field, PackedFieldExtension, PackedValue, Powers, PrimeCharacteristicRing,
+    add_scaled_slice_in_place, dot_product,
 };
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
@@ -37,7 +37,7 @@ pub struct NextStatement<F> {
     evaluations: Vec<F>,
 }
 
-impl<F: Field> NextStatement<F> {
+impl<F: PrimeCharacteristicRing> NextStatement<F> {
     /// Creates an empty group over the given variable space.
     ///
     /// # Arguments
@@ -133,11 +133,16 @@ impl<F: Field> NextStatement<F> {
         // Dot the claimed values against the challenge powers starting at the shift.
         // The shift keeps this group's powers disjoint from earlier groups.
         *claimed_eval += dot_product(
-            self.evaluations.iter().copied(),
-            challenge.shifted_powers(challenge.exp_u64(shift as u64)),
+            self.evaluations.iter().cloned(),
+            Powers {
+                current: challenge.exp_u64(shift as u64),
+                base: challenge,
+            },
         );
     }
+}
 
+impl<F: Field> NextStatement<F> {
     /// Folds every constraint into one dense weight polynomial and one expected sum.
     ///
     /// # Overview
@@ -241,7 +246,7 @@ struct NextConstraint<F> {
     var_order: VariableOrder,
 }
 
-impl<F: Field> NextConstraint<F> {
+impl<F: PrimeCharacteristicRing> NextConstraint<F> {
     /// Evaluates this constraint's weight at one full point.
     ///
     /// # Overview
@@ -270,7 +275,9 @@ impl<F: Field> NextConstraint<F> {
         let (_carry, done, omega) = Point::eval_next(self.point.as_slice(), local_row);
         Point::eval_eq(self.selector.as_slice(), selector_row) * (done + omega)
     }
+}
 
+impl<F: Field> NextConstraint<F> {
     /// Adds this constraint's dense successor weight, scaled, into a hypercube buffer.
     ///
     /// # Overview

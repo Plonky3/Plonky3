@@ -955,8 +955,6 @@ pub(crate) struct VirtualVerifierTranscript<'a, C, F: TranscriptField, EF> {
     ///
     /// The driver therefore reads an empty wire.
     state: VerifierState<'static, &'a mut C, Alphabet<F>>,
-    /// The numbers this claim was described with.
-    shape: VirtualShape,
     /// Marker for the extension field the claim carries.
     _ef: PhantomData<EF>,
 }
@@ -972,25 +970,23 @@ where
     /// The argument matches the prover's.
     ///
     /// Both sides therefore seed identically.
-    pub(crate) fn new(challenger: &'a mut C, shape: VirtualShape) -> Self {
+    pub(crate) fn new(challenger: &'a mut C, shape: &VirtualShape) -> Self {
         // Seeding folds the shape fingerprint into the sponge before any step.
         let separator = shape.domain_separator::<F, EF>();
 
         Self {
             state: VerifierState::new(challenger, &separator, &[]),
-            shape,
             _ef: PhantomData,
         }
     }
 
-    /// Draw the same out-of-domain point the prover drew.
-    pub(crate) fn point(&mut self) -> Point<EF> {
-        // One challenge, expanded exactly as the prover expanded it.
-        let challenge = self
-            .state
+    /// Draw the challenge the prover expanded into its out-of-domain point.
+    ///
+    /// The point is `Point::expand_from_univariate` of it, over the stacked arity.
+    pub(crate) fn point_challenge(&mut self) -> EF {
+        self.state
             .challenge_extension::<F, EF, FieldToFieldCodec<F>>(VIRTUAL_POINT)
-            .into_inner();
-        Point::expand_from_univariate(challenge, self.shape.binding.num_variables)
+            .into_inner()
     }
 
     /// Bind the claimed evaluation the proof carries.
@@ -1728,8 +1724,8 @@ mod tests {
 
         let mut verifier_challenger = fresh_challenger();
         let mut verifier =
-            VirtualVerifierTranscript::<Ch, F, EF>::new(&mut verifier_challenger, shape);
-        let verifier_point = verifier.point();
+            VirtualVerifierTranscript::<Ch, F, EF>::new(&mut verifier_challenger, &shape);
+        let verifier_point = Point::expand_from_univariate(verifier.point_challenge(), 11);
         verifier.evaluation(EF::from_u8(7));
         verifier.finish();
 
@@ -1759,8 +1755,8 @@ mod tests {
         let replay = |eval: EF| {
             let mut challenger = fresh_challenger();
             let mut transcript =
-                VirtualVerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape.clone());
-            let _point = transcript.point();
+                VirtualVerifierTranscript::<Ch, F, EF>::new(&mut challenger, &shape);
+            let _challenge = transcript.point_challenge();
             transcript.evaluation(eval);
             transcript.finish();
             CanSample::<F>::sample(&mut challenger)

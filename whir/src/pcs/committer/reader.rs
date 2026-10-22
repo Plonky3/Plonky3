@@ -1,11 +1,10 @@
-use core::fmt::Debug;
-
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSample, CanSampleUniformBits, GrindingChallenger};
-use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
+use p3_commit::{Mmcs, MmcsArith};
+use p3_field::PrimeCharacteristicRing;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::constraints::statement::EqStatement;
+use p3_verifier_arith::Lift;
 
 use crate::pcs::proof::WhirProof;
 use crate::pcs::verifier::errors::VerifierError;
@@ -23,31 +22,31 @@ pub struct ParsedCommitment<F, D> {
     pub ood_statement: EqStatement<F>,
 }
 
-impl<F, D> ParsedCommitment<F, D>
-where
-    F: Field,
-{
-    /// Parse a commitment for a specific round.
+impl<F: PrimeCharacteristicRing, D> ParsedCommitment<F, D> {
+    /// Parse a commitment for a specific round, within an arithmetic.
     ///
     /// # Errors
     ///
     /// - Round index is past the last round carried by the proof.
     /// - Round entry is present but its Merkle-root slot is empty.
-    pub fn parse_with_round<EF, MT: Mmcs<F>, Challenger>(
-        proof: &WhirProof<F, EF, MT>,
-        transcript: &mut WhirVerifierTranscript<'_, Challenger, F, EF>,
+    pub fn parse_with_round<A, MT, Challenger>(
+        arith: &mut A,
+        mmcs: &MT,
+        proof: &WhirProof<A::Val, A::Challenge, MT>,
+        transcript: &mut WhirVerifierTranscript<'_, Challenger, A::Val, A::Challenge>,
         num_variables: usize,
         ood_samples: usize,
         round_index: usize,
-    ) -> Result<ParsedCommitment<EF, MT::Commitment>, VerifierError>
+    ) -> Result<Self, VerifierError>
     where
-        F: Field + TranscriptField,
-        EF: ExtensionField<F>,
-        Challenger: CanObserve<F>
-            + CanSample<F>
-            + CanSampleUniformBits<F>
-            + GrindingChallenger<Witness = F>
-            + CanObserve<MT::Commitment>,
+        A: Lift<Val: TranscriptField, EF = F>,
+        MT: Mmcs<A::Val>
+            + MmcsArith<A, A::F, Commitment = <MT as Mmcs<A::Val>>::Commitment, Target = D>,
+        Challenger: CanObserve<A::Val>
+            + CanSample<A::Val>
+            + CanSampleUniformBits<A::Val>
+            + GrindingChallenger<Witness = A::Val>
+            + CanObserve<<MT as Mmcs<A::Val>>::Commitment>,
     {
         let round_proof = proof
             .rounds
@@ -67,22 +66,26 @@ where
         }
 
         // Observe the Merkle root in the transcript.
-        transcript.commitment(root.clone());
+        let target = mmcs.load_commitment(arith, &root);
+        mmcs.will_observe(arith, &target);
+        transcript.commitment(root);
 
         // Reconstruct equality constraints from OOD challenge points and answers.
         //
         // The count was pinned against the configuration above.
         // Every index below is therefore in bounds, and every draw is described.
         let mut ood_statement = EqStatement::initialize(num_variables);
-        (0..ood_samples).for_each(|i| {
-            let point = Point::expand_from_univariate(transcript.ood_point(), num_variables);
-            let eval = ood_answers[i];
-            transcript.ood_answer(eval);
+        for &answer in ood_answers {
+            let challenge = arith.sampled_ext(transcript.ood_point());
+            let point = Point::expand_from_univariate(challenge, num_variables);
+            let eval = arith.load_ext(answer);
+            arith.will_observe_ext(&eval);
+            transcript.ood_answer(answer);
             ood_statement.add_evaluated_constraint(point, eval);
-        });
+        }
 
-        Ok(ParsedCommitment {
-            root,
+        Ok(Self {
+            root: target,
             ood_statement,
         })
     }

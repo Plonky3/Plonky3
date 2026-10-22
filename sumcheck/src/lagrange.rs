@@ -40,7 +40,7 @@
 
 use alloc::vec::Vec;
 
-use p3_field::Field;
+use p3_field::{Field, PrimeCharacteristicRing};
 
 /// Computes the interpolation weights for the evaluation set `{0, 1, inf}`.
 ///
@@ -54,13 +54,13 @@ use p3_field::Field;
 /// `h(r) = h(0)*L_0(r) + h(1)*L_1(r) + h(inf)*L_inf(r)`.
 ///
 /// Note: these do NOT form a partition of unity (they do not sum to 1).
-pub(crate) fn lagrange_weights_01inf<F: Field>(r: F) -> [F; 3] {
-    let r_minus_one = r - F::ONE;
+pub(crate) fn lagrange_weights_01inf<F: PrimeCharacteristicRing>(r: F) -> [F; 3] {
+    let r_minus_one = r.dup() - F::ONE;
 
     // L_0(r) = 1 - r
     // L_1(r) = r
     // L_inf(r) = r * (r - 1)
-    [F::ONE - r, r, r * r_minus_one]
+    [F::ONE - r.dup(), r.dup(), r * r_minus_one]
 }
 
 /// Computes tensor product weights for multivariate interpolation on `{0, 1, inf}^k`.
@@ -103,7 +103,7 @@ pub fn lagrange_weights_01inf_multi<F: Field>(rs: &[F]) -> Vec<F> {
 /// ```text
 ///     h(r) = h(0)*(1-r) + h(1)*r + h(inf)*r*(r-1)
 /// ```
-pub fn extrapolate_01inf<F: Field>(e0: F, e1: F, e_inf: F, r: F) -> F {
+pub fn extrapolate_01inf<F: PrimeCharacteristicRing>(e0: F, e1: F, e_inf: F, r: F) -> F {
     let [w0, w1, w_inf] = lagrange_weights_01inf(r);
     e0 * w0 + e1 * w1 + e_inf * w_inf
 }

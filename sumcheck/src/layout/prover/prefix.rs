@@ -220,8 +220,10 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
                 let (local_part, selector_part) = point.split_at(table.num_variables());
 
                 // Scalar weight picking this slot out of the stacked space.
-                let weight =
-                    Point::eval_eq::<EF>(selector.point().as_slice(), selector_part.as_slice());
+                let weight = Point::eval_eq::<EF>(
+                    selector.point::<F>().as_slice(),
+                    selector_part.as_slice(),
+                );
 
                 // Factorise the local part, then evaluate the column at it.
                 let local_svo = SvoPoint::new_packed(self.claims.folding, &local_part);

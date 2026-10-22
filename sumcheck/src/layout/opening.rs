@@ -17,13 +17,6 @@ pub type ProverMultiClaim<F, EF> =
 /// Virtual claim carrying precomputed SVO accumulators.
 pub type ProverVirtualClaim<EF> = Claim<EF, Point<EF>, SvoAccumulators<EF>>;
 
-/// Opening on the verifier side: column index plus claimed evaluation.
-pub type VerifierOpening<EF> = Opening<EF, ()>;
-/// Multi-opening claim over a plain point on the verifier side.
-pub type VerifierMultiClaim<EF> = MultiClaim<EF, Point<EF>, (), ()>;
-/// Virtual evaluation claim on the stacked polynomial (verifier side).
-pub type VerifierVirtualClaim<EF> = Claim<EF, Point<EF>, ()>;
-
 /// Equality-weight partial-evaluation table produced for one round of the small-value-optimization preprocessing.
 ///
 /// Holds the multilinear residual left active after that round has been folded.

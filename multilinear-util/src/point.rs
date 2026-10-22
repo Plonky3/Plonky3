@@ -5,7 +5,7 @@ use core::ops::{Index, RangeBounds};
 use core::slice::SliceIndex;
 
 use itertools::Itertools;
-use p3_field::{ExtensionField, Field};
+use p3_field::{Algebra, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform};
@@ -91,7 +91,7 @@ where
 
 impl<F, S> Point<F, S>
 where
-    F: Field,
+    F: Clone,
     S: Borrow<[F]>,
 {
     /// Return a sub-point over the specified range of variables.
@@ -105,9 +105,15 @@ where
 
     /// Returns a new `Point` with the variables in reversed order.
     pub fn reversed(&self) -> Point<F> {
-        Point::new(self.iter().rev().copied().collect())
+        Point::new(self.iter().rev().cloned().collect())
     }
+}
 
+impl<F, S> Point<F, S>
+where
+    F: Field,
+    S: Borrow<[F]>,
+{
     /// Given a position splits the point into two sub-points.
     pub fn split_at(&self, pos: usize) -> (Point<F>, Point<F>) {
         let (left, right) = self.as_slice().split_at(pos);
@@ -189,7 +195,7 @@ where
 
 impl<F> Point<F>
 where
-    F: Field,
+    F: PrimeCharacteristicRing,
 {
     /// Construct a `Point` corresponding to a vertex of the hypercube.
     ///
@@ -223,7 +229,7 @@ where
         // Fill big-endian: [y^(2^(n-1)), ..., y^2, y]
         // Loop from the last index down to the first.
         for i in (0..num_variables).rev() {
-            res[i] = cur;
+            res[i] = cur.dup();
             cur = cur.square();
         }
 
@@ -244,7 +250,7 @@ where
     /// Panics if `p` and `q` have different lengths.
     #[must_use]
     #[inline]
-    pub fn eval_eq<EF: ExtensionField<F>>(p: &[F], q: &[EF]) -> EF {
+    pub fn eval_eq<EF: Algebra<F>>(p: &[F], q: &[EF]) -> EF {
         assert_eq!(
             p.len(),
             q.len(),
@@ -256,7 +262,7 @@ where
         // to avoid unnecessary multiplications.
         p.iter()
             .zip(q)
-            .map(|(&l, &r)| r.double() * l - l - r + F::ONE)
+            .map(|(l, r)| r.double() * l.dup() - l.dup() - r.dup() + F::ONE)
             .product()
     }
 
@@ -271,17 +277,17 @@ where
     /// ```
     #[must_use]
     #[inline]
-    pub fn eval_select<EF: ExtensionField<F>>(mut var: F, point: &[EF]) -> EF {
+    pub fn eval_select<EF: Algebra<F>>(mut var: F, point: &[EF]) -> EF {
         // Read coordinates from the highest variable down to the lowest.
         // `var` starts at the lowest power and is squared after each factor,
         // so reversed iteration yields the descending powers var^(2^(n-1)), ..., var.
         point
             .iter()
             .rev()
-            .map(|&r| {
+            .map(|r| {
                 // Per-coordinate factor: r * (var - 1) + 1.
                 // Equals 1 when var == 1, and equals 1 - r when var == 0.
-                let term = r * (F::NEG_ONE + var) + EF::ONE;
+                let term = r.dup() * (F::NEG_ONE + var.dup()) + EF::ONE;
                 // Advance to the next-higher power for the next coordinate.
                 var = var.square();
                 term
@@ -323,16 +329,16 @@ where
         // omega: weight of the repeating all-ones row.
         let mut omega = F::ONE;
         // Fold the low bit first so the carry ripples toward higher bits.
-        for (&point_bit, &row_bit) in point.iter().zip(row).rev() {
+        for (point_bit, row_bit) in point.iter().zip(row).rev() {
             // Equality factor: 1 when the bits agree, 0 when they differ.
-            let eq = row_bit.double() * point_bit - point_bit - row_bit + F::ONE;
+            let eq = row_bit.double() * point_bit.dup() - point_bit.dup() - row_bit.dup() + F::ONE;
             let prev_carry = carry;
             // Carry lives where point_bit = 1, row_bit = 0: a 0 -> 1 still to ripple up.
-            carry = prev_carry * point_bit * (F::ONE - row_bit);
+            carry = prev_carry.dup() * point_bit.dup() * (F::ONE - row_bit.dup());
             // Carry settles where point_bit = 0, row_bit = 1; settled mass rides the equality factor.
-            done = done * eq + prev_carry * (F::ONE - point_bit) * row_bit;
+            done = done * eq + prev_carry * (F::ONE - point_bit.dup()) * row_bit.dup();
             // All-ones weight: nonzero only where both bits are 1.
-            omega *= point_bit * row_bit;
+            omega *= point_bit.dup() * row_bit.dup();
         }
         (carry, done, omega)
     }
@@ -341,7 +347,12 @@ where
     pub fn extend<T: Borrow<[F]>>(&mut self, other: &Point<F, T>) {
         self.0.extend_from_slice(other.as_slice());
     }
+}
 
+impl<F> Point<F>
+where
+    F: Field,
+{
     /// Transposes points so same-index variables are aligned in rows.
     pub fn transpose(points: &[Self], rev_order: bool) -> RowMajorMatrix<F> {
         let k = points
