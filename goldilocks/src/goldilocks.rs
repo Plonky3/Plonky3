@@ -80,6 +80,23 @@ impl Goldilocks {
         Self { value }
     }
 
+    /// Return the canonical representative using `subtle`'s constant-time operations.
+    ///
+    /// Requires the `constant-time` feature. This covers only scalar canonicalization;
+    /// other field operations and calling code are not made constant-time.
+    /// Timing properties depend on `subtle`, compiler optimizations, and target hardware.
+    /// Use release builds: `subtle`'s debug assertions may introduce input-dependent branches.
+    #[cfg(feature = "constant-time")]
+    #[inline]
+    #[must_use]
+    pub fn as_canonical_u64_ct(&self) -> u64 {
+        use subtle::{ConditionallySelectable, ConstantTimeGreater};
+
+        // Every u64 is less than 2 * P, so at most one subtraction is needed.
+        let reduced = self.value.wrapping_sub(P);
+        u64::conditional_select(&reduced, &self.value, P.ct_gt(&self.value))
+    }
+
     /// Convert a `[u64; N]` array to an array of field elements.
     ///
     /// Const version of `input.map(Goldilocks::new)`.
@@ -1307,6 +1324,48 @@ mod tests {
         // The canonical encoding round-trips back to the same field element.
         let roundtrip: F = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtrip, non_canonical);
+    }
+
+    #[cfg(feature = "constant-time")]
+    #[test]
+    fn canonical_u64_ct_handles_boundary_representatives() {
+        for (raw, expected) in [
+            (0, 0),
+            (1, 1),
+            (P - 1, P - 1),
+            (P, 0),
+            (P + 1, 1),
+            (u64::MAX, 0xFFFF_FFFE),
+        ] {
+            assert_eq!(F::new(raw).as_canonical_u64_ct(), expected, "raw={raw}");
+        }
+
+        for canonical in [0, 1, 2, 0x7FFF_FFFF, 0xFFFF_FFFD, 0xFFFF_FFFE] {
+            assert_eq!(
+                F::new(canonical).as_canonical_u64_ct(),
+                F::new(P + canonical).as_canonical_u64_ct(),
+            );
+        }
+    }
+
+    #[cfg(feature = "constant-time")]
+    #[test]
+    fn canonical_u64_ct_matches_u128_modulo() {
+        let check = |raw: u64| {
+            let expected = (u128::from(raw) % u128::from(P)) as u64;
+            assert_eq!(F::new(raw).as_canonical_u64_ct(), expected, "raw={raw}");
+        };
+        let mut rng = SmallRng::seed_from_u64(0xCACA_0011_5EED);
+        for _ in 0..10_000 {
+            check(rng.random());
+            // Uniform u64 sampling almost never hits the noncanonical interval.
+            check(P + rng.random_range(0..=u64::MAX - P));
+        }
+        for offset in 0..256 {
+            check(P - offset);
+            check(P + offset);
+            check(u64::MAX - offset);
+        }
     }
 
     #[test]
