@@ -16,6 +16,7 @@ use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_binary_field::byteslice::transpose_bits;
 use p3_binary_field::{Poly192, Rijndael8b};
 use p3_field::PrimeCharacteristicRing;
 use p3_maybe_rayon::prelude::*;
@@ -23,7 +24,6 @@ use p3_maybe_rayon::prelude::*;
 use self::convert::{Convert, ConvertTables};
 use super::fixed::{MEDIUM_VALUES, N_FIXED, c_s, d_inv};
 use super::{EqHalves, Padding};
-use crate::byteslice::transpose_bits;
 use crate::skip::{K_SKIP, SKIP_SIZE, SkipLde};
 
 /// Bits of a window: the skip, then the fixed coordinates.

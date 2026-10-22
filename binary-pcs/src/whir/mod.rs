@@ -2,10 +2,13 @@
 
 mod boolean;
 mod budget;
+mod commitment;
 mod domain;
 mod error;
+pub mod preset;
 mod profile;
 mod proof;
+mod region;
 mod shape;
 
 pub use boolean::{
@@ -13,9 +16,11 @@ pub use boolean::{
     WeightedOpening,
 };
 pub use budget::BinaryWhirBudget;
+pub use commitment::{BitCommitment, CommitmentParams};
 pub use domain::{BinaryWhirAlphabet, BinaryWhirDomain, BooleanWhirDomain, recommended_cap_height};
-pub use error::{BooleanWhirError, BudgetError, ProfileError};
+pub use error::{BooleanWhirError, BudgetError, CommitmentError, ProfileError};
 pub use p3_sumcheck::ring_switch::bits::{BitTensor, SuffixTensors};
 pub use profile::BinaryWhirProfile;
 pub use proof::{BooleanWhirDeferredProof, BooleanWhirProof};
+pub use region::{Region, RegionLayout};
 pub use shape::{ProofShape, ProofShapeError};
