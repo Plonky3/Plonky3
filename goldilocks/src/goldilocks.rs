@@ -567,7 +567,7 @@ quotient_map_large_iint!(
     Goldilocks,
     i64,
     "`[-(2^63 - 2^31), 2^63 - 2^31]`",
-    "`[1 + 2^32 - 2^64, 2^64 - 1]`",
+    "`[-2^63, 2^63 - 1]`",
     [(i128, u128)]
 );
 
@@ -610,7 +610,7 @@ impl QuotientMap<u64> for Goldilocks {
 
     /// Convert a given `u64` integer into an element of the `Goldilocks` field.
     ///
-    /// Return `None` if the given integer is greater than `p = 2^64 - 2^32 + 1`.
+    /// Return `None` if the given integer is at least `p = 2^64 - 2^32 + 1`.
     #[inline]
     fn from_canonical_checked(int: u64) -> Option<Self> {
         (int < Self::ORDER_U64).then(|| Self::new(int))
@@ -642,7 +642,7 @@ impl QuotientMap<i64> for Goldilocks {
 
     /// Convert a given `i64` integer into an element of the `Goldilocks` field.
     ///
-    /// Returns none if the input does not lie in the range `(-(2^63 - 2^31), 2^63 - 2^31)`.
+    /// Returns none if the input does not lie in the range `[-(2^63 - 2^31), 2^63 - 2^31]`.
     #[inline]
     fn from_canonical_checked(int: i64) -> Option<Self> {
         const POS_BOUND: i64 = (P >> 1) as i64;
@@ -961,6 +961,29 @@ mod tests {
 
     type F = Goldilocks;
     type EF = BinomialExtensionField<F, 5>;
+
+    #[test]
+    fn quotient_map_documented_ranges() {
+        // Unchecked i128 conversion: the body casts to i64.
+        //
+        // So the documented range is exactly the i64 range.
+        for x in [i64::MIN, -1, 0, 1, i64::MAX] {
+            // SAFETY: x lies in the documented range [-2^63, 2^63 - 1].
+            let got = unsafe { <F as QuotientMap<i128>>::from_canonical_unchecked(x as i128) };
+            assert_eq!(got, F::from_int(x as i128));
+        }
+
+        // Checked i64 conversion: the bound (p - 1)/2 = 2^63 - 2^31 is included.
+        let bound = (P >> 1) as i64;
+        assert!(F::from_canonical_checked(bound).is_some());
+        assert!(F::from_canonical_checked(-bound).is_some());
+        assert!(F::from_canonical_checked(bound + 1).is_none());
+        assert!(F::from_canonical_checked(-bound - 1).is_none());
+
+        // Checked u64 conversion: p itself is rejected.
+        assert!(F::from_canonical_checked(P - 1).is_some());
+        assert!(F::from_canonical_checked(P).is_none());
+    }
 
     /// Check both product limbs, not just the residue: a lost carry could otherwise
     /// be hidden by the field reduction. Includes noncanonical field representatives.
