@@ -12,31 +12,11 @@ use p3_symmetric::{CryptographicPermutation, MerkleCap, PaddingFreeSponge, Trunc
 use p3_verifier_arith::{Arith, Lift};
 use serde::{Deserialize, Serialize};
 
+use crate::chip::sponge;
 use crate::{Base, CircuitArith, CircuitBuilder, Ext, PermutationChip};
 
 /// A Merkle commitment inside a circuit: the digest of every cap entry.
 pub type CapTarget<F> = Vec<Vec<Base<F>>>;
-
-/// [`PaddingFreeSponge`] on wires: overwrite the rate with each chunk, then permute.
-fn sponge<F, EF, P>(
-    builder: &mut CircuitBuilder<F, EF, P>,
-    inputs: &[Base<F>],
-    rate: usize,
-    out: usize,
-) -> Vec<Base<F>>
-where
-    F: PrimeField64,
-    EF: ExtensionField<F>,
-    P: PermutationChip<F>,
-{
-    let mut state = vec![Base::ZERO; P::WIDTH];
-    for chunk in inputs.chunks(rate) {
-        state[..chunk.len()].clone_from_slice(chunk);
-        state = builder.permute(&state);
-    }
-    state.truncate(out);
-    state
-}
 
 /// [`TruncatedPermutation`] of two digests on wires.
 fn compress<F, EF, P>(
@@ -188,7 +168,9 @@ where
             };
 
             // Walk the plan from the leaf, as the native verifier walks it.
-            let mut digest = sponge(builder, &gather(&plan.leaf), RATE, DIGEST);
+            let mut digest = sponge(&gather(&plan.leaf), P::WIDTH, RATE, DIGEST, |state| {
+                builder.permute(state)
+            });
             for ((depth, level), sibling) in plan.levels.iter().enumerate().zip(&path.siblings) {
                 // In a binary level, the index bit says whether the digest is the right child.
                 debug_assert_eq!(level.arity, 2, "a binary tree compresses pairs");
@@ -205,7 +187,10 @@ where
 
                 // Hash in the rows the plan injects at the next height.
                 if !level.inject.is_empty() {
-                    let injected = sponge(builder, &gather(&level.inject), RATE, DIGEST);
+                    let injected =
+                        sponge(&gather(&level.inject), P::WIDTH, RATE, DIGEST, |state| {
+                            builder.permute(state)
+                        });
                     digest = compress(builder, &digest, &injected);
                 }
             }

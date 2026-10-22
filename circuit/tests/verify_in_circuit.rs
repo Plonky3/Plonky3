@@ -2,56 +2,12 @@
 
 mod common;
 
-use common::{EF, F, chip, config, prove_and_verify};
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use common::{EF, F, Fibonacci, chip, config, fibonacci, prove_and_verify};
+use p3_air::BaseAir;
 use p3_batch_stark::{ProverData, StarkInstance, prove_batch, verify_batch, verify_batch_in};
 use p3_circuit::CircuitArith;
 use p3_field::PrimeCharacteristicRing;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_uni_stark::{prove, verify, verify_in};
-
-/// `(a, b) -> (b, a + b)` per row, with the first pair and the last value public.
-#[derive(Clone, Copy, Debug)]
-struct Fibonacci;
-
-impl<T> BaseAir<T> for Fibonacci {
-    fn width(&self) -> usize {
-        2
-    }
-
-    fn num_public_values(&self) -> usize {
-        3
-    }
-}
-
-impl<AB: AirBuilder> Air<AB> for Fibonacci {
-    fn eval(&self, builder: &mut AB) {
-        let main = builder.main();
-        let (local, next) = (main.current_slice().to_vec(), main.next_slice().to_vec());
-        let publics = builder.public_values().to_vec();
-        let (a, b, result) = (publics[0], publics[1], publics[2]);
-
-        builder.when_first_row().assert_eq(local[0], a);
-        builder.when_first_row().assert_eq(local[1], b);
-        builder.when_transition().assert_eq(next[0], local[1]);
-        builder
-            .when_transition()
-            .assert_eq(next[1], local[0] + local[1]);
-        builder.when_last_row().assert_eq(local[1], result);
-    }
-}
-
-/// The trace from `(a, b)` over `rows` rows, with its public values.
-fn fibonacci(a: F, b: F, rows: usize) -> (RowMajorMatrix<F>, Vec<F>) {
-    let first = [a, b];
-    let (mut a, mut b) = (a, b);
-    let mut values = Vec::with_capacity(2 * rows);
-    for _ in 0..rows {
-        values.extend([a, b]);
-        (a, b) = (b, a + b);
-    }
-    (RowMajorMatrix::new(values, 2), vec![first[0], first[1], a])
-}
 
 #[test]
 fn a_batch_proof_verifies_inside_a_circuit() {

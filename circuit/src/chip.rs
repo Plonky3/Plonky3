@@ -1,10 +1,11 @@
 //! Permutations the circuit proves in a dedicated table.
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 
 use p3_air::BaseAir;
-use p3_field::PrimeField;
+use p3_field::{PrimeCharacteristicRing, PrimeField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use p3_poseidon2_air::{Poseidon2Air, RoundConstants, generate_trace_rows, num_cols};
@@ -34,6 +35,25 @@ pub trait PermutationChip<F>: Clone + Debug + Sync {
 
     /// Column of a row holding output `i`.
     fn output_column(&self, i: usize) -> usize;
+}
+
+/// [`PaddingFreeSponge`](p3_symmetric::PaddingFreeSponge) over any permutation of `width` values.
+///
+/// Each chunk of `rate` inputs overwrites the front of the state before a permutation.
+pub(crate) fn sponge<T: PrimeCharacteristicRing>(
+    inputs: &[T],
+    width: usize,
+    rate: usize,
+    out: usize,
+    mut permute: impl FnMut(&[T]) -> Vec<T>,
+) -> Vec<T> {
+    let mut state = vec![T::ZERO; width];
+    for chunk in inputs.chunks(rate) {
+        state[..chunk.len()].clone_from_slice(chunk);
+        state = permute(&state);
+    }
+    state.truncate(out);
+    state
 }
 
 /// The Poseidon2 permutation, proven by [`Poseidon2Air`].
@@ -231,5 +251,27 @@ impl<
         // The outputs are the state after the last full round, which closes the row.
         num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>() - WIDTH
             + i
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_koala_bear::{KoalaBear, default_koalabear_poseidon2_16};
+    use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation};
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        #[test]
+        fn sponge_matches_the_padding_free_sponge(inputs in prop::collection::vec(any::<u32>(), 0..40)) {
+            let perm = default_koalabear_poseidon2_16();
+            let inputs: Vec<KoalaBear> = inputs.into_iter().map(KoalaBear::new).collect();
+            let expected = PaddingFreeSponge::<_, 16, 8, 8>::new(perm.clone()).hash_slice(&inputs);
+            let digest = sponge(&inputs, 16, 8, 8, |state| {
+                perm.permute(<[KoalaBear; 16]>::try_from(state).unwrap()).to_vec()
+            });
+            prop_assert_eq!(digest, expected.to_vec());
+        }
     }
 }
