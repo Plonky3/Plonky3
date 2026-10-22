@@ -1,0 +1,41 @@
+[package]
+name = "p3-xmss"
+description = "XMSS-style hash-based signatures over KoalaBear with Poseidon2, verified and aggregated inside recursive circuits."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[dependencies]
+p3-circuit.workspace = true
+p3-field.workspace = true
+p3-koala-bear.workspace = true
+p3-maybe-rayon.workspace = true
+p3-poseidon2-air.workspace = true
+p3-symmetric.workspace = true
+
+rand.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+p3-air = { path = "../air" }
+p3-batch-stark = { path = "../batch-stark" }
+p3-challenger = { path = "../challenger" }
+p3-commit = { path = "../commit" }
+p3-dft = { path = "../dft" }
+p3-fri = { path = "../fri" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-uni-stark = { path = "../uni-stark" }
+
+postcard = { workspace = true, features = ["alloc"] }
+proptest.workspace = true
+rand = { workspace = true, features = ["std_rng"] }
+
+[lints]
+workspace = true

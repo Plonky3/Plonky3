@@ -267,7 +267,10 @@ where
     fn new_wire(&mut self, kind: Kind, value: EF) -> Wire {
         // A wire's id is a field element on the bus, so two wires must never share one.
         let index = self.values.len();
-        assert!((index as u64) < F::ORDER_U64, "fewer wires than field elements");
+        assert!(
+            (index as u64) < F::ORDER_U64,
+            "fewer wires than field elements"
+        );
         let wire = Wire(u32::try_from(index).expect("fewer than 2^32 wires"));
         self.kinds.push(kind);
         self.values.push(value);

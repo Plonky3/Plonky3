@@ -19,7 +19,7 @@ pub mod tables;
 mod verifier;
 
 pub use builder::{CircuitBuilder, Unsatisfied};
-pub use chip::{PermutationChip, Poseidon2Chip};
+pub use chip::{PermutationChip, Poseidon2Chip, sponge};
 pub use circuit::Circuit;
 pub use expr::{Base, Ext};
 pub use verifier::*;

@@ -40,7 +40,7 @@ pub trait PermutationChip<F>: Clone + Debug + Sync {
 /// [`PaddingFreeSponge`](p3_symmetric::PaddingFreeSponge) over any permutation of `width` values.
 ///
 /// Each chunk of `rate` inputs overwrites the front of the state before a permutation.
-pub(crate) fn sponge<T: PrimeCharacteristicRing>(
+pub fn sponge<T: PrimeCharacteristicRing>(
     inputs: &[T],
     width: usize,
     rate: usize,

@@ -56,6 +56,7 @@ members = [
     "whir",
     "word",
     "word-backend",
+    "xmss",
     "zk-codes",
 ]
 
@@ -175,6 +176,7 @@ p3-verifier-arith = { path = "verifier-arith", version = "0.8.0" }
 p3-whir = { path = "whir", version = "0.8.0" }
 p3-word = { path = "word", version = "0.8.0" }
 p3-word-backend = { path = "word-backend", version = "0.8.0" }
+p3-xmss = { path = "xmss", version = "0.8.0" }
 p3-zk-codes = { path = "zk-codes", version = "0.8.0" }
 
 [workspace.package]
