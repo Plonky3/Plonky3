@@ -213,6 +213,7 @@ pub struct CapturedArithmeticConstraints<F: Field, EF: ExtensionField<F> = F> {
     /// Global assertion indices for the base and extension streams.
     pub layout: ConstraintLayout,
 }
+
 /// Reasons a publicly assembled arithmetic capture cannot be lowered.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ArithmeticLoweringError {
@@ -245,26 +246,18 @@ pub enum ArithmeticLoweringError {
 }
 
 impl<F: Field, EF: ExtensionField<F>> CapturedArithmeticConstraints<F, EF> {
-    /// Lower every root to primitive symbolic operations, preserving arithmetic values.
+    /// Lower every root to primitive symbolic operations, sharing caches across the whole capture.
     ///
-    /// Retains stream order, zero and duplicate roots, and global assertion indices.
-    /// Reuses pointer-identity caches across roots and base expressions lifted into
-    /// extension operands. Independently allocated equal expressions need not share.
-    /// Grouping and sharing may differ from legacy capture; serialized structure
-    /// and protocol commitments are not guaranteed to match.
+    /// Preserves arithmetic values, stream order, zero and duplicate roots, and global assertion indices.
+    /// Caches use pointer identity, including for base expressions lifted into extension operands.
+    /// Grouping and sharing may differ from legacy capture, so serialized structure and protocol commitments need not match.
     ///
-    /// Caches retain entries for the full capture, which can use more memory and
-    /// work and be slower for mostly unshared roots. Consider per-root
-    /// [`ArithmeticExpr::lower`](super::ArithmeticExpr::lower) for those workloads.
-    ///
-    /// Traversal bounds recursion and uses an explicit stack for deeper graphs.
-    /// Destroying deeply nested source or result graphs still uses recursive `Arc` drops.
+    /// Caches live for the whole capture, so per-root [`ArithmeticExpr::lower`](super::ArithmeticExpr::lower) can be faster and use less memory when roots share little.
+    /// Traversal uses an explicit stack for deep graphs; destroying source or result graphs still uses recursive `Arc` drops.
     ///
     /// # Errors
     ///
-    /// Returns an error before lowering if the stream and layout lengths differ,
-    /// or the index streams fail to form a strictly increasing, disjoint
-    /// partition of all global assertion indices.
+    /// Returns an error before lowering if stream and layout lengths differ or the index streams are not strictly increasing, disjoint, and complete.
     ///
     /// ```
     /// use p3_air::{AirBuilder, AirLayout, capture_arithmetic};
