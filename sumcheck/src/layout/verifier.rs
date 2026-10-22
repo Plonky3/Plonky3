@@ -577,6 +577,12 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         &self.placements[self.placement_by_table[table_idx]]
     }
 
+    /// The power of the batching challenge an extra initial weight takes, after every recorded claim.
+    #[must_use]
+    pub fn extra_weight_scale(&self, alpha: EF) -> EF {
+        alpha.exp_u64((self.num_claims() + self.virtual_claims.len()) as u64)
+    }
+
     /// Returns the number of concrete openings recorded so far.
     fn num_claims(&self) -> usize {
         self.claim_map

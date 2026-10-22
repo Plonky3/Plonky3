@@ -23,7 +23,6 @@ use crate::{Batch, Challenge, Val, Witness};
 /// # Panics
 ///
 /// - The witness, the claims or the public words are not the batch's.
-#[instrument(skip_all, name = "lincheck prove", fields(log_n = batch.log_n()))]
 pub fn prove<C>(
     batch: &Batch<'_>,
     witness: &Witness,
@@ -34,8 +33,29 @@ pub fn prove<C>(
 where
     C: CanObserve<Val> + CanSample<Val>,
 {
+    let (proof, claim, _) = prove_folded(batch, witness.z(), claims, public, challenger);
+    (proof, claim)
+}
+
+/// As [`prove`] over the witness bits alone, also returning them folded over the instances.
+///
+/// Entry `64 i + v` is the folded bit `v` of inner row `i`, before the sumcheck binds anything.
+///
+/// # Panics
+///
+/// - The witness, the claims or the public words are not the batch's.
+#[instrument(skip_all, name = "lincheck prove", fields(log_n = batch.log_n()))]
+pub fn prove_folded<C>(
+    batch: &Batch<'_>,
+    z: &[u64],
+    claims: &ZerocheckClaims,
+    public: &PublicPorts,
+    challenger: &mut C,
+) -> (LincheckProof, QuirkyClaim, Vec<Challenge>)
+where
+    C: CanObserve<Val> + CanSample<Val>,
+{
     let circuit = batch.circuit();
-    let z = witness.z();
     assert_eq!(
         z.len(),
         1 << (batch.log_n() - K_SKIP),
@@ -87,7 +107,7 @@ where
 
     // Phase 4: the product sumcheck over the inner variables past the skip, top first.
     let rounds = shape.rounds();
-    let mut sumcheck = ProductSumcheck::new(comb, folded);
+    let mut sumcheck = ProductSumcheck::new(comb, folded.clone());
     let mut running = sumcheck.claim();
     let mut messages = Vec::with_capacity(rounds);
     let mut point = Vec::with_capacity(rounds);
@@ -123,5 +143,6 @@ where
             slices,
         },
         claim,
+        folded,
     )
 }

@@ -308,6 +308,57 @@ where
         digests
     }
 
+    /// Hash every layer above leaf digests the caller computed, and return them, the leaf digests first.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless one matrix fills the leaf layer and there is one digest per row of it.
+    pub(crate) fn build_over_leaf_digests(
+        &self,
+        mut leaf_digests: Vec<[PW::Value; DIGEST_ELEMS]>,
+    ) -> Vec<Vec<[PW::Value; DIGEST_ELEMS]>>
+    where
+        PW::Value: Default,
+    {
+        assert_eq!(
+            self.layers[0].matrices.len(),
+            1,
+            "one matrix fills the leaves"
+        );
+        assert!(
+            self.layers[1..]
+                .iter()
+                .all(|layer| layer.matrices.is_empty()),
+            "no matrix is injected above the leaves"
+        );
+        assert_eq!(
+            leaf_digests.len(),
+            self.layers[0].computed,
+            "one digest per row"
+        );
+        leaf_digests.resize(
+            padded_len(self.layers[0].computed, N),
+            [PW::Value::default(); DIGEST_ELEMS],
+        );
+
+        let mut digests: Vec<_> = core::iter::once(leaf_digests)
+            .chain(
+                self.layers[1..]
+                    .iter()
+                    .map(|layer| default_digest_layer(padded_len(layer.computed, N))),
+            )
+            .collect();
+
+        // The leaf layer is done, so the passes start one layer up.
+        let mut lo = 1;
+        while lo < self.layers.len() {
+            let (blocks, hi) = self.pass_shape(lo);
+            self.run_pass(&mut digests, lo..=hi, blocks);
+            lo = hi + 1;
+        }
+        digests
+    }
+
     /// Nodes one vector call hashes together.
     ///
     /// Blocks are cut on multiples of it, so that only the last block runs a partial group.

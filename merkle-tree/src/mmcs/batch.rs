@@ -2,22 +2,61 @@
 
 use alloc::vec::Vec;
 use core::cmp::Reverse;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use itertools::Itertools;
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MmcsProofGeometry};
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MmcsProofGeometry, RowSink};
 use p3_field::PackedValue;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
-use p3_util::log2_ceil_usize;
+use p3_util::{DisjointMutPtr, log2_ceil_usize};
 use serde::{Deserialize, Serialize};
 
 use super::{check_widths, collect_opening_row, validate_commit_reachable_heights};
 use crate::MerkleTreeError::{
     CapMismatch, EmptyBatch, IndexOutOfBounds, WrongBatchSize, WrongHeight,
 };
+use crate::builder::default_digest_layer;
 use crate::merkle_tree::padded_len;
 use crate::pruning::PrunedMerklePaths;
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
+
+/// A streamed row no sink call has claimed.
+const FREE: u8 = 0;
+
+/// A streamed row one sink call is hashing.
+const CLAIMED: u8 = 1;
+
+/// A streamed row whose digest is written.
+const WRITTEN: u8 = 2;
+
+/// The rows one sink call claimed, released again unless their digests were written.
+struct RowClaim<'a> {
+    /// The states of the call's whole range.
+    rows: &'a [AtomicU8],
+    /// How many leading rows of the range this call holds.
+    claimed: usize,
+}
+
+impl RowClaim<'_> {
+    /// Mark every claimed row as written, keeping it from release.
+    fn written(mut self) {
+        for state in &self.rows[..self.claimed] {
+            state.store(WRITTEN, Ordering::Release);
+        }
+        self.claimed = 0;
+    }
+}
+
+impl Drop for RowClaim<'_> {
+    fn drop(&mut self) {
+        // An unwinding or refused call frees its rows, so a retry may hand them over again.
+        for state in &self.rows[..self.claimed] {
+            state.store(FREE, Ordering::Release);
+        }
+    }
+}
 
 impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize> Mmcs<P::Value>
     for MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>
@@ -72,6 +111,70 @@ where
 
         let cap = tree.cap(effective_cap_height);
         (cap, tree)
+    }
+
+    /// Hash every row as the producer hands it over, then build the tree above those digests.
+    fn commit_matrix_streamed<Fill>(
+        &self,
+        dimensions: Dimensions,
+        fill: Fill,
+    ) -> (Self::Commitment, Self::ProverData<RowMajorMatrix<P::Value>>)
+    where
+        Fill: FnOnce(&RowSink<'_, P::Value>) -> RowMajorMatrix<P::Value>,
+    {
+        let Dimensions { width, height } = dimensions;
+        assert!(height > 0, "all matrices have height 0");
+        let mut digests = default_digest_layer::<PW::Value, DIGEST_ELEMS>(height);
+        // One state per row: a call owns its rows only once it has claimed every one of them.
+        let states: Vec<AtomicU8> = (0..height).map(|_| AtomicU8::new(FREE)).collect();
+        let slots = DisjointMutPtr::new(&mut digests);
+        let sink = |first_row: usize, rows: &[P::Value]| {
+            let count = rows.len() / width.max(1);
+            assert_eq!(count * width, rows.len(), "a partial row");
+            let end = first_row.checked_add(count).expect("rows past the matrix");
+            assert!(end <= height, "rows past the matrix");
+            let mut claim = RowClaim {
+                rows: &states[first_row..end],
+                claimed: 0,
+            };
+            for state in claim.rows {
+                let free =
+                    state.compare_exchange(FREE, CLAIMED, Ordering::Acquire, Ordering::Relaxed);
+                // A refused call releases what it claimed, so the rows stay free for another.
+                assert!(free.is_ok(), "a row handed over twice");
+                claim.claimed += 1;
+            }
+            // SAFETY: this call claimed every row of the range, so no other call reaches these slots.
+            let out = unsafe { slots.slice_mut(first_row, count) };
+            <H as CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>>::hash_many(
+                &self.hash, rows, out,
+            );
+            claim.written();
+        };
+        let matrix = fill(&sink);
+        assert_eq!(
+            matrix.dimensions(),
+            dimensions,
+            "the matrix the producer promised"
+        );
+        // Every sink call has returned with `fill`, so no slot is still borrowed.
+        if width > 0 {
+            assert!(
+                states
+                    .iter()
+                    .all(|state| state.load(Ordering::Acquire) == WRITTEN),
+                "a row never handed over"
+            );
+        }
+
+        let tree = MerkleTree::new_over_leaf_digests::<P, PW, H, C>(
+            &self.hash,
+            &self.compress,
+            matrix,
+            digests,
+        );
+        let effective_cap_height = self.cap_height.min(tree.num_layers().saturating_sub(1));
+        (tree.cap(effective_cap_height), tree)
     }
 
     /// Opens a batch of rows from committed matrices.
@@ -341,8 +444,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use alloc::vec;
     use alloc::vec::Vec;
+    use std::panic::AssertUnwindSafe;
 
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -375,6 +481,146 @@ mod tests {
     type MyCompress4 = TruncatedPermutation<PermWide, 4, 8, 32>;
     type MyMmcs4 =
         MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress4, 4, 8>;
+
+    /// Commit through the streamed path, handing rows over in shuffled blocks of `block` rows.
+    fn commit_streamed<M: Mmcs<F, ProverData<RowMajorMatrix<F>> = P>, P>(
+        mmcs: &M,
+        matrix: &RowMajorMatrix<F>,
+        block: usize,
+    ) -> (M::Commitment, P) {
+        let width = matrix.width;
+        mmcs.commit_matrix_streamed(matrix.dimensions(), |sink| {
+            let mut blocks: Vec<_> = matrix.values.chunks(block * width).enumerate().collect();
+            blocks.reverse();
+            for (index, rows) in blocks {
+                sink(index * block, rows);
+            }
+            matrix.clone()
+        })
+    }
+
+    #[test]
+    fn a_streamed_commitment_is_the_committed_one() {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(7));
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 1);
+        let mut rng = SmallRng::seed_from_u64(8);
+        // A byte hasher that batches several rows per call.
+        type ByteMmcs = MerkleTreeMmcs<
+            F,
+            u8,
+            p3_symmetric::SerializingHasher<p3_keccak::Keccak256Hash>,
+            p3_symmetric::CompressionFunctionFromHasher<p3_keccak::Keccak256Hash, 2, 32>,
+            2,
+            32,
+        >;
+        let bytes = ByteMmcs::new(
+            p3_symmetric::SerializingHasher::new(p3_keccak::Keccak256Hash),
+            p3_symmetric::CompressionFunctionFromHasher::new(p3_keccak::Keccak256Hash),
+            2,
+        );
+        for (height, width, block) in [(1, 3, 1), (64, 8, 5), (100, 7, 16), (256, 16, 256)] {
+            let matrix = RowMajorMatrix::<F>::rand(&mut rng, height, width);
+            let (commitment, data) = mmcs.commit_matrix(matrix.clone());
+            let (streamed, streamed_data) = commit_streamed(&mmcs, &matrix, block);
+            assert_eq!(streamed, commitment, "height={height} width={width}");
+            assert_eq!(
+                commit_streamed(&bytes, &matrix, block).0,
+                bytes.commit_matrix(matrix.clone()).0,
+                "bytes height={height} width={width}"
+            );
+            for index in [0, height / 2, height - 1] {
+                let (streamed, committed) = (
+                    mmcs.open_batch(index, &streamed_data),
+                    mmcs.open_batch(index, &data),
+                );
+                assert_eq!(streamed.opened_values, committed.opened_values);
+                assert_eq!(streamed.opening_proof, committed.opening_proof);
+            }
+        }
+    }
+
+    /// Commit a random matrix whose producer hands over the given `(first_row, rows)` ranges.
+    fn hand_over(ranges: &[(usize, usize)]) {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(9));
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 1);
+        let matrix = RowMajorMatrix::<F>::rand(&mut SmallRng::seed_from_u64(10), 8, 2);
+        mmcs.commit_matrix_streamed(matrix.dimensions(), |sink| {
+            for &(first_row, rows) in ranges {
+                sink(first_row, &matrix.values[..rows * 2]);
+            }
+            matrix.clone()
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "a row handed over twice")]
+    fn overlapping_hand_overs_are_refused() {
+        hand_over(&[(0, 4), (2, 4), (6, 2)]);
+    }
+
+    #[test]
+    fn racing_hand_overs_of_one_row_admit_one_owner() {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(9));
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 1);
+        let matrix = RowMajorMatrix::<F>::rand(&mut SmallRng::seed_from_u64(10), 8, 2);
+        let (streamed, _) = mmcs.commit_matrix_streamed(matrix.dimensions(), |sink| {
+            // Two workers race for row 0: one owns it, the other is refused before writing.
+            let refused = std::thread::scope(|scope| {
+                let workers = [0, 1].map(|_| scope.spawn(|| sink(0, &matrix.values[..2])));
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join())
+                    .filter(Result::is_err)
+                    .count()
+            });
+            assert_eq!(refused, 1);
+            sink(1, &matrix.values[2..]);
+            matrix.clone()
+        });
+        assert_eq!(streamed, mmcs.commit_matrix(matrix).0);
+    }
+
+    /// Commit rows 0..8 of width 2: row 1 first, then a refused hand-over of rows 0..2, then `rest`.
+    fn after_a_refused_hand_over(rest: &[(usize, usize)]) -> bool {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(9));
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 1);
+        let matrix = RowMajorMatrix::<F>::rand(&mut SmallRng::seed_from_u64(10), 8, 2);
+        let (streamed, _) = mmcs.commit_matrix_streamed(matrix.dimensions(), |sink| {
+            let rows = |first: usize, count: usize| &matrix.values[2 * first..2 * (first + count)];
+            sink(1, rows(1, 1));
+            // Row 0 is claimed, then row 1 is refused: the call unwinds and must free row 0.
+            let refused = std::panic::catch_unwind(AssertUnwindSafe(|| sink(0, rows(0, 2))));
+            assert!(refused.is_err());
+            for &(first, count) in rest {
+                sink(first, rows(first, count));
+            }
+            matrix.clone()
+        });
+        streamed == mmcs.commit_matrix(matrix).0
+    }
+
+    #[test]
+    fn a_refused_hand_over_frees_its_rows_for_a_retry() {
+        assert!(after_a_refused_hand_over(&[(0, 1), (2, 6)]));
+    }
+
+    #[test]
+    #[should_panic(expected = "a row never handed over")]
+    fn a_row_only_a_refused_hand_over_claimed_is_missing() {
+        after_a_refused_hand_over(&[(2, 6)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "rows past the matrix")]
+    fn rows_past_the_matrix_are_refused() {
+        hand_over(&[(usize::MAX, 1)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "a row never handed over")]
+    fn a_missing_row_is_refused() {
+        hand_over(&[(0, 4), (4, 3)]);
+    }
 
     #[test]
     fn opening_row_reuses_owned_buffer() {

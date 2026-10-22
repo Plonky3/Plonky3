@@ -12,9 +12,9 @@
 use p3_binary_field::{BinaryChallenger, BinaryField128, Gf2, Ghash128, PackedGf2x64};
 use p3_binary_pcs::testing::assert_boolean_multilinear_commit_contract;
 use p3_binary_pcs::whir::{
-    BinaryWhirBudget, BinaryWhirProfile, BooleanWhirDomain, BooleanWhirError, BooleanWhirPcs,
-    BooleanWhirProof, BooleanWhirProver, BooleanWhirTracePcs, BudgetError, WeightedClaim,
-    WeightedOpening, recommended_cap_height,
+    BinaryWhirBudget, BinaryWhirProfile, BooleanWhirDeferredProof, BooleanWhirDomain,
+    BooleanWhirError, BooleanWhirPcs, BooleanWhirProof, BooleanWhirProver, BooleanWhirTracePcs,
+    BudgetError, WeightedClaim, WeightedOpening, recommended_cap_height,
 };
 use p3_binary_pcs::{
     BinaryPcsConfig, BinaryPcsParams, BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs,
@@ -355,6 +355,65 @@ fn a_weighted_opening_round_trips_through_whir() {
         verify(&values, &narrow),
         Err(BooleanWhirError::PointArity { .. })
     ));
+}
+
+#[test]
+fn a_deferred_weighted_opening_matches_the_reduced_one_and_refuses_tampering() {
+    // Invariant: deferring the ring switch's sum to the first fold changes no value.
+    let bits = witness(0x5716);
+    let mut rng = SmallRng::seed_from_u64(0x5717);
+    let openings: Vec<WeightedOpening<EF>> = (0..2)
+        .map(|_| WeightedOpening {
+            high: Point::rand(&mut rng, LOG_BITS - ABSORBED),
+            low_weights: (0..1 << ABSORBED).map(|_| rng.random()).collect(),
+        })
+        .collect();
+    let pcs = whir_pcs(BinaryWhirProfile::proven_list_decoding(
+        SECURITY_LEVEL,
+        LOG_INV_RATE,
+        FOLDING,
+    ));
+
+    let mut prover_chal = challenger();
+    let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
+    let (reduced, _) = pcs
+        .open_weighted(data.clone(), &openings, &mut prover_chal.clone())
+        .unwrap();
+    let (values, proof) = pcs
+        .open_weighted_deferred(data, &openings, &[], &mut prover_chal)
+        .unwrap();
+    assert_eq!(values, reduced);
+
+    let verify = |values: &[EF], proof: &BooleanWhirDeferredProof<_, _, _>| {
+        let mut verifier_chal = challenger();
+        pcs.observe_commitment(&commitment, &mut verifier_chal);
+        let claims: Vec<_> = openings
+            .iter()
+            .zip(values)
+            .map(|(opening, &value)| WeightedClaim {
+                opening: opening.clone(),
+                value,
+            })
+            .collect();
+        pcs.verify_weighted_deferred(&commitment, &claims, proof, &mut verifier_chal)
+    };
+    verify(&values, &proof).unwrap();
+
+    // A value one off, a tensor row, a first-fold message or an answer of the run is refused.
+    let mut tampered = values.clone();
+    tampered[1] += EF::ONE;
+    assert!(verify(&tampered, &proof).is_err());
+    let mut moved = proof.clone();
+    let mut rows = moved.reduction.claims[0].tensor.rows().to_vec();
+    rows[3] += EF::ONE;
+    moved.reduction.claims[0].tensor = rows.try_into().unwrap();
+    assert!(verify(&values, &moved).is_err());
+    let mut moved = proof.clone();
+    moved.opening.initial_sumcheck.polynomial_evaluations[1][1] += EF::ONE;
+    assert!(verify(&values, &moved).is_err());
+    let mut moved = proof;
+    moved.opening.initial_ood_answers[0] += EF::ONE;
+    assert!(verify(&values, &moved).is_err());
 }
 
 #[test]

@@ -8,23 +8,25 @@ mod tests;
 use alloc::vec::Vec;
 
 use p3_binary_pcs::whir::{
-    BinaryWhirDomain, BinaryWhirProfile, BooleanWhirData, BooleanWhirError, BooleanWhirPcs,
-    BooleanWhirProof, BooleanWhirProver, ProfileError, WeightedClaim, WeightedOpening,
-    recommended_cap_height,
+    BinaryWhirDomain, BinaryWhirProfile, BitTensor, BooleanWhirData, BooleanWhirDeferredProof,
+    BooleanWhirError, BooleanWhirPcs, BooleanWhirProver, ProfileError, SuffixTensors,
+    WeightedClaim, WeightedOpening, recommended_cap_height,
 };
 use p3_binary_pcs::{BooleanBackend, BooleanMultilinearPcs, PackedWords};
 use p3_commit::Mmcs;
+use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use thiserror::Error;
 use tracing::instrument;
 
 use crate::config::{FlockChallenger, PcsParams};
-use crate::point::QuirkyClaim;
+use crate::point::{QuirkyClaim, QuirkyPoint};
 use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
-use crate::{Challenge, Val, Witness};
+use crate::{Challenge, Val};
 
 /// Bits past the target a single error term may be asked for, before the search gives up.
 const MAX_TERM_SLACK: usize = 16;
@@ -45,7 +47,7 @@ pub type Commitment = <FlockMmcs as Mmcs<Val>>::Commitment;
 pub type ProverData = BooleanWhirData<Val, Challenge, FlockMmcs>;
 
 /// One opening proof for every claim.
-pub type OpeningProof = BooleanWhirProof<Val, Challenge, FlockMmcs>;
+pub type OpeningProof = BooleanWhirDeferredProof<Val, Challenge, FlockMmcs>;
 
 /// The bit commitment of a batch's witness: 64 bits per element, WHIR over the additive domain.
 pub struct WitnessPcs(
@@ -147,6 +149,11 @@ impl WitnessPcs {
         .with_first_round(params.first_folding.min(packed), params.first_reduction)
         .with_query_grinding(params.query_grinding);
         let config = profile.config::<Challenge, Val, FlockChallenger, _>(packed, &domain)?;
+        let config = if params.commitment_ood {
+            config
+        } else {
+            config.without_commitment_ood()
+        };
         let cap_height = recommended_cap_height(&config);
         let mmcs = FlockMmcs::new(
             Hash::new(Keccak256Hash),
@@ -159,18 +166,19 @@ impl WitnessPcs {
         )?))
     }
 
-    /// Commit to a witness's packed bits, observing the commitment.
+    /// Commit to a witness's packed words, taking them over, and observe the commitment.
+    ///
+    /// [`Self::committed_words`] reads them back from the prover data.
     ///
     /// # Errors
     ///
-    /// The witness does not have the committed variables.
+    /// The words do not have the committed variables.
     #[instrument(skip_all, name = "flock commit")]
     pub fn commit(
         &self,
-        witness: &Witness,
+        z: Vec<u64>,
         challenger: &mut FlockChallenger,
     ) -> Result<(Commitment, ProverData), OpeningError> {
-        let z = witness.z();
         let expected = 1usize << (BooleanBackend::<Challenge>::num_variables(&self.0) - K_SKIP);
         if z.len() != expected {
             return Err(OpeningError::WitnessLength {
@@ -179,8 +187,15 @@ impl WitnessPcs {
             });
         }
         // Bit j of word w is bit 64 w + j, the order the packing reads.
-        let packed = PackedWords::<Val>::from_words(z).expect("Poly64 is one word");
+        let packed = PackedWords::<Val>::from_word_vec(z).expect("Poly64 is one word");
         Ok(self.0.commit_packed(packed, challenger)?)
+    }
+
+    /// The witness words a commitment holds.
+    #[must_use]
+    pub fn committed_words(data: &ProverData) -> &[u64] {
+        PackedWords::<Val>::words_of(data.table(0).poly(0).into_slice())
+            .expect("Poly64 is one word")
     }
 
     /// Observe a commitment on the verifier side, as committing does on the prover side.
@@ -188,7 +203,47 @@ impl WitnessPcs {
         self.0.observe_commitment(commitment, challenger);
     }
 
+    /// A claim's element split over the trailing coordinates the commitment's first fold binds.
+    ///
+    /// Built from the witness folded over the instances, as the lincheck holds it before its rounds.
+    ///
+    /// # Returns
+    ///
+    /// Nothing when the inner coordinates past the skip are fewer than the first fold binds.
+    #[must_use]
+    pub fn suffix_tensors(
+        &self,
+        folded: &[Challenge],
+        point: &QuirkyPoint,
+        log_instances: usize,
+    ) -> Option<SuffixTensors<Challenge, Val>> {
+        let depth = self.0.first_folding();
+        let inner = point.rest.get(log_instances..)?;
+        let head = inner.len().checked_sub(depth)?;
+        if folded.len() != SKIP_SIZE << inner.len() {
+            return None;
+        }
+        let weights = Poly::new_from_point(&inner[..head], Challenge::ONE);
+        let banks = (0..1usize << depth)
+            .map(|bank| {
+                let mut slices = [Challenge::ZERO; SKIP_SIZE];
+                for (high, &weight) in weights.as_slice().iter().enumerate() {
+                    let row = &folded[((high << depth) | bank) * SKIP_SIZE..][..SKIP_SIZE];
+                    for (slice, &value) in slices.iter_mut().zip(row) {
+                        *slice += weight * value;
+                    }
+                }
+                BitTensor::from_columns(&slices)
+            })
+            .collect();
+        SuffixTensors::new(banks)
+    }
+
     /// Open the committed witness at every claim, in one proof.
+    ///
+    /// The ring switch's sum is proven by WHIR's first fold, which binds no separate point.
+    ///
+    /// Entry `i` of `splits`, when present, is claim `i`'s element split by [`Self::suffix_tensors`].
     ///
     /// # Errors
     ///
@@ -198,13 +253,16 @@ impl WitnessPcs {
         &self,
         data: ProverData,
         claims: &[QuirkyClaim],
+        splits: &[Option<&SuffixTensors<Challenge, Val>>],
         challenger: &mut FlockChallenger,
     ) -> Result<OpeningProof, OpeningError> {
         let openings = claims
             .iter()
             .map(|claim| self.weighted(claim))
             .collect::<Result<Vec<_>, _>>()?;
-        let (values, proof) = self.0.open_weighted(data, &openings, challenger)?;
+        let (values, proof) = self
+            .0
+            .open_weighted_deferred(data, &openings, splits, challenger)?;
         if let Some(index) = values
             .iter()
             .zip(claims)
@@ -239,7 +297,7 @@ impl WitnessPcs {
             .collect::<Result<Vec<_>, OpeningError>>()?;
         Ok(self
             .0
-            .verify_weighted(commitment, &claims, proof, challenger)?)
+            .verify_weighted_deferred(commitment, &claims, proof, challenger)?)
     }
 
     /// A claim as a weighted opening: Lagrange weights at the skip coordinate on the absorbed bits.

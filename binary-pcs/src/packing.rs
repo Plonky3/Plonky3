@@ -35,7 +35,7 @@
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use core::{ptr, slice};
 
 use p3_binary_field::{
@@ -559,6 +559,49 @@ impl<V: Coordinates + Send> PackedWords<V> {
     }
 }
 
+impl<V: Coordinates + Send> PackedWords<V> {
+    /// Elements taking over a vector of words, copied only where an element is not one word.
+    ///
+    /// # Returns
+    ///
+    /// Nothing for a level narrower or less aligned than a word, or words filling no whole elements.
+    #[must_use]
+    pub fn from_word_vec(words: Vec<u64>) -> Option<Self> {
+        const { check_coordinates::<V>() };
+        if size_of::<V>() != size_of::<u64>() || align_of::<V>() != align_of::<u64>() {
+            return Self::from_words(&words);
+        }
+        let mut words = ManuallyDrop::new(words);
+        // SAFETY: `V` has the size and alignment of a word, so the allocation's layout is unchanged.
+        //
+        // `V: Coordinates` is a padding-free run of coordinates, so every word is a value.
+        let elements = unsafe {
+            Vec::from_raw_parts(
+                words.as_mut_ptr().cast::<V>(),
+                words.len(),
+                words.capacity(),
+            )
+        };
+        Some(Self { elements })
+    }
+
+    /// The words a run of elements holds, read in place.
+    ///
+    /// # Returns
+    ///
+    /// Nothing for a level narrower or less aligned than a word.
+    #[must_use]
+    pub fn words_of(elements: &[V]) -> Option<&[u64]> {
+        const { check_coordinates::<V>() };
+        let len = size_of_val(elements) / size_of::<u64>();
+        // SAFETY: the word view makes each element whole aligned words.
+        //
+        // `V: Coordinates` is a padding-free run of coordinates, so every word is initialised.
+        Self::WORD_VIEW
+            .then(|| unsafe { slice::from_raw_parts(elements.as_ptr().cast::<u64>(), len) })
+    }
+}
+
 impl<V> PackedWords<V> {
     /// Whether a run of elements can be read as a run of words in place.
     const WORD_VIEW: bool =
@@ -908,6 +951,17 @@ mod tests {
                 .into_elements(),
             narrow
         );
+
+        // A one-word level takes the allocation over, and a two-word level copies it.
+        let taken = PackedWords::<BinaryField64>::from_word_vec(words.clone()).unwrap();
+        assert_eq!(taken.into_elements(), narrow);
+        let copied = PackedWords::<EF>::from_word_vec(words.clone()).unwrap();
+        assert_eq!(copied.into_elements(), written(words.len()));
+
+        // The words read back in place are the ones written.
+        assert_eq!(PackedWords::words_of(&narrow).unwrap(), &words[..]);
+        assert_eq!(PackedWords::words_of(&written(4)).unwrap(), &words[..4]);
+        assert!(PackedWords::<BinaryField32>::words_of(&[BinaryField32::ZERO; 2]).is_none());
 
         // A narrower level, and an odd word count of a two-word level, fill no whole elements.
         assert!(PackedWords::<BinaryField32>::from_words(&words).is_none());

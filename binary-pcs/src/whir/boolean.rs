@@ -41,20 +41,20 @@ use p3_multilinear_util::point::Point;
 use p3_security::multilinear::{bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term};
 use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::ring_switch::bits::{
-    BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims,
+    BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims, SuffixTensors,
 };
 use p3_sumcheck::{
     OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
     TableSpec,
 };
-use p3_whir::{WhirDomain, WhirProver, WhirProverData};
+use p3_whir::{InitialWeightCheck, WhirDomain, WhirProver, WhirProverData};
 
 use crate::boolean::{BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs};
 use crate::boolean_trace::BooleanTraceCommitment;
 use crate::fold::BitChallengeField;
 use crate::packing::{Coordinates, PackedStack, PackedWords, hypercube_variables};
 use crate::whir::error::BooleanWhirError;
-use crate::whir::proof::BooleanWhirProof;
+use crate::whir::proof::{BooleanWhirDeferredProof, BooleanWhirProof};
 use crate::whir::shape::{ProofShape, ProofShapeError};
 
 /// One claim weighing the absorbed bit patterns itself: `sum_v low_weights[v] * t(high, v)`.
@@ -262,6 +262,12 @@ where
         + CanSampleUniformBits<F>
         + CanObserve<MT::Commitment>,
 {
+    /// Variables the proximity argument's first fold binds, the packing's trailing ones.
+    #[must_use]
+    pub fn first_folding(&self) -> usize {
+        self.inner.round_folding_factor(0)
+    }
+
     /// Every labelled algebraic error one opening of this many claims charges.
     ///
     /// ```text
@@ -461,6 +467,95 @@ where
             .map(|(switch, elements)| switch.incoming_claim(&elements.tensor))
             .collect();
         Ok((values, proof))
+    }
+
+    /// Open the bit witness at weighted claims, the ring switch's sum proven by WHIR's first fold.
+    ///
+    /// No separate ring-switch sumcheck runs, and no opening point is evaluated.
+    ///
+    /// Entry `i` of `suffix_tensors`, when present, splits claim `i`'s element over the trailing
+    /// coordinates the first fold binds.
+    ///
+    /// # Returns
+    ///
+    /// One value per claim, `sum_v low_weights[v] * t(high, v)`, in the order supplied.
+    ///
+    /// # Errors
+    ///
+    /// Before the transcript moves, no claim, or a claim of the wrong width.
+    #[allow(clippy::type_complexity)]
+    pub fn open_weighted_deferred(
+        &self,
+        prover_data: BooleanWhirData<F, EF, MT>,
+        openings: &[WeightedOpening<EF>],
+        suffix_tensors: &[Option<&SuffixTensors<EF, F>>],
+        challenger: &mut Challenger,
+    ) -> Result<(Vec<EF>, BooleanWhirDeferredProof<F, EF, MT>), BooleanWhirError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        let claims = self.weighted_claims(openings.iter())?;
+        let depth = self.inner.round_folding_factor(0);
+        let (reduction, weight) = tracing::info_span!("bit ring switch")
+            .in_scope(|| {
+                claims.prove_deferred(
+                    &Self::packing(&prover_data),
+                    suffix_tensors,
+                    depth,
+                    challenger,
+                )
+            })
+            .map_err(BooleanWhirError::Reduction)?;
+        let values = claims
+            .reductions()
+            .iter()
+            .zip(&reduction.claims)
+            .map(|(switch, elements)| switch.incoming_claim(&elements.tensor))
+            .collect();
+        let opening = self
+            .inner
+            .open_with_initial_weight(prover_data, weight, challenger)
+            .map_err(BooleanWhirError::Commit)?;
+        Ok((values, BooleanWhirDeferredProof { reduction, opening }))
+    }
+
+    /// Check a deferred proof against every weighted claim.
+    ///
+    /// # Errors
+    ///
+    /// Before the transcript moves, a refused claim or a claim count that disagrees.
+    ///
+    /// After it, a false value, the commitment, or a first fold that does not close.
+    pub fn verify_weighted_deferred(
+        &self,
+        commitment: &MT::Commitment,
+        claims: &[WeightedClaim<EF>],
+        proof: &BooleanWhirDeferredProof<F, EF, MT>,
+        challenger: &mut Challenger,
+    ) -> Result<(), BooleanWhirError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        let batch = self.weighted_claims(claims.iter().map(|claim| &claim.opening))?;
+        let values = claims.iter().map(|claim| claim.value).collect::<Vec<_>>();
+        let closing = batch
+            .verify_deferred(&proof.reduction, &values, challenger)
+            .map_err(BooleanWhirError::ReductionProof)?;
+        let shapes = [TableShape::new(self.inner.num_variables(), 1)];
+        // The point always names the packing's variables, so a refusal only fails the check.
+        let weight_at = |point: &Point<EF>| closing.weight_at(point).unwrap_or(EF::ZERO);
+        self.inner
+            .verify_with_initial_weight(
+                commitment,
+                &proof.opening,
+                &shapes,
+                InitialWeightCheck {
+                    sum: closing.claimed_sum(),
+                    eval: &weight_at,
+                },
+                challenger,
+            )
+            .map_err(BooleanWhirError::Opening)
     }
 
     /// Check one proof against every weighted claim.
