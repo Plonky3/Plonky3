@@ -35,6 +35,7 @@
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use core::{ptr, slice};
 
 use p3_binary_field::{
@@ -506,6 +507,101 @@ impl<V: PrimeCharacteristicRing + Coordinates> PackedWords<V> {
     }
 }
 
+impl<V: Coordinates + Send> PackedWords<V> {
+    /// Elements holding a copy of the given words, where the level takes whole words.
+    ///
+    /// The words are copied in parallel, and nothing is zeroed first.
+    ///
+    /// # Returns
+    ///
+    /// Nothing for a level narrower or less aligned than a word, or words filling no whole elements.
+    #[must_use]
+    pub fn from_words(words: &[u64]) -> Option<Self> {
+        const {
+            check_coordinates::<V>();
+            assert!(
+                cfg!(target_endian = "little"),
+                "writing coordinates as words needs a little-endian target"
+            );
+        }
+        let bytes = size_of_val(words);
+        if !Self::WORD_VIEW || !bytes.is_multiple_of(size_of::<V>()) {
+            return None;
+        }
+        let len = bytes / size_of::<V>();
+        let mut elements = Vec::<V>::with_capacity(len);
+        // SAFETY: the spare capacity holds `len` elements, which are `words.len()` whole words.
+        //
+        // The word view check above makes each element whole aligned words.
+        let slots = unsafe {
+            slice::from_raw_parts_mut(
+                elements
+                    .spare_capacity_mut()
+                    .as_mut_ptr()
+                    .cast::<MaybeUninit<u64>>(),
+                words.len(),
+            )
+        };
+        let chunk = min_task_len(words.len(), size_of::<u64>());
+        slots
+            .par_chunks_mut(chunk)
+            .zip(words.par_chunks(chunk))
+            .for_each(|(slots, words)| {
+                for (slot, &word) in slots.iter_mut().zip(words) {
+                    slot.write(word);
+                }
+            });
+        // SAFETY: every word of the first `len` elements is written above.
+        //
+        // `V: Coordinates` is a padding-free run of coordinates, so every bit pattern is a value.
+        unsafe { elements.set_len(len) };
+        Some(Self { elements })
+    }
+}
+
+impl<V: Coordinates + Send> PackedWords<V> {
+    /// Elements taking over a vector of words, copied only where an element is not one word.
+    ///
+    /// # Returns
+    ///
+    /// Nothing for a level narrower or less aligned than a word, or words filling no whole elements.
+    #[must_use]
+    pub fn from_word_vec(words: Vec<u64>) -> Option<Self> {
+        const { check_coordinates::<V>() };
+        if size_of::<V>() != size_of::<u64>() || align_of::<V>() != align_of::<u64>() {
+            return Self::from_words(&words);
+        }
+        let mut words = ManuallyDrop::new(words);
+        // SAFETY: `V` has the size and alignment of a word, so the allocation's layout is unchanged.
+        //
+        // `V: Coordinates` is a padding-free run of coordinates, so every word is a value.
+        let elements = unsafe {
+            Vec::from_raw_parts(
+                words.as_mut_ptr().cast::<V>(),
+                words.len(),
+                words.capacity(),
+            )
+        };
+        Some(Self { elements })
+    }
+
+    /// The words a run of elements holds, read in place.
+    ///
+    /// # Returns
+    ///
+    /// Nothing for a level narrower or less aligned than a word.
+    #[must_use]
+    pub fn words_of(elements: &[V]) -> Option<&[u64]> {
+        const { check_coordinates::<V>() };
+        let len = size_of_val(elements) / size_of::<u64>();
+        // SAFETY: the word view makes each element whole aligned words.
+        //
+        // `V: Coordinates` is a padding-free run of coordinates, so every word is initialised.
+        Self::WORD_VIEW
+            .then(|| unsafe { slice::from_raw_parts(elements.as_ptr().cast::<u64>(), len) })
+    }
+}
+
 impl<V> PackedWords<V> {
     /// Whether a run of elements can be read as a run of words in place.
     const WORD_VIEW: bool =
@@ -825,6 +921,51 @@ mod tests {
         // A narrower level, and an odd word count of a two-word level, fill no whole elements.
         assert!(PackedWords::<BinaryField32>::zeroed(words.len()).is_none());
         assert!(PackedWords::<EF>::zeroed(3).is_none());
+    }
+
+    #[test]
+    fn copied_and_taken_words_are_the_written_ones() {
+        // Invariant: every constructor from words agrees with writing the words into zeros.
+        let mut rng = SmallRng::seed_from_u64(0x57a7);
+        let words = (0..1 << 12)
+            .map(|_| rng.random::<u64>())
+            .collect::<Vec<_>>();
+        let written = |len: usize| {
+            let mut packed = PackedWords::<EF>::zeroed(len).unwrap();
+            packed.words_mut().copy_from_slice(&words[..len]);
+            packed.into_elements()
+        };
+        let mut narrow = PackedWords::<BinaryField64>::zeroed(words.len()).unwrap();
+        narrow.words_mut().copy_from_slice(&words);
+        let narrow = narrow.into_elements();
+
+        assert_eq!(
+            PackedWords::<EF>::from_words(&words)
+                .unwrap()
+                .into_elements(),
+            written(words.len())
+        );
+        assert_eq!(
+            PackedWords::<BinaryField64>::from_words(&words)
+                .unwrap()
+                .into_elements(),
+            narrow
+        );
+
+        // A one-word level takes the allocation over, and a two-word level copies it.
+        let taken = PackedWords::<BinaryField64>::from_word_vec(words.clone()).unwrap();
+        assert_eq!(taken.into_elements(), narrow);
+        let copied = PackedWords::<EF>::from_word_vec(words.clone()).unwrap();
+        assert_eq!(copied.into_elements(), written(words.len()));
+
+        // The words read back in place are the ones written.
+        assert_eq!(PackedWords::words_of(&narrow).unwrap(), &words[..]);
+        assert_eq!(PackedWords::words_of(&written(4)).unwrap(), &words[..4]);
+        assert!(PackedWords::<BinaryField32>::words_of(&[BinaryField32::ZERO; 2]).is_none());
+
+        // A narrower level, and an odd word count of a two-word level, fill no whole elements.
+        assert!(PackedWords::<BinaryField32>::from_words(&words).is_none());
+        assert!(PackedWords::<EF>::from_words(&words[..3]).is_none());
     }
 
     #[test]

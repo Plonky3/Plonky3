@@ -11,9 +11,9 @@ mod error;
 mod transcript;
 
 pub use error::BusArgumentError;
+use p3_gkr::PreparedProductGkr;
 
 use self::transcript::{BusProverTranscript, BusVerifierTranscript};
-use crate::product::PreparedProductGkr;
 use crate::{BusDirection, BusPlan, ProductGkrOutput, ProductGkrProof};
 
 /// Verifier challenges defining every bus leaf factor.
@@ -100,7 +100,7 @@ impl BusPlan {
         }
 
         // Reuse the product layers' roots for the shared-root witness check.
-        let prepared = PreparedProductGkr::new_owned([pushes, pulls], self.product_shape());
+        let prepared = PreparedProductGkr::new_owned::<F>([pushes, pulls], self.product_shape());
         if prepared.roots()[0] != prepared.roots()[1] {
             transcript.abort();
             return Err(BusArgumentError::UnbalancedProducts);

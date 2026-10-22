@@ -310,6 +310,21 @@ where
         self.commitment_ood_samples
     }
 
+    /// The same schedule with no out-of-domain sample on the initial commitment.
+    ///
+    /// Every term the security report charges already union-bounds over the commitment's decoding list.
+    ///
+    /// That list is also reported as the candidate set, which a caller's own challenges are charged over.
+    ///
+    /// The sample is drawn at opening time, after those challenges, so it binds nothing they rely on.
+    ///
+    /// Dropping it removes its term from the report and one pass over the committed table.
+    #[must_use]
+    pub const fn without_commitment_ood(mut self) -> Self {
+        self.commitment_ood_samples = 0;
+        self
+    }
+
     /// PoW bits for the initial folding sumcheck.
     pub const fn starting_folding_pow_bits(&self) -> usize {
         self.starting_folding_pow_bits
@@ -328,6 +343,11 @@ where
     /// PoW bits for the final folding sumcheck.
     pub const fn final_folding_pow_bits(&self) -> usize {
         self.final_folding_pow_bits
+    }
+
+    /// Whether each query phase draws one index in every stratum of its power-of-two summands.
+    pub const fn stratified_queries(&self) -> bool {
+        self.stratified_queries
     }
 }
 

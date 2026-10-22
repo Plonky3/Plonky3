@@ -8,7 +8,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use itertools::Itertools;
 use num_bigint::BigUint;
-use p3_util::{as_base_slice, as_base_slice_mut, reconstitute_from_base};
+use p3_util::{as_base_slice, as_base_slice_mut, zero_vec_from_base};
 
 use super::{
     ExtField, HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField,
@@ -201,7 +201,7 @@ where
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(F::zero_vec(len * D)) }
+        unsafe { zero_vec_from_base(len, F::zero_vec) }
     }
 }
 

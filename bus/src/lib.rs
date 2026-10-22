@@ -15,7 +15,6 @@ mod evaluation;
 mod memory;
 mod name;
 mod plan;
-mod product;
 mod ram;
 mod security;
 mod timestamped;
@@ -40,13 +39,13 @@ pub use memory::{
     ReadOnlyMemoryError, ReadOnlyMemoryInteractionBuilder, ReadOnlyMemoryPlan,
 };
 pub use name::{BusName, BusNameError};
+pub use p3_gkr::{
+    ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
+    ProductGkrShape, ProductGkrShapeError,
+};
 pub use plan::{
     BusBlock, BusBlockOwner, BusDomain, BusExpressionLocation, BusPlan, BusPlanError, BusPlanInput,
     BusSecurityGeometry, BusTerminalShare, BusTupleSlot, UnsupportedBusAccess,
-};
-pub use product::{
-    ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
-    ProductGkrShape, ProductGkrShapeError,
 };
 pub use ram::{
     MAX_RAM_BIT_WIDTH, MIN_RAM_ACCESS_COUNT, RamAccess, RamAir, RamBoundary, RamError, RamLayout,

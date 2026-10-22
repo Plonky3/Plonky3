@@ -82,7 +82,7 @@ fn maximal_caps_are_included_in_the_proof_budget() {
         ProofShape::of(&config, &quaternary, 1),
         Err(ProofShapeError::UnsupportedGeometry)
     );
-    for cap_height in [0, recommended_cap_height(&config), usize::MAX] {
+    for cap_height in [recommended_cap_height(&config), 4, usize::MAX] {
         let backend = mmcs(cap_height);
         let shape = ProofShape::of(&config, &backend, 1).unwrap();
         let extension = p3_commit::ExtensionMmcs::<Poly64, Poly64, _>::new(backend.clone());
@@ -349,7 +349,9 @@ fn additive_domain_rejects_the_capacity_regime() {
 }
 
 #[test]
-fn the_cap_height_fits_every_round_tree() {
+fn the_bare_root_minimizes_the_proof_bound() {
+    use p3_binary_pcs::whir::ProofShape;
+
     // A flat round rate shrinks the last tree far below the first round's folded domain.
     let config = WhirConfig::<Poly192, Poly64, Challenger>::new_with_domain(
         11,
@@ -365,20 +367,43 @@ fn the_cap_height_fits_every_round_tree() {
     )
     .unwrap();
 
+    // Fixture state:
+    //
+    //     round 0: 35 draws over 2^9 positions -> strata 32 + 2 + 1, top 5 levels covered
+    //     final:   75 queries over 2^4 positions -> opens all 16, nothing drawn
     let round = &config.round_parameters()[0];
-    let final_round = config.final_round_config();
-
-    // The last phase asks for more queries than its folded domain holds, so it draws nothing.
     assert_eq!(round.num_queries, 35);
     assert_eq!(round.log_folded_domain_size, 9);
     assert_eq!(config.terminal().num_queries, 75);
-    assert_eq!(final_round.log_folded_domain_size, 4);
+    assert_eq!(config.final_round_config().log_folded_domain_size, 4);
 
-    // Both trees carry the cap, so the shallower one bounds the deepest stratum of the other.
-    let cap_height = recommended_cap_height(&config);
-    assert_eq!(cap_height, 4);
-    assert!(cap_height <= round.log_folded_domain_size);
-    assert!(cap_height <= final_round.log_folded_domain_size);
+    // Every digest a proof and its initial commitment carry together.
+    let total = |cap_height| {
+        let backend = mmcs(cap_height);
+        let initial = backend
+            .proof_geometry(round.log_folded_domain_size)
+            .unwrap();
+        let shape = ProofShape::of(&config, &backend, 1).unwrap();
+        shape.merkle_digests + initial.commitment_digests
+    };
+
+    // Each cap level costs as many digests as it can save in siblings.
+    assert_eq!(recommended_cap_height(&config), 0);
+    for cap_height in 1..=10 {
+        assert!(
+            total(0) < total(cap_height),
+            "cap {cap_height}: {} digests beat the bare root's {}",
+            total(cap_height),
+            total(0)
+        );
+    }
+
+    // Digests at the bare root:
+    //
+    //     round 0: depth 6 sends at most 32 siblings, depths 7..=9 at most 35 each -> 137
+    //     final:   every position opened, so no sibling, and its root               -> 1
+    //     initial: its root                                                         -> 1
+    assert_eq!(total(0), 137 + 1 + 1);
 }
 
 /// A trace over a thirty-two-bit alphabet, committed at its own width.

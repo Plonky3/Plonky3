@@ -511,12 +511,16 @@ class CiPlanTests(unittest.TestCase):
         workflows = sorted((REPO / ".github/workflows").glob("*.yml"))
         self.assertTrue(workflows, "no workflows found")
         reference = re.compile(r"\b(steps\.impact|needs\.plan)\.outputs\.([\w-]+)")
+        # Plan outputs wired from a step other than the planner are defined in the workflow itself.
+        step_output = re.compile(r"^\s+([\w-]+): \$\{\{ steps\.(?!impact\.)[\w-]+\.outputs\.", re.MULTILINE)
         contexts = set()
         for workflow in workflows:
-            for context, name in reference.findall(workflow.read_text(encoding="utf-8")):
+            text = workflow.read_text(encoding="utf-8")
+            defined = keys | set(step_output.findall(text))
+            for context, name in reference.findall(text):
                 contexts.add(context)
                 with self.subTest(workflow=workflow.name, output=name):
-                    self.assertIn(name, keys)
+                    self.assertIn(name, defined)
         self.assertEqual(contexts, {"steps.impact", "needs.plan"})
 
     def test_heavy_suites_follow_upstream_dependencies(self):

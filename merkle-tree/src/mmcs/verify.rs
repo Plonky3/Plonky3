@@ -21,6 +21,8 @@ where
 {
     /// Hash equal-width, already validated rows, concatenating matrices in their tree order.
     /// Batch hashers stage a bounded run; packed hashers gather columns directly from rows.
+    // A lane count from a type parameter cannot be a const generic argument.
+    #[allow(clippy::chunks_exact_to_as_chunks)]
     pub(super) fn hash_opened_rows<R: AsRef<[P::Value]>>(
         &self,
         matrices: &[usize],
@@ -81,6 +83,8 @@ where
     }
 
     /// Compress independent parents (including binary bridges and injection pairs padded to N).
+    // A lane count from a type parameter cannot be a const generic argument.
+    #[allow(clippy::chunks_exact_to_as_chunks)]
     pub(super) fn compress_opened_groups(
         &self,
         inputs: &[[[PW::Value; DIGEST_ELEMS]; N]],

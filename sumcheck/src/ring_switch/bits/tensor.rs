@@ -5,6 +5,7 @@ use core::marker::PhantomData;
 use core::ops::AddAssign;
 
 use p3_binary_field::BitCoordinates;
+use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
 
 use super::basis::Coefficients;
@@ -271,6 +272,26 @@ impl<EF: BitCoordinates, R: BitCoordinates> BitTensor<EF, R> {
         done
     }
 
+    /// The element whose column `v` is `columns[v]`, the columns past them zero.
+    ///
+    /// # Panics
+    ///
+    /// Panics when there are more columns than coordinates of the second leg.
+    #[must_use]
+    pub fn from_columns(columns: &[EF]) -> Self {
+        assert!(
+            columns.len() <= Coefficients::<R>::DIMENSION,
+            "one column per coordinate of the second leg"
+        );
+        let mut out = Self::zero();
+        for (v, &column) in columns.iter().enumerate() {
+            let mut basis = Coefficients::<R>::zero();
+            basis.set(v);
+            out.add_exterior_product(column, basis.element());
+        }
+        out
+    }
+
     /// Column `v` alone, read as an element of the first leg.
     ///
     /// Coordinate `u` of the column is coordinate `v` of row `u`, so this is `dim EF` bit reads.
@@ -283,6 +304,55 @@ impl<EF: BitCoordinates, R: BitCoordinates> BitTensor<EF, R> {
             }
         }
         column.element()
+    }
+}
+
+/// One claim's element split by the values of its point's trailing kept coordinates.
+///
+/// Bank `b` sums `eq(head, x) ⊗ t'(x, b)` over the leading coordinates `x`, with the trailing ones spelling `b`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SuffixTensors<EF, R = EF> {
+    /// One element per assignment of the trailing coordinates, most significant first.
+    banks: Vec<BitTensor<EF, R>>,
+}
+
+impl<EF: BitCoordinates, R: BitCoordinates> SuffixTensors<EF, R> {
+    /// Wrap one element per assignment of the trailing coordinates.
+    ///
+    /// # Returns
+    ///
+    /// Nothing unless the banks number a power of two.
+    #[must_use]
+    pub fn new(banks: Vec<BitTensor<EF, R>>) -> Option<Self> {
+        banks.len().is_power_of_two().then_some(Self { banks })
+    }
+
+    /// Trailing coordinates the banks split over.
+    #[must_use]
+    pub const fn depth(&self) -> usize {
+        self.banks.len().trailing_zeros() as usize
+    }
+
+    /// The banks, most significant coordinate first.
+    #[must_use]
+    pub fn banks(&self) -> &[BitTensor<EF, R>] {
+        &self.banks
+    }
+
+    /// The whole element, each bank weighed by the equality table of the trailing coordinates.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless `tail` names the coordinates the banks split over.
+    #[must_use]
+    pub fn total(&self, tail: &[EF]) -> BitTensor<EF, R> {
+        assert_eq!(tail.len(), self.depth(), "one coordinate per bank bit");
+        let weights = Poly::new_from_point(tail, EF::ONE);
+        let mut total = BitTensor::zero();
+        for (bank, &weight) in self.banks.iter().zip(weights.as_slice()) {
+            total.add_scaled_columns(bank, weight);
+        }
+        total
     }
 }
 

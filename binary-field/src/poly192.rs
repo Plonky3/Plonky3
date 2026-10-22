@@ -272,9 +272,11 @@ impl Poly192MixedAccumulator {
 impl Poly192 {
     /// Multiply four independent pairs, preserving their input order.
     ///
-    /// Uses four 256-bit coefficient lanes on AVX2 with VPCLMULQDQ. With
-    /// `wide-poly` and AVX-512F/BW, each pair instead occupies a 128-bit lane
-    /// in a 512-bit register, halving the number of carryless multiplies.
+    /// Uses four 256-bit coefficient lanes on AVX2 with VPCLMULQDQ.
+    ///
+    /// With AVX-512F, each pair instead occupies a 128-bit lane of a 512-bit register.
+    ///
+    /// That halves the number of carryless multiplies.
     #[inline]
     pub fn mul4(a: [Self; 4], b: [Self; 4]) -> [Self; 4] {
         #[cfg(all(
@@ -857,10 +859,23 @@ mod tests {
         Algebra, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
         PrimeCharacteristicRing,
     };
+    use proptest::array;
+    use proptest::collection::vec;
     use proptest::prelude::*;
 
     use super::{DEGREE, Poly192, Poly192MixedAccumulator};
     use crate::Poly64;
+
+    /// A coordinate or weight, often an extreme one that saturates the carryless products.
+    fn word() -> impl Strategy<Value = u64> {
+        prop_oneof![
+            Just(0),
+            Just(1),
+            Just(u64::MAX),
+            Just(1 << 63),
+            any::<u64>()
+        ]
+    }
 
     /// Seven elements whose twenty-one coordinates are all distinct, so any reordering shows.
     fn distinct_elements() -> Vec<Poly192> {
@@ -1228,8 +1243,13 @@ mod tests {
         }
 
         #[test]
-        fn the_mixed_dot_product_matches_the_sum_of_products(a: [[u64; 3]; 17], f: [u64; 17]) {
+        fn the_mixed_dot_product_matches_the_sum_of_products(
+            a in vec(array::uniform3(word()), 40),
+            f in vec(word(), 40),
+        ) {
             // The empty sum, a single term, and sums long enough to defer the reduction.
+            //
+            // Past eight terms, every length either side of a whole block of eight.
             check_mixed_dot_product::<0>(&a, &f);
             check_mixed_dot_product::<1>(&a, &f);
             check_mixed_dot_product::<2>(&a, &f);
@@ -1239,8 +1259,14 @@ mod tests {
             check_mixed_dot_product::<7>(&a, &f);
             check_mixed_dot_product::<8>(&a, &f);
             check_mixed_dot_product::<9>(&a, &f);
+            check_mixed_dot_product::<15>(&a, &f);
             check_mixed_dot_product::<16>(&a, &f);
             check_mixed_dot_product::<17>(&a, &f);
+            check_mixed_dot_product::<23>(&a, &f);
+            check_mixed_dot_product::<24>(&a, &f);
+            check_mixed_dot_product::<25>(&a, &f);
+            check_mixed_dot_product::<33>(&a, &f);
+            check_mixed_dot_product::<40>(&a, &f);
         }
 
         /// Scaling by a coefficient must agree with embedding the scalar first.

@@ -41,21 +41,42 @@ use p3_multilinear_util::point::Point;
 use p3_security::multilinear::{bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term};
 use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::ring_switch::bits::{
-    BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims,
+    BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims, SuffixTensors,
 };
 use p3_sumcheck::{
     OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
     TableSpec,
 };
-use p3_whir::{WhirDomain, WhirProver, WhirProverData};
+use p3_whir::{InitialWeightCheck, WhirDomain, WhirProver, WhirProverData};
 
 use crate::boolean::{BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs};
 use crate::boolean_trace::BooleanTraceCommitment;
 use crate::fold::BitChallengeField;
 use crate::packing::{Coordinates, PackedStack, PackedWords, hypercube_variables};
 use crate::whir::error::BooleanWhirError;
-use crate::whir::proof::BooleanWhirProof;
+use crate::whir::proof::{BooleanWhirDeferredProof, BooleanWhirProof};
 use crate::whir::shape::{ProofShape, ProofShapeError};
+
+/// One claim weighing the absorbed bit patterns itself: `sum_v low_weights[v] * t(high, v)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeightedOpening<EF> {
+    /// The kept coordinates: the witness's variables less the ones one element absorbs.
+    pub high: Point<EF>,
+    /// Weight `v` weighs bit `v` of every packed element.
+    pub low_weights: Vec<EF>,
+}
+
+/// The value of every weighted opening, in order, and the one proof that opens them all.
+type WeightedOpened<F, EF, MT> = (Vec<EF>, BooleanWhirProof<F, EF, MT>);
+
+/// A weighted opening and the value the verifier holds for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeightedClaim<EF> {
+    /// Where and how the claim weighs the witness.
+    pub opening: WeightedOpening<EF>,
+    /// The claimed value.
+    pub value: EF,
+}
 
 /// The binding mode the committed layout uses.
 ///
@@ -241,6 +262,12 @@ where
         + CanSampleUniformBits<F>
         + CanObserve<MT::Commitment>,
 {
+    /// Variables the proximity argument's first fold binds, the packing's trailing ones.
+    #[must_use]
+    pub fn first_folding(&self) -> usize {
+        self.inner.round_folding_factor(0)
+    }
+
     /// Every labelled algebraic error one opening of this many claims charges.
     ///
     /// ```text
@@ -363,14 +390,8 @@ where
         self.check_openings(openings)?;
         // Every reduction is set up before any runs, so a refused one leaves the transcript alone.
         let claims = Self::claims(openings)?;
-        let packing = Self::packing(&prover_data);
-
-        // One batch for every opening, leaving one claim about the packing.
-        let (reduction, surviving_point, _) =
-            tracing::info_span!("bit ring switch").in_scope(|| {
-                claims
-                    .prove::<<EF as BitChallengeField<F>>::SumcheckRepr, _, _>(&packing, challenger)
-            });
+        let proof = self.open_claims(prover_data, &claims, challenger)?;
+        let reduction = &proof.reduction;
 
         // The elements each claim sends already hold its readings.
         let readings = openings
@@ -389,6 +410,24 @@ where
                 Ok(BitReadings { current, next })
             })
             .collect::<Result<Vec<_>, BooleanWhirError>>()?;
+        Ok((readings, proof))
+    }
+
+    /// Reduce a batch of claims to one about the packing, then open WHIR at its point.
+    fn open_claims(
+        &self,
+        prover_data: BooleanWhirData<F, EF, MT>,
+        claims: &BitRingSwitchClaims<F, EF>,
+        challenger: &mut Challenger,
+    ) -> Result<BooleanWhirProof<F, EF, MT>, BooleanWhirError> {
+        let packing = Self::packing(&prover_data);
+
+        // One batch for every opening, leaving one claim about the packing.
+        let (reduction, surviving_point, _) =
+            tracing::info_span!("bit ring switch").in_scope(|| {
+                claims
+                    .prove::<<EF as BitChallengeField<F>>::SumcheckRepr, _, _>(&packing, challenger)
+            });
 
         // The surviving value crosses the wire twice, and the closing check is that the two agree.
         // The surviving point came out of the batch's rounds, so it is bound already.
@@ -401,8 +440,179 @@ where
                 challenger,
             )
             .map_err(BooleanWhirError::Commit)?;
+        Ok(BooleanWhirProof { reduction, opening })
+    }
 
-        Ok((readings, BooleanWhirProof { reduction, opening }))
+    /// Open the bit witness at weighted claims, in one proof.
+    ///
+    /// # Returns
+    ///
+    /// One value per claim, `sum_v low_weights[v] * t(high, v)`, in the order supplied.
+    ///
+    /// # Errors
+    ///
+    /// Before the transcript moves, no claim, or a claim of the wrong width.
+    pub fn open_weighted(
+        &self,
+        prover_data: BooleanWhirData<F, EF, MT>,
+        openings: &[WeightedOpening<EF>],
+        challenger: &mut Challenger,
+    ) -> Result<WeightedOpened<F, EF, MT>, BooleanWhirError> {
+        let claims = self.weighted_claims(openings.iter())?;
+        let proof = self.open_claims(prover_data, &claims, challenger)?;
+        let values = claims
+            .reductions()
+            .iter()
+            .zip(&proof.reduction.claims)
+            .map(|(switch, elements)| switch.incoming_claim(&elements.tensor))
+            .collect();
+        Ok((values, proof))
+    }
+
+    /// Open the bit witness at weighted claims, the ring switch's sum proven by WHIR's first fold.
+    ///
+    /// No separate ring-switch sumcheck runs, and no opening point is evaluated.
+    ///
+    /// Entry `i` of `suffix_tensors`, when present, splits claim `i`'s element over the trailing
+    /// coordinates the first fold binds.
+    ///
+    /// # Returns
+    ///
+    /// One value per claim, `sum_v low_weights[v] * t(high, v)`, in the order supplied.
+    ///
+    /// # Errors
+    ///
+    /// Before the transcript moves, no claim, or a claim of the wrong width.
+    #[allow(clippy::type_complexity)]
+    pub fn open_weighted_deferred(
+        &self,
+        prover_data: BooleanWhirData<F, EF, MT>,
+        openings: &[WeightedOpening<EF>],
+        suffix_tensors: &[Option<&SuffixTensors<EF, F>>],
+        challenger: &mut Challenger,
+    ) -> Result<(Vec<EF>, BooleanWhirDeferredProof<F, EF, MT>), BooleanWhirError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        let claims = self.weighted_claims(openings.iter())?;
+        let depth = self.inner.round_folding_factor(0);
+        let (reduction, weight) = tracing::info_span!("bit ring switch")
+            .in_scope(|| {
+                claims.prove_deferred(
+                    &Self::packing(&prover_data),
+                    suffix_tensors,
+                    depth,
+                    challenger,
+                )
+            })
+            .map_err(BooleanWhirError::Reduction)?;
+        let values = claims
+            .reductions()
+            .iter()
+            .zip(&reduction.claims)
+            .map(|(switch, elements)| switch.incoming_claim(&elements.tensor))
+            .collect();
+        let opening = self
+            .inner
+            .open_with_initial_weight(prover_data, weight, challenger)
+            .map_err(BooleanWhirError::Commit)?;
+        Ok((values, BooleanWhirDeferredProof { reduction, opening }))
+    }
+
+    /// Check a deferred proof against every weighted claim.
+    ///
+    /// # Errors
+    ///
+    /// Before the transcript moves, a refused claim or a claim count that disagrees.
+    ///
+    /// After it, a false value, the commitment, or a first fold that does not close.
+    pub fn verify_weighted_deferred(
+        &self,
+        commitment: &MT::Commitment,
+        claims: &[WeightedClaim<EF>],
+        proof: &BooleanWhirDeferredProof<F, EF, MT>,
+        challenger: &mut Challenger,
+    ) -> Result<(), BooleanWhirError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        let batch = self.weighted_claims(claims.iter().map(|claim| &claim.opening))?;
+        let values = claims.iter().map(|claim| claim.value).collect::<Vec<_>>();
+        let closing = batch
+            .verify_deferred(&proof.reduction, &values, challenger)
+            .map_err(BooleanWhirError::ReductionProof)?;
+        let shapes = [TableShape::new(self.inner.num_variables(), 1)];
+        // The point always names the packing's variables, so a refusal only fails the check.
+        let weight_at = |point: &Point<EF>| closing.weight_at(point).unwrap_or(EF::ZERO);
+        self.inner
+            .verify_with_initial_weight(
+                commitment,
+                &proof.opening,
+                &shapes,
+                InitialWeightCheck {
+                    sum: closing.claimed_sum(),
+                    eval: &weight_at,
+                },
+                challenger,
+            )
+            .map_err(BooleanWhirError::Opening)
+    }
+
+    /// Check one proof against every weighted claim.
+    ///
+    /// # Errors
+    ///
+    /// Before the transcript moves, a refused claim or a reduction count that disagrees.
+    ///
+    /// After it, a false value, a failed reduction, the commitment, or an unclosed claim.
+    pub fn verify_weighted(
+        &self,
+        commitment: &MT::Commitment,
+        claims: &[WeightedClaim<EF>],
+        proof: &BooleanWhirProof<F, EF, MT>,
+        challenger: &mut Challenger,
+    ) -> Result<(), BooleanWhirError> {
+        let batch = self.weighted_claims(claims.iter().map(|claim| &claim.opening))?;
+        if proof.reduction.claims.len() != claims.len() {
+            return Err(BooleanWhirError::ClaimCount {
+                expected: claims.len(),
+                values: claims.len(),
+                reductions: proof.reduction.claims.len(),
+            });
+        }
+        let readings = claims
+            .iter()
+            .map(|claim| (Some(claim.value), None))
+            .collect::<Vec<_>>();
+        self.verify_claims(commitment, &batch, &readings, proof, challenger)
+    }
+
+    /// Every weighted claim's reduction, gathered into one batch.
+    fn weighted_claims<'a>(
+        &self,
+        openings: impl ExactSizeIterator<Item = &'a WeightedOpening<EF>>,
+    ) -> Result<BitRingSwitchClaims<F, EF>, BooleanWhirError>
+    where
+        EF: 'a,
+    {
+        if openings.len() == 0 {
+            return Err(BooleanWhirError::NoPoints);
+        }
+        let kept = self.inner.num_variables();
+        let reductions = openings
+            .map(|opening| {
+                // The kept coordinates are the witness's less the absorbed ones.
+                if opening.high.num_variables() != kept {
+                    return Err(BooleanWhirError::PointArity {
+                        expected: kept,
+                        actual: opening.high.num_variables(),
+                    });
+                }
+                BitRingSwitch::with_low_weights(&opening.high, &opening.low_weights)
+                    .map_err(BooleanWhirError::Reduction)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        BitRingSwitchClaims::new(reductions).map_err(BooleanWhirError::Reduction)
     }
 
     /// Check one proof against the readings it claims at every opening.
@@ -442,14 +652,25 @@ where
             return Err(BooleanWhirError::ReadingShape { index });
         }
         let claims = Self::claims(openings)?;
-
-        // The batch turns every reading about the bits into one claim about the packing.
         let readings = readings
             .iter()
             .map(|reading| (reading.current, reading.next))
             .collect::<Vec<_>>();
+        self.verify_claims(commitment, &claims, &readings, proof, challenger)
+    }
+
+    /// Replay a batch of claims, then the WHIR opening at the point it leaves.
+    fn verify_claims(
+        &self,
+        commitment: &MT::Commitment,
+        claims: &BitRingSwitchClaims<F, EF>,
+        readings: &[(Option<EF>, Option<EF>)],
+        proof: &BooleanWhirProof<F, EF, MT>,
+        challenger: &mut Challenger,
+    ) -> Result<(), BooleanWhirError> {
+        // The batch turns every reading about the bits into one claim about the packing.
         let (surviving_point, surviving_value) = claims
-            .verify_readings(&proof.reduction, &readings, challenger)
+            .verify_readings(&proof.reduction, readings, challenger)
             .map_err(BooleanWhirError::ReductionProof)?;
 
         // One proximity opening pins the one surviving point to the committed polynomial.

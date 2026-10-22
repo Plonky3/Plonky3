@@ -9,7 +9,7 @@ use core::arch::x86_64::{
     _mm512_unpacklo_epi32, _mm512_unpacklo_epi64, _mm512_xor_si512,
 };
 
-use crate::Ghash128;
+use crate::{Ghash128, transpose_8x8};
 
 /// The immediate of a three-input exclusive-or, as a truth table of its three operands.
 const XOR3: i32 = 0x96;
@@ -47,17 +47,6 @@ const TRANSPOSE_ORDER: __m512i = {
     unsafe { core::mem::transmute::<[u8; 64], __m512i>(index) }
 };
 
-/// Transposes the bits of an 8 × 8 byte matrix packed row-major in a u64.
-#[inline]
-const fn transpose8(mut value: u64) -> u64 {
-    let mut exchange = (value ^ (value >> 7)) & 0x00aa_00aa_00aa_00aa;
-    value ^= exchange ^ (exchange << 7);
-    exchange = (value ^ (value >> 14)) & 0x0000_cccc_0000_cccc;
-    value ^= exchange ^ (exchange << 14);
-    exchange = (value ^ (value >> 28)) & 0x0000_0000_f0f0_f0f0;
-    value ^ exchange ^ (exchange << 28)
-}
-
 /// The 16 output-byte rows of a linear map, one block per eight input corners.
 #[inline]
 const fn affine_blocks<const GROUPS: usize>(columns: &[u128]) -> [[u64; GROUPS]; 16] {
@@ -76,7 +65,7 @@ const fn affine_blocks<const GROUPS: usize>(columns: &[u128]) -> [[u64; GROUPS];
         while k < 16 {
             let packed =
                 u64::from_le_bytes([c0[k], c1[k], c2[k], c3[k], c4[k], c5[k], c6[k], c7[k]]);
-            blocks[k][j] = transpose8(packed).swap_bytes();
+            blocks[k][j] = transpose_8x8(packed).swap_bytes();
             k += 1;
         }
         j += 1;

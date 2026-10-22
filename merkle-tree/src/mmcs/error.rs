@@ -53,6 +53,20 @@ pub enum MerkleTreeError {
         bits_reduced: usize,
     },
 
+    /// Padding prevents a binary bridge from shrinking or reaching the next injection.
+    #[error(
+        "cannot shrink padded layer of height {padded_height} with arity {arity} \
+         to inject matrix of height {height}"
+    )]
+    NonShrinkingLayer {
+        /// Digest count in the layer being folded.
+        padded_height: usize,
+        /// Height of the next matrix awaiting injection.
+        height: usize,
+        /// Full compression arity that fixes the minimum padded width.
+        arity: usize,
+    },
+
     /// The queried row index exceeds the maximum height.
     #[error("index out of bounds: index {index} exceeds max height {max_height}")]
     IndexOutOfBounds {

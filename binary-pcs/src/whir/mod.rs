@@ -8,10 +8,14 @@ mod profile;
 mod proof;
 mod shape;
 
-pub use boolean::{BooleanWhirData, BooleanWhirPcs, BooleanWhirProver, BooleanWhirTracePcs};
+pub use boolean::{
+    BooleanWhirData, BooleanWhirPcs, BooleanWhirProver, BooleanWhirTracePcs, WeightedClaim,
+    WeightedOpening,
+};
 pub use budget::BinaryWhirBudget;
 pub use domain::{BinaryWhirAlphabet, BinaryWhirDomain, BooleanWhirDomain, recommended_cap_height};
 pub use error::{BooleanWhirError, BudgetError, ProfileError};
+pub use p3_sumcheck::ring_switch::bits::{BitTensor, SuffixTensors};
 pub use profile::BinaryWhirProfile;
-pub use proof::BooleanWhirProof;
+pub use proof::{BooleanWhirDeferredProof, BooleanWhirProof};
 pub use shape::{ProofShape, ProofShapeError};

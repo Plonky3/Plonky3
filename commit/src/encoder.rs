@@ -1,10 +1,34 @@
 //! Linear codes applied column-wise to a matrix.
 
+use alloc::vec::Vec;
+
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
+
+/// Receives finished rows of a codeword, as `(first_row, rows)`, from any worker.
+///
+/// Every row is handed over exactly once, in blocks of whole rows.
+pub type RowSink<'a, T> = dyn Fn(usize, &[T]) + Sync + 'a;
+
+/// Bytes of one block of rows handed to a sink.
+const ROW_BLOCK_BYTES: usize = 256 * 1024;
+
+/// Hand rows starting at `first_row` to a sink once each, in blocks of whole rows, from the pool.
+pub fn hand_over_rows<T: Sync>(
+    values: &[T],
+    width: usize,
+    first_row: usize,
+    sink: &RowSink<'_, T>,
+) {
+    let rows = (ROW_BLOCK_BYTES / (size_of::<T>() * width).max(1)).max(1);
+    values
+        .par_chunks(rows * width.max(1))
+        .enumerate()
+        .for_each(|(index, block)| sink(first_row + index * rows, block));
+}
 
 /// A borrowed message copied into a zeroed matrix `2^log_inv_rate` times its height.
 ///
@@ -31,14 +55,29 @@ pub fn zero_padded<F: Field>(
         // Recovering the original length from the shifted one is what proves no bits were lost.
         .filter(|&padded| padded >> log_inv_rate == len)
         .expect("codeword length overflows usize");
-    let mut values = F::zero_vec(padded_len);
+    let mut values = Vec::with_capacity(padded_len);
+    let (head, tail) = values.spare_capacity_mut()[..padded_len].split_at_mut(len);
 
     // Each element is read once and written once.
     let chunk = min_task_len(len, 2 * size_of::<F>());
-    values[..len]
-        .par_chunks_mut(chunk)
+    head.par_chunks_mut(chunk)
         .zip(message.values.par_chunks(chunk))
-        .for_each(|(destination, source)| destination.copy_from_slice(source));
+        .for_each(|(destination, source)| {
+            for (slot, &value) in destination.iter_mut().zip(source) {
+                slot.write(value);
+            }
+        });
+
+    // The zero tail is written in parallel too, since a recycled allocation is not zero already.
+    let chunk = min_task_len(tail.len(), size_of::<F>());
+    tail.par_chunks_mut(chunk).for_each(|destination| {
+        for slot in destination {
+            slot.write(F::ZERO);
+        }
+    });
+
+    // SAFETY: the two sweeps above initialised every one of the first `padded_len` slots.
+    unsafe { values.set_len(padded_len) };
     RowMajorMatrix::new(values, message.width)
 }
 
@@ -104,6 +143,22 @@ pub trait Encoder<F: Field> {
         log_inv_rate: usize,
     ) -> RowMajorMatrix<F> {
         self.encode_batch_padded(zero_padded(message, log_inv_rate), log_inv_rate)
+    }
+
+    /// As [`Self::encode_batch_borrowed`], handing every finished codeword row to `sink` once.
+    ///
+    /// An encoder may hand rows over while it still holds them in cache.
+    ///
+    /// The default hands them over once the whole codeword is done.
+    fn encode_batch_borrowed_with(
+        &self,
+        message: RowMajorMatrixView<'_, F>,
+        log_inv_rate: usize,
+        sink: &RowSink<'_, F>,
+    ) -> RowMajorMatrix<F> {
+        let codeword = self.encode_batch_borrowed(message, log_inv_rate);
+        hand_over_rows(&codeword.values, codeword.width, 0, sink);
+        codeword
     }
 }
 

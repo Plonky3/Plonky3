@@ -13,9 +13,14 @@ on:
   pull_request:
     branches: [ "*" ]
 
+# One group per commit, so a second run of the same commit waits instead of cancelling the first.
+#
+# GitHub can fire two pull_request events for one commit, e.g. when a PR opens inside a stack.
+# Cancelling the first while `plan` runs would leave its matrix check, under the unexpanded name, failed for good.
+# Runs of superseded commits are cancelled by the plan job instead.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -28,7 +33,11 @@ jobs:
   plan:
     name: Plan CI
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     outputs:
+      duplicate: ${{ steps.duplicate.outputs.duplicate }}
       packages: ${{ steps.impact.outputs.packages }}
       rust: ${{ steps.impact.outputs.rust }}
       parallel: ${{ steps.impact.outputs.parallel }}
@@ -47,9 +56,91 @@ jobs:
       lint: ${{ steps.impact.outputs.lint }}
 
     steps:
+      # Runs of older commits of this pull request are stale once a new commit arrives.
+      #
+      # Only older runs are cancelled.
+      # A slow plan of an old commit must never cancel the run of a newer one.
+      #
+      # Only runs attached to this pull request are cancelled.
+      # A fork's token cannot cancel, so those runs finish.
+      - name: Cancel runs of superseded commits
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_NUMBER: ${{ github.run_number }}
+        # A branch name is attacker-chosen text, so it reaches the API and jq only as data.
+        run: |
+          gh api -X GET "repos/$GH_REPO/actions/workflows/ci.yml/runs" \
+            -f event=pull_request -f branch="$BRANCH" -F per_page=100 \
+            | jq -r --argjson run_number "$RUN_NUMBER" --arg head_sha "$HEAD_SHA" --argjson pr "$PR" '
+              .workflow_runs[]
+              | select(.run_number < $run_number)
+              | select(.head_sha != $head_sha and .status != "completed")
+              | select(any(.pull_requests[]; .number == $pr))
+              | .id' \
+            | xargs -r -n1 gh run cancel
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      # A pull request run whose exact context already passed has nothing left to check, so every job skips.
+      #
+      # The context is the pair of base and head commits.
+      # Together they fix both the merge under test and the jobs the plan selects.
+      #
+      # A marker's name proves nothing, since any run can upload any name.
+      # Only a successful run of this workflow, on this branch and head commit, is trusted.
+      - name: Detect a passed run of this context
+        id: duplicate
+        if: github.event_name == 'pull_request'
+        # Should the API fail, the output stays unset and every job runs.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO_ID: ${{ github.event.pull_request.head.repo.id }}
+        # A branch name is attacker-chosen text, so it reaches jq only as data.
+        run: |
+          echo "$BASE_SHA $HEAD_SHA" > "$RUNNER_TEMP/ci-context"
+          workflow=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
+          passed=false
+          for run in $(gh api -X GET "repos/$GH_REPO/actions/artifacts" \
+            -f name="ci-context-$BASE_SHA-$HEAD_SHA" -F per_page=100 \
+            | jq --argjson self "$GITHUB_RUN_ID" '.artifacts[].workflow_run.id | select(. != $self)'); do
+            trusted=$(gh api "repos/$GH_REPO/actions/runs/$run" \
+              | jq --argjson workflow "$workflow" --arg head_sha "$HEAD_SHA" \
+                --arg head_ref "$HEAD_REF" --argjson head_repo "$HEAD_REPO_ID" '
+                .conclusion == "success"
+                and .event == "pull_request"
+                and .workflow_id == $workflow
+                and .head_sha == $head_sha
+                and .head_branch == $head_ref
+                and .head_repository.id == $head_repo')
+            if [[ "$trusted" == true ]]; then
+              passed=true
+              break
+            fi
+          done
+          echo "duplicate=$passed" >> "$GITHUB_OUTPUT"
+
+      # Tag this run with the context it tests, so a later run of the same context finds its result.
+      - name: Record the tested context
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-context-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/ci-context
+          retention-days: 30
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -200,7 +291,9 @@ jobs:
             target: aarch64-unknown-linux-gnu
             modes: serial parallel
     runs-on: ${{ matrix.os }}
-    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+    if: >-
+      needs.plan.outputs.duplicate != 'true' &&
+      !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
 
     steps:
       - uses: actions/checkout@v6
@@ -510,6 +603,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     if: >-
+      needs.plan.outputs.duplicate != 'true' &&
       needs.plan.outputs.embedded == 'true' &&
       !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
 
@@ -540,6 +634,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     if: >-
+      needs.plan.outputs.duplicate != 'true' &&
       (needs.plan.outputs.wasm == 'true' || needs.plan.outputs.wasm_blake3 == 'true') &&
       !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
     env:
@@ -593,6 +688,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     if: >-
+      needs.plan.outputs.duplicate != 'true' &&
       needs.plan.outputs.lint == 'true' &&
       !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
 

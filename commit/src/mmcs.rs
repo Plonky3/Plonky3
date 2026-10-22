@@ -7,6 +7,8 @@ use p3_matrix::{Dimensions, Matrix};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::RowSink;
+
 /// Digest payload bounds for a commitment to one power-of-two-height matrix.
 ///
 /// The commitment carries only digests; openings carry only matrix elements and digests.
@@ -19,6 +21,11 @@ pub struct MmcsProofGeometry {
     pub commitment_digests: usize,
     /// Most authentication digests in one row opening.
     pub opening_digests: usize,
+    /// Whether a multi-opening is a pruned binary frontier.
+    ///
+    /// Each of the `opening_digests` levels then sends at most one sibling per opened parent.
+    /// Otherwise a multi-opening is bounded only by its row openings' digests.
+    pub binary_frontier: bool,
 }
 
 impl MmcsProofGeometry {
@@ -27,6 +34,18 @@ impl MmcsProofGeometry {
         Self {
             commitment_digests,
             opening_digests,
+            binary_frontier: false,
+        }
+    }
+
+    /// Bounds a binary tree whose multi-openings send one sibling per opened parent and level.
+    ///
+    /// `path_levels` is the number of tree levels below the commitment.
+    pub const fn binary_frontier(commitment_digests: usize, path_levels: usize) -> Self {
+        Self {
+            commitment_digests,
+            opening_digests: path_levels,
+            binary_frontier: true,
         }
     }
 }
@@ -84,6 +103,27 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     /// A tuple `(commitment, prover_data)` as in [`Self::commit`].
     fn commit_matrix<M: Matrix<T>>(&self, input: M) -> (Self::Commitment, Self::ProverData<M>) {
         self.commit(vec![input])
+    }
+
+    /// Commit to one matrix of `dimensions` a closure produces, handing this scheme its rows as they finish.
+    ///
+    /// The closure calls the sink once per finished row, in blocks of whole rows, from any worker.
+    ///
+    /// A scheme may panic on a row handed over twice, never, or past the matrix.
+    ///
+    /// A scheme may hash the rows there, while the producer still holds them in cache.
+    ///
+    /// The default ignores them and commits the matrix once it is whole.
+    fn commit_matrix_streamed<Fill>(
+        &self,
+        dimensions: Dimensions,
+        fill: Fill,
+    ) -> (Self::Commitment, Self::ProverData<RowMajorMatrix<T>>)
+    where
+        Fill: FnOnce(&RowSink<'_, T>) -> RowMajorMatrix<T>,
+    {
+        let _ = dimensions;
+        self.commit_matrix(fill(&|_, _| {}))
     }
 
     /// Convenience method to commit to a single column vector, treated as a column matrix.

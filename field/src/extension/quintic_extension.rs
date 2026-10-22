@@ -15,7 +15,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use itertools::Itertools;
 use num_bigint::BigUint;
-use p3_util::{as_base_slice, as_base_slice_mut, reconstitute_from_base};
+use p3_util::{as_base_slice, as_base_slice_mut, zero_vec_from_base};
 
 use super::packed_quintic_extension::PackedQuinticTrinomialExtensionField;
 use super::{ExtField, HasFrobenius, HasTwoAdicQuinticExtension, ext_mixed_dot_product};
@@ -190,7 +190,7 @@ where
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: `Self` is `repr(transparent)` over `[A; 5]`.
-        unsafe { reconstitute_from_base(A::zero_vec(len * 5)) }
+        unsafe { zero_vec_from_base(len, A::zero_vec) }
     }
 }
 

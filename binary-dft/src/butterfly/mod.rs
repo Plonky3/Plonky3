@@ -13,6 +13,7 @@ use p3_binary_field::{
     BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
     BinaryField128, Gf2, Ghash128, Poly64, Rijndael8b, TowerLevel,
 };
+use p3_commit::{RowSink, hand_over_rows};
 use p3_field::{PackedValue, PrimeCharacteristicRing};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use subfield::{byte_map_twiddle_bits, coordinate_butterfly};
@@ -81,6 +82,28 @@ pub trait ButterflyField: TowerLevel {
     #[inline]
     fn lch_transform_cosets(values: &mut [Self], width: usize, log_message: usize) {
         lch::transform_cosets::<Self>(values, width, log_message);
+    }
+
+    /// As [`Self::lch_transform_cosets`], the message read from `source` instead of the leading coset.
+    ///
+    /// # Panics
+    ///
+    /// - As [`Self::lch_transform_cosets`], or if the source is not one coset long.
+    ///
+    /// A sink receives every finished row once, while the transform still holds it in cache where it can.
+    #[inline]
+    fn lch_transform_cosets_from(
+        values: &mut [Self],
+        source: &[Self],
+        width: usize,
+        log_message: usize,
+        sink: Option<&RowSink<'_, Self>>,
+    ) {
+        values[..source.len()].copy_from_slice(source);
+        Self::lch_transform_cosets(values, width, log_message);
+        if let Some(sink) = sink {
+            hand_over_rows(values, width, 0, sink);
+        }
     }
 }
 
@@ -211,6 +234,17 @@ impl ButterflyField for Poly64 {
     #[inline]
     fn butterfly_radix8<const INVERSE: bool>(rows: &mut [&mut [Self]; 8], t: &[Self; 7]) {
         poly64::radix8::<INVERSE>(rows, t);
+    }
+
+    #[inline]
+    fn lch_transform_cosets_from(
+        values: &mut [Self],
+        source: &[Self],
+        width: usize,
+        log_message: usize,
+        sink: Option<&RowSink<'_, Self>>,
+    ) {
+        lch::transform_cosets_from::<Self>(values, Some(source), width, log_message, sink);
     }
 }
 

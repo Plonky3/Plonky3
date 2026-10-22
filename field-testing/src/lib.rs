@@ -537,6 +537,36 @@ pub fn test_div_2exp_u64_panics_char2<R: PrimeCharacteristicRing>() {
     let _divided = R::ONE.div_2exp_u64(1);
 }
 
+/// A zero vector of length `len` holds exactly `len` zeros.
+pub fn test_zero_vec<R: PrimeCharacteristicRing + Eq>() {
+    // Lengths around every packing and extension width, including empty.
+    for len in [0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 33] {
+        let zeros = R::zero_vec(len);
+        assert_eq!(zeros.len(), len);
+        assert!(zeros.iter().all(|x| *x == R::ZERO));
+    }
+}
+
+/// A zero vector refuses a length no allocation can hold.
+///
+/// It must panic like `vec![zero; len]`, never return a shorter vector.
+///
+/// The length is chosen so that an unchecked coordinate count wraps around.
+///
+/// Must be invoked from a `#[should_panic(expected = "capacity overflow")]` test.
+pub fn test_zero_vec_overflow_panics<R: PrimeCharacteristicRing>() {
+    // An element is `r` prime-field coordinates, stacked over extension degrees and packing widths.
+    let r = size_of::<R>() / size_of::<R::PrimeSubfield>().max(1);
+
+    // The smallest length whose coordinate count passes 2^64, or the largest one for a prime field.
+    //
+    //     r = 4:  len = 2^62  ->  len * 4 wraps to 0  ->  an unchecked build returns an empty vector
+    let len = (usize::MAX / r.max(1)).saturating_add(1);
+    let zeros = R::zero_vec(len);
+    // Unreachable: the length shows what a missing check would have returned.
+    panic!("zero_vec({len}) returned {} elements", zeros.len());
+}
+
 pub fn test_div_2exp_u64<R: PrimeCharacteristicRing + Eq>()
 where
     StandardUniform: Distribution<R>,
@@ -1588,6 +1618,15 @@ macro_rules! test_ring_with_eq {
             fn test_div_2exp_u64() {
                 $crate::test_div_2exp_u64::<$ring>();
             }
+            #[test]
+            fn test_zero_vec() {
+                $crate::test_zero_vec::<$ring>();
+            }
+            #[test]
+            #[should_panic(expected = "capacity overflow")]
+            fn test_zero_vec_overflow_panics() {
+                $crate::test_zero_vec_overflow_panics::<$ring>();
+            }
         }
     };
 }
@@ -1680,6 +1719,15 @@ macro_rules! test_ring_with_eq_char2 {
             #[should_panic]
             fn test_div_2exp_u64_panics() {
                 $crate::test_div_2exp_u64_panics_char2::<$ring>();
+            }
+            #[test]
+            fn test_zero_vec() {
+                $crate::test_zero_vec::<$ring>();
+            }
+            #[test]
+            #[should_panic(expected = "capacity overflow")]
+            fn test_zero_vec_overflow_panics() {
+                $crate::test_zero_vec_overflow_panics::<$ring>();
             }
         }
     };

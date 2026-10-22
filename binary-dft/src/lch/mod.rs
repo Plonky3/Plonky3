@@ -6,17 +6,19 @@ mod twiddles;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use p3_commit::RowSink;
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 pub(crate) use schedule::BUTTERFLY_GRAIN;
-use schedule::{DEEP_TILE_BYTES, Schedule, run, run_cosets, stage_pass};
+use schedule::{CACHED_MATRIX_BYTES, Schedule, run, run_cosets, stage_pass};
 use twiddles::Twiddles;
 
 use crate::butterfly::ButterflyField;
 use crate::domain::domain_point;
-use crate::traits::AdditiveNtt;
+use crate::staging::zeroed;
+use crate::traits::{AdditiveNtt, padded_len};
 
 /// The Lin-Chung-Han additive NTT over the Cantor-basis domain.
 ///
@@ -56,6 +58,43 @@ impl<F: ButterflyField> AdditiveNtt<F> for LchNtt<F> {
         F::lch_transform_cosets(&mut mat.values, width, log_n - log_inv_rate);
         mat
     }
+
+    fn ntt_batch_borrowed(
+        &self,
+        mat: RowMajorMatrixView<'_, F>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<F> {
+        let width = mat.width();
+        let log_message = log2_strict_usize(mat.height());
+        assert!(
+            log_message + log_inv_rate <= 1 << F::LOG_BITS,
+            "domain exceeds field dimension"
+        );
+
+        // The transform reads the message where it lies, so it is never copied into the codeword.
+        let mut values = zeroed(padded_len(mat.values.len(), log_inv_rate), F::ZERO);
+        F::lch_transform_cosets_from(&mut values, mat.values, width, log_message, None);
+        RowMajorMatrix::new(values, width)
+    }
+
+    fn ntt_batch_borrowed_with(
+        &self,
+        mat: RowMajorMatrixView<'_, F>,
+        log_inv_rate: usize,
+        sink: &RowSink<'_, F>,
+    ) -> RowMajorMatrix<F> {
+        let width = mat.width();
+        let log_message = log2_strict_usize(mat.height());
+        assert!(
+            log_message + log_inv_rate <= 1 << F::LOG_BITS,
+            "domain exceeds field dimension"
+        );
+
+        // Each finished tile goes to the sink while it is still in cache.
+        let mut values = zeroed(padded_len(mat.values.len(), log_inv_rate), F::ZERO);
+        F::lch_transform_cosets_from(&mut values, mat.values, width, log_message, Some(sink));
+        RowMajorMatrix::new(values, width)
+    }
 }
 
 /// Transform a row-major buffer of `width` columns in place, over the coset `shift + S_l`.
@@ -76,7 +115,7 @@ pub(crate) fn transform<F: ButterflyField, const INVERSE: bool>(
     let twiddles = Twiddles::new(log_n, shift);
 
     // A matrix within one tile stays in cache throughout, so blocking would only add bookkeeping.
-    if size_of_val(values) <= DEEP_TILE_BYTES {
+    if size_of_val(values) <= CACHED_MATRIX_BYTES {
         for step in 0..log_n {
             let j = if INVERSE { step } else { log_n - 1 - step };
             stage_pass::<F, INVERSE>(values, width, j, &twiddles);
@@ -117,16 +156,38 @@ pub(crate) fn transform_cosets<F: ButterflyField>(
     width: usize,
     log_message: usize,
 ) {
+    transform_cosets_from(values, None, width, log_message, None);
+}
+
+/// As [`transform_cosets`], the message read from `source` when one is given.
+///
+/// The leading coset's prior contents are then never read.
+pub(crate) fn transform_cosets_from<F: ButterflyField>(
+    values: &mut [F],
+    source: Option<&[F]>,
+    width: usize,
+    log_message: usize,
+    sink: Option<&RowSink<'_, F>>,
+) {
     let len = width << log_message;
 
     // A coset within one tile is cheap to copy and transform on its own.
-    if size_of::<F>() * len <= DEEP_TILE_BYTES {
+    if size_of::<F>() * len <= CACHED_MATRIX_BYTES {
         let (message, rest) = values.split_at_mut(len);
+        if let Some(source) = source {
+            message.copy_from_slice(source);
+        }
         rest.par_chunks_mut(len).enumerate().for_each(|(c, coset)| {
             coset.copy_from_slice(message);
             transform::<F, false>(coset, width, domain_point::<F>((c + 1) << log_message));
+            if let Some(sink) = sink {
+                sink((c + 1) << log_message, coset);
+            }
         });
         transform::<F, false>(message, width, F::ZERO);
+        if let Some(sink) = sink {
+            sink(0, message);
+        }
         return;
     }
 
@@ -136,10 +197,12 @@ pub(crate) fn transform_cosets<F: ButterflyField>(
         .collect();
     run_cosets(
         values,
+        source,
         width,
         log_message,
         &twiddles,
         &Schedule::new::<F>(width, log_message),
+        sink,
     );
 }
 
@@ -159,11 +222,11 @@ mod tests {
     use proptest::prelude::*;
 
     use super::schedule::{
-        DEEP_TILE_BYTES, MIN_FUSED_STAGES, STAGED_WORKERS, Schedule, run, run_cosets, stage_pass,
-        staged_runs,
+        CACHED_MATRIX_BYTES, MIN_FUSED_STAGES, Schedule, run, run_cosets, stage_pass, staged_runs,
     };
     use super::{ButterflyField, LchNtt, Twiddles};
     use crate::butterfly::{ghash_transform, ghash_transform_cosets};
+    use crate::cache::CacheBudget;
     use crate::domain::{domain_point, subspace_polynomial};
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
@@ -207,6 +270,22 @@ mod tests {
     /// takes the butterfly's separate case. The other shift has bits throughout, so no stage's
     /// twiddle is accidentally zero.
     const SHIFTS: [u64; 2] = [0, 0x5555_1234_9abc_def0];
+
+    /// A cache budget far below any real one, so test-sized matrices reach every blocked shape.
+    ///
+    /// A contiguous tile may spill into the shared budget, four times the private one.
+    const SPILLING: CacheBudget = CacheBudget {
+        private: 128 * 1024,
+        shared: 512 * 1024,
+        last_level: 0,
+    };
+
+    /// The same private budget with nothing to spill into, so every tile fills the private one.
+    const PRIVATE_ONLY: CacheBudget = CacheBudget {
+        private: 128 * 1024,
+        shared: 128 * 1024,
+        last_level: 0,
+    };
 
     /// Builds an element of any level from a 64-bit pattern, repeating it for wider levels.
     fn sample<F: ButterflyField>(bits: u64) -> F {
@@ -355,6 +434,60 @@ mod tests {
     }
 
     #[test]
+    fn the_sink_sees_every_codeword_row_once_as_it_ends() {
+        extern crate std;
+        use std::sync::Mutex;
+
+        // Fixture state: one coset in a tile, cosets past a tile, and a deep pass with a tile.
+        for (log_n, width, log_inv_rate) in [(4, 3, 2), (11, 16, 1), (12, 64, 1), (9, 48, 4)] {
+            let message = matrix::<Poly64>(log_n, width, 9);
+            let ntt = LchNtt::<Poly64>::default();
+            let seen = Mutex::new(vec![None; 1 << (log_n + log_inv_rate)]);
+            let sink = |first: usize, rows: &[Poly64]| {
+                let mut seen = seen.lock().unwrap();
+                for (offset, row) in rows.chunks(width).enumerate() {
+                    assert!(
+                        seen[first + offset].is_none(),
+                        "row {} twice",
+                        first + offset
+                    );
+                    seen[first + offset] = Some(row.to_vec());
+                }
+            };
+            let codeword = ntt.ntt_batch_borrowed_with(message.as_view(), log_inv_rate, &sink);
+            assert_eq!(
+                codeword,
+                ntt.ntt_batch_borrowed(message.as_view(), log_inv_rate)
+            );
+            for (row, seen) in codeword
+                .values
+                .chunks(width)
+                .zip(seen.into_inner().unwrap())
+            {
+                assert_eq!(Some(row.to_vec()), seen, "log_n={log_n} width={width}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_borrowed_message_encodes_as_its_zero_padded_copy() {
+        // Fixture state: one coset in a tile, and cosets past a tile on the staged and deep paths.
+        for (log_n, width, log_inv_rate) in [(4, 3, 2), (11, 16, 1), (12, 64, 1), (9, 48, 4)] {
+            let message = matrix::<Poly64>(log_n, width, 7);
+            let mut padded = message.clone();
+            padded
+                .values
+                .resize(message.values.len() << log_inv_rate, Poly64::ZERO);
+            let ntt = LchNtt::<Poly64>::default();
+            assert_eq!(
+                ntt.ntt_batch_borrowed(message.as_view(), log_inv_rate),
+                ntt.ntt_batch_padded(padded, log_inv_rate),
+                "log_n={log_n} width={width} rate={log_inv_rate}"
+            );
+        }
+    }
+
+    #[test]
     fn incremental_twiddles_match_independent_domain_points() {
         for shift_bits in SHIFTS {
             check_the_twiddle_walk::<BinaryField32>(16, shift_bits);
@@ -383,7 +516,7 @@ mod tests {
         );
     }
 
-    /// The blocked schedule of a named worker count, against the same independent walk.
+    /// The blocked schedule of named worker counts under both test budgets, against the same independent walk.
     ///
     /// The transform picks its own schedule from the shape and the thread count, so what it
     /// covers moves with the machine. This drives `run` directly instead: the walk then pins the
@@ -399,10 +532,14 @@ mod tests {
         let twiddles = Twiddles::new(log_n, shift);
         let walked = twiddle_walk_ntt::<F>(coeffs.clone(), shift);
 
-        for &workers in workers {
-            let schedule = Schedule::for_workers::<F>(width, log_n, workers);
-            let label =
-                format!("log_n={log_n} width={width} shift={shift_bits:#x} workers={workers}");
+        for (&workers, budget) in workers
+            .iter()
+            .flat_map(|workers| [(workers, SPILLING), (workers, PRIVATE_ONLY)])
+        {
+            let schedule = Schedule::for_budget::<F>(width, log_n, workers, budget);
+            let label = format!(
+                "log_n={log_n} width={width} shift={shift_bits:#x} workers={workers} {budget:?}"
+            );
 
             let mut blocked = coeffs.clone();
             run::<F, false>(&mut blocked.values, width, log_n, &twiddles, &schedule);
@@ -571,6 +708,48 @@ mod tests {
     }
 
     proptest! {
+        // Each case is a few whole matrices, so this block draws fewer of them.
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// Any schedule a cache budget and a worker count give is the plain one, reordered.
+        #[test]
+        fn every_budget_schedule_matches_the_plain_one(
+            log_n in 0usize..=13,
+            width in prop_oneof![1usize..=9, 31usize..=65],
+            log_private in 8usize..=15,
+            spill in 0usize..=3,
+            workers in 1usize..=33,
+            log_inv_rate in 0usize..=3,
+            resident in any::<bool>(),
+        ) {
+            // A message past 2^16 elements adds time, not shapes.
+            prop_assume!(width << log_n <= 1 << 16);
+
+            // Fixture state: budgets from one staged run up to 32 KiB, so a matrix of at most
+            // 512 KiB meets tiles, groups and staged runs of every depth.
+            //
+            //     spill 0   the tile fills the private budget
+            //     spill 3   it may spill into a shared budget eight times larger
+            let budget = CacheBudget {
+                private: 1 << log_private,
+                shared: 1 << (log_private + spill),
+                last_level: if resident { 1 << 20 } else { 0 },
+            };
+
+            // Poly64 rows pass a cache line from width 8, BinaryField32 ones from width 16.
+            //
+            // So between them the drawn widths stage both single rows and runs of rows.
+            let schedule = Schedule::for_budget::<Poly64>(width, log_n, workers, budget);
+            check_schedules_agree::<Poly64>(log_n, width, &schedule);
+            check_the_shared_cosets_agree::<Poly64>(log_n, width, log_inv_rate, &schedule);
+
+            let schedule = Schedule::for_budget::<BinaryField32>(width, log_n, workers, budget);
+            check_schedules_agree::<BinaryField32>(log_n, width, &schedule);
+            check_the_shared_cosets_agree::<BinaryField32>(log_n, width, log_inv_rate, &schedule);
+        }
+    }
+
+    proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
         /// Random padded shapes, against running the skipped layers as ordinary butterflies.
@@ -634,8 +813,8 @@ mod tests {
         //
         // The tile shapes here are far smaller than a cache, which is what lets a test-sized
         // matrix reach the branches a production-sized one does. They also reach `run` whole:
-        // the worker count reshapes a schedule inside `Schedule::for_workers`, so these
-        // fixtures run the same stages at any thread count.
+        // the worker count and the cache budget reshape a schedule only when it is built, so
+        // these fixtures run the same stages on any machine.
 
         // Fixture state: rows per contiguous tile, staged rows per group, rows per staged row.
         let shape = |tile: usize, staged: usize, slab: usize| Schedule {
@@ -675,21 +854,23 @@ mod tests {
     }
 
     #[test]
-    fn production_schedule_matches_the_plain_one() {
-        // Fixture state: the production tile shapes, past the height where blocking switches
-        // on. The shapes come from cache budgets, so the heights that clear them differ by
-        // shape, and each pairing below leaves at least one group above the contiguous tile.
+    fn budget_schedule_matches_the_plain_one() {
+        // Fixture state: the tile shapes a private-only budget gives, past the height where
+        // blocking switches on. The heights that clear the budget differ by shape, and each
+        // pairing below leaves at least one group above the contiguous tile.
         //
         // The worker count is named rather than read: a lone worker takes the deepest tile the
         // budget allows, and 32 workers the shallowest the clamp leaves.
         for workers in [1usize, 32] {
             for (log_n, width) in [(14usize, 3usize), (15, 3), (13, 16)] {
-                let schedule = Schedule::for_workers::<BinaryField32>(width, log_n, workers);
+                let schedule =
+                    Schedule::for_budget::<BinaryField32>(width, log_n, workers, PRIVATE_ONLY);
                 assert!(schedule.log_tile_rows < log_n, "no group above the tile");
                 check_schedules_agree::<BinaryField32>(log_n, width, &schedule);
             }
             for (log_n, width) in [(11usize, 16usize), (12, 16), (13, 5)] {
-                let schedule = Schedule::for_workers::<BinaryField128>(width, log_n, workers);
+                let schedule =
+                    Schedule::for_budget::<BinaryField128>(width, log_n, workers, PRIVATE_ONLY);
                 assert!(schedule.log_tile_rows < log_n, "no group above the tile");
                 check_schedules_agree::<BinaryField128>(log_n, width, &schedule);
                 check_schedules_agree::<Ghash128>(log_n, width, &schedule);
@@ -761,7 +942,15 @@ mod tests {
         let twiddles: Vec<_> = (0..1usize << log_inv_rate)
             .map(|c| Twiddles::new(log_message, domain_point::<F>(c << log_message)))
             .collect();
-        run_cosets(&mut padded, width, log_message, &twiddles, schedule);
+        run_cosets(
+            &mut padded,
+            None,
+            width,
+            log_message,
+            &twiddles,
+            schedule,
+            None,
+        );
         assert_eq!(
             padded, expected.values,
             "log_message={log_message} width={width} rate={log_inv_rate} {schedule:?}"
@@ -816,9 +1005,9 @@ mod tests {
 
     #[test]
     fn a_padded_transform_past_one_tile_matches_the_full_one() {
-        // Invariant: a coset larger than one tile takes the shared-pass route, at production budgets.
+        // Invariant: a coset past the cached-matrix bound takes the shared-pass route.
         //
-        // Fixture state: each message below is 256 KiB, twice the tile budget.
+        // Fixture state: each message below is 256 KiB, twice that bound.
         //
         //     BinaryField32   2^16 rows of 1 column
         //     Poly64          2^12 rows of 8 columns
@@ -829,15 +1018,17 @@ mod tests {
             check_the_padded_transform_agrees::<BinaryField128>(10, 16, log_inv_rate);
         }
 
-        // The same shapes at named worker counts, since the pool size moves the tile and the groups.
+        // The same shapes at named worker counts and budgets, since both move the tile and the groups.
         for workers in [1usize, 32] {
-            for log_inv_rate in 0..=2 {
-                check_the_shared_cosets_agree::<Poly64>(
-                    12,
-                    8,
-                    log_inv_rate,
-                    &Schedule::for_workers::<Poly64>(8, 12, workers),
-                );
+            for budget in [SPILLING, PRIVATE_ONLY] {
+                for log_inv_rate in 0..=2 {
+                    check_the_shared_cosets_agree::<Poly64>(
+                        12,
+                        8,
+                        log_inv_rate,
+                        &Schedule::for_budget::<Poly64>(8, 12, workers, budget),
+                    );
+                }
             }
         }
     }
@@ -884,7 +1075,7 @@ mod tests {
     #[test]
     fn the_contiguous_tile_leaves_one_for_every_worker() {
         // Invariant: a contiguous tile is a task, so the schedule keeps one per worker wherever
-        // the height allows, and is otherwise as deep as the byte budget permits.
+        // the height allows, and is otherwise as deep as the private budget permits.
         //
         // No comparison against the plain schedule can see this: the clamp only moves where a
         // stage runs, never what it computes. Replacing it with `.min(log_n)` leaves the rest of
@@ -892,58 +1083,110 @@ mod tests {
         for workers in [1usize, 2, 3, 4, 14, 16, 32, 4096] {
             for log_n in 0..=24usize {
                 for width in [1usize, 3, 16, 64, 1 << 14] {
-                    let tile =
-                        Schedule::for_workers::<BinaryField32>(width, log_n, workers).log_tile_rows;
-                    assert!(tile <= log_n, "a tile taller than the matrix");
-                    let tiles = 1usize << (log_n - tile);
-                    assert!(
-                        tiles >= workers.min(1 << log_n),
-                        "workers={workers} log_n={log_n} width={width}: {tiles} tiles"
-                    );
+                    for budget in [SPILLING, PRIVATE_ONLY] {
+                        let tile =
+                            Schedule::for_budget::<BinaryField32>(width, log_n, workers, budget)
+                                .log_tile_rows;
+                        assert!(tile <= log_n, "a tile taller than the matrix");
+                        let tiles = 1usize << (log_n - tile);
+                        assert!(
+                            tiles >= workers.min(1 << log_n),
+                            "workers={workers} log_n={log_n} width={width}: {tiles} tiles"
+                        );
 
-                    // And no shallower than it has to be: one more row per tile would either
-                    // halve the tile count below the worker count or overrun the budget.
-                    let row_bytes = core::mem::size_of::<BinaryField32>() * width;
-                    let deeper_fits = (row_bytes << (tile + 1)) <= DEEP_TILE_BYTES;
-                    assert!(
-                        tile == log_n || !deeper_fits || tiles / 2 < workers,
-                        "workers={workers} log_n={log_n} width={width}: tile {tile} is short"
-                    );
+                        // No deeper than the shared budget, past a tile of one row.
+                        let row_bytes = core::mem::size_of::<BinaryField32>() * width;
+                        assert!(
+                            tile == 0 || (row_bytes << tile) <= budget.shared,
+                            "workers={workers} log_n={log_n} width={width}: tile {tile} overruns"
+                        );
+
+                        // And no shallower than it has to be: one more row per tile would either
+                        // halve the tile count below the worker count or overrun the private budget.
+                        let deeper_fits = (row_bytes << (tile + 1)) <= budget.private;
+                        assert!(
+                            tile == log_n || !deeper_fits || tiles / 2 < workers,
+                            "workers={workers} log_n={log_n} width={width}: tile {tile} is short"
+                        );
+                    }
                 }
             }
         }
 
-        // One shape where the clamp bites: a 4-byte row of one element fills a tile at 2^15
-        // rows, so a lone worker takes all of a 2^16-row matrix in two tiles, and 32 workers
-        // give up four stages of tile depth to have one each.
+        // One shape where the clamp bites: a 4-byte row of one element fills the private budget
+        // at 2^15 rows, so a lone worker would take a 2^16-row matrix in two tiles.
+        //
+        // The shared budget holds it whole, which saves its one group, so a lone worker takes one
+        // tile, and 32 workers give up five stages of tile depth to have one each.
         assert_eq!(
-            Schedule::for_workers::<BinaryField32>(1, 16, 1).log_tile_rows,
+            Schedule::for_budget::<BinaryField32>(1, 16, 1, PRIVATE_ONLY).log_tile_rows,
             15
         );
         assert_eq!(
-            Schedule::for_workers::<BinaryField32>(1, 16, 32).log_tile_rows,
+            Schedule::for_budget::<BinaryField32>(1, 16, 1, SPILLING).log_tile_rows,
+            16
+        );
+        assert_eq!(
+            Schedule::for_budget::<BinaryField32>(1, 16, 32, SPILLING).log_tile_rows,
             11
         );
     }
 
     #[test]
-    fn staging_waits_for_enough_workers() {
-        // Invariant: below `STAGED_WORKERS` the schedule leaves every stage above the contiguous
-        // tile a plain pass, however much staging the byte budget would have paid for.
+    fn staging_runs_at_every_worker_count() {
+        // Invariant: the groups above the contiguous tile fuse at least two stages each, at any
+        // worker count, whenever the private budget holds that many staged rows.
         //
-        // The tile itself is unaffected at these counts, so they differ in the groups alone.
-        for workers in [1usize, STAGED_WORKERS - 1, STAGED_WORKERS] {
-            let schedule = Schedule::for_workers::<Ghash128>(16, 20, workers);
-            assert_eq!(
-                schedule.log_tile_rows, 9,
-                "a 256-byte row fills the tile budget at 2^9 rows"
-            );
-            assert_eq!(
+        // Fixture state: a 256-byte row, 2^9 rows private, 2^11 rows shared, 2^9 staged rows.
+        for workers in [1usize, 2, 4, 8, 15, 16, 32] {
+            let schedule = Schedule::for_budget::<Ghash128>(16, 20, workers, SPILLING);
+            assert!(
                 schedule.log_staged_rows >= MIN_FUSED_STAGES,
-                workers >= STAGED_WORKERS,
                 "workers={workers}"
             );
+            assert_eq!(schedule.log_staged_rows, 9, "workers={workers}");
         }
+    }
+
+    #[test]
+    fn a_lone_worker_skips_staging_where_the_matrix_stays_in_cache() {
+        // Invariant: staging trades sweeps of memory for copies through the cache.
+        // A lone worker over a matrix half the last-level cache holds sweeps no memory, so it skips the trade.
+        //
+        // Fixture state: a 256-byte row, 2^20 rows, so a 256 MiB matrix.
+        //
+        //     last level 512 MiB, 1 worker    matrix fits half of it  -> plain passes
+        //     last level 512 MiB, 2 workers   barriers still pay      -> staged
+        //     last level 256 MiB, 1 worker    matrix overruns half    -> staged
+        //     last level unknown, 1 worker    nothing assumed         -> staged
+        let staged = |last_level: usize, workers: usize| {
+            let budget = CacheBudget {
+                last_level,
+                ..SPILLING
+            };
+            Schedule::for_budget::<Ghash128>(16, 20, workers, budget).log_staged_rows
+        };
+        assert_eq!(staged(512 << 20, 1), 0);
+        assert!(staged(512 << 20, 2) >= MIN_FUSED_STAGES);
+        assert!(staged(256 << 20, 1) >= MIN_FUSED_STAGES);
+        assert!(staged(0, 1) >= MIN_FUSED_STAGES);
+    }
+
+    #[test]
+    fn the_tile_spills_only_where_it_saves_a_sweep() {
+        // Invariant: a contiguous tile past the private budget costs traffic to the shared one.
+        // So the schedule takes it only where it leaves fewer groups above the tile.
+        //
+        // Fixture state: a 256-byte row, 2^9 rows private, 2^11 rows shared, groups of 9 stages.
+        //
+        //     2^18 rows:  private tile 9, 9 stages above -> 1 group
+        //                 shared tile 11, 7 stages above -> 1 group    no sweep saved, stays private
+        //     2^19 rows:  private tile 9, 10 stages above -> 2 groups
+        //                 shared tile 11, 8 stages above  -> 1 group   one sweep saved, spills
+        let tile =
+            |log_n: usize| Schedule::for_budget::<Ghash128>(16, log_n, 1, SPILLING).log_tile_rows;
+        assert_eq!(tile(18), 9);
+        assert_eq!(tile(19), 11);
     }
 
     #[test]
@@ -1059,8 +1302,9 @@ mod tests {
     fn sweep_across_the_tile_boundaries<F: ButterflyField>() {
         for width in BOUNDARY_WIDTHS {
             // Neither the height nor the worker count binds at a height no level can reach, so
-            // this reads the raw budget.
-            let tile = Schedule::for_workers::<F>(width, usize::BITS as usize, 1).log_tile_rows;
+            // this reads the raw private budget.
+            let tile = Schedule::for_budget::<F>(width, usize::BITS as usize, 1, PRIVATE_ONLY)
+                .log_tile_rows;
             for log_n in [tile, tile + 1, tile + 2] {
                 for shift_bits in SHIFTS {
                     check_walk_agrees::<F>(log_n, width, shift_bits);
@@ -1108,17 +1352,17 @@ mod tests {
     fn check_a_staged_run_of_rows<F: ButterflyField>(log_n: usize) {
         // The heights above come from the deepest tile the budget allows, which is the one a
         // lone worker takes.
-        let alone = Schedule::for_workers::<F>(1, log_n, 1);
+        let alone = Schedule::for_budget::<F>(1, log_n, 1, PRIVATE_ONLY);
         assert_eq!(alone.log_tile_rows + MIN_FUSED_STAGES, log_n);
         assert!(alone.log_slab_rows > 0, "the staged row is a single row");
 
         // The clamp then moves the tile but not the run, so the group is still staged in runs.
-        let shared = Schedule::for_workers::<F>(1, log_n, STAGED_WORKERS);
+        let pooled = Schedule::for_budget::<F>(1, log_n, 16, PRIVATE_ONLY);
         assert!(
-            shared.log_staged_rows >= MIN_FUSED_STAGES,
+            pooled.log_staged_rows >= MIN_FUSED_STAGES,
             "nothing is staged"
         );
-        assert!(shared.log_slab_rows > 0, "the staged row is a single row");
+        assert!(pooled.log_slab_rows > 0, "the staged row is a single row");
     }
 
     #[test]
@@ -1158,7 +1402,7 @@ mod tests {
         //
         // The schedule degrades to plain passes, rather than to a tile of no rows.
         const WIDTH: usize = 16384;
-        let schedule = Schedule::for_workers::<BinaryField128>(WIDTH, 4, 32);
+        let schedule = Schedule::for_budget::<BinaryField128>(WIDTH, 4, 32, SPILLING);
         assert_eq!(schedule.log_tile_rows, 0);
         assert_eq!(schedule.log_slab_rows, 0);
         assert_eq!(schedule.log_staged_rows, 0);
@@ -1399,12 +1643,12 @@ mod tests {
             ("ghash", ghash_transform_cosets),
         ];
 
-        // Fixture state: one tile holds 2^9 rows of 16 columns.
+        // Fixture state: the cached-matrix bound holds 2^9 rows of 16 columns.
         //
         //     log_message 0 ..= 4   tiny cosets, each copied from the message and transformed alone
         //     log_message 9         a coset of exactly one tile, still copied
         //     log_message 11        cosets past one tile, which share their first pass
-        assert_eq!(size_of::<BinaryField128>() * (16 << 9), DEEP_TILE_BYTES);
+        assert_eq!(size_of::<BinaryField128>() * (16 << 9), CACHED_MATRIX_BYTES);
         let shapes = (0..=4)
             .flat_map(|log_message| [1usize, 3, 16].map(|width| (width, log_message)))
             .chain([(16, 9), (16, 11)]);

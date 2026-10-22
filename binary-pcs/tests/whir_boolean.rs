@@ -12,8 +12,9 @@
 use p3_binary_field::{BinaryChallenger, BinaryField128, Gf2, Ghash128, PackedGf2x64};
 use p3_binary_pcs::testing::assert_boolean_multilinear_commit_contract;
 use p3_binary_pcs::whir::{
-    BinaryWhirBudget, BinaryWhirProfile, BooleanWhirDomain, BooleanWhirError, BooleanWhirPcs,
-    BooleanWhirProof, BooleanWhirProver, BooleanWhirTracePcs, BudgetError, recommended_cap_height,
+    BinaryWhirBudget, BinaryWhirProfile, BooleanWhirDeferredProof, BooleanWhirDomain,
+    BooleanWhirError, BooleanWhirPcs, BooleanWhirProof, BooleanWhirProver, BooleanWhirTracePcs,
+    BudgetError, WeightedClaim, WeightedOpening, recommended_cap_height,
 };
 use p3_binary_pcs::{
     BinaryPcsConfig, BinaryPcsParams, BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs,
@@ -283,6 +284,139 @@ fn a_boolean_opening_round_trips_through_whir() {
 }
 
 #[test]
+fn a_weighted_opening_round_trips_through_whir() {
+    // Invariant: a claim weighing the absorbed bit patterns opens to the weighted bit planes.
+    let bits = witness(0x5714);
+    let reference = embedded(&bits);
+    let mut rng = SmallRng::seed_from_u64(0x5715);
+    let openings: Vec<WeightedOpening<EF>> = (0..2)
+        .map(|_| WeightedOpening {
+            high: Point::rand(&mut rng, LOG_BITS - ABSORBED),
+            low_weights: (0..1 << ABSORBED).map(|_| rng.random()).collect(),
+        })
+        .collect();
+    let pcs = whir_pcs(BinaryWhirProfile::proven_list_decoding(
+        SECURITY_LEVEL,
+        LOG_INV_RATE,
+        FOLDING,
+    ));
+
+    let mut prover_chal = challenger();
+    let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
+    let (values, proof) = pcs
+        .open_weighted(data, &openings, &mut prover_chal)
+        .unwrap();
+
+    // Each value is the weighted sum of the bit planes at the kept coordinates.
+    for (opening, &value) in openings.iter().zip(&values) {
+        let eq_high = Poly::<EF>::new_from_point(opening.high.as_slice(), EF::ONE);
+        let want: EF = (0..1usize << LOG_BITS)
+            .map(|i| {
+                reference.as_slice()[i]
+                    * eq_high.as_slice()[i >> ABSORBED]
+                    * opening.low_weights[i & ((1 << ABSORBED) - 1)]
+            })
+            .sum();
+        assert_eq!(value, want);
+    }
+
+    let verify = |values: &[EF], openings: &[WeightedOpening<EF>]| {
+        let claims: Vec<WeightedClaim<EF>> = openings
+            .iter()
+            .zip(values)
+            .map(|(opening, &value)| WeightedClaim {
+                opening: opening.clone(),
+                value,
+            })
+            .collect();
+        let mut verifier_chal = challenger();
+        pcs.observe_commitment(&commitment, &mut verifier_chal);
+        pcs.verify_weighted(&commitment, &claims, &proof, &mut verifier_chal)
+    };
+    verify(&values, &openings).unwrap();
+
+    // A value one off, or another weight, is refused.
+    let mut tampered = values.clone();
+    tampered[1] += EF::ONE;
+    assert!(matches!(
+        verify(&tampered, &openings),
+        Err(BooleanWhirError::ReductionProof(
+            BitRingSwitchProofError::ClaimMismatch
+        ))
+    ));
+    let mut moved = openings.clone();
+    moved[0].low_weights[5] += EF::ONE;
+    assert!(verify(&values, &moved).is_err());
+
+    // A claim over the wrong kept width is refused before the transcript moves.
+    let mut narrow = openings;
+    narrow[0].high = Point::rand(&mut rng, LOG_BITS - ABSORBED - 1);
+    assert!(matches!(
+        verify(&values, &narrow),
+        Err(BooleanWhirError::PointArity { .. })
+    ));
+}
+
+#[test]
+fn a_deferred_weighted_opening_matches_the_reduced_one_and_refuses_tampering() {
+    // Invariant: deferring the ring switch's sum to the first fold changes no value.
+    let bits = witness(0x5716);
+    let mut rng = SmallRng::seed_from_u64(0x5717);
+    let openings: Vec<WeightedOpening<EF>> = (0..2)
+        .map(|_| WeightedOpening {
+            high: Point::rand(&mut rng, LOG_BITS - ABSORBED),
+            low_weights: (0..1 << ABSORBED).map(|_| rng.random()).collect(),
+        })
+        .collect();
+    let pcs = whir_pcs(BinaryWhirProfile::proven_list_decoding(
+        SECURITY_LEVEL,
+        LOG_INV_RATE,
+        FOLDING,
+    ));
+
+    let mut prover_chal = challenger();
+    let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
+    let (reduced, _) = pcs
+        .open_weighted(data.clone(), &openings, &mut prover_chal.clone())
+        .unwrap();
+    let (values, proof) = pcs
+        .open_weighted_deferred(data, &openings, &[], &mut prover_chal)
+        .unwrap();
+    assert_eq!(values, reduced);
+
+    let verify = |values: &[EF], proof: &BooleanWhirDeferredProof<_, _, _>| {
+        let mut verifier_chal = challenger();
+        pcs.observe_commitment(&commitment, &mut verifier_chal);
+        let claims: Vec<_> = openings
+            .iter()
+            .zip(values)
+            .map(|(opening, &value)| WeightedClaim {
+                opening: opening.clone(),
+                value,
+            })
+            .collect();
+        pcs.verify_weighted_deferred(&commitment, &claims, proof, &mut verifier_chal)
+    };
+    verify(&values, &proof).unwrap();
+
+    // A value one off, a tensor row, a first-fold message or an answer of the run is refused.
+    let mut tampered = values.clone();
+    tampered[1] += EF::ONE;
+    assert!(verify(&tampered, &proof).is_err());
+    let mut moved = proof.clone();
+    let mut rows = moved.reduction.claims[0].tensor.rows().to_vec();
+    rows[3] += EF::ONE;
+    moved.reduction.claims[0].tensor = rows.try_into().unwrap();
+    assert!(verify(&values, &moved).is_err());
+    let mut moved = proof.clone();
+    moved.opening.initial_sumcheck.polynomial_evaluations[1][1] += EF::ONE;
+    assert!(verify(&values, &moved).is_err());
+    let mut moved = proof;
+    moved.opening.initial_ood_answers[0] += EF::ONE;
+    assert!(verify(&values, &moved).is_err());
+}
+
+#[test]
 fn the_commitment_holds_one_byte_per_eight_bits() {
     // A widened commitment would hold one element per bit, sixteen bytes each.
     // The packed one holds one element per one hundred and twenty-eight bits.
@@ -328,9 +462,11 @@ fn the_budget_grades_the_schedule_and_the_proof() {
     // Three variables fold once, so every position opens eight off a tree of one depth.
     assert_eq!(shape.opened_base_elements, shape.stir_queries << FOLDING);
     assert_eq!(shape.opened_extension_elements, 0);
-    assert_eq!(
-        shape.merkle_digests,
-        shape.stir_queries * (LOG_BITS - ABSORBED - FOLDING + LOG_INV_RATE - cap_height)
+    //
+    // Pruned openings share siblings, so the paths never cost more than one full path each.
+    assert!(
+        shape.merkle_digests
+            <= shape.stir_queries * (LOG_BITS - ABSORBED - FOLDING + LOG_INV_RATE - cap_height)
     );
     assert!(shape.grinding_bits <= budget.max_grinding_bits);
 

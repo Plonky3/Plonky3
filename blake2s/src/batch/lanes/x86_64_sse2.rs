@@ -18,6 +18,9 @@ pub(super) const WIDTH: usize = 4;
 /// G, and four spill the working vectors out of the 16 registers.
 pub(super) const GROUPS: usize = 2;
 
+/// The generic rounds of the compression.
+pub(in crate::batch) use crate::batch::compress::compress;
+
 // SAFETY (every block below): SSE2 is part of the x86-64 baseline, and SSSE3 is checked.
 impl Word for __m128i {
     #[inline(always)]

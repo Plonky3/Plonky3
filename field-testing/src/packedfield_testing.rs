@@ -1281,6 +1281,15 @@ macro_rules! test_packed_extension_field {
                 $crate::test_div_2exp_u64::<$packedextfield>();
             }
             #[test]
+            fn test_zero_vec() {
+                $crate::test_zero_vec::<$packedextfield>();
+            }
+            #[test]
+            #[should_panic(expected = "capacity overflow")]
+            fn test_zero_vec_overflow_panics() {
+                $crate::test_zero_vec_overflow_panics::<$packedextfield>();
+            }
+            #[test]
             fn test_ring_axioms_proptest() {
                 $crate::test_ring_axioms_proptest::<$packedextfield>();
             }

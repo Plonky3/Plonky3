@@ -271,9 +271,11 @@ proptest! {
 
     #[test]
     fn any_equal_length_batch_matches_one_at_a_time(
-        len in 0usize..200,
-        count in 1usize..20,
+        len in 0usize..=1100,
+        count in 1usize..=3 * LANES + 7,
     ) {
+        // Counts reach three full groups, and most leave a partial group after them.
+        // Lengths reach seventeen blocks, and most end in a partial final block.
         let messages = fixture(len * count);
         let mut digests = vec![[0u8; DIGEST_BYTES]; count];
         Blake2s256.hash_many(&messages, &mut digests);

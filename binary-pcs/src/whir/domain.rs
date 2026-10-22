@@ -3,11 +3,10 @@
 use p3_binary_dft::{AdditiveRsEncoder, LchNtt, PolyBasisNtt, domain_point};
 use p3_binary_field::{BinaryField32, BinaryField128, Poly64, TowerLevel};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_commit::Encoder;
+use p3_commit::{Encoder, RowSink, zero_padded};
 use p3_field::{BasedVectorSpace, ExtensionField, Field};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_multilinear_util::point::Point;
-use p3_whir::transcript::query_draws;
 use p3_whir::{SecurityAssumption, WhirConfig, WhirDomain, WhirQueryPoint};
 
 /// Widest domain a machine word can index.
@@ -37,47 +36,25 @@ impl BinaryWhirAlphabet for BinaryField128 {
     const DOMAIN_ID: &'static [u8] = b"p3-whir-domain:cantor-tower-128-v1";
 }
 
-/// Returns a Merkle cap height that every round's tree can carry.
+/// Returns the Merkle cap height that minimizes proof bytes: the bare root.
 ///
-/// One cap node covers each deepest stratum, so authentication paths stop at a protocol-fixed layer.
+/// Openings are pruned multiproofs, so a node any query path computes is never sent.
 ///
-/// A round that opens every position draws nothing and fixes no stratum.
+/// The stratified schedule puts one query in each of the `2^c` deepest strata.
 ///
-/// All rounds share one commitment scheme, so the shallowest tree bounds the result.
+/// The top `c` levels are then computed for free, and a cap that deep would only add digests.
+///
+/// Each level deeper costs as many cap digests as it can at best save in siblings.
 #[must_use]
-pub fn recommended_cap_height<EF, F, Challenger>(config: &WhirConfig<EF, F, Challenger>) -> usize
+pub const fn recommended_cap_height<EF, F, Challenger>(
+    _config: &WhirConfig<EF, F, Challenger>,
+) -> usize
 where
     F: Field,
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
-    let mut deepest = 0;
-    let mut shallowest = usize::MAX;
-
-    for (log_folded_domain_size, queries) in config
-        .round_parameters()
-        .iter()
-        .map(|round| (round.log_folded_domain_size, round.num_queries))
-        .chain(core::iter::once((
-            config.final_round_config().log_folded_domain_size,
-            config.terminal().num_queries,
-        )))
-    {
-        shallowest = shallowest.min(log_folded_domain_size);
-
-        // A domain too wide to size as a machine word can never be saturated.
-        let draws = 1usize
-            .checked_shl(log_folded_domain_size as u32)
-            .map_or(queries, |folded_domain_size| {
-                query_draws(folded_domain_size, queries)
-            });
-
-        if draws != 0 {
-            deepest = deepest.max(draws.ilog2() as usize);
-        }
-    }
-
-    deepest.min(shallowest)
+    0
 }
 
 /// WHIR's Reed--Solomon code over nested binary Cantor subspaces.
@@ -135,6 +112,30 @@ where
 }
 
 /// Selector coordinates of one queried codeword position.
+/// Encode an extension matrix held elsewhere through the base encoder, coordinate by coordinate.
+///
+/// A layout with no base view falls back to a zero-padded copy.
+fn encode_extension_borrowed<F, EF, E>(
+    encoder: &E,
+    message: RowMajorMatrixView<'_, EF>,
+    log_inv_rate: usize,
+) -> RowMajorMatrix<EF>
+where
+    F: TowerLevel,
+    EF: ExtensionField<F>,
+    E: Encoder<F>,
+{
+    let width = message.width;
+    let Some(coefficients) = EF::flatten_slice_to_base(message.values) else {
+        return encode_extension(encoder, zero_padded(message, log_inv_rate), log_inv_rate);
+    };
+    let encoded = encoder.encode_batch_borrowed(
+        RowMajorMatrixView::new(coefficients, width * <EF as BasedVectorSpace<F>>::DIMENSION),
+        log_inv_rate,
+    );
+    RowMajorMatrix::new(EF::reconstitute_from_base(encoded.values), width)
+}
+
 fn query_point<F: TowerLevel>(
     log_domain_size: usize,
     num_variables: usize,
@@ -196,6 +197,16 @@ where
     ) -> RowMajorMatrix<Poly64> {
         self.encoder.encode_batch_borrowed(message, log_inv_rate)
     }
+
+    fn encode_batch_borrowed_with(
+        &self,
+        message: RowMajorMatrixView<'_, Poly64>,
+        log_inv_rate: usize,
+        sink: &RowSink<'_, Poly64>,
+    ) -> RowMajorMatrix<Poly64> {
+        self.encoder
+            .encode_batch_borrowed_with(message, log_inv_rate, sink)
+    }
 }
 
 impl<EF, Ntt> WhirDomain<Poly64, EF> for BinaryWhirDomain<Poly64, Ntt>
@@ -226,6 +237,14 @@ where
         log_inv_rate: usize,
     ) -> RowMajorMatrix<EF> {
         encode_extension::<Poly64, EF, _>(&self.encoder, message, log_inv_rate)
+    }
+
+    fn encode_extension_batch_borrowed(
+        &self,
+        message: RowMajorMatrixView<'_, EF>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<EF> {
+        encode_extension_borrowed::<Poly64, EF, _>(&self.encoder, message, log_inv_rate)
     }
 
     fn query_point(
@@ -418,10 +437,22 @@ mod tests {
         let reference = BinaryWhirDomain::<Poly64, _>::new(NaiveAdditiveNtt::<Poly64>::default());
         let reference = WhirDomain::<Poly64, Poly192>::encode_extension_batch_padded(
             &reference,
-            message,
+            message.clone(),
             log_inv_rate,
         );
         assert_eq!(fast, reference);
+
+        // The borrowed message encodes as its zero-padded copy, fast and reference alike.
+        let leading = RowMajorMatrix::new(
+            message.values[..width << log_message_height].to_vec(),
+            width,
+        );
+        let borrowed = WhirDomain::<Poly64, Poly192>::encode_extension_batch_borrowed(
+            &fast_domain,
+            leading.as_view(),
+            log_inv_rate,
+        );
+        assert_eq!(borrowed, reference);
     }
 
     #[test]

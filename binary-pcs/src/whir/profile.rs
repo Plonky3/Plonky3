@@ -55,6 +55,10 @@ pub struct BinaryWhirProfile {
     starting_log_inv_rate: usize,
     /// Variables eliminated by each round.
     folding_factor: usize,
+    /// Variables the first round eliminates instead, and bits the codeword domain then loses.
+    first_round: Option<(usize, usize)>,
+    /// Grinding the derivation starts from, so queries close only the rest of the target.
+    query_grinding: usize,
 }
 
 impl BinaryWhirProfile {
@@ -70,6 +74,8 @@ impl BinaryWhirProfile {
             security_level,
             starting_log_inv_rate,
             folding_factor,
+            first_round: None,
+            query_grinding: 0,
         }
     }
 
@@ -87,6 +93,8 @@ impl BinaryWhirProfile {
             security_level,
             starting_log_inv_rate,
             folding_factor,
+            first_round: None,
+            query_grinding: 0,
         }
     }
 
@@ -104,7 +112,48 @@ impl BinaryWhirProfile {
             security_level,
             starting_log_inv_rate,
             folding_factor,
+            first_round: None,
+            query_grinding: 0,
         }
+    }
+
+    /// Fold `folding_factor` variables in the first round, then shrink the domain by `domain_reduction` bits.
+    ///
+    /// Later rounds keep the profile's folding and shrink the domain by one bit each.
+    #[must_use]
+    pub const fn with_first_round(
+        mut self,
+        folding_factor: usize,
+        domain_reduction: usize,
+    ) -> Self {
+        self.first_round = Some((folding_factor, domain_reduction));
+        self
+    }
+
+    /// Grind at least `bits` bits before every query phase, so fewer queries close the target.
+    #[must_use]
+    pub const fn with_query_grinding(mut self, bits: usize) -> Self {
+        self.query_grinding = bits;
+        self
+    }
+
+    /// The folding factors and the explicit round rates of this profile.
+    fn schedule(&self, num_variables: usize) -> Result<(FoldingFactor, Vec<usize>), ProfileError> {
+        let Some((first, reduction)) = self.first_round else {
+            return Ok((FoldingFactor::Constant(self.folding_factor), Vec::new()));
+        };
+        let folding = FoldingFactor::ConstantFromSecondRound(first, self.folding_factor);
+        let schedule = folding
+            .compute_folding_schedule(num_variables)
+            .map_err(|error| ProfileError::Schedule(WhirConfigError::FoldingFactor(error)))?;
+        // A reduction past the first fold leaves a zero rate, which the schedule refuses.
+        let mut rate = (self.starting_log_inv_rate + first).saturating_sub(reduction);
+        let mut rates = Vec::with_capacity(schedule.len() - 1);
+        for &factor in &schedule[1..] {
+            rates.push(rate);
+            rate += factor - 1;
+        }
+        Ok((folding, rates))
     }
 
     /// The proximity regime this profile is graded under.
@@ -145,12 +194,13 @@ impl BinaryWhirProfile {
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
         Domain: WhirDomain<F, EF>,
     {
-        let mut pow_bits = 0;
+        let (folding_factor, round_log_inv_rates) = self.schedule(num_variables)?;
+        let mut pow_bits = raise_allowance::<F>(self.query_grinding)?;
         loop {
             let parameters = ProtocolParameters {
                 starting_log_inv_rate: self.starting_log_inv_rate,
-                round_log_inv_rates: Vec::new(),
-                folding_factor: FoldingFactor::Constant(self.folding_factor),
+                round_log_inv_rates: round_log_inv_rates.clone(),
+                folding_factor: folding_factor.clone(),
                 soundness_type: self.assumption,
                 security_level: self.security_level,
                 pow_bits,
@@ -235,6 +285,56 @@ mod tests {
             Some(ProfileError::Schedule(WhirConfigError::FoldingFactor(
                 FoldingFactorError::ZeroFactor
             )))
+        ));
+    }
+
+    #[test]
+    fn a_wide_first_round_shrinks_the_domain_by_its_reduction() {
+        // Fixture state: fold six variables first and drop three domain bits, then fold four.
+        let domain = BooleanWhirDomain::default();
+        let config = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, 1, 4)
+            .with_first_round(6, 3)
+            .config::<EF, EF, MyChallenger, _>(20, &domain)
+            .unwrap();
+        assert_eq!(config.folding_schedule(), [6, 4, 4]);
+        assert_eq!(config.rs_reduction_factor(0), 3);
+        assert_eq!(config.rs_reduction_factor(1), 1);
+        let rates: alloc::vec::Vec<_> = config
+            .round_parameters()
+            .iter()
+            .map(|round| round.log_inv_rate)
+            .collect();
+        assert_eq!(rates, [4, 7]);
+
+        // A reduction past the first fold leaves no redundancy, which the schedule refuses.
+        assert!(matches!(
+            BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, 1, 4)
+                .with_first_round(6, 7)
+                .config::<EF, EF, MyChallenger, _>(20, &domain),
+            Err(ProfileError::Schedule(_))
+        ));
+    }
+
+    #[test]
+    fn query_grinding_buys_fewer_queries_and_is_ground() {
+        let domain = BooleanWhirDomain::default();
+        let derive = |bits| {
+            BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, 1, 4)
+                .with_query_grinding(bits)
+                .config::<EF, EF, MyChallenger, _>(16, &domain)
+                .unwrap()
+        };
+        let (plain, ground) = (derive(0), derive(12));
+        assert!(ground.round_parameters()[0].num_queries < plain.round_parameters()[0].num_queries);
+        assert!(ground.round_parameters()[0].pow_bits > 0);
+        assert!(ground.max_pow_bits() <= 12);
+
+        // A request past what one witness carries is refused.
+        assert!(matches!(
+            BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, 1, 4)
+                .with_query_grinding(57)
+                .config::<EF, EF, MyChallenger, _>(16, &domain),
+            Err(ProfileError::Grinding { .. })
         ));
     }
 

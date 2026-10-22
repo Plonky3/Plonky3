@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Poly64, TowerLevel,
 };
-use p3_commit::Encoder;
+use p3_commit::{Encoder, RowSink};
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 
@@ -102,6 +102,15 @@ macro_rules! impl_additive_rs_encoder {
                 log_inv_rate: usize,
             ) -> RowMajorMatrix<$field> {
                 self.ntt.ntt_batch_borrowed(message, log_inv_rate)
+            }
+
+            fn encode_batch_borrowed_with(
+                &self,
+                message: RowMajorMatrixView<'_, $field>,
+                log_inv_rate: usize,
+                sink: &RowSink<'_, $field>,
+            ) -> RowMajorMatrix<$field> {
+                self.ntt.ntt_batch_borrowed_with(message, log_inv_rate, sink)
             }
         }
     )*};

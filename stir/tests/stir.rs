@@ -629,11 +629,9 @@ mod babybear_stir {
 
     #[test]
     fn test_grinding_proof_verifies_under_replay() {
-        // With `parallel` enabled, grinding may choose any valid witness found by
-        // `find_any`, so two proving runs from the same FS state need not produce
-        // byte-identical proofs. The invariant STIR needs is that each proof's
-        // witness-driven transcript replays through the verifier, including the
-        // first-round query indices returned for PCS binding.
+        // Each proof's witness-driven transcript replays through the verifier.
+        // That includes the first-round query indices returned for PCS binding.
+        // Grinding returns the smallest witness, so both runs also agree.
         let (config, dft, challenger, poly) = pow_proof_setup();
 
         let mut p_ch_a = challenger.clone();
@@ -657,6 +655,9 @@ mod babybear_stir {
             sorted_dedup(&outputs_b.first_round_draws),
             outputs_b.first_round_indices
         );
+
+        assert_eq!(proof_a.final_pow_witness, proof_b.final_pow_witness);
+        assert_eq!(idx_a, idx_b);
     }
 
     #[test]

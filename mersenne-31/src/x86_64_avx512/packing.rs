@@ -16,7 +16,7 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm512_mod_add,
     mm512_mod_sub,
 };
-use p3_util::reconstitute_from_base;
+use p3_util::zero_vec_from_base;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
@@ -184,7 +184,7 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
+        unsafe { zero_vec_from_base(len, Mersenne31::zero_vec) }
     }
 
     #[inline(always)]

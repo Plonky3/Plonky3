@@ -9,13 +9,16 @@
 //!
 //! Each group and the tile pass then cost one read and one write of the matrix.
 
+use p3_commit::{RowSink, hand_over_rows};
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_floor_usize};
 
 use super::twiddles::Twiddles;
 use crate::butterfly::ButterflyField;
+use crate::cache::CacheBudget;
 use crate::staging::{
-    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
+    Dispatch, SHARED_CACHE_BYTES, StagedRuns, Store, for_each_staged_tile,
+    for_each_staged_tile_into_cosets, for_each_staged_tile_into_cosets_stored, prefault,
 };
 
 /// Field elements one butterfly task covers on each side of a block.
@@ -25,32 +28,23 @@ use crate::staging::{
 /// - A few nanoseconds per butterfly makes a task microseconds of work, well above a thread handoff.
 pub(crate) const BUTTERFLY_GRAIN: usize = 1 << 10;
 
-/// Bytes of one contiguous row tile.
+/// Bytes of a matrix small enough to run as plain passes.
 ///
-/// A worker holds one tile for every stage it is closed under, so it must fit a private L2.
-pub(super) const DEEP_TILE_BYTES: usize = 128 * 1024;
-
-/// Bytes of one staging tile.
-///
-/// Each worker holds one per group, and deeper tiles stop paying past this size.
-const STAGING_TILE_BYTES: usize = 64 * 1024;
+/// It stays in cache throughout, so blocking would only add bookkeeping.
+pub(super) const CACHED_MATRIX_BYTES: usize = 128 * 1024;
 
 /// The fewest stages a staging tile must fuse to beat plain passes.
 ///
 /// One stage gathered and scattered moves what one plain pass moves, plus two copies.
 pub(super) const MIN_FUSED_STAGES: usize = 2;
 
-/// Workers a transform needs before staging pays.
+/// The fewest bytes one staged run covers.
 ///
-/// - Staging trades a pass per stage for a strided gather and scatter.
-/// - Few workers leave memory idle, so the traversals it removes were cheap.
-/// - A `no_std` crate cannot read the cache sizes, so the worker count is the signal.
-pub(super) const STAGED_WORKERS: usize = 16;
-
-/// The smallest cache line among the supported targets, in bytes.
-///
-/// A staged row shorter than a line wastes the rest of it, so short rows are staged in runs.
-const CACHE_LINE_BYTES: usize = 64;
+/// - A gather pulls whole cache lines, so a run shorter than a line wastes the rest of it.
+/// - The narrowest stage of a staging tile pairs single runs, so a run is also its shortest butterfly.
+/// - A butterfly this long reaches the vector kernels of every target, NEON's byte kernel included.
+/// - Each doubling of the run costs one fused stage, which a budget of many runs can spare.
+const STAGED_RUN_BYTES: usize = 256;
 
 /// The tile shapes of one matrix, as base-two logarithms.
 #[derive(Copy, Clone, Debug)]
@@ -64,31 +58,92 @@ pub(super) struct Schedule {
 }
 
 impl Schedule {
-    /// The tile shapes a matrix gets on the current thread pool.
+    /// The tile shapes a matrix gets on the current thread pool and machine.
     pub(super) fn new<F>(width: usize, log_n: usize) -> Self {
-        Self::for_workers::<F>(width, log_n, current_num_threads())
+        Self::for_budget::<F>(width, log_n, current_num_threads(), CacheBudget::host())
     }
 
-    /// The tile shapes a matrix gets from its byte budgets and a worker count.
+    /// The tile shapes a matrix gets from a cache budget and a worker count.
     ///
-    /// A tile is also a task, so it is cut back until every worker has one.
-    pub(super) fn for_workers<F>(width: usize, log_n: usize, workers: usize) -> Self {
+    /// # Algorithm
+    ///
+    /// A large transform is bound by memory, so its cost is its number of sweeps.
+    ///
+    /// ```text
+    ///     stages:  0 ......... tile ............................ log_n
+    ///              |-- tile --|-- group --|-- group --| ... |-- group --|
+    /// ```
+    ///
+    /// - A staging tile fills the private budget, which fixes the stages one group fuses.
+    /// - A contiguous tile fills the private budget too.
+    /// - It fills the shared budget instead only where that saves a whole sweep.
+    /// - A tile is also a task, so it is cut back until every worker has one.
+    /// - A lone worker over a matrix the last-level cache holds runs plain passes, which sweep no memory.
+    pub(super) fn for_budget<F>(
+        width: usize,
+        log_n: usize,
+        workers: usize,
+        budget: CacheBudget,
+    ) -> Self {
         let row_bytes = size_of::<F>() * width;
 
-        // At least one row per tile, even where a single row overruns the budget.
-        let capacity = log2_floor_usize((DEEP_TILE_BYTES / row_bytes).max(1));
-        let log_tile_rows = capacity.min(log_n.saturating_sub(log2_ceil_usize(workers)));
+        // Rows one budget holds, as a log, and at least one row where a single row overruns it.
+        let fit = |bytes: usize, row: usize| log2_floor_usize((bytes / row).max(1));
 
-        // A row shorter than a cache line is staged in runs, so a gather uses every byte it fetches.
-        let log_slab_rows =
-            log2_ceil_usize(CACHE_LINE_BYTES.div_ceil(row_bytes)).min(log_tile_rows);
+        // The deepest tile that still leaves one per worker.
+        let parallel = log_n.saturating_sub(log2_ceil_usize(workers));
 
-        // The staging budget divides by the run, since a staged row is a whole run.
-        let slab_bytes = row_bytes << log_slab_rows;
-        let log_staged_rows = if workers >= STAGED_WORKERS {
-            log2_floor_usize((STAGING_TILE_BYTES / slab_bytes).max(1))
+        // A row shorter than a run is staged in runs, which a tile of `tile` stages may not exceed.
+        let run_rows = log2_ceil_usize(STAGED_RUN_BYTES.div_ceil(row_bytes));
+        let staged = |tile: usize| {
+            let slab = run_rows.min(tile);
+            (slab, fit(budget.private, row_bytes << slab))
+        };
+
+        // Sweeps the stages above a tile of `tile` stages take, a plain pass each where no group fuses.
+        let sweeps = |tile: usize| {
+            let above = log_n - tile;
+            let (_, depth) = staged(tile);
+            if depth >= MIN_FUSED_STAGES {
+                above.div_ceil(depth)
+            } else {
+                above
+            }
+        };
+
+        // A tile past the private cache spills into the shared one, which only pays for a sweep saved.
+        //
+        //     512-byte rows, 2^21 rows, 2^10 rows private, 2^12 rows shared:
+        //       private tile:  10 stages, then 2 groups (10 + 1 stages)
+        //       shared tile:   12 stages, then 1 group  (9 stages)   <- one sweep fewer
+        let near = fit(budget.private, row_bytes).min(parallel);
+        let far = fit(budget.shared, row_bytes).min(parallel);
+        let log_tile_rows = if sweeps(far) < sweeps(near) {
+            far
         } else {
+            near
+        };
+
+        let (log_slab_rows, staged_rows) = staged(log_tile_rows);
+
+        // A plain pass over a matrix half the last-level cache holds moves no memory, only cache.
+        //
+        //     one worker:      the plain passes stream from that cache, and staging only adds copies
+        //     several workers: each plain pass is a dispatch and a barrier, which staging removes
+        let resident =
+            budget.last_level / 2 >= row_bytes && log_n <= fit(budget.last_level / 2, row_bytes);
+        let log_staged_rows = if workers == 1 && resident {
             0
+        } else {
+            staged_rows
+        };
+
+        // The fewest groups cover the stages above the tile, each as shallow as that count allows.
+        let above = log_n.saturating_sub(log_tile_rows);
+        let log_staged_rows = if log_staged_rows >= MIN_FUSED_STAGES && above > 0 {
+            above.div_ceil(above.div_ceil(log_staged_rows))
+        } else {
+            log_staged_rows
         };
 
         Self {
@@ -241,17 +296,23 @@ fn tile_stages<F: ButterflyField, const INVERSE: bool>(
 /// Run the bottom `log_rows` stages inside each contiguous tile of `2^log_rows` rows.
 ///
 /// Those stages pair rows closer than a tile, so each tile is read once and written once.
+///
+/// A sink, with the first row the matrix starts at, receives each tile while it is still in cache.
 fn deep_tiles<F: ButterflyField, const INVERSE: bool>(
     values: &mut [F],
     width: usize,
     log_rows: usize,
     twiddles: &Twiddles<F>,
+    sink: Option<(&RowSink<'_, F>, usize)>,
 ) {
     values
         .par_chunks_mut((1 << log_rows) * width)
         .enumerate()
         .for_each(|(index, tile)| {
             tile_stages::<F, INVERSE>(tile, width, log_rows, 0, index, twiddles);
+            if let Some((sink, first_row)) = sink {
+                sink(first_row + (index << log_rows), tile);
+            }
         });
 }
 
@@ -349,29 +410,34 @@ pub(super) fn run<F: ButterflyField, const INVERSE: bool>(
     let cut = Cut::new(schedule, log_n);
     if INVERSE {
         if cut.tile > 0 {
-            deep_tiles::<F, true>(values, width, cut.tile, twiddles);
+            deep_tiles::<F, true>(values, width, cut.tile, twiddles, None);
         }
         for g in 0..cut.groups {
             group_pass::<F, true>(values, width, cut.bounds(g), cut.slab, twiddles);
         }
     } else {
-        forward_below(values, width, cut, cut.groups, twiddles);
+        forward_below(values, width, cut, cut.groups, twiddles, None);
     }
 }
 
 /// The forward groups below the first `groups` from the bottom, then the tile.
+///
+/// A sink, with the first row the matrix starts at, receives every finished row once.
 fn forward_below<F: ButterflyField>(
     values: &mut [F],
     width: usize,
     cut: Cut,
     groups: usize,
     twiddles: &Twiddles<F>,
+    sink: Option<(&RowSink<'_, F>, usize)>,
 ) {
     for g in (0..groups).rev() {
         group_pass::<F, false>(values, width, cut.bounds(g), cut.slab, twiddles);
     }
     if cut.tile > 0 {
-        deep_tiles::<F, false>(values, width, cut.tile, twiddles);
+        deep_tiles::<F, false>(values, width, cut.tile, twiddles, sink);
+    } else if let Some((sink, first_row)) = sink {
+        hand_over_rows(values, width, first_row, sink);
     }
 }
 
@@ -389,21 +455,26 @@ fn forward_below<F: ButterflyField>(
 ///
 /// No pass copies the message into the cosets before transforming them.
 ///
+/// A separate source stands in for the leading coset, whose prior contents are then never read.
+///
 /// Each coset then finishes its remaining passes on its own rows.
 pub(super) fn run_cosets<F: ButterflyField>(
     values: &mut [F],
+    source: Option<&[F]>,
     width: usize,
     log_message: usize,
     twiddles: &[Twiddles<F>],
     schedule: &Schedule,
+    sink: Option<&RowSink<'_, F>>,
 ) {
     let len = width << log_message;
     let cut = Cut::new(schedule, log_message);
 
-    // The cosets past the leading one hold zeros, and the shared pass is their first write.
+    // Every coset the shared pass writes first is faulted in beforehand by a contiguous sweep.
     //
-    // A contiguous sweep faults their pages in beforehand.
-    prefault(&mut values[len..], F::ZERO);
+    // That is the leading one too when the message lies elsewhere.
+    let fresh = if source.is_some() { 0 } else { len };
+    prefault(&mut values[fresh..], F::ZERO);
 
     if cut.groups == 0 {
         // The contiguous tile covers every stage, so the shared pass is the whole transform.
@@ -413,7 +484,7 @@ pub(super) fn run_cosets<F: ButterflyField>(
         let tasks = len / (width << cut.tile);
         for_each_staged_tile_into_cosets(
             values,
-            None,
+            source,
             len,
             runs,
             staged_dispatch(tasks),
@@ -422,6 +493,9 @@ pub(super) fn run_cosets<F: ButterflyField>(
                 tile_stages::<F, false>(tile, width, cut.tile, 0, index, &twiddles[coset]);
             },
         );
+        if let Some(sink) = sink {
+            hand_over_rows(values, width, 0, sink);
+        }
         return;
     }
 
@@ -430,12 +504,21 @@ pub(super) fn run_cosets<F: ButterflyField>(
     let (top, depth) = (high - 1, high - low);
     let row_len = (1 << cut.slab) * width;
     let tasks = len / (row_len << depth);
-    for_each_staged_tile_into_cosets(
+    // A matrix past the shared cache is read back from memory by the next pass anyway.
+    //
+    // Its scatter therefore streams around the cache, which also skips reading each line first.
+    let store = if size_of_val(values) > SHARED_CACHE_BYTES {
+        Store::Streamed
+    } else {
+        Store::Cached
+    };
+    for_each_staged_tile_into_cosets_stored(
         values,
-        None,
+        source,
         len,
         staged_runs(width, top, depth, cut.slab),
         staged_dispatch(tasks),
+        store,
         |_| {},
         |tile, block, coset| {
             tile_stages::<F, false>(tile, row_len, depth, low, block, &twiddles[coset]);
@@ -446,7 +529,15 @@ pub(super) fn run_cosets<F: ButterflyField>(
     values
         .par_chunks_mut(len)
         .zip(twiddles.par_iter())
-        .for_each(|(coset, twiddles)| {
-            forward_below(coset, width, cut, cut.groups - 1, twiddles);
+        .enumerate()
+        .for_each(|(index, (coset, twiddles))| {
+            forward_below(
+                coset,
+                width,
+                cut,
+                cut.groups - 1,
+                twiddles,
+                sink.map(|sink| (sink, index << log_message)),
+            );
         });
 }

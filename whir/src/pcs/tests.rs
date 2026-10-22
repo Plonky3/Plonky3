@@ -1849,3 +1849,149 @@ fn commit_binds_what_the_verifier_binds() {
         witness(&mut rng),
     );
 }
+
+mod initial_weight {
+    use alloc::vec;
+
+    use p3_commit::MultilinearPcs;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_multilinear_util::point::Point;
+    use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::TableShape;
+    use p3_sumcheck::layout::{InitialWeight, Layout, SuffixProver, Table};
+    use p3_sumcheck::strategy::VariableOrder;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::{EF, F, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, challenger};
+    use crate::InitialWeightCheck;
+    use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+
+    type L = SuffixProver<F, EF>;
+
+    const NUM_VARIABLES: usize = 12;
+    const FOLDING: usize = 4;
+
+    /// An extra weight held densely, beside a copy of the committed polynomial.
+    struct DenseWeight {
+        evals: Poly<EF>,
+        weights: Poly<EF>,
+        bound: usize,
+    }
+
+    impl DenseWeight {
+        /// Bind every challenge not yet applied, the last variable first.
+        fn catch_up(&mut self, challenges: &[EF]) {
+            for &r in &challenges[self.bound..] {
+                VariableOrder::Suffix.fix_var(&mut self.evals, r);
+                VariableOrder::Suffix.fix_var(&mut self.weights, r);
+            }
+            self.bound = challenges.len();
+        }
+    }
+
+    impl InitialWeight<EF> for DenseWeight {
+        fn claimed_sum(&self) -> EF {
+            self.evals
+                .as_slice()
+                .iter()
+                .zip(self.weights.as_slice())
+                .map(|(&e, &w)| e * w)
+                .sum()
+        }
+
+        fn round(&mut self, challenges: &[EF]) -> (EF, EF) {
+            self.catch_up(challenges);
+            let message = VariableOrder::Suffix
+                .sumcheck_coefficients(self.evals.as_slice(), self.weights.as_slice());
+            (message.c_a, message.c_inf)
+        }
+
+        fn into_folded(mut self, challenges: &[EF]) -> Poly<EF> {
+            self.catch_up(challenges);
+            self.weights
+        }
+    }
+
+    fn pcs(commitment_ood: bool) -> TestWhirPcs<L> {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![4],
+            folding_factor: FoldingFactor::Constant(FOLDING),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+        let config = WhirConfig::new(NUM_VARIABLES, params).unwrap();
+        let config = if commitment_ood {
+            config
+        } else {
+            config.without_commitment_ood()
+        };
+        TestWhirPcs::<L>::new(config, MyDft::default(), mmcs)
+    }
+
+    #[test]
+    fn an_extra_initial_weight_opens_and_a_wrong_one_is_refused() {
+        check_an_extra_initial_weight(true);
+        check_an_extra_initial_weight(false);
+    }
+
+    fn check_an_extra_initial_weight(commitment_ood: bool) {
+        let mut rng = SmallRng::seed_from_u64(9);
+        let table = Table::rand(&mut rng, 1, NUM_VARIABLES);
+        let evals: Poly<EF> = Poly::new(
+            table
+                .poly(0)
+                .as_slice()
+                .iter()
+                .map(|&x| EF::from(x))
+                .collect(),
+        );
+        let weights: Poly<EF> = Poly::new((0..1 << NUM_VARIABLES).map(|_| rng.random()).collect());
+        let pcs = pcs(commitment_ood);
+        let shapes = [TableShape::new(NUM_VARIABLES, 1)];
+
+        let mut prover = challenger();
+        let witness = L::new_witness(vec![table], FOLDING);
+        let (commitment, data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, _>>::commit(&pcs, witness, &mut prover).unwrap();
+        let weight = DenseWeight {
+            evals,
+            weights: weights.clone(),
+            bound: 0,
+        };
+        let sum = weight.claimed_sum();
+        let proof = pcs
+            .open_with_initial_weight(data, weight, &mut prover)
+            .unwrap();
+
+        let weight_at = |point: &Point<EF>| weights.eval_ext::<F>(point);
+        let verify = |sum: EF, weight_at: &dyn Fn(&Point<EF>) -> EF| {
+            let mut verifier = challenger();
+            <TestWhirPcs<L> as MultilinearPcs<EF, _>>::observe_commitment(
+                &pcs,
+                &commitment,
+                &mut verifier,
+            );
+            pcs.verify_with_initial_weight(
+                &commitment,
+                &proof,
+                &shapes,
+                InitialWeightCheck {
+                    sum,
+                    eval: weight_at,
+                },
+                &mut verifier,
+            )
+        };
+        verify(sum, &weight_at).unwrap();
+
+        // A wrong sum, or a weight read at another polynomial, is refused.
+        assert!(verify(sum + EF::ONE, &weight_at).is_err());
+        let other = |point: &Point<EF>| weight_at(point) + EF::ONE;
+        assert!(verify(sum, &other).is_err());
+    }
+}

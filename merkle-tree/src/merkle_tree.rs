@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -87,6 +88,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
     /// * If `leaves` is empty, or every leaf has height 0.
     /// * If the packing widths of `P` and `PW` differ.
     /// * If any leaf height is off the `ceil(max_height / 2^k)` ladder.
+    /// * If an injection requires a binary bridge that padding prevents from progressing.
     #[instrument(name = "build merkle tree", level = "debug", skip_all,
                  fields(dimensions = alloc::format!("{:?}", leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>())))]
     pub fn new<P, PW, H, C>(h: &H, c: &C, leaves: Vec<M>) -> Self
@@ -124,6 +126,56 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
             (builder.build(), builder.arity_schedule())
         };
 
+        Self {
+            leaves,
+            digest_layers,
+            arity_schedule,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Build a tree over one matrix whose leaf digests the caller already hashed with `h`.
+    ///
+    /// Digest `i` must be `h` of row `i`, which this does not check.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless there is one digest per row, as [`Self::new`] does on a bad shape.
+    #[instrument(
+        name = "build merkle tree over leaf digests",
+        level = "debug",
+        skip_all
+    )]
+    pub fn new_over_leaf_digests<P, PW, H, C>(
+        h: &H,
+        c: &C,
+        leaf: M,
+        leaf_digests: Vec<[W; DIGEST_ELEMS]>,
+    ) -> Self
+    where
+        P: PackedValue<Value = F>,
+        PW: PackedValue<Value = W>,
+        W: Default,
+        H: CryptographicHasher<F, [W; DIGEST_ELEMS]>
+            + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+            + Sync,
+        C: PseudoCompressionFunction<[W; DIGEST_ELEMS], N>
+            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
+            + Sync,
+    {
+        const {
+            assert!(N >= 2, "Arity N must be at least 2");
+            assert!(N.is_power_of_two(), "Arity N must be a power of two");
+            assert!(P::WIDTH == PW::WIDTH, "Packing widths must match");
+        }
+        let leaves = vec![leaf];
+        let (digest_layers, arity_schedule) = {
+            let builder = TreeBuilder::<P, PW, H, C, M, N, DIGEST_ELEMS>::new(h, c, &leaves);
+            (
+                builder.build_over_leaf_digests(leaf_digests),
+                builder.arity_schedule(),
+            )
+        };
         Self {
             leaves,
             digest_layers,
@@ -184,22 +236,40 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
 /// Select the compression arity for the current layer.
 ///
 /// Returns `N` for a full N-ary step, or `2` for a binary bridge step when a
-/// matrix injection must happen before the next N-ary target level.
+/// matrix injection must happen before the next N-ary target level. Rejects a
+/// bridge that neither shrinks the padded layer nor consumes an injection.
 pub(crate) fn select_arity_step<const N: usize>(
     curr_height_padded: usize,
     leaf_height_npt: usize,
     remaining_heights_tallest_first: impl Iterator<Item = usize>,
-) -> usize {
+) -> Result<usize, crate::MerkleTreeError> {
     if curr_height_padded < N {
-        return 2;
+        return Ok(2);
     }
 
     let n_ary_target = (curr_height_padded / N).next_power_of_two();
-    let has_intermediate = remaining_heights_tallest_first
+    let intermediate = remaining_heights_tallest_first
         .filter(|height| height.next_power_of_two() != leaf_height_npt)
-        .any(|height| height.next_power_of_two() > n_ary_target);
+        .find(|height| height.next_power_of_two() > n_ary_target);
 
-    if has_intermediate { 2 } else { N }
+    if let Some(height) = intermediate {
+        let binary_target = curr_height_padded / 2;
+        // At the minimum padded width, a binary bridge can pad straight back to
+        // the same width. It must consume an injection or the planner will repeat
+        // this exact state forever, growing its layer/schedule vector until OOM.
+        if padded_len(binary_target, N) >= curr_height_padded
+            && height.next_power_of_two() != binary_target.next_power_of_two()
+        {
+            return Err(crate::MerkleTreeError::NonShrinkingLayer {
+                padded_height: curr_height_padded,
+                height,
+                arity: N,
+            });
+        }
+        Ok(2)
+    } else {
+        Ok(N)
+    }
 }
 
 /// Compute the padded output length for a compression step.
@@ -567,5 +637,110 @@ mod tests {
             &compress,
             vec![empty_mat],
         );
+    }
+
+    fn commit_non_shrinking_geometry<const N: usize>(direct: bool) {
+        use p3_commit::Mmcs;
+
+        let hash = Keccak256Hash;
+        let compress = CompressionFunctionFromHasher::<_, N, 32>::new(hash);
+        let leaves = vec![
+            RowMajorMatrix::new(vec![0u8; 4], 1),
+            RowMajorMatrix::new(vec![1u8; 2], 1),
+        ];
+        if direct {
+            let _ = MerkleTree::<u8, u8, _, N, 32>::new::<u8, u8, _, _>(&hash, &compress, leaves);
+        } else {
+            let mmcs = crate::MerkleTreeMmcs::<u8, u8, _, _, N, 32>::new(hash, compress, 0);
+            let _ = mmcs.commit(leaves);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot shrink")]
+    fn commit_rejects_non_shrinking_geometry_n8() {
+        commit_non_shrinking_geometry::<8>(false);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot shrink")]
+    fn new_rejects_non_shrinking_geometry() {
+        commit_non_shrinking_geometry::<8>(true);
+    }
+
+    #[test]
+    fn verifier_rejects_non_shrinking_geometry() {
+        use p3_commit::Mmcs;
+        use p3_matrix::{Dimensions, Matrix};
+
+        fn rejected<T>(result: &Result<T, crate::MerkleTreeError>) {
+            assert!(matches!(
+                result,
+                Err(crate::MerkleTreeError::NonShrinkingLayer {
+                    padded_height: 8,
+                    height: 2,
+                    arity: 8,
+                })
+            ));
+        }
+
+        for cap_height in [0, usize::MAX] {
+            let mmcs = crate::MerkleTreeMmcs::<u8, u8, _, _, 8, 32>::new(
+                Keccak256Hash,
+                CompressionFunctionFromHasher::new(Keccak256Hash),
+                cap_height,
+            );
+            for heights in [&[4, 2][..], &[32, 2], &[256, 2], &[8, 4, 2]] {
+                // Use a real proof from a supported shape, then claim an unreachable injection.
+                let inputs = heights
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &height)| {
+                        RowMajorMatrix::new(vec![i as u8; if i == 0 { height } else { 1 }], 1)
+                    })
+                    .collect::<Vec<_>>();
+                let mut dims: Vec<Dimensions> = inputs.iter().map(Matrix::dimensions).collect();
+                let (commit, data) = mmcs.commit(inputs);
+                let single = mmcs.open_batch(0, &data);
+                let (values, proof) = mmcs.open_multi_batch(&[0], &data);
+                for (dims, &height) in dims.iter_mut().zip(heights) {
+                    dims.height = height;
+                }
+
+                rejected(&mmcs.proof_arity_schedule(&dims));
+                rejected(&mmcs.verify_batch(&commit, &dims, 0, (&single).into()));
+                rejected(&mmcs.verify_multi_batch(&commit, &dims, &[0], &values, &proof));
+                rejected(&mmcs.restore_and_recompute_paths(&dims, &[0], &values, &proof));
+            }
+        }
+    }
+
+    #[test]
+    fn non_shrinking_bridges_that_consume_an_injection_remain_supported() {
+        use p3_commit::Mmcs;
+        use p3_matrix::Matrix;
+
+        fn check<const N: usize>(heights: &[usize]) {
+            let mmcs = crate::MerkleTreeMmcs::<u8, u8, _, _, N, 32>::new(
+                Keccak256Hash,
+                CompressionFunctionFromHasher::new(Keccak256Hash),
+                usize::MAX,
+            );
+            let inputs = heights
+                .iter()
+                .map(|&height| RowMajorMatrix::new(vec![0u8; height], 1))
+                .collect::<Vec<_>>();
+            let dims = inputs.iter().map(Matrix::dimensions).collect::<Vec<_>>();
+            let (commit, data) = mmcs.commit(inputs);
+            for index in 0..heights[0] {
+                let opening = mmcs.open_batch(index, &data);
+                mmcs.verify_batch(&commit, &dims, index, (&opening).into())
+                    .unwrap();
+            }
+        }
+
+        check::<4>(&[4, 2]);
+        check::<8>(&[8, 4]);
+        check::<8>(&[16, 2]);
     }
 }

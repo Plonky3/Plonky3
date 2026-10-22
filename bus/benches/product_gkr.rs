@@ -4,8 +4,11 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use p3_binary_field::{BinaryChallenger, BinaryField128};
+use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+use p3_binary_field::{BinaryChallenger, BinaryField128, Poly64, Poly192};
 use p3_bus::{ProductGkrProof, ProductGkrRootShape, ProductGkrShape};
+use p3_challenger::DuplexChallenger;
+use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_multilinear_util::point::Point;
@@ -179,11 +182,59 @@ fn product_gkr(criterion: &mut Criterion) {
     }
 }
 
+/// Prove the bus's shape: two trees of `2^22` leaves sharing one root.
+fn prove_two_trees(criterion: &mut Criterion) {
+    let log_height = 22;
+    let shape = ProductGkrShape::new(log_height, 2, ProductGkrRootShape::FirstTwoShared).unwrap();
+    let mut rng = Xoroshiro128Plus::seed_from_u64(0xB055_600D);
+    let mut group = criterion.benchmark_group("prove_two_trees");
+
+    // A binary challenge field, the cubic extension of GF(2^64).
+    // The second tree is the first reversed, so the two products agree.
+    let push = (0..1usize << log_height)
+        .map(|_| rng.random::<Poly192>())
+        .collect::<Vec<_>>();
+    let pull = push.iter().rev().copied().collect::<Vec<_>>();
+    group.bench_function(BenchmarkId::new("poly192", log_height), |bencher| {
+        bencher.iter(|| {
+            let mut challenger =
+                BinaryChallenger::<Poly64, _>::from_hasher(Vec::new(), Keccak256Hash);
+            black_box(ProductGkrProof::prove::<Poly64, _>(
+                &[&push, &pull],
+                shape,
+                &mut challenger,
+            ))
+        });
+    });
+
+    // A prime challenge field, the quartic extension of BabyBear.
+    let push = (0..1usize << log_height)
+        .map(|_| BinomialExtensionField::<BabyBear, 4>::from_u64(rng.random()))
+        .collect::<Vec<_>>();
+    let pull = push.iter().rev().copied().collect::<Vec<_>>();
+    let permutation = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+    group.bench_function(
+        BenchmarkId::new("baby_bear_quartic", log_height),
+        |bencher| {
+            bencher.iter(|| {
+                let mut challenger =
+                    DuplexChallenger::<BabyBear, _, 16, 8>::new(permutation.clone());
+                black_box(ProductGkrProof::prove::<BabyBear, _>(
+                    &[&push, &pull],
+                    shape,
+                    &mut challenger,
+                ))
+            });
+        },
+    );
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default()
         .sample_size(10)
         .measurement_time(Duration::from_secs(3));
-    targets = product_gkr
+    targets = product_gkr, prove_two_trees
 }
 criterion_main!(benches);

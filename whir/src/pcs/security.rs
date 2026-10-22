@@ -40,8 +40,9 @@ where
         config.initial_claims_error(num_claims),
     ));
 
-    let add_ood = |errors: &mut Vec<ErrorBits>, variables, rate, samples| {
-        if assumption != SecurityAssumption::UniqueDecoding {
+    // A phase drawing no sample has no out-of-domain step that could fail.
+    let add_ood = |errors: &mut Vec<ErrorBits>, variables, rate, samples: usize| {
+        if assumption != SecurityAssumption::UniqueDecoding && samples > 0 {
             errors.push(ErrorBits::from_log2(
                 assumption.ood_error(variables, rate, field_bits, samples),
             ));
@@ -232,6 +233,20 @@ mod tests {
                 assumption.list_size_bits(12, 1)
             );
         }
+    }
+
+    #[test]
+    fn dropping_the_commitment_sample_keeps_the_list_and_every_other_term() {
+        let with = pcs_with_assumption(SecurityAssumption::JohnsonBound);
+        let reported = with.prescribed_security(&protocol(12)).unwrap();
+        let mut without = with;
+        without.config = without.config.clone().without_commitment_ood();
+        assert_eq!(without.config.commitment_ood_samples, 0);
+        let evidence = without.prescribed_security(&protocol(12)).unwrap();
+        // The candidate list outer challenges pay for is the same.
+        assert_eq!(evidence.log2_max_candidates, reported.log2_max_candidates);
+        // One fewer term and one fewer initial claim leave at least the bits reported before.
+        assert!(evidence.error().bits() >= reported.error().bits());
     }
 
     #[test]

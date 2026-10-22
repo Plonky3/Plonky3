@@ -17,7 +17,7 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing, PrimeField64, dispatch_chunked_mixed_dot_product,
     impl_packed_field_pow_2,
 };
-use p3_util::reconstitute_from_base;
+use p3_util::zero_vec_from_base;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
@@ -228,7 +228,7 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(Goldilocks::zero_vec(len * WIDTH)) }
+        unsafe { zero_vec_from_base(len, Goldilocks::zero_vec) }
     }
 }
 
