@@ -12,8 +12,8 @@ use tracing::instrument;
 use super::transcript::{LincheckShape, VerifierTranscript};
 use super::{LincheckError, LincheckProof, slice_claim, split_point};
 use crate::point::{QuirkyClaim, QuirkyPoint};
-use crate::ports::PublicPorts;
-use crate::skip::{SKIP_SIZE, interpolate, lagrange_weights};
+use crate::ports::{PublicPorts, eq_at};
+use crate::skip::{SKIP_SIZE, interpolate};
 use crate::zerocheck::ZerocheckClaims;
 use crate::{Batch, FlockArith, Val};
 
@@ -125,37 +125,26 @@ where
     }
     let skip = arith.sampled_ext(transcript.slices(&proof.slices)?);
 
-    // The terminal identity: the circuit's form, then C and the pin in closed form.
-    let eq_inner = claims.point.eq_weights_in(arith, inner.len());
-    let columns: Vec<A::EF> = arith
-        .eq_table(&point)
-        .into_iter()
-        .flat_map(|e| s.iter().map(move |v| e.dup() * v.dup()))
-        .collect();
+    // The terminal identity: the circuit's form, then C, the pin and the public words in closed form.
     let circuit = batch.circuit();
-    let mut form = A::EF::ZERO;
-    circuit.walk_rows(&columns, |row, a, b| {
-        form += eq_inner[row].dup() * (a + alpha.dup() * b);
-    });
+    let form = arith.circuit_form(circuit, &claims.point.skip, inner, &point, &s, &alpha);
     let c_term = Point::eval_eq(inner, &point) * interpolate(&claims.point.skip, &s);
-    // Column `64 i + v` is `eq(point, i) s[v]`, so the pin's column is its term.
-    let pin_term = columns[circuit.const_pos()].dup();
+    // Column `64 j + v` weighs `eq(point, j) s[v]`.
+    let pin = circuit.const_pos();
+    let pin_term = eq_at(arith, &point, &[pin / 64]).remove(0) * s[pin % 64].dup();
     let port_term = match ports.split_first() {
         Some((skip, region)) => {
-            let lagrange = lagrange_weights(skip, SKIP_SIZE);
-            public
+            let bits = public.region_bits();
+            let (high, low) = point.split_at(point.len() - bits);
+            let outside: A::EF = high.iter().map(|r| A::EF::ONE + r.dup()).product();
+            let words = eq_at(arith, low, public.words());
+            let weighted: A::EF = public
                 .weights(arith, region)
                 .into_iter()
-                .map(|(w, weight)| {
-                    let slots = &columns[SKIP_SIZE * w..][..SKIP_SIZE];
-                    weight
-                        * slots
-                            .iter()
-                            .zip(&lagrange)
-                            .map(|(c, l)| c.dup() * l.dup())
-                            .sum::<A::EF>()
-                })
-                .sum()
+                .zip(words)
+                .map(|((_, weight), word)| weight * word)
+                .sum();
+            outside * weighted * interpolate(skip, &s)
         }
         None => A::EF::ZERO,
     };

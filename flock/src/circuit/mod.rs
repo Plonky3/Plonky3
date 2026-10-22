@@ -5,6 +5,8 @@
 mod builder;
 mod wire;
 
+use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Range;
 
@@ -14,6 +16,8 @@ use p3_keccak::Keccak256Hash;
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicHasher;
 pub use wire::{Wire, Word};
+
+use crate::witness::Program;
 
 /// Gates a digest chunk encodes and hashes on its own.
 const DIGEST_GATES: usize = 1 << 12;
@@ -68,6 +72,8 @@ pub struct Circuit {
     outputs: Vec<Range<usize>>,
     /// Keccak-256 of the encoding, the one binding of the circuit every transcript absorbs.
     digest: [u8; 32],
+    /// The compiled walk, once the gates are dropped.
+    program: Option<Arc<Program>>,
 }
 
 impl Circuit {
@@ -92,9 +98,32 @@ impl Circuit {
             inputs,
             outputs,
             digest: [0; 32],
+            program: None,
         };
         circuit.digest = circuit.compute_digest();
         circuit
+    }
+
+    /// The circuit with its gates compiled into a register walk and dropped: it can be verified and evaluated, not proven.
+    #[must_use]
+    pub fn compile(mut self) -> Self {
+        if self.program.is_none() {
+            self.program = Some(Arc::new(Program::new(&self)));
+            self.gates = Vec::new();
+        }
+        self
+    }
+
+    /// The compiled walk, if the gates were dropped for it.
+    pub(crate) fn compiled(&self) -> Option<&Program> {
+        self.program.as_deref()
+    }
+
+    /// The compiled walk, compiled now unless the circuit already is.
+    pub(crate) fn program(&self) -> Arc<Program> {
+        self.program
+            .clone()
+            .unwrap_or_else(|| Arc::new(Program::new(self)))
     }
 
     /// Bits per instance, as a power of two.
@@ -258,31 +287,43 @@ impl Circuit {
     pub(crate) fn walk_rows<V: PrimeCharacteristicRing>(
         &self,
         w: &[V],
-        mut row: impl FnMut(usize, V, V),
+        row: impl FnMut(usize, V, V),
     ) {
         assert_eq!(w.len(), 1 << self.k_log, "one entry per slot");
+        self.walk_rows_by(|s| w[s].dup(), row);
+    }
+
+    /// As [`Self::walk_rows`], the entry of slot `s` given by `w(s)`.
+    pub(crate) fn walk_rows_by<V: PrimeCharacteristicRing>(
+        &self,
+        w: impl Fn(usize) -> V,
+        mut row: impl FnMut(usize, V, V),
+    ) {
+        if let Some(program) = &self.program {
+            return program.walk_rows_by(w, row);
+        }
         // B reads the constant on port and copy rows.
-        let wc = &w[self.const_pos];
+        let wc = &w(self.const_pos);
 
         // Each wire carries its column combination; a committed wire is its own column.
         let mut wires: Vec<V> = Vec::with_capacity(self.gates.len());
         for &gate in &self.gates {
             let v = match gate {
                 Gate::Free(s) => {
-                    let s = s as usize;
-                    row(s, w[s].dup(), wc.dup());
-                    w[s].dup()
+                    let ws = w(s as usize);
+                    row(s as usize, ws.dup(), wc.dup());
+                    ws
                 }
                 Gate::Xor(x, y) => wires[x as usize].dup() + wires[y as usize].dup(),
                 Gate::And(x, y, s) => {
                     let s = s as usize;
                     row(s, wires[x as usize].dup(), wires[y as usize].dup());
-                    w[s].dup()
+                    w(s)
                 }
                 Gate::Copy(x, s) => {
                     let s = s as usize;
                     row(s, wires[x as usize].dup(), wc.dup());
-                    w[s].dup()
+                    w(s)
                 }
             };
             wires.push(v);
@@ -297,6 +338,9 @@ impl Circuit {
     pub(crate) fn add_fold_transpose<V: Field>(&self, a: V, b: V, u: &[V], m: &mut [V]) {
         assert_eq!(u.len(), 1 << self.k_log, "one weight per row");
         assert_eq!(m.len(), u.len(), "one output per slot");
+        if self.gates.len() > LARGE_GATES {
+            return self.add_fold_transpose_registers(a, b, u, m);
+        }
         let c = self.const_pos;
 
         // Each wire's adjoint: the row weight its consumers handed back.
@@ -333,6 +377,68 @@ impl Circuit {
         }
     }
 }
+
+impl Circuit {
+    /// As [`Self::add_fold_transpose`], each live adjoint in a register rather than one per gate.
+    ///
+    /// A wire's adjoint lives from its last reader, met first going backward, to its own gate.
+    pub(crate) fn add_fold_transpose_registers<V: Field>(&self, a: V, b: V, u: &[V], m: &mut [V]) {
+        const NONE: u32 = u32::MAX;
+        let c = self.const_pos;
+        let mut reg: Vec<u32> = vec![NONE; self.gates.len()];
+        let mut file: Vec<V> = Vec::new();
+        let mut free: Vec<u32> = Vec::new();
+        // Add into a wire's adjoint, giving it a register the first time.
+        let add = |w: u32, v: V, reg: &mut [u32], file: &mut Vec<V>, free: &mut Vec<u32>| {
+            let r = &mut reg[w as usize];
+            if *r == NONE {
+                *r = free.pop().unwrap_or_else(|| {
+                    file.push(V::ZERO);
+                    (file.len() - 1) as u32
+                });
+                file[*r as usize] = v;
+            } else {
+                file[*r as usize] += v;
+            }
+        };
+        for (i, &gate) in self.gates.iter().enumerate().rev() {
+            // The gate's own adjoint is complete: take it and release its register.
+            let g = match reg[i] {
+                NONE => V::ZERO,
+                r => {
+                    free.push(r);
+                    file[r as usize]
+                }
+            };
+            match gate {
+                Gate::Free(s) => {
+                    let s = s as usize;
+                    m[s] += g + a * u[s];
+                    m[c] += b * u[s];
+                }
+                Gate::Xor(x, y) => {
+                    add(x, g, &mut reg, &mut file, &mut free);
+                    add(y, g, &mut reg, &mut file, &mut free);
+                }
+                Gate::And(x, y, s) => {
+                    let s = s as usize;
+                    m[s] += g;
+                    add(x, a * u[s], &mut reg, &mut file, &mut free);
+                    add(y, b * u[s], &mut reg, &mut file, &mut free);
+                }
+                Gate::Copy(x, s) => {
+                    let s = s as usize;
+                    m[s] += g;
+                    add(x, a * u[s], &mut reg, &mut file, &mut free);
+                    m[c] += b * u[s];
+                }
+            }
+        }
+    }
+}
+
+/// Gates past which the backward walk keeps live adjoints in registers.
+const LARGE_GATES: usize = 1 << 25;
 
 /// Append gates at a fixed width: a kind byte, then three big-endian words.
 fn encode_gates(gates: &[Gate], out: &mut Vec<u8>) {

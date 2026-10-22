@@ -7,6 +7,12 @@ use core::ops::Range;
 
 use super::{Circuit, Gate, Wire, Word, slot};
 
+/// Tag of a provisional advice slot, relocated when the circuit is finished.
+const ADVICE: u32 = 1 << 31;
+
+/// Tag of a provisional revealed slot, relocated when the circuit is finished.
+const REVEALED: u32 = 1 << 30;
+
 /// A gate list under construction.
 #[derive(Debug)]
 pub struct Builder {
@@ -24,6 +30,10 @@ pub struct Builder {
     driven: Vec<bool>,
     /// Words the input ports span.
     n_input_words: usize,
+    /// Bits of the advice port, the trailing input port, so far.
+    advice: usize,
+    /// Bits of the revealed port, the trailing output port, so far.
+    revealed: usize,
 }
 
 impl Builder {
@@ -50,6 +60,8 @@ impl Builder {
             outputs: Vec::new(),
             driven: vec![false; 64 * n_output_words],
             n_input_words,
+            advice: 0,
+            revealed: 0,
         };
         c.one = c.push(Gate::Free(slot(const_pos)));
 
@@ -304,6 +316,67 @@ impl Builder {
         self.push(Gate::And(x, y, s))
     }
 
+    /// Fresh free wires, appended to the advice port: an input port after the declared ones that grows with every call.
+    ///
+    /// The circuit reads them from the input words past the declared ports.
+    pub fn advice(&mut self, bits: usize) -> Vec<Wire> {
+        (0..bits)
+            .map(|_| {
+                let s = ADVICE | slot(self.advice);
+                self.advice += 1;
+                assert!(self.advice < REVEALED as usize, "advice fits its tag");
+                self.push(Gate::Free(s))
+            })
+            .collect()
+    }
+
+    /// Commit a wire as the next bit of the revealed port: an output port after the declared ones that grows with every call.
+    ///
+    /// A statement pins revealed bits through the public ports, a zero bit being an assertion.
+    pub fn reveal(&mut self, wire: Wire) {
+        let s = REVEALED | slot(self.revealed);
+        self.revealed += 1;
+        assert!(
+            self.revealed < REVEALED as usize,
+            "revealed bits fit their tag"
+        );
+        // A structural zero needs no gate: its empty row forces zero.
+        if let Some(wire) = wire.index() {
+            self.push(Gate::Copy(wire, s));
+        }
+    }
+
+    /// Leave the slots below `slots` unused, so the circuit has at least that many before its padding.
+    ///
+    /// An unused slot has an empty row, which forces its bit to zero.
+    pub fn reserve_slots(&mut self, slots: usize) {
+        self.next_slot = self.next_slot.max(slots);
+    }
+
+    /// Bits of the advice port so far.
+    #[must_use]
+    pub const fn advice_bits(&self) -> usize {
+        self.advice
+    }
+
+    /// Bits of the revealed port so far.
+    #[must_use]
+    pub const fn revealed_bits(&self) -> usize {
+        self.revealed
+    }
+
+    /// Gates so far.
+    #[must_use]
+    pub const fn num_gates(&self) -> usize {
+        self.gates.len()
+    }
+
+    /// Products so far.
+    #[must_use]
+    pub const fn num_ands(&self) -> usize {
+        self.next_slot - (64 * self.n_input_words + self.driven.len() + 1)
+    }
+
     /// Claim one bit of an output port, returning its slot.
     ///
     /// A slot holds one row, so a second commit would silently drop the first.
@@ -319,12 +392,44 @@ impl Builder {
     }
 
     /// The finished circuit, padded to a power of two bits.
+    ///
+    /// The advice port follows the declared inputs and the revealed port the declared outputs, every later slot moving up past them.
     #[must_use]
-    pub fn finish(self) -> Circuit {
+    pub fn finish(mut self) -> Circuit {
+        let advice_words = self.advice.div_ceil(64);
+        let revealed_words = self.revealed.div_ceil(64);
+        let declared_inputs = 64 * self.n_input_words;
+        let declared_ports = declared_inputs + self.driven.len();
+        if advice_words + revealed_words > 0 {
+            let relocate = |s: u32| -> u32 {
+                let s = if s & ADVICE != 0 {
+                    declared_inputs + (s & !ADVICE) as usize
+                } else if s & REVEALED != 0 {
+                    declared_ports + 64 * advice_words + (s & !REVEALED) as usize
+                } else if (s as usize) < declared_inputs {
+                    s as usize
+                } else if (s as usize) < declared_ports {
+                    s as usize + 64 * advice_words
+                } else {
+                    s as usize + 64 * (advice_words + revealed_words)
+                };
+                slot(s)
+            };
+            for gate in &mut self.gates {
+                *gate = match *gate {
+                    Gate::Free(s) => Gate::Free(relocate(s)),
+                    Gate::Xor(x, y) => Gate::Xor(x, y),
+                    Gate::And(x, y, s) => Gate::And(x, y, relocate(s)),
+                    Gate::Copy(x, s) => Gate::Copy(x, relocate(s)),
+                };
+            }
+            self.next_slot += 64 * (advice_words + revealed_words);
+        }
         let useful_bits = self.next_slot;
-        // Each port's words: inputs from word zero, outputs after them.
+
+        // Each port's words: inputs from word zero, the advice after them, then the outputs and the revealed bits.
         let mut end = 0;
-        let inputs = self
+        let mut inputs: Vec<Range<usize>> = self
             .inputs
             .iter()
             .map(|wires| {
@@ -333,11 +438,19 @@ impl Builder {
                 start..end
             })
             .collect();
-        let outputs = self
+        if advice_words > 0 {
+            inputs.push(end..end + advice_words);
+        }
+        let shift = advice_words;
+        let mut outputs: Vec<Range<usize>> = self
             .outputs
             .iter()
-            .map(|&(base, bits)| base / 64..base / 64 + bits.div_ceil(64))
+            .map(|&(base, bits)| base / 64 + shift..base / 64 + shift + bits.div_ceil(64))
             .collect();
+        if revealed_words > 0 {
+            let start = declared_ports / 64 + advice_words;
+            outputs.push(start..start + revealed_words);
+        }
         Circuit::new(
             self.gates,
             inputs,

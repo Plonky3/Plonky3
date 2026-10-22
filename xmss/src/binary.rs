@@ -217,6 +217,20 @@ impl BinaryAggregator {
         )?)
     }
 
+    /// The batch and public words a proof of these statements is verified against.
+    ///
+    /// # Errors
+    ///
+    /// When there is no statement or the batch is out of range.
+    pub fn statement(
+        &self,
+        statements: &[Statement<Blake3Hash>],
+    ) -> Result<(Batch<'_>, PublicPorts), AggregationError> {
+        let (_, batch) = self.batch(statements.len())?;
+        let public = self.public(&batch, statements);
+        Ok((batch, public))
+    }
+
     /// The last item's index and the batch of `count` items rounded up to a power of two.
     fn batch(&self, count: usize) -> Result<(usize, Batch<'_>), AggregationError> {
         let last = count.checked_sub(1).ok_or(AggregationError::Empty)?;

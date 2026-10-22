@@ -303,3 +303,20 @@ fn a_proof_on_fixed_seeds_has_a_pinned_digest() {
         hex_literal::hex!("a7c678c7d48a8a692045d1229a493d2f208d5d7cd6bead20db0b53ec1d79505c")
     );
 }
+
+#[test]
+fn the_register_backward_walk_is_the_plain_one() {
+    use crate::Challenge;
+    let mut rng = SmallRng::seed_from_u64(0xBAC);
+    for _ in 0..8 {
+        let c = random_circuit(&mut rng, 400);
+        let n = 1 << c.k_log();
+        let u: Vec<Challenge> = (0..n).map(|_| rng.random()).collect();
+        let (a, b): (Challenge, Challenge) = (rng.random(), rng.random());
+        let mut plain = Challenge::zero_vec(n);
+        c.add_fold_transpose(a, b, &u, &mut plain);
+        let mut registers = Challenge::zero_vec(n);
+        c.add_fold_transpose_registers(a, b, &u, &mut registers);
+        assert_eq!(plain, registers);
+    }
+}

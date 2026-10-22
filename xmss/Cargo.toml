@@ -35,6 +35,7 @@ thiserror.workspace = true
 [dev-dependencies]
 p3-air = { path = "../air" }
 p3-batch-stark = { path = "../batch-stark" }
+p3-blake3 = { path = "../blake3" }
 p3-dft = { path = "../dft" }
 p3-fri = { path = "../fri" }
 p3-keccak = { path = "../keccak" }

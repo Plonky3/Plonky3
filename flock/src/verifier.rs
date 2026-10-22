@@ -68,7 +68,7 @@ where
         >,
 {
     // Bind the statement, then the commitment, where the prover did.
-    arith.seeding(|| public.bind(batch, challenger))?;
+    arith.bind_statement(batch, public, challenger)?;
     let pcs = hash64::witness_commitment::<H>(batch.log_n(), &config.pcs, 1)?;
     let commitment = pcs.mmcs().load_commitment(arith, &proof.commitment);
     pcs.observe_in(arith, &proof.commitment, &commitment, challenger);

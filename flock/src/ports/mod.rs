@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::CanObserve;
 use p3_challenger::fs::{DomainSeparator, FieldUnit, InteractionPattern};
-use p3_field::Dup;
+use p3_field::{Dup, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicHasher;
@@ -31,7 +31,7 @@ use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
 use crate::{Batch, FlockArith, Val};
 
 /// Instances a statement chunk hashes on its own.
-const DIGEST_INSTANCES: usize = 1 << 10;
+pub(crate) const DIGEST_INSTANCES: usize = 1 << 10;
 
 /// The statement every proof binds before its first challenge: the circuit, the batch, and the public port words.
 const STATEMENT: &[u8] = b"p3-flock-statement";
@@ -82,6 +82,33 @@ pub enum PortsError {
         /// One such instance.
         instance: usize,
     },
+}
+
+/// `eq(point, i)` at each index, the first coordinate the most significant.
+///
+/// A few indices cost a product per coordinate each; many share the whole table.
+pub(crate) fn eq_at<A: Arith>(arith: &mut A, point: &[A::EF], indices: &[usize]) -> Vec<A::EF> {
+    let n = point.len();
+    if indices.len() * n >= 1 << n {
+        let table = arith.eq_table(point);
+        return indices.iter().map(|&i| table[i].dup()).collect();
+    }
+    indices
+        .iter()
+        .map(|&i| {
+            point
+                .iter()
+                .enumerate()
+                .map(|(t, r)| {
+                    if (i >> (n - 1 - t)) & 1 == 1 {
+                        r.dup()
+                    } else {
+                        A::EF::ONE + r.dup()
+                    }
+                })
+                .product()
+        })
+        .collect()
 }
 
 impl PublicPorts {
@@ -149,16 +176,33 @@ impl PublicPorts {
                 Keccak256Hash.hash_slice(&bytes)
             })
             .collect();
-        let mut shape = Vec::with_capacity(8 * (2 + len));
-        for v in [self.log_instances, len]
+        let shape = self.shape_bytes();
+        Keccak256Hash.hash_iter_slices(
+            core::iter::once(shape.as_slice()).chain(chunks.iter().map(|c| c.as_slice())),
+        )
+    }
+
+    /// The digest's first input: the instance count, the word count and the public words, big-endian.
+    pub(crate) fn shape_bytes(&self) -> Vec<u8> {
+        let mut shape = Vec::with_capacity(8 * (2 + self.words.len()));
+        for v in [self.log_instances, self.words.len()]
             .into_iter()
             .chain(self.words.iter().copied())
         {
             shape.extend_from_slice(&(v as u64).to_be_bytes());
         }
-        Keccak256Hash.hash_iter_slices(
-            core::iter::once(shape.as_slice()).chain(chunks.iter().map(|c| c.as_slice())),
-        )
+        shape
+    }
+
+    /// Instances, as a power of two.
+    #[must_use]
+    pub const fn log_instances(&self) -> usize {
+        self.log_instances
+    }
+
+    /// Every instance's packed values, `stride` words apart.
+    pub(crate) fn values(&self) -> &[u64] {
+        &self.values
     }
 
     /// Public words of one instance, ascending.
@@ -267,8 +311,8 @@ impl PublicPorts {
 
     /// Each public word with its weight `eq(region, w)`.
     pub(crate) fn weights<A: Arith>(&self, arith: &mut A, region: &[A::EF]) -> Vec<(usize, A::EF)> {
-        let eq = arith.eq_table(region);
-        self.words.iter().map(|&w| (w, eq[w].dup())).collect()
+        let eq = eq_at(arith, region, &self.words);
+        self.words.iter().copied().zip(eq).collect()
     }
 
     /// The public table's weighted sum: each word folded over the instances, at the skip coordinate, under its weight.

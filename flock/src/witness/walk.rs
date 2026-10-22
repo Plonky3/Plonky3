@@ -22,8 +22,8 @@ enum Op {
 }
 
 /// A circuit's gates as register operations.
-#[derive(Clone, Debug)]
-pub(super) struct Program {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Program {
     /// Operations in gate order.
     ops: Vec<Op>,
     /// Registers the walk needs, the sink included.
@@ -40,7 +40,10 @@ pub(super) struct Program {
 
 impl Program {
     /// Compile a circuit: each wire lives in a register from its gate to its last reader.
-    pub(super) fn new(circuit: &Circuit) -> Self {
+    pub(crate) fn new(circuit: &Circuit) -> Self {
+        if let Some(program) = circuit.compiled() {
+            return program.clone();
+        }
         let gates = circuit.gates();
 
         // The last gate reading each wire.
@@ -171,6 +174,78 @@ impl Program {
                     };
                     a[s] = v;
                     r[dst as usize] = v;
+                }
+            }
+        }
+    }
+}
+
+impl Program {
+    /// Registers a walk holds at once.
+    pub(crate) const fn registers(&self) -> usize {
+        self.registers
+    }
+
+    /// The forward walk of [`Circuit::walk_rows_by`], live wires only in registers.
+    pub(crate) fn walk_rows_by<V: p3_field::PrimeCharacteristicRing>(
+        &self,
+        w: impl Fn(usize) -> V,
+        mut row: impl FnMut(usize, V, V),
+    ) {
+        let wc = w(self.const_pos);
+        let mut r = vec![V::ZERO; self.registers];
+        for &op in &self.ops {
+            match op {
+                Op::Xor { dst, x, y } => {
+                    r[dst as usize] = r[x as usize].dup() + r[y as usize].dup();
+                }
+                Op::And { dst, x, y, slot } => {
+                    row(slot as usize, r[x as usize].dup(), r[y as usize].dup());
+                    r[dst as usize] = w(slot as usize);
+                }
+                Op::Copy { dst, x, slot } => {
+                    row(slot as usize, r[x as usize].dup(), wc.dup());
+                    r[dst as usize] = w(slot as usize);
+                }
+                Op::Free { dst, slot } => {
+                    let ws = w(slot as usize);
+                    row(slot as usize, ws.dup(), wc.dup());
+                    r[dst as usize] = ws;
+                }
+            }
+        }
+    }
+
+    /// The forward walk of [`Circuit::walk_rows`] on `L` column vectors at once, live wires only in registers.
+    ///
+    /// `column(s)` is the lanes' entry at slot `s`, and `row(s, a, b)` receives every committed row's `A` and `B` entries.
+    pub(crate) fn walk_rows_lanes<V, const L: usize>(
+        &self,
+        column: impl Fn(usize) -> [V; L],
+        mut row: impl FnMut(usize, &[V; L], &[V; L]),
+    ) where
+        V: Copy + Default + core::ops::Add<Output = V>,
+    {
+        let wc = column(self.const_pos);
+        let mut r = vec![[V::default(); L]; self.registers];
+        for &op in &self.ops {
+            match op {
+                Op::Xor { dst, x, y } => {
+                    let (x, y) = (r[x as usize], r[y as usize]);
+                    r[dst as usize] = core::array::from_fn(|l| x[l] + y[l]);
+                }
+                Op::And { dst, x, y, slot } => {
+                    row(slot as usize, &r[x as usize], &r[y as usize]);
+                    r[dst as usize] = column(slot as usize);
+                }
+                Op::Copy { dst, x, slot } => {
+                    row(slot as usize, &r[x as usize], &wc);
+                    r[dst as usize] = column(slot as usize);
+                }
+                Op::Free { dst, slot } => {
+                    let w = column(slot as usize);
+                    row(slot as usize, &w, &wc);
+                    r[dst as usize] = w;
                 }
             }
         }

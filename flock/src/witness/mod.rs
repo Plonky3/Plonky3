@@ -9,7 +9,8 @@ use alloc::vec::Vec;
 use p3_binary_field::PackedGf2x64;
 use p3_maybe_rayon::prelude::*;
 
-use self::walk::{Lanes, Program};
+use self::walk::Lanes;
+pub(crate) use self::walk::Program;
 use crate::circuit::Circuit;
 use crate::stream::Stream;
 

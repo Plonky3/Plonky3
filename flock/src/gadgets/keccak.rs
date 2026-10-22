@@ -61,41 +61,8 @@ impl Gadget for KeccakF1600 {
     fn circuit() -> Circuit {
         let mut c = Builder::new(&[1600], &[1600]);
         let input = c.input(0);
-        let mut a: [Word; 25] = core::array::from_fn(|i| Word::from(&input[64 * i..64 * (i + 1)]));
-
-        for &rc in &RC {
-            // Theta: each lane takes two neighbouring column parities.
-            let col: [Word; 5] = core::array::from_fn(|x| {
-                (1..5).fold(a[x].clone(), |p, y| c.xor_word(&p, &a[x + 5 * y]))
-            });
-            for x in 0..5 {
-                let d = c.xor_word(&col[(x + 4) % 5], &col[(x + 1) % 5].rotate_left(1));
-                for y in 0..5 {
-                    a[x + 5 * y] = c.xor_word(&a[x + 5 * y], &d);
-                }
-            }
-
-            // Rho and pi: lane `(x, y)` rotates into `(y, 2x + 3y)`.
-            let mut b: [Word; 25] = core::array::from_fn(|_| Word::default());
-            for x in 0..5 {
-                for y in 0..5 {
-                    b[y + 5 * ((2 * x + 3 * y) % 5)] = a[x + 5 * y].rotate_left(RHO[x + 5 * y]);
-                }
-            }
-
-            // Chi: one product per bit.
-            for y in 0..5 {
-                for x in 0..5 {
-                    let row = |dx: usize| &b[(x + dx) % 5 + 5 * y];
-                    let t = c.andn_word(row(1), row(2));
-                    a[x + 5 * y] = c.xor_word(row(0), &t);
-                }
-            }
-
-            // Iota: a constant, free.
-            let k = c.literal(rc, 64);
-            a[0] = c.xor_word(&a[0], &k);
-        }
+        let a: [Word; 25] = core::array::from_fn(|i| Word::from(&input[64 * i..64 * (i + 1)]));
+        let a = permute(&mut c, a);
 
         for (i, lane) in a.iter().enumerate() {
             for (bit, &wire) in lane.iter().enumerate() {
@@ -125,6 +92,44 @@ impl Gadget for KeccakF1600 {
         );
         Witness::by_instance(16, log_instances, rows, padding, Self::rows)
     }
+}
+
+/// The permutation on circuit words, lane `x + 5 y` at index `x + 5 y`.
+pub(crate) fn permute(c: &mut Builder, mut a: [Word; 25]) -> [Word; 25] {
+    for &rc in &RC {
+        // Theta: each lane takes two neighbouring column parities.
+        let col: [Word; 5] = core::array::from_fn(|x| {
+            (1..5).fold(a[x].clone(), |p, y| c.xor_word(&p, &a[x + 5 * y]))
+        });
+        for x in 0..5 {
+            let d = c.xor_word(&col[(x + 4) % 5], &col[(x + 1) % 5].rotate_left(1));
+            for y in 0..5 {
+                a[x + 5 * y] = c.xor_word(&a[x + 5 * y], &d);
+            }
+        }
+
+        // Rho and pi: lane `(x, y)` rotates into `(y, 2x + 3y)`.
+        let mut b: [Word; 25] = core::array::from_fn(|_| Word::default());
+        for x in 0..5 {
+            for y in 0..5 {
+                b[y + 5 * ((2 * x + 3 * y) % 5)] = a[x + 5 * y].rotate_left(RHO[x + 5 * y]);
+            }
+        }
+
+        // Chi: one product per bit.
+        for y in 0..5 {
+            for x in 0..5 {
+                let row = |dx: usize| &b[(x + dx) % 5 + 5 * y];
+                let t = c.andn_word(row(1), row(2));
+                a[x + 5 * y] = c.xor_word(row(0), &t);
+            }
+        }
+
+        // Iota: a constant, free.
+        let k = c.literal(rc, 64);
+        a[0] = c.xor_word(&a[0], &k);
+    }
+    a
 }
 
 impl KeccakF1600 {

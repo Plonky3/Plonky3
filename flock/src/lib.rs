@@ -23,6 +23,7 @@ mod point;
 pub mod ports;
 mod proof;
 mod prover;
+pub mod recursion;
 mod skip;
 mod stream;
 mod verifier;
