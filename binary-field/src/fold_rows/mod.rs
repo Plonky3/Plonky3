@@ -109,6 +109,22 @@ pub fn fold_rows(
     if weights.len() < 8 {
         return fold_bits(words, log_row_bits, weights);
     }
+    // The rows past the last whole stripe fold bit by bit, on top of the striped fold.
+    let whole = weights.len() / 8 * 8;
+    if whole < weights.len() {
+        let split = (whole << log_row_bits) >> LOG_WORD_BITS;
+        let mut out = fold_rows(
+            &words[..split],
+            log_row_bits,
+            useful_bits,
+            &weights[..whole],
+        );
+        let tail = fold_bits(&words[split..], log_row_bits, &weights[whole..]);
+        for (out, tail) in out.iter_mut().zip(tail) {
+            *out += tail;
+        }
+        return out;
+    }
     let stripes = Stripes::new(words, log_row_bits);
     // Groups of 64 positions holding a useful bit; a straddling group folds its zeros harmlessly.
     let groups = useful_bits.div_ceil(64);
@@ -211,6 +227,27 @@ mod tests {
                 let got = gfni::partial_fold::<Model, { gfni::WIDE_TILE }>(stripes, groups, &eq);
                 assert_eq!(got, want, "wide {k_log} {n_log} {useful}");
             }
+        }
+    }
+
+    #[test]
+    fn a_partial_last_stripe_folds_its_rows() {
+        // Rows past a multiple of eight fill no whole stripe, but still count.
+        //
+        //     9 rows    one stripe, then one row
+        //     15 rows   one stripe, then seven rows
+        //     17 rows   two stripes of eight-word rows, then one row
+        //     263 rows  a wide tile of stripes, then seven rows
+        let mut rng = SmallRng::seed_from_u64(0xF01E);
+        for (k_log, rows) in [(6, 9), (6, 15), (9, 17), (9, 263)] {
+            let words = rows << (k_log - 6);
+            let z: Vec<u64> = (0..words).map(|_| rng.next_u64()).collect();
+            let eq: Vec<Poly192> = (0..rows).map(|_| rng.random()).collect();
+            assert_eq!(
+                fold_rows(&z, k_log, 1 << k_log, &eq),
+                fold_bits(&z, k_log, &eq),
+                "{k_log} {rows}"
+            );
         }
     }
 
