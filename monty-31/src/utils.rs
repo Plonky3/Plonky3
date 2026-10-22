@@ -166,9 +166,13 @@ pub(crate) const fn large_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 /// - Input must satisfy `x < 2^96`.
 /// - Output is in `[0, P)`.
 pub(crate) const fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
-    // This function assumes MONTY_BITS == 32 for the limb split and range analysis.
+    // This function assumes MONTY_BITS == 32 and P > 2^30 for the limb split and range analysis.
     const {
         assert!(MP::MONTY_BITS == 32);
+        assert!(
+            MP::PRIME > (1 << 30),
+            "PRIME must exceed 2^30 for 96-bit reduction"
+        );
     }
     debug_assert!(x < 1 << 96);
 
@@ -191,7 +195,7 @@ pub(crate) const fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
     //   lo               <= 2^64 - 1   (arbitrary u64)
     //
     // So the low limb can exceed the accepted range by at most one copy of 2*R*P.
-    // Subtracting it once is always enough because 2^64 < 4*R*P for any 31-bit prime.
+    // Subtracting it once is always enough because 2^64 <= 4*R*P when P > 2^30.
     //
     // Correctness: 2*R*P is a multiple of P, so this subtraction
     // does not change the residue modulo P.
@@ -254,6 +258,29 @@ mod tests {
     const KB_TWO_RP: u64 = KB_RP * 2;
     const BB_RP: u64 = BB_P as u64 * R;
     const BB_TWO_RP: u64 = BB_RP * 2;
+
+    #[test]
+    fn monty_reduce_u128_maximal_low_limb() {
+        // The low limb is brought below 2*R*P by at most one subtraction of 2*R*P.
+        //
+        // One subtraction is enough because 2^64 <= 4*R*P, which needs P > 2^30.
+        //
+        // These inputs make the low limb maximal, the tightest case:
+        //
+        //     x = 2^64 - 1:  hi = 0,          lo = 2^64 - 1
+        //     x = 2^96 - 1:  hi = 2^32 - 1,   lo = 2^64 - 1
+        for x in [u64::MAX as u128, (1u128 << 96) - 1] {
+            // KoalaBear: canonical output, and output * R = x (mod P).
+            let kb = monty_reduce_u128::<KB>(x) as u128;
+            assert!(kb < KB_P as u128);
+            assert_eq!((kb * R as u128) % KB_P as u128, x % KB_P as u128);
+
+            // BabyBear: the same two properties.
+            let bb = monty_reduce_u128::<BB>(x) as u128;
+            assert!(bb < BB_P as u128);
+            assert_eq!((bb * R as u128) % BB_P as u128, x % BB_P as u128);
+        }
+    }
 
     proptest! {
         // ---------------------------------------------------------------

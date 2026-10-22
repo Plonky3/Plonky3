@@ -828,8 +828,8 @@ pub const fn gcd_inner<const NUM_ROUNDS: usize>(a: &mut u64, b: &mut u64) -> (i6
 ///  - b: The value of the prime `P > 2`.
 ///
 /// Output:
-/// - A `64-bit` signed integer `v` equal to `2^{2 * FIELD_BITS - 2} a^{-1} mod P` with
-///   size `|v| < 2^{2 * FIELD_BITS - 2}`.
+/// - A `64-bit` signed integer `v` equal to `2^{2 * FIELD_BITS - 2} a^{-1} mod P`.
+/// - Its size is `|v| <= 2^{2 * FIELD_BITS - 2}`, with equality at `a = 1`.
 ///
 /// It is up to the user to ensure that `b` is an odd prime with at most `FIELD_BITS` bits and
 /// `a < b`. If either of these assumptions break, the output is undefined.
@@ -1161,6 +1161,16 @@ mod tests {
 
                 assert_eq!(actual, expect);
             }
+        }
+    }
+
+    #[test]
+    fn test_gcd_inversion_prime_field_32_bound_is_attained() {
+        // The output satisfies |v| <= 2^{2 * 31 - 2} = 2^60.
+        //
+        // The bound is inclusive: inverting 1 gives exactly 2^60 * 1^{-1} = 2^60.
+        for p in [0x7800_0001, 0x7f00_0001] {
+            assert_eq!(gcd_inversion_prime_field_32::<31>(1, p), 1 << 60);
         }
     }
 
