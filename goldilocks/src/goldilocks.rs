@@ -86,6 +86,8 @@ impl Goldilocks {
     /// other field operations and calling code are not made constant-time.
     /// Timing properties depend on `subtle`, compiler optimizations, and target hardware.
     /// Use release builds: `subtle`'s debug assertions may introduce input-dependent branches.
+    /// Callers relying on timing must assess their build and calling context; see the
+    /// [caller obligations](https://github.com/Plonky3/Plonky3/blob/main/docs/caller-obligations.md#scalar-canonicalization-timing).
     #[cfg(feature = "constant-time")]
     #[inline]
     #[must_use]
