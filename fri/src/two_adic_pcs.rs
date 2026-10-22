@@ -28,8 +28,8 @@ use p3_commit::{
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, PrimeField64,
-    TwoAdicField, batch_multiplicative_inverse, dot_product,
+    ExtensionField, HornerIter, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    PrimeField64, TwoAdicField, batch_multiplicative_inverse, dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -184,6 +184,25 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
             return (lo + hi).halve() + (lo - hi) * beta * halve_inv_power;
         }
 
+        // The inverse FFT returns the coefficients of arity * p(sX), where
+        // s = subgroup_start. Horner evaluation at beta/s and division by arity
+        // therefore interpolate p(beta), without allocating or inverting in EF.
+        if log_arity == 2 {
+            let row = core::array::from_fn(|_| evals.next().expect("Expected 4 evaluations"));
+            assert!(evals.next().is_none(), "Expected 4 evaluations");
+            let [c0, c1, c2, c3] = ifft4(row, -F::two_adic_generator(2));
+            let x = beta * subgroup_start.inverse();
+            return [c0, c1, c2].into_iter().horner_acc(c3, x) * F::ONE.halve().halve();
+        }
+        if log_arity == 3 {
+            let row = core::array::from_fn(|_| evals.next().expect("Expected 8 evaluations"));
+            assert!(evals.next().is_none(), "Expected 8 evaluations");
+            let [c0, c1, c2, c3, c4, c5, c6, c7] = ifft8::<F, EF>(row);
+            let x = beta * subgroup_start.inverse();
+            return [c0, c1, c2, c3, c4, c5, c6].into_iter().horner_acc(c7, x)
+                * F::ONE.halve().halve().halve();
+        }
+
         let evals: Vec<_> = evals.collect();
         assert_eq!(evals.len(), arity, "Expected {} evaluations", arity);
 
@@ -292,6 +311,47 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
             data
         }
     }
+}
+
+/// Unnormalized inverse FFT of four evaluations in bit-reversed order.
+/// `root_inv` is the inverse fourth root belonging to this transform's domain.
+#[inline]
+fn ifft4<F: TwoAdicField, EF: ExtensionField<F>>(
+    [y0, y2, y1, y3]: [EF; 4],
+    root_inv: F,
+) -> [EF; 4] {
+    let a0 = y0 + y2;
+    let a1 = y0 - y2;
+    let a2 = y1 + y3;
+    let a3 = (y1 - y3) * root_inv;
+    [a0 + a2, a1 + a3, a0 - a2, a1 - a3]
+}
+
+/// Unnormalized inverse FFT of eight evaluations in bit-reversed order.
+#[inline]
+fn ifft8<F: TwoAdicField, EF: ExtensionField<F>>(
+    [y0, y4, y2, y6, y1, y5, y3, y7]: [EF; 8],
+) -> [EF; 8] {
+    let root = F::two_adic_generator(3);
+    let root_squared = root.square();
+    // Derive every twiddle from this domain's root. A field need not choose its
+    // fourth root to be the square of its eighth root.
+    let fourth_root_inv = -root_squared;
+    let [b0, b1, b2, b3] = ifft4([y0, y4, y2, y6], fourth_root_inv);
+    let [b4, b5, b6, b7] = ifft4([y1, y5, y3, y7], fourth_root_inv);
+    let t1 = b5 * -(root_squared * root);
+    let t2 = b6 * fourth_root_inv;
+    let t3 = b7 * -root;
+    [
+        b0 + b4,
+        b1 + t1,
+        b2 + t2,
+        b3 + t3,
+        b0 - b4,
+        b1 - t1,
+        b2 - t2,
+        b3 - t3,
+    ]
 }
 
 /// Whether `fold_matrix` folds a matrix of `height` rows over a base field of `field_bits`
@@ -1482,6 +1542,88 @@ mod tests {
                     evals.into_iter(),
                 );
                 assert_eq!(folded, expected);
+            }
+        }
+    }
+
+    /// Catch incorrect input permutations, inverse twiddles, coset shifts or normalization.
+    #[test]
+    fn fold_row_matches_direct_interpolation() {
+        fn check<Base: TwoAdicField, Ext: ExtensionField<Base>>()
+        where
+            StandardUniform: Distribution<Ext>,
+        {
+            let mut rng = SmallRng::seed_from_u64(3);
+            let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+            for log_arity in 1..=4 {
+                let arity = 1 << log_arity;
+                for log_height in 0..=5 {
+                    for index in 0..(1 << log_height) {
+                        let s = Base::two_adic_generator(log_height + log_arity)
+                            .exp_u64(reverse_bits_len(index, log_height) as u64);
+                        let root = Base::two_adic_generator(log_arity);
+                        let xs: Vec<_> = (0..arity)
+                            .map(|i| s * root.exp_u64(reverse_bits_len(i, log_arity) as u64))
+                            .collect();
+                        let evals: Vec<Ext> = (0..arity).map(|_| rng.random()).collect();
+                        for beta in [Ext::ZERO, rng.random()]
+                            .into_iter()
+                            .chain(xs.iter().copied().map(Ext::from))
+                        {
+                            // Direct Lagrange basis, independent of the barycentric and FFT paths.
+                            let expected: Ext = (0..arity)
+                                .map(|i| {
+                                    let mut numerator = Ext::ONE;
+                                    let mut denominator = Base::ONE;
+                                    for j in 0..arity {
+                                        if i != j {
+                                            numerator *= beta - xs[j];
+                                            denominator *= xs[i] - xs[j];
+                                        }
+                                    }
+                                    evals[i] * numerator * denominator.inverse()
+                                })
+                                .sum();
+                            assert_eq!(
+                                FriFoldingStrategy::<Base, Ext>::fold_row(
+                                    &folding,
+                                    index,
+                                    log_height,
+                                    log_arity,
+                                    beta,
+                                    evals.iter().copied(),
+                                ),
+                                expected,
+                                "log_arity={log_arity}, log_height={log_height}, index={index}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        check::<F, EF>();
+        check::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>();
+    }
+
+    #[cfg(panic = "unwind")]
+    #[test]
+    fn fold_row_rejects_missing_and_excess_evaluations() {
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+        for log_arity in 1..=4 {
+            let arity = 1 << log_arity;
+            for len in (0..=arity + 2).filter(|&len| len != arity) {
+                // Filter hides the exact size, so validation cannot rely on a size hint.
+                let result = std::panic::catch_unwind(|| {
+                    FriFoldingStrategy::<F, EF>::fold_row(
+                        &folding,
+                        0,
+                        0,
+                        log_arity,
+                        EF::ZERO,
+                        (0..len).filter(|_| true).map(|_| EF::ONE),
+                    )
+                });
+                assert!(result.is_err(), "log_arity={log_arity}, len={len}");
             }
         }
     }
