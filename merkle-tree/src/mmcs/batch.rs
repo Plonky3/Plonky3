@@ -67,9 +67,8 @@ where
 
         let tree = MerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
 
-        // Make cap_height fit this tree (small trees during FRI folding may have fewer layers)
-        let num_layers = tree.num_layers();
-        let effective_cap_height = self.cap_height.min(num_layers.saturating_sub(1));
+        // Keep the cap at or above every matrix injection, including in small FRI trees.
+        let (effective_cap_height, _) = self.cap_height_and_proof_levels(&tree);
 
         let cap = tree.cap(effective_cap_height);
         (cap, tree)
@@ -109,11 +108,7 @@ where
             .collect_vec();
 
         // Only include siblings up to (but not including) the cap layer.
-        let num_layers = prover_data.digest_layers.len();
-        let effective_cap_height = self.cap_height.min(num_layers.saturating_sub(1));
-        let proof_levels = num_layers
-            .saturating_sub(1)
-            .saturating_sub(effective_cap_height);
+        let (_, proof_levels) = self.cap_height_and_proof_levels(prover_data);
 
         let mut proof = Vec::new();
         let mut idx = index;
@@ -325,6 +320,12 @@ where
                 });
                 digest = self.compress.compress(inject_inputs);
             }
+        }
+
+        // Unreachable for validated dimensions: the schedule reaches every injection.
+        // Fail closed if this walk ever disagrees with the schedule.
+        if heights_tallest_first.peek().is_some() {
+            return Err(CapMismatch);
         }
 
         // After processing the proof, `index` has been shifted by the proof length.

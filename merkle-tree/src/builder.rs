@@ -257,7 +257,8 @@ where
         while len > 1 {
             // A binary bridge step lands a shorter matrix on its own layer.
             let arity =
-                select_arity_step::<N>(len, leaf_height_npt, by_height.clone().map(|m| m.height()));
+                select_arity_step::<N>(len, leaf_height_npt, by_height.clone().map(|m| m.height()))
+                    .unwrap_or_else(|err| panic!("{err}"));
             let computed = len / arity;
 
             // Matrices whose padded height matches this layer are injected into it.
@@ -1045,7 +1046,8 @@ mod tests {
                 below.len(),
                 max_height.next_power_of_two(),
                 rest.iter().map(|m| m.height()),
-            );
+            )
+            .expect("reference shape has reachable injections");
             let computed = below.len() / arity;
 
             // Matrices whose padded height matches this layer are injected into it.
