@@ -636,13 +636,12 @@ impl Sum for Mersenne31 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length >= 6.
-        // It assumes that iter.len() < 2^31.
 
-        // This sum will not overflow so long as iter.len() < 2^33.
+        // Each value is below 2^31, so this sum does not overflow while iter.len() < 2^33.
         let sum = iter.map(|x| x.value as u64).sum::<u64>();
 
-        // sum is < 2^62 provided iter.len() < 2^31.
-        from_u62(sum)
+        // Reduce the full u64, whatever its size.
+        Self::new_reduced(reduce_64(sum))
     }
 }
 
@@ -718,9 +717,27 @@ mod tests {
         test_field, test_prime_field, test_prime_field_32, test_prime_field_64,
     };
 
+    use super::{P, reduce_64};
     use crate::Mersenne31;
 
     type F = Mersenne31;
+
+    #[test]
+    fn sum_reduces_the_full_total() {
+        // A sum of n stored values reaches 2^62 once n > 2^31.
+        //
+        // The total is reduced in full, so every u64 total must reduce exactly.
+        for total in [1u64 << 62, (1 << 62) + 12345, u64::MAX - 1, u64::MAX] {
+            let reduced = reduce_64(total) as u64;
+            assert!(reduced <= P as u64);
+            assert_eq!(reduced % P as u64, total % P as u64);
+        }
+
+        // P is the second representation of zero, and sums like any other value.
+        let p = F::new_reduced(P);
+        let values = [p, F::ONE, p, F::TWO, p, F::NEG_ONE, p];
+        assert_eq!(values.into_iter().sum::<F>(), F::TWO);
+    }
 
     /// Repeated maximal products exercise the accumulator bound, including redundant zero.
     #[test]
