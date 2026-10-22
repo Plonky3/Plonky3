@@ -1,7 +1,7 @@
 use p3_field::{
     Field, PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64,
 };
-use p3_maybe_rayon::prelude::*;
+use p3_maybe_rayon::search::find_map_first;
 use p3_symmetric::CryptographicPermutation;
 use tracing::instrument;
 
@@ -84,8 +84,8 @@ pub trait ByteGrindingChallenger: CanObserve<u8> + CanSample<u8> + Clone + Send 
     ///
     /// # Returns
     ///
-    /// Any passing candidate, or `None` when none passes.
-    /// When `p3_maybe_rayon::PARALLEL_ENABLED` is false it is the smallest passing candidate.
+    /// The smallest passing candidate, or `None` when none passes.
+    /// It does not depend on the thread count, so proofs are reproducible.
     fn find_witness<const W: usize, const S: usize>(
         &self,
         num_candidates: u64,
@@ -106,11 +106,15 @@ pub(crate) fn find_witness_by_cloning<C, const W: usize, const S: usize>(
 where
     C: CanObserve<u8> + CanSample<u8> + Clone + Sync,
 {
-    (0..num_candidates).into_par_iter().find_any(|&candidate| {
-        let mut challenger = challenger.clone();
-        challenger.observe_slice(&encode(candidate));
-        accepts(challenger.sample_array())
-    })
+    find_map_first(
+        0..num_candidates,
+        || (),
+        |(), candidate| {
+            let mut challenger = challenger.clone();
+            challenger.observe_slice(&encode(candidate));
+            accepts(challenger.sample_array()).then_some(candidate)
+        },
+    )
 }
 
 /// Trait for challengers that support proof-of-work (PoW) grinding with
@@ -241,15 +245,16 @@ where
 
         // Grinding is implemented via parallel brute-force search over candidate witnesses.
         //
-        // For efficiency, the search is vectorized using SIMD:
-        // It is semantically equivalent to serially trying witnesses until the PoW condition is met.
+        // For efficiency, the search is vectorized using SIMD.
+        // It returns the smallest passing witness, as trying witnesses serially would.
         //
         // - Each SIMD lane corresponds to a distinct candidate witness
         // - All lanes share the same transcript prefix
         // - A single permutation evaluates multiple candidates in parallel
-        let witness = (0..num_batches)
-            .into_par_iter()
-            .find_map_any(|batch| {
+        let witness = find_map_first(
+            0..num_batches,
+            || (),
+            |(), batch| {
                 // Compute the starting candidate for this batch.
                 //
                 // Each batch processes `F::Packing::WIDTH` candidates:
@@ -300,8 +305,9 @@ where
                         (sample.as_canonical_u64() & mask) == 0
                     })
                     .map(|(_, &witness)| witness)
-            })
-            .expect("failed to find proof-of-work witness");
+            },
+        )
+        .expect("failed to find proof-of-work witness");
 
         // Double-check the witness using the standard verifier logic and update the challenger state.
         assert!(self.check_witness(bits, witness));
@@ -360,14 +366,16 @@ where
             return F::ZERO;
         }
         // The core parallel brute-force search logic.
-        let witness = (0..F::ORDER_U64)
-            .into_par_iter()
-            .map(|i| unsafe {
-                // This is safe as i is always in range.
-                F::from_canonical_unchecked(i)
-            })
-            .find_any(|&witness| check_fn(&mut self.clone(), witness))
-            .expect("failed to find proof-of-work witness");
+        let witness = find_map_first(
+            0..F::ORDER_U64,
+            || (),
+            |(), i| {
+                // SAFETY: i is below the field order, so it is canonical.
+                let witness = unsafe { F::from_canonical_unchecked(i) };
+                check_fn(&mut self.clone(), witness).then_some(witness)
+            },
+        )
+        .expect("failed to find proof-of-work witness");
         // Run the check one last time on the *original* challenger to update its state
         // and confirm the witness is valid.
         assert!(check_fn(self, witness));
@@ -403,10 +411,15 @@ where
         // The parallel search then runs one stack-state permutation per candidate.
         let witness = {
             let accepts = self.pow_check_fn(bits);
-            (0..F::ORDER_U32)
-                .into_par_iter()
-                .find_any(|&candidate| accepts(candidate))
-                .expect("failed to find proof-of-work witness")
+            find_map_first(
+                0..u64::from(F::ORDER_U32),
+                || (),
+                |(), candidate| {
+                    let candidate = candidate as u32;
+                    accepts(candidate).then_some(candidate)
+                },
+            )
+            .expect("failed to find proof-of-work witness")
         };
         // candidate < F::ORDER_U32 by construction so this is safe.
         let witness = unsafe { F::from_canonical_unchecked(witness) };
@@ -415,5 +428,75 @@ where
         // advance the real transcript state.
         assert!(self.check_witness(bits, witness));
         witness
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::{BabyBear, default_babybear_poseidon2_16};
+    use p3_goldilocks::{Goldilocks, default_goldilocks_poseidon2_8};
+
+    use super::*;
+
+    /// The difficulties checked: free, the smallest, and two that span many parallel chunks.
+    const BITS: [usize; 4] = [0, 1, 8, 14];
+
+    /// Assert that `grind` returns the smallest witness `check` accepts on `challenger`.
+    fn assert_grinds_smallest<C: GrindingChallenger + Clone>(
+        challenger: &C,
+        grind: impl Fn(&mut C, usize) -> C::Witness,
+        check: impl Fn(&mut C, usize, C::Witness) -> bool,
+    ) {
+        for bits in BITS {
+            let witness = grind(&mut challenger.clone(), bits);
+            // The serial search: try 0, 1, 2, ... on a fresh transcript each.
+            let smallest = (0..)
+                .map(C::Witness::from_u64)
+                .find(|&candidate| check(&mut challenger.clone(), bits, candidate));
+            assert_eq!(Some(witness), smallest, "bits {bits}");
+        }
+    }
+
+    #[test]
+    fn duplex_grinders_return_the_smallest_witness() {
+        let permutation = default_babybear_poseidon2_16();
+        // Transcripts leaving 0, 1 and 7 elements buffered before the witness.
+        for pending in [0, 1, 7] {
+            let mut challenger = DuplexChallenger::<BabyBear, _, 16, 8>::new(permutation.clone());
+            challenger.observe_slice(&BabyBear::new_array([3; 7])[..pending]);
+
+            assert_grinds_smallest(
+                &challenger,
+                |c, bits| c.grind(bits),
+                |c, bits, w| c.check_witness(bits, w),
+            );
+            assert_grinds_smallest(
+                &challenger,
+                |c, bits| c.grind_uniform(bits),
+                |c, bits, w| c.check_witness_uniform(bits, w),
+            );
+            assert_grinds_smallest(
+                &challenger,
+                |c, bits| c.grind_uniform_may_error(bits),
+                |c, bits, w| c.check_witness_uniform_may_error(bits, w),
+            );
+        }
+    }
+
+    #[test]
+    fn multi_field_grinder_returns_the_smallest_witness() {
+        let permutation = default_goldilocks_poseidon2_8();
+        for pending in [0, 1, 7] {
+            let mut challenger =
+                MultiField32Challenger::<BabyBear, Goldilocks, _, 8, 4>::new(permutation.clone())
+                    .unwrap();
+            challenger.observe_slice(&BabyBear::new_array([5; 7])[..pending]);
+
+            assert_grinds_smallest(
+                &challenger,
+                |c, bits| c.grind(bits),
+                |c, bits, w| c.check_witness(bits, w),
+            );
+        }
     }
 }

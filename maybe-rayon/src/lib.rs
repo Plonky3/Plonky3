@@ -20,6 +20,7 @@ mod serial;
 #[cfg(feature = "parallel")]
 mod dispatch;
 
+pub mod search;
 pub mod task_size;
 
 pub mod prelude {
