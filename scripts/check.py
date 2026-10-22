@@ -553,6 +553,17 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
                 "--ignored",
                 "--exact",
             ],
+            # Aggregation trees, whose nodes verify circuit proofs.
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-circuit",
+                "--test",
+                "aggregate",
+                "--",
+                "--ignored",
+            ],
             # Every integer-machine proof except the honest run, which the main suite proves.
             [
                 "cargo",

@@ -35,5 +35,7 @@ p3-baby-bear = { path = "../baby-bear" }
 p3-dft = { path = "../dft" }
 p3-koala-bear = { path = "../koala-bear" }
 
+proptest.workspace = true
+
 [lints]
 workspace = true

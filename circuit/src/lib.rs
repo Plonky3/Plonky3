@@ -14,6 +14,7 @@ mod builder;
 mod chip;
 mod circuit;
 mod expr;
+pub mod recursion;
 pub mod tables;
 mod verifier;
 

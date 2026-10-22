@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_batch_stark::{BatchProof, ProverData, prove_batch, verify_batch};
 use p3_challenger::DuplexChallenger;
 use p3_circuit::{Circuit, Poseidon2Chip};
@@ -15,6 +16,7 @@ use p3_koala_bear::{
     KOALABEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL, KOALABEAR_POSEIDON2_RC_16_INTERNAL, KoalaBear,
     Poseidon2KoalaBear, default_koalabear_poseidon2_16,
 };
+use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon2_air::RoundConstants;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -84,4 +86,47 @@ pub fn prove_and_verify(config: &Config, circuit: &Circuit<F, EF, Chip>) -> Batc
     )
     .expect("the circuit proof verifies");
     proof
+}
+
+/// `(a, b) -> (b, a + b)` per row, with the first pair and the last value public.
+#[derive(Clone, Copy, Debug)]
+pub struct Fibonacci;
+
+impl<T> BaseAir<T> for Fibonacci {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn num_public_values(&self) -> usize {
+        3
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for Fibonacci {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let (local, next) = (main.current_slice().to_vec(), main.next_slice().to_vec());
+        let publics = builder.public_values().to_vec();
+        let (a, b, result) = (publics[0], publics[1], publics[2]);
+
+        builder.when_first_row().assert_eq(local[0], a);
+        builder.when_first_row().assert_eq(local[1], b);
+        builder.when_transition().assert_eq(next[0], local[1]);
+        builder
+            .when_transition()
+            .assert_eq(next[1], local[0] + local[1]);
+        builder.when_last_row().assert_eq(local[1], result);
+    }
+}
+
+/// The trace from `(a, b)` over `rows` rows, with its public values.
+pub fn fibonacci(a: F, b: F, rows: usize) -> (RowMajorMatrix<F>, Vec<F>) {
+    let first = [a, b];
+    let (mut a, mut b) = (a, b);
+    let mut values = Vec::with_capacity(2 * rows);
+    for _ in 0..rows {
+        values.extend([a, b]);
+        (a, b) = (b, a + b);
+    }
+    (RowMajorMatrix::new(values, 2), vec![first[0], first[1], a])
 }
