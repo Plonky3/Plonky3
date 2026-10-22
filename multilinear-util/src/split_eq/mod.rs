@@ -723,6 +723,9 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     ///
     /// Panics if the eq table has more variables than the polynomial.
     pub fn compress_suffix(&self, poly: PolyView<'_, F>) -> Poly<EF> {
+        // Check before subtracting, so a too-small polynomial cannot wrap the output size.
+        assert!(self.num_variables() <= poly.num_variables());
+
         // Allocate output and delegate to the in-place version.
         let mut out = Poly::zero(poly.num_variables() - self.num_variables());
         self.compress_suffix_into(out.as_mut_slice(), poly);
@@ -1039,6 +1042,17 @@ mod tests {
     /// A split arm handed the gate's own charge would run these small shapes as one task,
     /// leaving the merge that joins two tasks untested.
     const SPLIT_EVERY_ITEM: usize = usize::MAX;
+
+    #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn compress_suffix_rejects_a_polynomial_smaller_than_the_table() {
+        // Fixture state: a 3-variable eq table against a 2-variable polynomial.
+        //
+        //     output variables = 2 - 3  ->  underflows, so the bound is checked first
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(1), 3);
+        let poly = Poly::<F>::zero(2);
+        let _ = SplitEq::<F, EF>::new_unpacked(&point, EF::ONE).compress_suffix(poly.as_view());
+    }
 
     // A wrong source-row stride, tile offset, eq split, or lost scale changes the
     // result against this full-table contraction, independently of the tiled kernels.

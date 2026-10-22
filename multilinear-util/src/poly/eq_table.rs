@@ -31,6 +31,30 @@ use crate::split_eq::MUL_ACC_BYTES;
 /// ```
 pub(crate) const LOW_VARS: usize = 10;
 
+/// Returns `2^n`, the size of the equality table over `n` variables.
+///
+/// # Panics
+///
+/// Panics if `2^n` overflows `usize`.
+pub(crate) fn eq_table_len(num_variables: usize) -> usize {
+    u32::try_from(num_variables)
+        .ok()
+        .and_then(|shift| 1usize.checked_shl(shift))
+        .expect("Point length too large: 2^n overflows usize.")
+}
+
+/// Returns the size of the tensor product of factors of the given lengths.
+///
+/// # Panics
+///
+/// Panics if the product overflows `usize`.
+fn tensor_len(lengths: &[usize]) -> usize {
+    lengths
+        .iter()
+        .try_fold(1usize, |len, &factor| len.checked_mul(factor))
+        .expect("Tensor table too large: its length overflows usize.")
+}
+
 /// Returns `scale * eq(point, x)` for every `x`, doubling one coordinate per pass.
 ///
 /// Each coordinate `c` doubles the filled prefix, as a new high bit:
@@ -49,9 +73,7 @@ pub(crate) const LOW_VARS: usize = 10;
 ///
 /// Panics if `2^point.len()` overflows `usize`.
 pub(crate) fn eq_doubled<F: Field, A: Algebra<F> + Copy>(point: &[F], scale: A) -> Vec<A> {
-    let len = 1usize
-        .checked_shl(point.len() as u32)
-        .expect("Point length too large: 2^n overflows usize.");
+    let len = eq_table_len(point.len());
     let mut table = Vec::with_capacity(len);
     let slots = &mut table.spare_capacity_mut()[..len];
 
@@ -136,7 +158,8 @@ const fn row_bytes<EF>(packed_len: usize, passes: usize) -> usize {
 ///
 /// # Panics
 ///
-/// Panics if `low` is empty.
+/// - Panics if `low` is empty.
+/// - Panics if the table length overflows `usize`.
 pub(crate) fn tensor_packed<F, EF>(
     high: &[EF],
     low: &[EF::ExtensionPacking],
@@ -145,7 +168,7 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
-    let len = high.len() * low.len();
+    let len = tensor_len(&[high.len(), low.len()]);
     let mut table = Vec::with_capacity(len);
     // One item multiplies and stores one whole row.
     table.spare_capacity_mut()[..len]
@@ -172,14 +195,15 @@ where
 ///
 /// # Panics
 ///
-/// Panics if `low` is empty.
+/// - Panics if `low` is empty.
+/// - Panics if the table length overflows `usize`.
 pub(crate) fn tensor_unpacked<F, EF>(high: &[EF], low: &[EF::ExtensionPacking]) -> Vec<EF>
 where
     F: Field,
     EF: ExtensionField<F>,
 {
     let width = F::Packing::WIDTH;
-    let len = high.len() * low.len() * width;
+    let len = tensor_len(&[high.len(), low.len(), width]);
     let mut table = Vec::with_capacity(len);
     // One item multiplies and stores one whole row.
     table.spare_capacity_mut()[..len]
@@ -214,6 +238,15 @@ mod tests {
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
     type EP = <EF as ExtensionField<F>>::ExtensionPacking;
+
+    #[test]
+    #[should_panic(expected = "Tensor table too large")]
+    fn tensor_len_rejects_a_wrapping_product() {
+        // Each factor fits in usize, but their product wraps.
+        //
+        //     2^(BITS - 1) * 2  =  2^BITS  ->  0 unchecked
+        tensor_len(&[1 << (usize::BITS - 1), 2]);
+    }
 
     proptest! {
         #[test]
