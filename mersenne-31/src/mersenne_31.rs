@@ -461,7 +461,7 @@ quotient_map_large_uint!(
 quotient_map_large_iint!(
     Mersenne31,
     i32,
-    "`[-2^30, 2^30]`",
+    "`[1 - 2^30, 2^30 - 1]`",
     "`[1 - 2^31, 2^31 - 1]`",
     [(i64, u64), (i128, u128)]
 );
@@ -479,7 +479,7 @@ impl QuotientMap<u32> for Mersenne31 {
 
     /// Convert a given `u32` integer into an element of the `Mersenne31` field.
     ///
-    /// Returns none if the input does not lie in the range `[0, 2^31 - 1]`.
+    /// Returns none if the input does not lie in the range `[0, 2^31 - 2]`.
     #[inline]
     fn from_canonical_checked(int: u32) -> Option<Self> {
         (int < Self::ORDER_U32).then(|| Self::new_reduced(int))
@@ -757,6 +757,22 @@ mod tests {
         // SAFETY: the input lies in the documented range.
         let p64 = unsafe { <F as QuotientMap<u64>>::from_canonical_unchecked((1 << 31) - 1) };
         assert_eq!(p64, F::ZERO);
+    }
+
+    #[test]
+    fn from_canonical_checked_documented_ranges() {
+        // u32: [0, 2^31 - 2], so P = 2^31 - 1 is rejected.
+        assert!(F::from_canonical_checked((1u32 << 31) - 2).is_some());
+        assert!(F::from_canonical_checked((1u32 << 31) - 1).is_none());
+
+        // i64 and i128: [1 - 2^30, 2^30 - 1], so both 2^30 and -2^30 are rejected.
+        let bound = 1i64 << 30;
+        assert!(F::from_canonical_checked(bound - 1).is_some());
+        assert!(F::from_canonical_checked(1 - bound).is_some());
+        assert!(F::from_canonical_checked(bound).is_none());
+        assert!(F::from_canonical_checked(-bound).is_none());
+        assert!(F::from_canonical_checked(bound as i128).is_none());
+        assert!(F::from_canonical_checked(-(bound as i128)).is_none());
     }
 
     /// Repeated maximal products exercise the accumulator bound, including redundant zero.
