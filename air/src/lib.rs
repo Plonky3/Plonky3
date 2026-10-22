@@ -12,6 +12,8 @@ mod check_constraints;
 mod filtered;
 mod named;
 pub mod symbolic;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod utils;
 mod virtual_column;
 mod window;
