@@ -152,7 +152,7 @@ where
         .and_then(|()| roots_match.into_iter().collect())
 }
 
-/// The chain step ending at `position` of `chain`, as [`Hasher::chain_step`](crate::hash::Hasher::chain_step) lays it out.
+/// The chain step ending at `position` of `chain`, as [`Poseidon2Hash`](crate::Poseidon2Hash) lays it out.
 fn chain_step<EF, P>(
     builder: &mut CircuitBuilder<F, EF, P>,
     parameter: &[Base<F>; PARAMETER_LEN],
@@ -181,7 +181,7 @@ where
     output
 }
 
-/// The message digest, as [`Hasher::message`](crate::hash::Hasher::message) computes it.
+/// The message digest, as [`Poseidon2Hash`](crate::Poseidon2Hash) computes it.
 fn message_digest<EF, P>(
     builder: &mut CircuitBuilder<F, EF, P>,
     parameter: &[Base<F>; PARAMETER_LEN],
@@ -202,7 +202,7 @@ where
     sponge(&input, WIDTH, RATE, RATE, |state| builder.permute(state))
 }
 
-/// The bits of every digit of a digest, least significant first, as [`Params::digits`] reads them.
+/// The bits of every digit of a digest, least significant first, as [`Poseidon2Hash`](crate::Poseidon2Hash) reads them.
 fn digit_bits<EF, P>(
     builder: &mut CircuitBuilder<F, EF, P>,
     params: &Params,
@@ -234,8 +234,8 @@ mod tests {
     use rand::rngs::StdRng;
 
     use super::*;
-    use crate::hash::Hasher;
-    use crate::{Chip, Message, Xmss, chip};
+    use crate::hash::Poseidon2Hash;
+    use crate::{Chip, Message, TweakableHash, Xmss, chip};
 
     type Builder = CircuitBuilder<F, BinomialExtensionField<F, 4>, Chip>;
 
@@ -265,7 +265,7 @@ mod tests {
             let message_values = message.map(|x| builder.public(x));
 
             // The circuit hashes match the native ones.
-            let hasher = Hasher::new();
+            let hasher = Poseidon2Hash::new();
             let randomness: Vec<Base<F>> =
                 signature.randomness.iter().map(|&x| builder.witness(x)).collect();
             let digest = message_digest(&mut builder, &key.parameter, &epoch_value, &randomness, &message_values);

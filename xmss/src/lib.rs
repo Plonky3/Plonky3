@@ -1,16 +1,20 @@
-//! XMSS-style hash-based signatures over KoalaBear with Poseidon2, and their aggregation.
+//! XMSS-style hash-based signatures over a tweakable hash, and their aggregation.
 //!
 //! The scheme is the synchronized signature of "Hash-Based Multi-Signatures for Post-Quantum Ethereum" (ePrint 2025/055).
 //!
 //! Messages are encoded with the target-sum Winternitz encoding of "At the top of the hypercube" (ePrint 2025/889).
 //!
-//! The same verification runs natively and inside a [`p3_circuit`] circuit, whose proofs aggregate recursively.
+//! Over KoalaBear Poseidon2, the same verification runs natively and inside a [`p3_circuit`] circuit, whose proofs aggregate recursively.
+//!
+//! Over keyed BLAKE3, many verifications are proved at once in one binary-field Flock proof.
 
 #![no_std]
 
 extern crate alloc;
 
 mod aggregate;
+mod binary;
+mod blake3_hash;
 mod gadget;
 mod hash;
 mod keys;
@@ -18,9 +22,13 @@ mod params;
 mod scheme;
 mod signature;
 
-pub use aggregate::{Claim, leaf_circuit};
+pub use aggregate::{Claim, Statement, leaf_circuit};
+pub use binary::{AggregationError, BinaryAggregator};
+pub use blake3_hash::Blake3Hash;
 pub use gadget::{PublicKeyTarget, verify_in_circuit};
-pub use hash::{DIGEST_LEN, MESSAGE_LEN, PARAMETER_LEN, RANDOMNESS_LEN};
+pub use hash::{
+    DIGEST_LEN, MESSAGE_LEN, PARAMETER_LEN, Poseidon2Hash, RANDOMNESS_LEN, TweakableHash,
+};
 pub use keys::{PublicKey, SecretKey};
 use p3_circuit::Poseidon2Chip;
 use p3_koala_bear::{

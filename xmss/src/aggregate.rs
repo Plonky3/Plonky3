@@ -5,19 +5,42 @@ use alloc::vec::Vec;
 use p3_circuit::{Circuit, CircuitBuilder, PermutationChip, Unsatisfied};
 use p3_field::{ExtensionField, PrimeCharacteristicRing};
 
-use crate::{F, Message, Params, PublicKey, PublicKeyTarget, Signature, verify_in_circuit};
+use crate::hash::{Poseidon2Hash, TweakableHash};
+use crate::{F, Params, PublicKey, PublicKeyTarget, Signature, verify_in_circuit};
 
 /// A signature with the key, epoch and message it verifies on.
 #[derive(Clone, Debug)]
-pub struct Claim {
+pub struct Claim<H: TweakableHash = Poseidon2Hash> {
     /// The signer's key.
-    pub public_key: PublicKey,
+    pub public_key: PublicKey<H::Digest, H::Parameter>,
     /// The epoch signed at.
     pub epoch: u32,
     /// The signed message.
-    pub message: Message,
+    pub message: H::Message,
     /// The signature.
-    pub signature: Signature,
+    pub signature: Signature<H::Digest, H::Randomness>,
+}
+
+/// What a claim states without its signature: the key, the epoch and the message.
+#[derive(Clone, Debug)]
+pub struct Statement<H: TweakableHash = Poseidon2Hash> {
+    /// The signer's key.
+    pub public_key: PublicKey<H::Digest, H::Parameter>,
+    /// The epoch signed at.
+    pub epoch: u32,
+    /// The signed message.
+    pub message: H::Message,
+}
+
+impl<H: TweakableHash> Claim<H> {
+    /// The claim without its signature.
+    pub const fn statement(&self) -> Statement<H> {
+        Statement {
+            public_key: self.public_key,
+            epoch: self.epoch,
+            message: self.message,
+        }
+    }
 }
 
 impl Claim {

@@ -1,6 +1,6 @@
 [package]
 name = "p3-xmss"
-description = "XMSS-style hash-based signatures over KoalaBear with Poseidon2, verified and aggregated inside recursive circuits."
+description = "XMSS-style hash-based signatures over a tweakable hash: Poseidon2 signatures aggregated in recursive circuits, BLAKE3 signatures in one binary-field proof."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,17 +9,23 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tikv-jemallocator.workspace = true
+
 [features]
-parallel = ["p3-maybe-rayon/parallel"]
+parallel = ["p3-maybe-rayon/parallel", "p3-flock/parallel"]
 
 [dependencies]
 p3-circuit.workspace = true
 p3-field.workspace = true
+p3-flock.workspace = true
 p3-koala-bear.workspace = true
 p3-maybe-rayon.workspace = true
 p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true
+p3-util.workspace = true
 
+blake3.workspace = true
 rand.workspace = true
 thiserror.workspace = true
 
@@ -30,6 +36,7 @@ p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit" }
 p3-dft = { path = "../dft" }
 p3-fri = { path = "../fri" }
+p3-keccak = { path = "../keccak" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-uni-stark = { path = "../uni-stark" }
 

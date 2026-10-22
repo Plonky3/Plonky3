@@ -1,5 +1,7 @@
 //! The BLAKE3 compression function (BLAKE3 specification, Section 2.2): seven rounds of eight G's, 184 products per G.
 
+use alloc::vec::Vec;
+
 use hex_literal::hex;
 
 use super::arx::{G_LANES, IV, g, g_rows};
@@ -20,7 +22,7 @@ const CONST_POS: usize = 64 * 22;
 
 /// Digest of the circuit, so the word-level generator refuses any other.
 const CIRCUIT_DIGEST: [u8; 32] =
-    hex!("0aaec33420c391e22858a6d2151938788105388524dc602b260d0ad03d856ffe");
+    hex!("8b343eff47cf3cdaff8ffa3082967b7156f797535278689690d3243c58ab2a02");
 
 /// One compression: `compress(cv, block, counter, block_len, flags)`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -46,35 +48,19 @@ impl Gadget for Blake3Compress {
 
     fn circuit() -> Circuit {
         let mut c = Builder::new(&[256, 512, 64, 64], &[512]);
-        let cv = Word::split_u32(c.input(0));
-        let mut m = Word::split_u32(c.input(1));
-        let (counter, len_flags) = (Word::split_u32(c.input(2)), Word::split_u32(c.input(3)));
-
-        // The working state: the chaining value, the IV's first half, the counter, length and flags.
-        let mut v: [Word; 16] = core::array::from_fn(|i| match i {
-            0..8 => cv[i].clone(),
-            8..12 => c.literal(u64::from(IV[i - 8]), 32),
-            12 | 13 => counter[i - 12].clone(),
-            _ => len_flags[i - 14].clone(),
-        });
-
-        // Seven rounds, the message permuted after each.
-        for round in 0..ROUNDS {
-            for (i, &lanes) in G_LANES.iter().enumerate() {
-                g(&mut c, &mut v, lanes, &m[2 * i], &m[2 * i + 1]);
-            }
-            if round + 1 < ROUNDS {
-                m = MSG_PERMUTATION.iter().map(|&j| m[j].clone()).collect();
-            }
-        }
-
-        // The output: `v[i] ^ v[i + 8]`, then `v[i + 8] ^ cv[i]`.
-        for i in 0..8 {
-            let lo = c.xor_word(&v[i], &v[i + 8]);
-            let hi = c.xor_word(&v[i + 8], &cv[i]);
-            for (bit, (&lo, &hi)) in lo.iter().zip(&hi).enumerate() {
-                c.output(0, 32 * i + bit, lo);
-                c.output(0, 256 + 32 * i + bit, hi);
+        let cv: [Word; 8] = Word::split_u32(c.input(0)).try_into().expect("eight words");
+        let block: [Word; 16] = Word::split_u32(c.input(1))
+            .try_into()
+            .expect("sixteen words");
+        let tail: [Word; 4] = (2..4)
+            .flat_map(|p| Word::split_u32(c.input(p)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("four words");
+        let out = compress(&mut c, &cv, &block, &tail);
+        for (i, word) in out.iter().enumerate() {
+            for (bit, &wire) in word.iter().enumerate() {
+                c.output(0, 32 * i + bit, wire);
             }
         }
         c.finish()
@@ -103,6 +89,43 @@ impl Gadget for Blake3Compress {
         );
         Witness::by_instance(14, log_instances, rows, padding, Self::rows)
     }
+}
+
+/// The compression on circuit words: the sixteen output words of `compress(cv, block, counter, block_len, flags)`.
+///
+/// `tail` holds the counter's low and high halves, the block length and the flags, which constant words make cheaper.
+pub fn compress(
+    c: &mut Builder,
+    cv: &[Word; 8],
+    block: &[Word; 16],
+    tail: &[Word; 4],
+) -> [Word; 16] {
+    // The working state: the chaining value, the IV's first half, then the tail.
+    let mut v: [Word; 16] = core::array::from_fn(|i| match i {
+        0..8 => cv[i].clone(),
+        8..12 => c.literal(u64::from(IV[i - 8]), 32),
+        _ => tail[i - 12].clone(),
+    });
+
+    // Seven rounds, the message permuted after each.
+    let mut m = block.clone();
+    for round in 0..ROUNDS {
+        for (i, &lanes) in G_LANES.iter().enumerate() {
+            g(c, &mut v, lanes, &m[2 * i], &m[2 * i + 1]);
+        }
+        if round + 1 < ROUNDS {
+            m = core::array::from_fn(|j| m[MSG_PERMUTATION[j]].clone());
+        }
+    }
+
+    // The output: `v[i] ^ v[i + 8]`, then `v[i + 8] ^ cv[i]`.
+    core::array::from_fn(|i| {
+        if i < 8 {
+            c.xor_word(&v[i], &v[i + 8])
+        } else {
+            c.xor_word(&v[i], &cv[i - 8])
+        }
+    })
 }
 
 impl Blake3Compress {

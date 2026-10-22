@@ -1,8 +1,5 @@
 //! The parameters of one instance of the scheme.
 
-use p3_field::PrimeField32;
-
-use crate::Digest;
 use crate::hash::DIGEST_LEN;
 
 /// Digit bits taken from each digest element: its low 24 bits, nearly uniform since `2^24` divides `p - 1`.
@@ -94,16 +91,5 @@ impl Params {
     /// The number of digest elements the digits come from.
     pub(crate) const fn digit_elements(&self) -> usize {
         (self.num_chains * self.chunk_bits).div_ceil(BITS_PER_ELEMENT)
-    }
-
-    /// The digits of a message digest, read from the low bits of each element, least significant first.
-    pub(crate) fn digits(&self, digest: &Digest) -> impl Iterator<Item = usize> {
-        let per_element = BITS_PER_ELEMENT / self.chunk_bits;
-        let (bits, mask) = (self.chunk_bits, self.chain_len() as u32);
-        let digest = *digest;
-        (0..self.num_chains).map(move |i| {
-            let element = digest[i / per_element].as_canonical_u32();
-            ((element >> ((i % per_element) * bits)) & mask) as usize
-        })
     }
 }
