@@ -11,15 +11,19 @@ use crate::PermutationChip;
 
 /// Calls of the circuit's permutation, one per row.
 ///
-/// Preprocessed columns: `active`, `merkle` and the bit wire.
+/// Preprocessed columns: `active`, `merkle`, `conditional` and the bit wire.
 ///
 /// Then the input wires, the output wires and the output write counts.
 ///
-/// Main columns: the chip's own trace, which reads its inputs and outputs in place, then the bit.
+/// Main columns: the chip's own trace, which reads its inputs and outputs in place.
+///
+/// Then the bit, and the flag `keep = conditional * (1 - bit)`.
 ///
 /// A Merkle row keeps the sibling in its own inputs.
 ///
 /// It reads the running digest from the side the bit names.
+///
+/// A conditional row writes its inputs instead of its outputs where `keep` is set.
 #[derive(Clone, Debug)]
 pub struct PermuteAir<F, P> {
     /// The permutation and its AIR.
@@ -34,7 +38,7 @@ pub struct PermuteAir<F, P> {
 
 impl<F: Field, P: PermutationChip<F>> BaseAir<F> for PermuteAir<F, P> {
     fn width(&self) -> usize {
-        self.chip.air().width() + 1
+        self.chip.air().width() + 2
     }
 
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
@@ -42,7 +46,7 @@ impl<F: Field, P: PermutationChip<F>> BaseAir<F> for PermuteAir<F, P> {
     }
 
     fn preprocessed_width(&self) -> usize {
-        3 + 3 * P::WIDTH
+        4 + 3 * P::WIDTH
     }
 
     fn max_constraint_degree(&self) -> Option<usize> {
@@ -79,24 +83,31 @@ where
         let preprocessed = builder.preprocessed().current_slice().to_vec();
         let main = builder.main().current_slice().to_vec();
         let (width, size) = (P::WIDTH, self.digest);
-        let (active, merkle, bit_id) = (preprocessed[0], preprocessed[1], preprocessed[2]);
-        let bit = main[chip_width];
+        let (active, merkle, conditional, bit_id) = (
+            preprocessed[0],
+            preprocessed[1],
+            preprocessed[2],
+            preprocessed[3],
+        );
+        let (bit, keep) = (main[chip_width], main[chip_width + 1]);
         let input = |i: usize| -> AB::Expr { main[self.chip.input_column(i)].into() };
 
-        // A Merkle row reads its bit, which is boolean.
-        builder.assert_zero(merkle * bit * (bit - AB::Expr::ONE));
+        // A Merkle or conditional row reads its bit, which is boolean.
+        let reads_bit: AB::Expr = merkle + conditional;
+        builder.assert_zero(reads_bit.clone() * bit * (bit - AB::Expr::ONE));
         send(
             builder,
             bit_id.into(),
             [bit.into()],
             self.dimension,
-            read(merkle.into()),
+            read(reads_bit),
         );
+        builder.assert_eq(keep, conditional * (AB::Expr::ONE - bit));
 
         // The running digest is the left child where the bit is zero, and the right child otherwise.
         let right: AB::Expr = merkle * bit;
         for i in 0..size {
-            let id: AB::Expr = preprocessed[3 + i].into();
+            let id: AB::Expr = preprocessed[4 + i].into();
             builder.push_exclusive_interaction(
                 WIRE_BUS,
                 [
@@ -122,21 +133,32 @@ where
             }
             send(
                 builder,
-                preprocessed[3 + i].into(),
+                preprocessed[4 + i].into(),
                 [input(i)],
                 self.dimension,
                 read(plain.clone()),
             );
         }
 
+        // Each output wire carries the permuted lane, or the input lane where `keep` is set.
         for i in 0..width {
             let output = main[self.chip.output_column(i)];
-            send(
-                builder,
-                preprocessed[3 + width + i].into(),
-                [output.into()],
-                self.dimension,
-                write(preprocessed[3 + 2 * width + i].into()),
+            let id: AB::Expr = preprocessed[4 + width + i].into();
+            let count: AB::Expr = preprocessed[4 + 2 * width + i].into();
+            builder.push_exclusive_interaction(
+                WIRE_BUS,
+                [
+                    (
+                        AB::Expr::ONE - keep,
+                        write(count.clone()),
+                        message(id.clone(), [output.into()], self.dimension),
+                    ),
+                    (
+                        keep.into(),
+                        write(count),
+                        message(id, [input(i)], self.dimension),
+                    ),
+                ],
             );
         }
     }

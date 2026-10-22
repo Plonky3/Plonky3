@@ -54,6 +54,12 @@ pub(crate) enum Op<F> {
         inputs: Vec<Wire>,
         outputs: Vec<Option<Wire>>,
     },
+    /// The first output lanes of the permutation where `take` is one, and the input lanes otherwise.
+    PermuteIf {
+        inputs: Vec<Wire>,
+        take: Wire,
+        outputs: Vec<Wire>,
+    },
     /// One Merkle compression of `digest` with a sibling only this row holds.
     ///
     /// `digest` is the right child when `bit` is one, and the left child otherwise.
@@ -661,6 +667,36 @@ where
         self.ops.push(Op::Permute {
             inputs,
             outputs: outputs.iter().copied().map(Some).collect(),
+        });
+        outputs.into_iter().map(Base::wire).collect()
+    }
+
+    /// The first `len` lanes of the permuted state where `take` is one, and of the state where it is zero.
+    ///
+    /// One row proves both the permutation and the choice, so a conditional hash costs no select rows.
+    ///
+    /// # Panics
+    ///
+    /// When `take` is not boolean, or `len` exceeds the state width.
+    pub fn permute_if(&mut self, state: &[Base<F>], take: &Base<F>, len: usize) -> Vec<Base<F>> {
+        assert_eq!(state.len(), P::WIDTH);
+        assert!(len <= P::WIDTH, "the kept lanes fit in the state");
+        let values: Vec<F> = state.iter().map(|x| self.value(x)).collect();
+        let chosen = match self.value(take) {
+            b if b == F::ZERO => values,
+            b if b == F::ONE => self.chip.permute(&values),
+            _ => panic!("a choice bit is boolean"),
+        };
+        let inputs: Vec<Wire> = state.iter().map(|x| self.base_wire(x)).collect();
+        let take = self.base_wire(take);
+        let outputs: Vec<Wire> = chosen[..len]
+            .iter()
+            .map(|&value| self.new_wire(Kind::Base, EF::from(value)))
+            .collect();
+        self.ops.push(Op::PermuteIf {
+            inputs,
+            take,
+            outputs: outputs.clone(),
         });
         outputs.into_iter().map(Base::wire).collect()
     }

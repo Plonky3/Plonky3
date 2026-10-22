@@ -146,7 +146,7 @@ where
                     rows.main.extend(limbs(*ext));
                 }
                 Op::Permute { inputs, outputs } => {
-                    permute_pre.extend([F::ONE, F::ZERO, F::ZERO]);
+                    permute_pre.extend([F::ONE, F::ZERO, F::ZERO, F::ZERO]);
                     permute_pre.extend(inputs.iter().map(|&w| id(w)));
                     for output in outputs {
                         permute_pre.push(output.map_or(F::ZERO, id));
@@ -155,7 +155,27 @@ where
                         permute_pre.push(output.map_or(F::ZERO, writes));
                     }
                     permute_inputs.push(inputs.iter().map(|&w| limbs(w)[0]).collect());
-                    permute_bits.push(F::ZERO);
+                    permute_bits.push((F::ZERO, F::ZERO));
+                }
+                Op::PermuteIf {
+                    inputs,
+                    take,
+                    outputs,
+                } => {
+                    let width = P::WIDTH;
+                    let mut row = vec![F::ZERO; 4 + 3 * width];
+                    row[..4].copy_from_slice(&[F::ONE, F::ZERO, F::ONE, id(*take)]);
+                    for (i, &wire) in inputs.iter().enumerate() {
+                        row[4 + i] = id(wire);
+                    }
+                    for (i, &wire) in outputs.iter().enumerate() {
+                        row[4 + width + i] = id(wire);
+                        row[4 + 2 * width + i] = writes(wire);
+                    }
+                    permute_pre.extend(row);
+                    permute_inputs.push(inputs.iter().map(|&w| limbs(w)[0]).collect());
+                    let take = limbs(*take)[0];
+                    permute_bits.push((take, F::ONE - take));
                 }
                 Op::MerkleStep {
                     digest,
@@ -171,14 +191,14 @@ where
                         "every Merkle step of a circuit has one digest size"
                     );
                     let width = P::WIDTH;
-                    let mut row = vec![F::ZERO; 3 + 3 * width];
-                    row[..3].copy_from_slice(&[F::ONE, F::ONE, id(*bit)]);
+                    let mut row = vec![F::ZERO; 4 + 3 * width];
+                    row[..4].copy_from_slice(&[F::ONE, F::ONE, F::ZERO, id(*bit)]);
                     for (i, &wire) in digest.iter().enumerate() {
-                        row[3 + i] = id(wire);
+                        row[4 + i] = id(wire);
                     }
                     for (i, &wire) in outputs.iter().enumerate() {
-                        row[3 + width + i] = id(wire);
-                        row[3 + 2 * width + i] = writes(wire);
+                        row[4 + width + i] = id(wire);
+                        row[4 + 2 * width + i] = writes(wire);
                     }
                     permute_pre.extend(row);
 
@@ -194,7 +214,7 @@ where
                     state[..size].copy_from_slice(left);
                     state[size..2 * size].copy_from_slice(right_child);
                     permute_inputs.push(state);
-                    permute_bits.push(F::from_bool(right));
+                    permute_bits.push((F::from_bool(right), F::ZERO));
                 }
             }
         }
@@ -261,17 +281,17 @@ where
             );
         }
         if !permute_inputs.is_empty() {
-            // The chip's trace, with the direction bit of every row appended.
+            // The chip's trace, with the bit and the keep flag of every row appended.
             let chip_trace = builder.chip.trace(permute_inputs);
             let height = chip_trace.values.len() / chip_trace.width;
-            permute_bits.resize(height, F::ZERO);
+            permute_bits.resize(height, (F::ZERO, F::ZERO));
             let main: Vec<F> = chip_trace
                 .values
                 .chunks(chip_trace.width)
                 .zip(&permute_bits)
-                .flat_map(|(row, &bit)| row.iter().copied().chain([bit]))
+                .flat_map(|(row, &(bit, keep))| row.iter().copied().chain([bit, keep]))
                 .collect();
-            let width = 3 + 3 * P::WIDTH;
+            let width = 4 + 3 * P::WIDTH;
             let mut preprocessed = permute_pre;
             preprocessed.resize(height * width, F::ZERO);
             push(
@@ -281,7 +301,7 @@ where
                     digest: merkle_digest.unwrap_or(0),
                     preprocessed: RowMajorMatrix::new(preprocessed, width),
                 }),
-                RowMajorMatrix::new(main, chip_trace.width + 1),
+                RowMajorMatrix::new(main, chip_trace.width + 2),
             );
         }
 
@@ -356,6 +376,10 @@ fn read_counts<F>(ops: &[Op<F>], wires: usize) -> Vec<u32> {
                 }
             }
             Op::Permute { inputs, .. } => inputs.iter().for_each(&mut read),
+            Op::PermuteIf { inputs, take, .. } => {
+                inputs.iter().for_each(&mut read);
+                read(take);
+            }
             Op::MerkleStep { digest, bit, .. } => {
                 digest.iter().for_each(&mut read);
                 read(bit);

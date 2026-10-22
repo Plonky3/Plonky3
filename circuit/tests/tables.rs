@@ -54,6 +54,18 @@ fn every_table_proves_and_verifies() {
         }
     }
 
+    // A conditional permutation on each choice: the permuted lanes, or the input lanes.
+    let values: Vec<F> = (0..16).map(|i| F::from_usize(300 + i)).collect();
+    let permuted = builder.chip().permute(&values);
+    let inputs: Vec<_> = values.iter().map(|&v| builder.witness(v)).collect();
+    for (take, expected) in [(true, &permuted), (false, &values)] {
+        let bit = builder.witness(F::from_bool(take));
+        let lanes = builder.permute_if(&inputs, &bit, 8);
+        for (out, &expected) in lanes.iter().zip(expected.iter()) {
+            builder.assert_zero(&(out.clone() - expected)).unwrap();
+        }
+    }
+
     // Canonical bits of a value recompose it.
     let bits = builder.canonical_bits(&y);
     assert_eq!(bits.len(), 31);
@@ -87,6 +99,38 @@ fn a_flipped_merkle_direction_breaks_the_wire_bus() {
     permute.values[bit_column] = F::ONE;
 
     // Debug builds catch the imbalance while proving; otherwise the native verifier rejects.
+    let config = config(2);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let instances = circuit.instances::<Config>();
+        let data = ProverData::from_instances(&config, &instances).unwrap();
+        let proof = prove_batch(&config, &instances, &data).unwrap();
+        verify_batch(
+            &config,
+            &circuit.airs,
+            &proof,
+            &circuit.public_values(),
+            &data.common,
+        )
+    }));
+    assert!(!matches!(outcome, Ok(Ok(()))));
+}
+
+#[test]
+fn a_flipped_conditional_choice_breaks_the_wire_bus() {
+    let mut builder = CircuitBuilder::<F, EF, _>::new(chip());
+    let inputs: Vec<_> = (0..16).map(|i| builder.witness(F::from_usize(i))).collect();
+    let take = builder.witness(F::ONE);
+    let lanes = builder.permute_if(&inputs, &take, 8);
+    let public = builder.public(builder.value(&lanes[0]));
+    builder.assert_zero(&(public - lanes[0].clone())).unwrap();
+    let mut circuit = builder.build();
+
+    // The prover claims the input lanes were kept: the bit and the keep flag both flip.
+    let permute = circuit.traces.last_mut().unwrap();
+    let (bit, keep) = (permute.width - 2, permute.width - 1);
+    permute.values[bit] = F::ZERO;
+    permute.values[keep] = F::ONE;
+
     let config = config(2);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let instances = circuit.instances::<Config>();

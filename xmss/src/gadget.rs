@@ -1,8 +1,10 @@
 //! Signature verification inside a circuit, with a shape fixed by the parameters alone.
 //!
-//! Every chain takes all `w - 1` steps, and digit-driven selects keep or drop each one.
+//! Every chain hashes all `w - 1` steps, and a digit-driven bit takes or skips each one.
 //!
-//! A step's tweak depends only on its slot, so the selects never touch the hash inputs.
+//! A step's tweak depends only on its slot, so the choice never touches the hash inputs.
+//!
+//! The permutation row makes the choice itself, so a skipped step costs no select rows.
 
 use alloc::vec::Vec;
 
@@ -110,12 +112,7 @@ where
                     }
                 })
                 .product::<Base<F>>();
-            let step = chain_step(builder, parameter, epoch, chain, slot + 1, &state);
-            state = state
-                .into_iter()
-                .zip(step)
-                .map(|(kept, stepped)| kept.clone() + reached.clone() * (stepped - kept))
-                .collect();
+            state = chain_step(builder, parameter, epoch, chain, slot + 1, &state, &reached);
         }
         ends.extend(state);
     }
@@ -153,6 +150,8 @@ where
 }
 
 /// The chain step ending at `position` of `chain`, as [`Poseidon2Hash`](crate::Poseidon2Hash) lays it out.
+///
+/// The step is taken where `take` is one, and `value` is kept where it is zero.
 fn chain_step<EF, P>(
     builder: &mut CircuitBuilder<F, EF, P>,
     parameter: &[Base<F>; PARAMETER_LEN],
@@ -160,6 +159,7 @@ fn chain_step<EF, P>(
     chain: usize,
     position: usize,
     value: &[Base<F>],
+    take: &Base<F>,
 ) -> Vec<Base<F>>
 where
     EF: ExtensionField<F>,
@@ -176,9 +176,7 @@ where
         .chain(parameter.iter().cloned())
         .chain(tweak)
         .collect();
-    let mut output = builder.permute(&state);
-    output.truncate(DIGEST_LEN);
-    output
+    builder.permute_if(&state, take, DIGEST_LEN)
 }
 
 /// The message digest, as [`Poseidon2Hash`](crate::Poseidon2Hash) computes it.
@@ -274,7 +272,7 @@ mod tests {
                 hasher.message(&public.parameter, epoch, &signature.randomness, &message).to_vec()
             );
             let value: Vec<Base<F>> = signature.chains[3].iter().map(|&x| builder.witness(x)).collect();
-            let step = chain_step(&mut builder, &key.parameter, &epoch_value, 3, 2, &value);
+            let step = chain_step(&mut builder, &key.parameter, &epoch_value, 3, 2, &value, &Base::ONE);
             prop_assert_eq!(
                 values(&builder, &step),
                 hasher.chain_step(&public.parameter, epoch, 3, 2, signature.chains[3]).to_vec()
