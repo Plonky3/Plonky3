@@ -1101,3 +1101,224 @@ fn lowering_sums_reuses_shared_operand_roots() {
         concrete.perm.values[0].square() * F::from_usize(33)
     );
 }
+
+#[test]
+fn whole_capture_lowering_preserves_values_degrees_and_global_order() {
+    let captured = p3_air::capture_arithmetic::<F, EF>(layout(), |b| {
+        let x = b.main().values[0];
+        let shared = E::from(x).square() + b.periodic_values()[0];
+        let base = shared.clone() * b.is_first_row() + b.is_transition();
+        let coefficient = EF::from_basis_coefficients_fn(|i| F::new(i as u32 + 2));
+        let extension = EE::from(b.permutation().values[0]) * coefficient + shared;
+        b.assert_zero(F::ZERO);
+        b.assert_zero_ext(coefficient);
+        b.assert_zero_ext(extension.clone());
+        b.assert_zero(base.clone());
+        b.assert_zero(base);
+        b.assert_zero_ext(extension);
+        b.assert_zero(E::from(x).square() + F::TWO);
+        b.assert_zero_ext(F::ZERO);
+    });
+    let lowered = captured.lower().unwrap();
+    assert_eq!(lowered.constraint_layout().base_indices, [0, 3, 4, 6]);
+    assert_eq!(lowered.constraint_layout().ext_indices, [1, 2, 5, 7]);
+    assert_eq!(lowered.base_constraints().len(), 4);
+    assert_eq!(lowered.extension_constraints().len(), 4);
+    assert_eq!(lowered.base_constraints()[0].degree_multiple(), 0);
+    assert_eq!(lowered.extension_constraints()[3].degree_multiple(), 0);
+    for seed in 0..5 {
+        let concrete = Concrete::new(seed);
+        assert_eq!(lowered.base_constraints()[0].resolve(&concrete), F::ZERO);
+        assert_eq!(
+            eval_legacy(&lowered.extension_constraints()[3], &concrete),
+            EF::ZERO
+        );
+        for (arithmetic, symbolic) in captured.base.iter().zip(lowered.base_constraints()) {
+            let per_root = arithmetic.lower();
+            assert_eq!(symbolic.resolve(&concrete), arithmetic.resolve(&concrete));
+            assert_eq!(symbolic.resolve(&concrete), per_root.resolve(&concrete));
+            assert_eq!(symbolic.degree_multiple(), per_root.degree_multiple());
+            assert_eq!(
+                symbolic.degree_multiple_with_transition(1),
+                per_root.degree_multiple_with_transition(1)
+            );
+            assert_eq!(
+                symbolic.poly_degree(16, &[4]),
+                per_root.poly_degree(16, &[4])
+            );
+        }
+        for (arithmetic, symbolic) in captured
+            .extension
+            .iter()
+            .zip(lowered.extension_constraints())
+        {
+            let per_root = arithmetic.lower();
+            assert_eq!(
+                eval_legacy(symbolic, &concrete),
+                arithmetic.resolve(&concrete)
+            );
+            assert_eq!(
+                eval_legacy(symbolic, &concrete),
+                eval_legacy(&per_root, &concrete)
+            );
+            assert_eq!(symbolic.degree_multiple(), per_root.degree_multiple());
+            assert_eq!(
+                symbolic.degree_multiple_with_transition(1),
+                per_root.degree_multiple_with_transition(1)
+            );
+            assert_eq!(
+                symbolic.poly_degree(16, &[4]),
+                per_root.poly_degree(16, &[4])
+            );
+        }
+    }
+}
+
+#[test]
+fn whole_capture_lowering_handles_empty_and_single_stream_captures() {
+    for (base_count, extension_count) in [(0, 0), (2, 0), (0, 2)] {
+        let captured = p3_air::capture_arithmetic::<F, EF>(layout(), |b| {
+            for _ in 0..base_count {
+                b.assert_zero(F::ZERO);
+            }
+            for _ in 0..extension_count {
+                b.assert_zero_ext(F::ZERO);
+            }
+        });
+        let lowered = captured.lower().unwrap();
+        assert_eq!(lowered.base_constraints().len(), base_count);
+        assert_eq!(lowered.extension_constraints().len(), extension_count);
+        assert_eq!(
+            lowered.constraint_layout().base_indices,
+            (0..base_count).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            lowered.constraint_layout().ext_indices,
+            (0..extension_count).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn whole_capture_lowering_shares_across_distinct_roots_and_deep_base_lifts() {
+    use std::sync::Arc;
+
+    let b = ArithmeticAirBuilder::<F, EF>::new(layout());
+    let x = b.main().values[0];
+    let mut deep = E::from(x);
+    for _ in 0..96 {
+        deep = deep * F::TWO + x;
+    }
+    let deep = Arc::new(deep);
+    let shared_extension =
+        Arc::new(EE::from(b.permutation().values[0]) + ExtOperand::Base(deep.clone()));
+    let captured = p3_air::CapturedArithmeticConstraints {
+        base: vec![
+            E::ONE + BaseOperand::Expr(deep.clone()),
+            E::TWO + BaseOperand::Expr(deep.clone()),
+        ],
+        extension: vec![
+            EE::ONE + ExtOperand::Extension(shared_extension.clone()),
+            EE::TWO + ExtOperand::Extension(shared_extension),
+            EE::from((*deep).clone()),
+        ],
+        layout: p3_air::ConstraintLayout {
+            base_indices: vec![0, 3],
+            ext_indices: vec![1, 2, 4],
+        },
+    };
+    let lowered = captured.lower().unwrap();
+    let SymbolicExpr::Add { y: base0, .. } = &lowered.base_constraints()[0] else {
+        panic!("base root")
+    };
+    let SymbolicExpr::Add { y: base1, .. } = &lowered.base_constraints()[1] else {
+        panic!("base root")
+    };
+    assert!(Arc::ptr_eq(base0, base1));
+    let SymbolicExpr::Add { y: ext0, .. } = &lowered.extension_constraints()[0] else {
+        panic!("extension root")
+    };
+    let SymbolicExpr::Add { y: ext1, .. } = &lowered.extension_constraints()[1] else {
+        panic!("extension root")
+    };
+    assert!(Arc::ptr_eq(ext0, ext1));
+    let SymbolicExpr::Add { y: lifted, .. } = ext0.as_ref() else {
+        panic!("shared extension")
+    };
+    let SymbolicExpr::Leaf(ExtLeaf::Base(lifted)) = lifted.as_ref() else {
+        panic!("base operand")
+    };
+    let SymbolicExpr::Leaf(ExtLeaf::Base(leaf_lift)) = &lowered.extension_constraints()[2] else {
+        panic!("base leaf")
+    };
+    let SymbolicExpr::Add { x: base_child, .. } = base0.as_ref() else {
+        panic!("deep base")
+    };
+    for lift in [lifted, leaf_lift] {
+        let SymbolicExpr::Add {
+            x: lifted_child, ..
+        } = lift
+        else {
+            panic!("deep lift")
+        };
+        assert!(Arc::ptr_eq(base_child, lifted_child));
+    }
+    assert_eq!(base0.degree_multiple(), 1);
+    assert_eq!(
+        base0.resolve(&Concrete::new(3)),
+        deep.resolve(&Concrete::new(3))
+    );
+}
+
+#[test]
+fn whole_capture_lowering_rejects_malformed_public_layouts() {
+    use p3_air::arithmetic::ArithmeticLoweringError;
+
+    let malformed = |base: Vec<usize>, extension: Vec<usize>, base_count, ext_count| {
+        p3_air::CapturedArithmeticConstraints::<F, EF> {
+            base: vec![E::ZERO; base_count],
+            extension: vec![EE::ZERO; ext_count],
+            layout: p3_air::ConstraintLayout {
+                base_indices: base,
+                ext_indices: extension,
+            },
+        }
+    };
+    for (base, extension, base_count, ext_count) in [
+        (vec![], vec![], 1, 0),
+        (vec![], vec![], 0, 1),
+        (vec![0], vec![], 0, 0),
+        (vec![], vec![0], 0, 0),
+    ] {
+        assert_eq!(
+            malformed(base.clone(), extension.clone(), base_count, ext_count)
+                .lower()
+                .unwrap_err(),
+            ArithmeticLoweringError::LengthMismatch {
+                base_constraints: base_count,
+                base_indices: base.len(),
+                extension_constraints: ext_count,
+                extension_indices: extension.len(),
+            }
+        );
+    }
+    for (base, extension, expected, base_index, extension_index) in [
+        (vec![0], vec![0], 0, Some(0), Some(0)), // overlap
+        (vec![0, 0], vec![], 1, Some(0), None),  // duplicate
+        (vec![], vec![0, 0], 1, None, Some(0)),
+        (vec![0], vec![2], 1, None, Some(2)), // gap / out of range
+        (vec![usize::MAX], vec![], 0, Some(usize::MAX), None),
+        (vec![1, 0], vec![], 0, Some(1), None), // out of order
+        (vec![0], vec![2, 1], 1, None, Some(2)),
+    ] {
+        let captured = malformed(base.clone(), extension.clone(), base.len(), extension.len());
+        assert_eq!(
+            captured.lower().unwrap_err(),
+            ArithmeticLoweringError::InvalidIndex {
+                expected,
+                base_index,
+                extension_index
+            }
+        );
+    }
+}

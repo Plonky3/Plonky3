@@ -33,6 +33,19 @@ pub struct SymbolicConstraints<F: Field, EF: ExtensionField<F> = F> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> SymbolicConstraints<F, EF> {
+    /// Construct a result after the caller has validated stream lengths and index order.
+    pub(crate) const fn from_parts(
+        base_constraints: Vec<SymbolicExpression<F>>,
+        extension_constraints: Vec<SymbolicExpressionExt<F, EF>>,
+        constraint_layout: ConstraintLayout,
+    ) -> Self {
+        Self {
+            base_constraints,
+            extension_constraints,
+            constraint_layout,
+        }
+    }
+
     /// Constraints emitted through [`crate::AirBuilder::assert_zero`], in emission order.
     pub fn base_constraints(&self) -> &[SymbolicExpression<F>] {
         &self.base_constraints

@@ -4,9 +4,10 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_air::{
-    Air, AirLayout, BaseAir, ConstraintCounts, ConstraintLayout, ConstraintLayoutBuilder,
-    PermutationAirBuilder, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
-    WindowAccess, capture_constraint_layout,
+    Air, AirBuilder, AirLayout, BaseAir, CapturedArithmeticConstraints, ConstraintCounts,
+    ConstraintLayout, ConstraintLayoutBuilder, ExtensionBuilder, PermutationAirBuilder,
+    SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt, WindowAccess,
+    capture_arithmetic, capture_constraint_layout,
 };
 use p3_baby_bear::BabyBear as F;
 use p3_field::extension::BinomialExtensionField;
@@ -162,5 +163,80 @@ fn bench_constraint_analysis(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_constraint_analysis);
+// Capture once so these cases measure lowering and result destruction only.
+fn arithmetic_capture(air: &Workload, highly_shared: bool) -> CapturedArithmeticConstraints<F, EF> {
+    capture_arithmetic(layout(), |builder| {
+        if !highly_shared {
+            air.eval(builder);
+            return;
+        }
+        let x = builder.main().values[0];
+        let mut base = p3_air::arithmetic::ArithmeticExpression::from(x);
+        let mut extension =
+            p3_air::arithmetic::ArithmeticExpressionExt::from(builder.permutation().values[0]);
+        for _ in 0..air.rounds {
+            base = base.clone() * base + x;
+            extension = extension.clone() * extension + base.clone();
+        }
+        for i in 0..air.constraints {
+            let offset = F::from_usize(i + 1);
+            builder.assert_zero(base.clone() + offset);
+            builder.assert_zero_ext(extension.clone() + offset);
+        }
+    })
+}
+
+fn lower_per_root(captured: &CapturedArithmeticConstraints<F, EF>) -> ConstraintParts {
+    (
+        captured.base.iter().map(|root| root.lower()).collect(),
+        captured.extension.iter().map(|root| root.lower()).collect(),
+        ConstraintLayout {
+            base_indices: captured.layout.base_indices.clone(),
+            ext_indices: captured.layout.ext_indices.clone(),
+        },
+    )
+}
+
+fn bench_arithmetic_lowering(c: &mut Criterion) {
+    for (name, highly_shared) in [("highly_shared", true), ("mostly_unshared", false)] {
+        let mut group = c.benchmark_group(format!("arithmetic_lowering/{name}"));
+        for size in [16, 512] {
+            let captured = arithmetic_capture(
+                &Workload {
+                    constraints: size,
+                    rounds: 6,
+                },
+                highly_shared,
+            );
+            let whole = captured.lower().unwrap();
+            let (base, extension, layout) = lower_per_root(&captured);
+            assert_layout_eq(whole.constraint_layout(), &layout);
+            assert_eq!(whole.base_constraints().len(), base.len());
+            assert_eq!(whole.extension_constraints().len(), extension.len());
+            let inputs = ConstraintLayoutBuilder::<F, EF>::new(self::layout());
+            for (a, b) in whole.base_constraints().iter().zip(&base) {
+                assert_eq!(a.resolve(&inputs), b.resolve(&inputs));
+                assert_eq!(a.degree_multiple(), b.degree_multiple());
+            }
+            for (a, b) in whole.extension_constraints().iter().zip(&extension) {
+                assert_eq!(a.resolve(&inputs), b.resolve(&inputs));
+                assert_eq!(a.degree_multiple(), b.degree_multiple());
+            }
+            drop((whole, base, extension, layout));
+            group.bench_function(BenchmarkId::new("per_root", size), |b| {
+                b.iter(|| black_box(lower_per_root(black_box(&captured))));
+            });
+            group.bench_function(BenchmarkId::new("whole_capture", size), |b| {
+                b.iter(|| black_box(black_box(&captured).lower().unwrap()));
+            });
+        }
+        group.finish();
+    }
+}
+
+criterion_group!(
+    benches,
+    bench_constraint_analysis,
+    bench_arithmetic_lowering
+);
 criterion_main!(benches);
