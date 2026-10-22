@@ -17,7 +17,7 @@ use super::transcript::{ProductGkrProverTranscript, ProductGkrVerifierTranscript
 use super::{ProductGkrError, ProductGkrShape};
 
 /// Number of transmitted evaluations for a degree-five round polynomial.
-pub(crate) const ROUND_POLY_LEN: usize = 5;
+pub const ROUND_POLY_LEN: usize = 5;
 
 /// Prover messages for one product-tree layer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,10 +57,10 @@ pub struct ProductGkrOutput<EF> {
     pub values: Vec<EF>,
 }
 
-/// Product layers and roots bound to one validated statement shape.
+/// Product layers and roots bound to one validated statement shape, ready to prove.
 ///
 /// Borrowed leaves stay borrowed until the first fold of the leaf layer.
-pub(crate) struct PreparedProductGkr<'a, EF: Clone> {
+pub struct PreparedProductGkr<'a, EF: Clone> {
     shape: ProductGkrShape,
     all_layers: Vec<ProductLayers<'a, EF>>,
     roots: Vec<EF>,
@@ -68,7 +68,7 @@ pub(crate) struct PreparedProductGkr<'a, EF: Clone> {
 
 impl<'a, EF: Field> PreparedProductGkr<'a, EF> {
     /// Prepare layers without asserting the shared-root relation or touching a transcript.
-    pub(crate) fn new<F: Field>(inputs: &[&'a [EF]], shape: ProductGkrShape) -> Self
+    pub fn new<F: Field>(inputs: &[&'a [EF]], shape: ProductGkrShape) -> Self
     where
         EF: ExtensionField<F>,
     {
@@ -91,8 +91,8 @@ impl<'a, EF: Field> PreparedProductGkr<'a, EF> {
         Self::from_layers(shape, all_layers)
     }
 
-    /// Consume the bus's owned leaves without copying their explicit prefixes.
-    pub(crate) fn new_owned<F: Field>(mut inputs: [Vec<EF>; 2], shape: ProductGkrShape) -> Self
+    /// Consume two owned leaf tables without copying their explicit prefixes.
+    pub fn new_owned<F: Field>(mut inputs: [Vec<EF>; 2], shape: ProductGkrShape) -> Self
     where
         EF: ExtensionField<F>,
     {
@@ -139,12 +139,17 @@ impl<'a, EF: Field> PreparedProductGkr<'a, EF> {
         }
     }
 
-    pub(crate) fn roots(&self) -> &[EF] {
+    /// The product root of every tree, before root encoding.
+    pub fn roots(&self) -> &[EF] {
         &self.roots
     }
 
-    /// Prove a statement whose roots have already been checked by the bus reduction.
-    pub(crate) fn prove<F, Challenger>(
+    /// Prove a statement whose roots the caller has already checked.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the challenge field has fewer than six interpolation nodes, or a shared-root statement is false.
+    pub fn prove<F, Challenger>(
         self,
         challenger: &mut Challenger,
     ) -> (ProductGkrProof<EF>, ProductGkrOutput<EF>)

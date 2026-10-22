@@ -122,7 +122,7 @@ impl ProductGkrShape {
     }
 
     /// Number of root values carried by the proof.
-    pub(crate) const fn root_message_len(&self) -> usize {
+    pub const fn root_message_len(&self) -> usize {
         match self.root_shape {
             ProductGkrRootShape::Distinct => self.num_trees,
             ProductGkrRootShape::FirstTwoShared => self.num_trees - 1,
@@ -130,7 +130,7 @@ impl ProductGkrShape {
     }
 
     /// Root-to-leaf arity and sumcheck-round count of each layer.
-    pub(crate) fn layers(&self) -> Vec<(usize, usize)> {
+    pub fn layers(&self) -> Vec<(usize, usize)> {
         // The point starts empty at the root.
         let mut point_len = 0;
         let mut remaining = self.log_height;

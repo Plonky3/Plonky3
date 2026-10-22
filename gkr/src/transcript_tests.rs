@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use p3_binary_field::BinaryField128;
 use p3_challenger::testing::{assert_seeds_pairwise_distinct, seed_digest};
 
-use crate::product::{ProductGkrRootShape, ProductGkrShape};
+use crate::{ProductGkrRootShape, ProductGkrShape};
 
 #[test]
 fn transcript_seed_binds_every_shape_dimension() {
