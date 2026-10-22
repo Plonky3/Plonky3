@@ -5,6 +5,8 @@
 use p3_maybe_rayon::prelude::current_num_threads;
 use p3_util::{log2_ceil_usize, log2_floor_usize};
 
+use crate::staging::SHARED_CACHE_BYTES;
+
 /// Bytes of one contiguous tile for a matrix the shared cache holds.
 const TILE_BYTES: usize = 32 * 1024;
 
@@ -19,12 +21,6 @@ const STAGING_BYTES: usize = 64 * 1024;
 /// - The figure is half of one hardware thread's share of a private L2.
 /// - The other half is left to the gather and scatter streaming through the same cache.
 pub(super) const DEEP_TILE_BYTES: usize = 256 * 1024;
-
-/// Bytes of shared cache a matrix is taken to fit inside.
-///
-/// - A `no_std` crate cannot read the cache size, so the matrix size against a fixed figure is the signal.
-/// - A smaller real cache only forgoes the deeper tiles' win, which is the safe direction.
-pub(super) const SHARED_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
 // The smallest matrix on the deep budget must still leave far more tiles than any machine has workers.
 const _: () = assert!(SHARED_CACHE_BYTES / DEEP_TILE_BYTES >= 256);

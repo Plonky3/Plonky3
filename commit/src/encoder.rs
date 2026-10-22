@@ -1,5 +1,7 @@
 //! Linear codes applied column-wise to a matrix.
 
+use alloc::vec::Vec;
+
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::Matrix;
@@ -31,14 +33,29 @@ pub fn zero_padded<F: Field>(
         // Recovering the original length from the shifted one is what proves no bits were lost.
         .filter(|&padded| padded >> log_inv_rate == len)
         .expect("codeword length overflows usize");
-    let mut values = F::zero_vec(padded_len);
+    let mut values = Vec::with_capacity(padded_len);
+    let (head, tail) = values.spare_capacity_mut()[..padded_len].split_at_mut(len);
 
     // Each element is read once and written once.
     let chunk = min_task_len(len, 2 * size_of::<F>());
-    values[..len]
-        .par_chunks_mut(chunk)
+    head.par_chunks_mut(chunk)
         .zip(message.values.par_chunks(chunk))
-        .for_each(|(destination, source)| destination.copy_from_slice(source));
+        .for_each(|(destination, source)| {
+            for (slot, &value) in destination.iter_mut().zip(source) {
+                slot.write(value);
+            }
+        });
+
+    // The zero tail is written in parallel too, since a recycled allocation is not zero already.
+    let chunk = min_task_len(tail.len(), size_of::<F>());
+    tail.par_chunks_mut(chunk).for_each(|destination| {
+        for slot in destination {
+            slot.write(F::ZERO);
+        }
+    });
+
+    // SAFETY: the two sweeps above initialised every one of the first `padded_len` slots.
+    unsafe { values.set_len(padded_len) };
     RowMajorMatrix::new(values, message.width)
 }
 

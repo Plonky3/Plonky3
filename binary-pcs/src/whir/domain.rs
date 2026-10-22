@@ -3,7 +3,7 @@
 use p3_binary_dft::{AdditiveRsEncoder, LchNtt, PolyBasisNtt, domain_point};
 use p3_binary_field::{BinaryField32, BinaryField128, Poly64, TowerLevel};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_commit::Encoder;
+use p3_commit::{Encoder, zero_padded};
 use p3_field::{BasedVectorSpace, ExtensionField, Field};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_multilinear_util::point::Point;
@@ -135,6 +135,30 @@ where
 }
 
 /// Selector coordinates of one queried codeword position.
+/// Encode an extension matrix held elsewhere through the base encoder, coordinate by coordinate.
+///
+/// A layout with no base view falls back to a zero-padded copy.
+fn encode_extension_borrowed<F, EF, E>(
+    encoder: &E,
+    message: RowMajorMatrixView<'_, EF>,
+    log_inv_rate: usize,
+) -> RowMajorMatrix<EF>
+where
+    F: TowerLevel,
+    EF: ExtensionField<F>,
+    E: Encoder<F>,
+{
+    let width = message.width;
+    let Some(coefficients) = EF::flatten_slice_to_base(message.values) else {
+        return encode_extension(encoder, zero_padded(message, log_inv_rate), log_inv_rate);
+    };
+    let encoded = encoder.encode_batch_borrowed(
+        RowMajorMatrixView::new(coefficients, width * <EF as BasedVectorSpace<F>>::DIMENSION),
+        log_inv_rate,
+    );
+    RowMajorMatrix::new(EF::reconstitute_from_base(encoded.values), width)
+}
+
 fn query_point<F: TowerLevel>(
     log_domain_size: usize,
     num_variables: usize,
@@ -226,6 +250,14 @@ where
         log_inv_rate: usize,
     ) -> RowMajorMatrix<EF> {
         encode_extension::<Poly64, EF, _>(&self.encoder, message, log_inv_rate)
+    }
+
+    fn encode_extension_batch_borrowed(
+        &self,
+        message: RowMajorMatrixView<'_, EF>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<EF> {
+        encode_extension_borrowed::<Poly64, EF, _>(&self.encoder, message, log_inv_rate)
     }
 
     fn query_point(
@@ -418,10 +450,22 @@ mod tests {
         let reference = BinaryWhirDomain::<Poly64, _>::new(NaiveAdditiveNtt::<Poly64>::default());
         let reference = WhirDomain::<Poly64, Poly192>::encode_extension_batch_padded(
             &reference,
-            message,
+            message.clone(),
             log_inv_rate,
         );
         assert_eq!(fast, reference);
+
+        // The borrowed message encodes as its zero-padded copy, fast and reference alike.
+        let leading = RowMajorMatrix::new(
+            message.values[..width << log_message_height].to_vec(),
+            width,
+        );
+        let borrowed = WhirDomain::<Poly64, Poly192>::encode_extension_batch_borrowed(
+            &fast_domain,
+            leading.as_view(),
+            log_inv_rate,
+        );
+        assert_eq!(borrowed, reference);
     }
 
     #[test]

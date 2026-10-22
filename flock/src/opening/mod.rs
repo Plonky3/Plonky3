@@ -26,6 +26,9 @@ use crate::point::QuirkyClaim;
 use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
 use crate::{Challenge, Val, Witness};
 
+/// Bits past the target a single error term may be asked for, before the search gives up.
+const MAX_TERM_SLACK: usize = 16;
+
 /// Merkle leaf hash.
 type Hash = SerializingHasher<Keccak256Hash>;
 
@@ -63,6 +66,12 @@ pub enum OpeningError {
     /// The parameters admit no WHIR schedule.
     #[error(transparent)]
     Profile(#[from] ProfileError),
+    /// No per-term target composes to the requested bound.
+    #[error("no WHIR schedule composes to {target} bits")]
+    Security {
+        /// Bits requested.
+        target: usize,
+    },
     /// The commitment refused.
     #[error(transparent)]
     Pcs(#[from] BooleanWhirError),
@@ -93,19 +102,50 @@ pub enum OpeningError {
 impl WitnessPcs {
     /// The bit commitment for a witness of `2^num_variables` bits.
     ///
+    /// Every error term is targeted a little past `security_bits`, so that their union bound reaches it.
+    ///
+    /// The bound is the one opening of one claim, which is what a Flock proof opens.
+    ///
     /// # Errors
     ///
-    /// The witness is narrower than one element, or the parameters admit no schedule.
+    /// The witness is narrower than one element, the parameters admit no schedule, or no target reaches the bound.
     pub fn new(num_variables: usize, params: &PcsParams) -> Result<Self, OpeningError> {
+        for term_bits in params.security_bits..=params.security_bits + MAX_TERM_SLACK {
+            // Grinding can cover a whole term, leaving no query; a higher target may still need some.
+            let pcs = match Self::with_term_bits(num_variables, params, term_bits) {
+                Err(OpeningError::Profile(ProfileError::ZeroQueries)) => continue,
+                pcs => pcs?,
+            };
+            let composed = pcs
+                .0
+                .readings_security(1, false)
+                .map(|security| security.error().bits());
+            if composed.is_some_and(|bits| bits >= params.security_bits as f64) {
+                return Ok(pcs);
+            }
+        }
+        Err(OpeningError::Security {
+            target: params.security_bits,
+        })
+    }
+
+    /// The bit commitment with every error term targeted at `term_bits`.
+    fn with_term_bits(
+        num_variables: usize,
+        params: &PcsParams,
+        term_bits: usize,
+    ) -> Result<Self, OpeningError> {
         let packed = num_variables
             .checked_sub(K_SKIP)
             .ok_or(OpeningError::TooFewVariables { num_variables })?;
         let domain = BinaryWhirDomain::<Val>::default();
         let profile = BinaryWhirProfile::proven_list_decoding(
-            params.security_bits,
+            term_bits,
             params.log_inv_rate,
             params.folding.min(packed),
-        );
+        )
+        .with_first_round(params.first_folding.min(packed), params.first_reduction)
+        .with_query_grinding(params.query_grinding);
         let config = profile.config::<Challenge, Val, FlockChallenger, _>(packed, &domain)?;
         let cap_height = recommended_cap_height(&config);
         let mmcs = FlockMmcs::new(
@@ -139,8 +179,7 @@ impl WitnessPcs {
             });
         }
         // Bit j of word w is bit 64 w + j, the order the packing reads.
-        let mut packed = PackedWords::<Val>::zeroed(z.len()).expect("Poly64 is one word");
-        packed.words_mut().copy_from_slice(z);
+        let packed = PackedWords::<Val>::from_words(z).expect("Poly64 is one word");
         Ok(self.0.commit_packed(packed, challenger)?)
     }
 
