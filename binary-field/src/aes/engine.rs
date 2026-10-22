@@ -288,17 +288,29 @@ unsafe impl ByteLanes for u8 {
 mod x86_64;
 
 // Which registers the kernels sweep with, widest first.
+// AArch64 sweeps with NEON instead, driving the map from nibble tables.
+#[cfg(all(
+    target_arch = "aarch64",
+    not(all(target_arch = "x86_64", target_feature = "gfni"))
+))]
+use neon::lanes::{Narrow, Wide};
 #[cfg(all(target_arch = "x86_64", target_feature = "gfni"))]
 use x86_64::{Narrow, Wide};
 
 /// The widest register this target runs these operations in.
-#[cfg(not(all(target_arch = "x86_64", target_feature = "gfni")))]
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "gfni"),
+    target_arch = "aarch64"
+)))]
 type Wide = u8;
 
 /// The narrower register this target runs these operations in.
 ///
 /// Both widths collapse onto the byte where neither instruction set is available.
-#[cfg(not(all(target_arch = "x86_64", target_feature = "gfni")))]
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "gfni"),
+    target_arch = "aarch64"
+)))]
 type Narrow = u8;
 
 /// Maps the longest prefix of whole registers, returning what is left over.
@@ -450,6 +462,24 @@ mod tests {
         (0..8).fold(0, |acc, b| {
             acc ^ if (byte >> b) & 1 == 1 { images[b] } else { 0 }
         })
+    }
+
+    /// The sweep must use this target's widest register, not the byte fallback.
+    ///
+    /// Without this a mis-written `cfg` would silently route AArch64 back to
+    /// `u8` and every other test here would still pass.
+    #[test]
+    fn the_sweep_uses_this_target_s_registers() {
+        #[cfg(target_arch = "aarch64")]
+        {
+            assert_eq!(<super::Wide as super::ByteLanes>::WIDTH, 16);
+            assert_eq!(<super::Narrow as super::ByteLanes>::WIDTH, 16);
+        }
+        #[cfg(not(any(
+            all(target_arch = "x86_64", target_feature = "gfni"),
+            target_arch = "aarch64"
+        )))]
+        assert_eq!(<super::Wide as super::ByteLanes>::WIDTH, 1);
     }
 
     #[test]
