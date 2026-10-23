@@ -466,9 +466,7 @@ fn dft_layer_par<F: Field, B: Butterfly<F>>(
             let (hi_chunk, lo_chunk) = block.split_at_mut(half_outer_block_size);
 
             // If num_blocks is small, we probably are not using all available threads.
-            let num_threads = current_num_threads();
-            // More threads than elements would leave empty sub-blocks, so keep at least one element each.
-            let inner_block_size = (size / (2 * num_blocks).max(num_threads)).max(1);
+            let inner_block_size = inner_block_size(size, num_blocks, current_num_threads());
 
             hi_chunk
                 .par_chunks_mut(inner_block_size)
@@ -483,6 +481,14 @@ fn dft_layer_par<F: Field, B: Butterfly<F>>(
                     }
                 });
         });
+}
+
+/// Number of elements per parallel sub-block when one layer splits a matrix of `size` elements into `num_blocks` blocks.
+///
+/// Sub-blocks shrink until every thread has one, but never below one element.
+#[inline]
+fn inner_block_size(size: usize, num_blocks: usize, num_threads: usize) -> usize {
+    (size / (2 * num_blocks).max(num_threads)).max(1)
 }
 
 /// Splits the matrix into chunks of size `chunk_size` and performs
@@ -1101,5 +1107,28 @@ impl<F: Field> MultiLayerButterfly<F, DifButterfly<F>> for MultiLayerDifButterfl
             );
             fft_triple_layer_single_twiddle(&mut blk_decomp, twiddles_small[ind]);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inner_block_size_splits_halves_across_threads() {
+        // Few threads: each sub-block is a whole half block.
+        //
+        //     1024 elements, 8 blocks  ->  halves of 64 elements
+        assert_eq!(inner_block_size(1024, 8, 4), 64);
+        // More threads than halves: halves split further, one sub-block per thread.
+        assert_eq!(inner_block_size(1024, 1, 4), 256);
+    }
+
+    #[test]
+    fn inner_block_size_is_positive_with_more_threads_than_elements() {
+        // 900 threads over 820 elements would give 820 / 900 = 0 elements per sub-block.
+        assert_eq!(inner_block_size(820, 1, 900), 1);
+        // A single-element matrix on two threads.
+        assert_eq!(inner_block_size(1, 1, 2), 1);
     }
 }

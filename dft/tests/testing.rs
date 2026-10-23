@@ -873,32 +873,37 @@ proptest! {
 }
 
 #[test]
-fn small_batch_matches_naive_on_pool_larger_than_matrix() {
+fn small_batch_parallel_layer_matches_naive() {
     // 40-byte elements leave room for 819 of them in L1, so one 2 x 410 block does not fit:
     //
     //     rows per L1 block:  819 / 410 = 1 < height 2  ->  the top layer runs in parallel
-    //     elements:           2 * 410 = 820 < 900 threads
     type EF = BinomialExtensionField<Goldilocks, 5>;
     let mut rng = SmallRng::seed_from_u64(7);
     let mat = RowMajorMatrix::<EF>::rand(&mut rng, 2, 410);
     let shift = EF::GENERATOR;
 
-    // Reference results do not depend on the pool.
+    // Reference results do not depend on the thread count.
     let dft = NaiveDft.dft_batch(mat.clone());
     let idft = NaiveDft.idft_batch(mat.clone());
     let lde = NaiveDft.coset_lde_batch(mat.clone(), 1, shift);
 
-    // Run on more threads than the matrix has elements.
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(900)
-        .build()
-        .unwrap();
-    pool.install(|| {
+    let check = || {
         let small_batch = Radix2DFTSmallBatch::<EF>::default();
         assert_eq!(small_batch.dft_batch(mat.clone()), dft);
         assert_eq!(small_batch.idft_batch(mat.clone()), idft);
-        assert_eq!(small_batch.coset_lde_batch(mat, 1, shift), lde);
-    });
+        assert_eq!(small_batch.coset_lde_batch(mat.clone(), 1, shift), lde);
+    };
+    // The sub-block size for more threads than elements is unit-tested without spawning them.
+    #[cfg(feature = "parallel")]
+    for workers in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(check);
+    }
+    #[cfg(not(feature = "parallel"))]
+    check();
 }
 
 #[test]
