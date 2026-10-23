@@ -411,4 +411,44 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn weight_at_rejects_a_point_shorter_than_the_fixed_prefix() {
+        // Fixture state: one plain claim whose first coordinate is 0.
+        //
+        //     point = (0, r_1, ..., r_{n + absorbed - 1})
+        //     fixed Boolean prefix = 1 coordinate
+        let mut rng = SmallRng::seed_from_u64(7);
+        let witness: Vec<u8> = (0..1 << 10).map(|_| rng.random()).collect();
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let n = packing.num_variables();
+        let absorbed = BitRingSwitch::<EF>::ABSORBED;
+        let mut coords = vec![EF::ZERO];
+        coords.extend(Point::<EF>::rand(&mut rng, n + absorbed - 1).as_slice());
+        let plain = BitRingSwitch::new(&Point::new(coords)).unwrap();
+        assert_eq!(plain.fixed_prefix().0, 1);
+        let claims = BitRingSwitchClaims::new(vec![plain]).unwrap();
+
+        let (proof, _) = claims
+            .prove_deferred(&packing, &[], DEPTH, &mut challenger())
+            .unwrap();
+        let closing = claims
+            .verify_deferred(&proof, &readings(&claims, &proof), &mut challenger())
+            .unwrap();
+
+        // Mutation: ask for the weight at a point with no coordinates.
+        //
+        // Invariant: a point of the wrong width is a width error, never a panic.
+        //
+        //     expected   n = 9, the packing's variable count
+        //     actual     0 shared prefix + 0 point coordinates = 0
+        let empty = Point::<EF>::new(Vec::new());
+        assert_eq!(
+            closing.weight_at(&empty),
+            Err(BitRingSwitchError::WidthMismatch {
+                expected: n,
+                actual: 0,
+            })
+        );
+    }
 }

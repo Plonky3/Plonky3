@@ -709,6 +709,19 @@ where
     ) -> Result<EF, BitRingSwitchError> {
         let mut closing = EF::ZERO;
         for ((reduction, batch), &weight) in self.reductions.iter().zip(batches).zip(weights) {
+            // The point names every coordinate the shared prefix leaves to this claim.
+            //
+            // Checked before the split below.
+            // The split would panic on a point shorter than the claim's own prefix.
+            let actual = prefix + r_prime.num_variables();
+            if actual != reduction.num_variables() {
+                return Err(BitRingSwitchError::WidthMismatch {
+                    expected: reduction.num_variables(),
+                    actual,
+                });
+            }
+
+            // Split off the Boolean coordinates this claim fixes beyond the shared prefix.
             let own = reduction.fixed_prefix().0 - prefix;
             let (selected, rest) = r_prime.as_slice().split_at(own);
             let gate = boolean_equality(&reduction.high()[prefix..prefix + own], selected);
