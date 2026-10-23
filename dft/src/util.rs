@@ -25,12 +25,29 @@ pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
     mat.scale(h_inv);
 }
 
+/// Height and element count of a low-degree extension by `2^added_bits` of an `h x w` matrix.
+///
+/// # Panics
+///
+/// Panics if either value overflows `usize`.
+pub(crate) fn lde_shape(w: usize, h: usize, added_bits: usize) -> (usize, usize) {
+    // A plain shift wraps silently in release builds, so check that no bit of `h` is lost.
+    let padded_h = u32::try_from(added_bits)
+        .ok()
+        .and_then(|bits| h.checked_shl(bits))
+        .filter(|&padded_h| padded_h >> added_bits == h)
+        .expect("LDE height overflows usize");
+    let padded_len = w.checked_mul(padded_h).expect("LDE length overflows usize");
+    (padded_h, padded_len)
+}
+
 /// Multiply each element of row `i` of `mat` by `shift**i`.
 ///
 /// Scales row chunks in parallel, computing one starting power per chunk and
 /// then advancing it row-by-row inside the chunk.
 pub(crate) fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
-    if shift == F::ONE {
+    // A width-0 matrix holds nothing to scale.
+    if shift == F::ONE || mat.width() == 0 {
         return;
     }
 
@@ -61,6 +78,35 @@ mod tests {
     use super::*;
 
     type F = BabyBear;
+
+    #[test]
+    fn lde_shape_scales_height_and_length() {
+        // A 4 x 3 matrix extended by 2^2 has 16 rows and 48 values.
+        assert_eq!(lde_shape(3, 4, 2), (16, 48));
+        // No extension keeps the shape.
+        assert_eq!(lde_shape(3, 4, 0), (4, 12));
+    }
+
+    #[test]
+    #[should_panic(expected = "LDE height overflows usize")]
+    fn lde_shape_rejects_height_overflow() {
+        // 2^(BITS - 1) is the largest power of two, so one more doubling overflows.
+        lde_shape(1, 1 << (usize::BITS - 1), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "LDE height overflows usize")]
+    fn lde_shape_rejects_word_sized_shift() {
+        // A shift by the word size overflows even for height 1.
+        lde_shape(1, 1, usize::BITS as usize);
+    }
+
+    #[test]
+    #[should_panic(expected = "LDE length overflows usize")]
+    fn lde_shape_rejects_length_overflow() {
+        // The height fits but width times height does not.
+        lde_shape(2, 1 << (usize::BITS - 1), 0);
+    }
 
     #[test]
     fn test_divide_by_height_2x2() {

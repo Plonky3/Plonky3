@@ -16,6 +16,7 @@ use tracing::{debug_span, instrument};
 
 use crate::butterflies::{Butterfly, DitButterfly, ScaledDitButterfly, TwiddleFreeButterfly};
 use crate::twiddle_cache::TwiddleCache;
+use crate::util::lde_shape;
 use crate::{Layout, TwoAdicSubgroupDft};
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
@@ -283,7 +284,7 @@ impl<F: TwoAdicField + Ord> Radix2DitParallel<F> {
 
         transform(&mut mat.as_view_mut(), Layout::BitReversed);
 
-        let lde_elems = w * (h << added_bits);
+        let (_, lde_elems) = lde_shape(w, h, added_bits);
         let elems_to_add = lde_elems - w * h;
         debug_span!("reserve_exact").in_scope(|| mat.values.reserve_exact(elems_to_add));
 
