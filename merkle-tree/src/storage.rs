@@ -17,6 +17,7 @@ use crate::{MerkleTreeError, MerkleTreeMmcs};
 /// This is not a bound on the total memory needed to build or retain a commitment.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MerkleDigestStorage {
     /// Number of retained digest layers, including the leaf layer and root.
     pub layer_count: usize,
