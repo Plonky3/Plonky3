@@ -1260,7 +1260,7 @@ mod tests {
 
         // Invariant: distinct points succeed, and a duplicate point still returns nothing.
         assert!(v.recover_coefficients(&xs).is_some());
-        assert!(v.recover_coefficients(&[F::ONE, F::TWO, F::ONE]).is_none());
+        assert_eq!(v.recover_coefficients(&[F::ONE, F::TWO, F::ONE]), None);
 
         // Mutation: updating the rows of an empty coefficient matrix panics on the first row.
     }
