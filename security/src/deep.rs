@@ -13,11 +13,26 @@
 //! The caller supplies the exact chunk count. For degree `d` and `z = is_zk`, this is
 //! `c = 2^z · next_power_of_two(max(d + z, 2) − 1)`, including both ZK adjustments.
 //!
-//! The list size `L⁺` enters linearly here, following `soundcalc`.
-//! [2024/1553] Theorem 2 (`eps_2`) instead uses `L² ≈ (m/ρ)²`, which is
-//! a few bits more conservative in the list-decoding regime; ALI/DEEP
-//! don't bind at the LDR optimum in practice (see `fri::best_ldr_m`), so
-//! the difference does not currently affect reported bounds.
+//! # Why the list size enters linearly
+//!
+//! The trace and quotient words are decoded jointly, as one interleaved word.
+//!
+//! So the list size enters once.
+//!
+//! Haböck's FRI summary (eprint 2022/1216) proves this in Theorem 8 and Remark 9.
+//!
+//! soundcalc uses the same charge.
+//!
+//! Eprint 2024/1553, Theorem 2, charges its square, a looser bound.
+//!
+//! The difference matters, because this term can set the reported level:
+//!
+//! ```text
+//!     degree-3 AIR, 2^24 trace, blowup 8, 70 queries, 124-bit field, m = 3
+//!
+//!     linear list size:   94.7 bits, the weakest term of the report
+//!     squared list size:  91.4 bits
+//! ```
 
 use libm::log2;
 
