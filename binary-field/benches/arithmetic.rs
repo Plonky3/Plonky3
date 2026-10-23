@@ -14,9 +14,9 @@ use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
 use p3_binary_field::{
-    ByteMatrix,
-    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
-    LinearizedPoly8b, PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel, poly_basis,
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, ByteMatrix,
+    Ghash128, LinearizedPoly8b, PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel,
+    poly_basis,
 };
 use p3_field::{Algebra, BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
