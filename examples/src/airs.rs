@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "Keep the existing Poseidon AIR examples working until the crates are removed."
+)]
+
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, AirBuilder, BaseAir, DebugConstraintBuilder};
 use p3_blake3_air::Blake3Air;

@@ -1,3 +1,6 @@
+//! **Deprecated since 0.9.0.** This crate is planned for removal in a future release.
+//! Avoid using it in new projects.
+//!
 //! The Monolith permutation family for ZK-friendly hashing.
 //!
 //! Monolith is a cryptographic permutation designed for efficient
@@ -11,6 +14,10 @@
 //!
 //! Reference: <https://eprint.iacr.org/2023/1025.pdf>
 
+#![deprecated(
+    since = "0.9.0",
+    note = "p3-monolith is planned for removal in a future release."
+)]
 #![no_std]
 
 pub mod bars;

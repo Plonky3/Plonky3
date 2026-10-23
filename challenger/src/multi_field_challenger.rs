@@ -735,6 +735,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "Keep BN254 challenger regression coverage until p3-bn254 is removed."
+    )]
     fn test_observe_hash_native_pf_high_bits_distinct() {
         use num_bigint::BigUint;
         use p3_bn254::Bn254;
@@ -904,6 +908,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "Keep BN254 challenger regression coverage until p3-bn254 is removed."
+    )]
     fn test_grind_advances_state_like_direct_check_bn254() {
         // Bn254 splits each squeezed cell into several BabyBear limbs,
         // so this pins the limb-extraction path the Goldilocks fixture cannot reach.

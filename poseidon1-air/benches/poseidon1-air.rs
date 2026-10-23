@@ -1,5 +1,10 @@
 //! Criterion benchmarks for the Poseidon1 AIR: trace generation, proving, and verification.
 
+#![allow(
+    deprecated,
+    reason = "Keep benchmarking p3-poseidon1-air until its removal."
+)]
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{
     BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16,

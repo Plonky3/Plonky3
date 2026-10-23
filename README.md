@@ -8,6 +8,20 @@ Plonky3 is a toolkit which provides a set of primitives, such as polynomial comm
 For questions or discussions, please use the Telegram group, [t.me/plonky3](https://t.me/plonky3).
 
 
+## Deprecated crates
+
+Starting with v0.9.0, the following crates are deprecated and planned for removal
+in a future release:
+
+- `p3-bn254`
+- `p3-monolith`
+- `p3-monolith-air`
+- `p3-poseidon1-air`
+- `p3-poseidon2-air`
+- `p3-rescue`
+
+Avoid using these crates in new projects. A removal version has not yet been scheduled.
+
 ## Status
 
 Fields:

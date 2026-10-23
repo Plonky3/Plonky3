@@ -1,3 +1,5 @@
+#![allow(deprecated, reason = "Keep benchmarking p3-bn254 until its removal.")]
+
 use core::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};

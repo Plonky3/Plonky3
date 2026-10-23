@@ -1851,6 +1851,10 @@ where
 }
 
 #[cfg(test)]
+#[allow(
+    deprecated,
+    reason = "Keep Poseidon2 AIR regression coverage until p3-poseidon2-air is removed."
+)]
 mod tests {
     extern crate std;
 

@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "Keep the Poseidon2 AIR benchmark coverage until p3-poseidon2-air is removed."
+)]
+
 use core::time::Duration;
 use std::hint::black_box;
 

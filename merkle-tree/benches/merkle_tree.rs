@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "Keep the Rescue benchmark coverage until p3-rescue is removed."
+)]
+
 use core::any::type_name;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};

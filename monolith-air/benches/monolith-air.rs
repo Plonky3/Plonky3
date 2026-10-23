@@ -3,6 +3,11 @@
 //! Covers **Monolith-31** (Mersenne31, WIDTH 16, circle STARKs) and **Monolith-64**
 //! (Goldilocks, WIDTH 8, two-adic FRI + Keccak), mirroring the poseidon1-air bench layout.
 
+#![allow(
+    deprecated,
+    reason = "Keep benchmarking the deprecated Monolith crates until their removal."
+)]
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_challenger::{HashChallenger, SerializingChallenger32, SerializingChallenger64};
 use p3_circle::CirclePcs;

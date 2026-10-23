@@ -1,3 +1,5 @@
+#![allow(deprecated, reason = "Keep benchmarking p3-rescue until its removal.")]
+
 use core::array;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};

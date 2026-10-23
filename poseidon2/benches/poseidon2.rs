@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "Keep the BN254 benchmark coverage until p3-bn254 is removed."
+)]
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_bn254::{

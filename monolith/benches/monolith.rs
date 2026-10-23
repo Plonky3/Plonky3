@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "Keep benchmarking p3-monolith until its removal."
+)]
+
 use core::array;
 
 use criterion::{Criterion, criterion_group, criterion_main};

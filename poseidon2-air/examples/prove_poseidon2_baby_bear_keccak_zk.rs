@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "Keep the p3-poseidon2-air example working until the crate is removed."
+)]
+
 use p3_baby_bear::{
     BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
     BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear,

@@ -1,6 +1,6 @@
 [package]
 name = "p3-rescue"
-description = "Implementation of the Rescue hash function and its variants."
+description = "Deprecated since 0.9.0. Implementation of the Rescue hash function and its variants."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
