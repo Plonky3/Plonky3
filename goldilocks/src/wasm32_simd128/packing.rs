@@ -584,7 +584,7 @@ fn unsigned_add_carry(a: v128, b: v128, sum: v128) -> v128 {
 #[inline]
 fn dot_products<const N: usize>(get: impl Fn(usize) -> (v128, v128)) -> v128 {
     const {
-        assert!((N as u32) <= (1 << 31));
+        assert!(N <= 1 << 31);
     }
 
     dot_products_n(N, get)
