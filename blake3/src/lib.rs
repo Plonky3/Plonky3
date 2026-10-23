@@ -12,8 +12,7 @@
 //!
 //! Other targets pick at build time: NEON on AArch64, SIMD128 on wasm32, and one lane elsewhere.
 //!
-//! Raw single-block compression is available through [`compress_raw`],
-//! [`compress_raw_xof`], and [`compress_raw_packed`].
+//! Raw single-block compression is available through [`compress_raw`], [`compress_raw_xof`], and [`compress_raw_packed`].
 
 #![no_std]
 

@@ -5,14 +5,15 @@ use super::lanes::{Backend, from_lanes, to_lanes};
 
 /// Compress one block and return the eight-word chaining value.
 ///
-/// The working vector starts with `cv` in slots `0..8`, the first four BLAKE3 IV
-/// words in slots `8..12`, and `parameter_words` verbatim in slots `12..16`.
-/// Conventionally these four words are counter low, counter high, block length
-/// in bytes, and flags. All 32 bits of every parameter word are accepted.
+/// The working vector starts with `cv` in slots `0..8`, the first four BLAKE3 IV words in slots `8..12`, and `parameter_words` verbatim in slots `12..16`.
 ///
-/// This performs one compression without padding, tree framing, or parameter
-/// validation. To compress bytes, decode each consecutive four-byte group as
-/// one little-endian block word.
+/// Conventionally these four words are counter low, counter high, block length in bytes, and flags.
+///
+/// All 32 bits of every parameter word are accepted.
+///
+/// This performs one compression without padding, tree framing, or parameter validation.
+///
+/// To compress bytes, decode each consecutive four-byte group as one little-endian block word.
 #[must_use]
 pub fn compress_raw(
     cv: &[u32; STATE_WORDS],
@@ -26,9 +27,9 @@ pub fn compress_raw(
 
 /// Compress one block and return all sixteen output words.
 ///
-/// Inputs and parameter placement are the same as [`compress_raw`]. After the
-/// seven rounds, output word `i` is `v[i] ^ v[i + 8]` for `i < 8`, and
-/// `v[i] ^ cv[i - 8]` for `i >= 8`, using the original chaining value.
+/// Inputs and parameter placement are the same as [`compress_raw`].
+///
+/// After the seven rounds, output word `i` is `v[i] ^ v[i + 8]` for `i < 8`, and `v[i] ^ cv[i - 8]` for `i >= 8`, using the original chaining value.
 #[must_use]
 pub fn compress_raw_xof(
     cv: &[u32; STATE_WORDS],
@@ -40,13 +41,13 @@ pub fn compress_raw_xof(
 
 /// Compress `L` independent blocks with shared parameter words.
 ///
-/// Each array is word-major: `cv[word][lane]` and `block[word][lane]` belong to
-/// the same independent compression. Each output lane equals [`compress_raw`]
-/// with that lane's inputs and the shared `parameter_words`, including arbitrary
-/// 32-bit parameters. Any `L` is supported, including zero.
+/// Each array is word-major: `cv[word][lane]` and `block[word][lane]` belong to the same independent compression.
 ///
-/// Uses the same backend selection as [`crate::Blake3`]'s batched hashing, with
-/// full register groups first, single registers next, and scalar tails.
+/// Each output lane equals [`compress_raw`] with that lane's inputs and the shared `parameter_words`, including arbitrary 32-bit parameters.
+///
+/// Any `L` is supported, including zero.
+///
+/// Uses the same backend selection as [`crate::Blake3`]'s batched hashing, with full register groups first, single registers next, and scalar tails.
 #[must_use]
 pub fn compress_raw_packed<const L: usize>(
     cv: &[[u32; L]; STATE_WORDS],
@@ -99,14 +100,12 @@ fn packed_group<V: Backend<W>, const W: usize, const G: usize>(
 ) {
     let mut state: [[V; STATE_WORDS]; G] = core::array::from_fn(|g| {
         core::array::from_fn(|w| {
-            from_lanes::<V, W>(core::array::from_fn(|l| cv[w * lanes + first + g * W + l]))
+            from_lanes::<V, W>(cv[w * lanes + first + g * W..][..W].try_into().unwrap())
         })
     });
     let message: [[V; BLOCK_WORDS]; G] = core::array::from_fn(|g| {
         core::array::from_fn(|w| {
-            from_lanes::<V, W>(core::array::from_fn(|l| {
-                block[w * lanes + first + g * W + l]
-            }))
+            from_lanes::<V, W>(block[w * lanes + first + g * W..][..W].try_into().unwrap())
         })
     });
     compress::compress_raw(&mut state, &message, parameter_words);
