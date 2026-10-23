@@ -1443,6 +1443,10 @@ pub trait TwoAdicField: Field {
 
     /// Returns a generator of the multiplicative group of order `2^bits`.
     /// Assumes `bits <= TWO_ADICITY`, otherwise the result is undefined.
+    ///
+    /// Generators must be nested: squaring the generator for `bits + 1` gives the generator for `bits`.
+    ///
+    /// FFTs rely on this to share one twiddle table across all sizes.
     #[must_use]
     fn two_adic_generator(bits: usize) -> Self;
 }

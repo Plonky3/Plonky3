@@ -67,6 +67,8 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     ///
     /// Only its first `mat.height() >> log_inv_rate` rows may be nonzero; the caller must set the remaining rows to zero.
     ///
+    /// Implementations may skip reading those rows, so the result is unspecified if any is nonzero.
+    ///
     /// This is a coefficient transform, not a low-degree extension of evaluations.
     ///
     /// The result uses the same roots and ordering as [`Self::dft_batch`].
@@ -183,10 +185,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// Treating `vec` as the evaluations of a polynomial on the subgroup `H`,
     /// compute the evaluations of that polynomial on the subgroup `K`.
     ///
-    /// There is another way to interpret this transformation which gives a larger
-    /// use case. We can also view it as treating columns of `mat` as evaluations
-    /// over a coset `gH` and then computing the evaluations of those polynomials
-    /// on the coset `gK`.
+    /// Equivalently, treating `vec` as evaluations over a coset `gH`, this computes the evaluations over `gK`.
     fn lde(&self, vec: Vec<F>, added_bits: usize) -> Vec<F> {
         self.lde_batch(RowMajorMatrix::new_col(vec), added_bits)
             .to_row_major_matrix()
@@ -294,6 +293,8 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// `transform` runs once on the calling thread before any consumer call. The default
     /// implementation publishes the full output as one block; implementations may publish
     /// smaller blocks as they complete.
+    ///
+    /// Implementations may run `make_consumer` before or after `transform`.
     fn coset_lde_batch_with_blocks<T, K, C>(
         &self,
         mat: RowMajorMatrix<F>,
@@ -467,10 +468,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// Treating `vec` as the evaluations of a polynomial on the subgroup `H`,
     /// compute the evaluations of that polynomial on the subgroup `K`.
     ///
-    /// There is another way to interpret this transformation which gives a larger
-    /// use case. We can also view it as treating columns of `mat` as evaluations
-    /// over a coset `gH` and then computing the evaluations of those polynomials
-    /// on the coset `gK`.
+    /// Equivalently, treating `vec` as evaluations over a coset `gH`, this computes the evaluations over `gK`.
     fn lde_algebra<V: BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         vec: Vec<V>,
