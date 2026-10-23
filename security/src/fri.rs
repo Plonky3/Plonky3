@@ -37,6 +37,25 @@ use crate::shape::{InstanceShape, StarkAirParams};
 /// is added there. There is intentionally no `From<FriParameters>` impl:
 /// the protocol crate assembles this from its own params + instance
 /// shape, baking in protocol-specific assumptions at the call site.
+///
+/// The bounds assume every committed word has the largest height.
+///
+/// A folding round then combines its words with the powers of one challenge.
+///
+/// For arity a, that is a curve of degree a - 1, which is what each round charges.
+///
+/// A shorter word joins a later round, multiplied by the challenge to the power a.
+///
+/// That round combines a curve of degree a, one more than charged:
+///
+/// ```text
+///     C = curve count of one round
+///
+///     arity 2:  charged 1 C / |F|,  owed 2 C / |F|,  short by 1 bit
+///     arity 4:  charged 3 C / |F|,  owed 4 C / |F|,  short by 0.42 bits
+/// ```
+///
+/// Callers that commit words of several heights must not use these bounds as they stand.
 #[derive(Copy, Clone, Debug)]
 pub struct FriRegime {
     pub log_blowup: usize,
@@ -178,21 +197,46 @@ pub fn commit_phase_error_udr(regime: &FriRegime, shape: &InstanceShape) -> Opti
     Some(ErrorBits::from_log2(bits.max(0.0)))
 }
 
-/// FRI commit-phase per-round error in LDR with explicit proximity
-/// parameter `m`. DKT26 Theorem 5.12 and Appendix B.1–B.2 give the
-/// Johnson-regime line-MCA count `C = 8·n·(m + 1/2)^3/(3·rho_minus)`;
-/// multiplying by `folding − 1` accounts for the polynomial-curve degree of
-/// a folding round. We also retain the independent `n/|F|` bound from
-/// [2024/1553] and take the minimum of their security bits. Round-by-
-/// round soundness is dominated by round 0 (largest `n`), so we use
-/// `n = lde_domain_size` for every round.
-/// For positive-degree codes at `m >= 3`, MCA gives fewer security bits and
-/// determines this minimum. Reconstruction can instead cap the separate
-/// constant-code bound.
+/// Error of one folding round in the list-decoding regime, at multiplicity m.
 ///
-/// Returns `None` when `regime.max_log_arity` is `0` (folding factor `1`,
-/// i.e. no fold at all) — such a regime has no commit-phase round, rather
-/// than being indistinguishable from arity 2.
+/// # Overview
+///
+/// A round of arity a folds a curve of degree a - 1 in the challenge.
+///
+/// The bound is the larger of two error terms:
+///
+/// - the curve count (a - 1) C / |F|, from DKT26, Theorem 5.12;
+/// - the term a (2m + 1)(n + 1) / (sqrt(rho) |F|), from eprint 2020/654, Lemma 8.2.
+///
+/// Here C = 8 n (m + 1/2)^3 / (3 rho_minus) and n is the largest evaluation domain.
+///
+/// The larger term suffices, not their sum.
+///
+/// In eprint 2020/654, the second term pays for weighted agreement (Theorem 7.2, Lemma 7.6).
+///
+/// DKT26 proves full agreement sets instead.
+///
+/// Outside the exceptional challenges, the folded word agrees exactly where all its parts agree.
+///
+/// That gives weighted agreement directly, so the curve count alone bounds the round.
+///
+/// Taking the larger term is therefore a valid bound.
+///
+/// For positive-degree codes and m >= 3, the curve count is always the larger one.
+///
+/// A constant code counts binom(n, 2) exceptional lines instead.
+///
+/// There the second term can bind.
+///
+/// One n serves every round.
+///
+/// The count C shrinks with the domain, from round to round.
+///
+/// The first round has the largest domain, so its count bounds every round.
+///
+/// # Returns
+///
+/// Nothing when the arity is 1, since then no fold happens.
 pub fn commit_phase_error_ldr_m(
     regime: &FriRegime,
     shape: &InstanceShape,
@@ -593,5 +637,97 @@ mod tests {
             .min(shape.modulus_bits as f64)
             .floor() as usize;
         assert_eq!(bits, 128);
+    }
+
+    #[test]
+    fn curve_count_is_the_larger_folding_term_for_positive_degree() {
+        // Invariant: for positive-degree codes, the curve count term binds.
+        //
+        // It never has more bits than the second term.
+        //
+        // So the round reports exactly the curve count, the term DKT26 needs.
+        //
+        // Fixture state: 128-bit field, no grinding, and every combination of
+        //
+        //     trace   2^1 .. 2^24
+        //     blowup  2 .. 2^8
+        //     arity   2 .. 16
+        //     m       3, 4, 10, 100, 1000
+        //
+        // Why: if the second term ever bound the round, the two values would differ.
+        for log_trace_length in 1..=24 {
+            for log_blowup in 1..=8 {
+                for max_log_arity in 1..=4 {
+                    // One regime and one shape per combination.
+                    // The query count does not enter a folding round.
+                    let regime = FriRegime {
+                        log_blowup,
+                        num_queries: 1,
+                        log_final_poly_len: 0,
+                        max_log_arity,
+                        commit_pow_bits: 0,
+                        query_pow_bits: 0,
+                    };
+                    let shape = InstanceShape {
+                        log_trace_length,
+                        modulus_bits: 128,
+                        collision_resistance: 128,
+                        num_batched_functions: 1,
+                    };
+                    for m in [3, 4, 10, 100, 1000] {
+                        // The curve count term, as the round computes it.
+                        let curve = 128.0
+                            - johnson_exceptional_line_count_log2(log_trace_length, log_blowup, m)
+                            - log2(regime.folding_factor() - 1.0);
+
+                        // The round's reported bits must equal the curve count term.
+                        let bits = commit_phase_error_ldr_m(&regime, &shape, m)
+                            .expect("arity at least two folds")
+                            .bits();
+                        assert!(
+                            (bits - curve.max(0.0)).abs() < 1e-9,
+                            "trace 2^{log_trace_length}, blowup 2^{log_blowup}, arity 2^{max_log_arity}, m = {m}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn constant_code_folding_round_reports_the_larger_term() {
+        // Fixture state: trace length 1, a constant code, blowup 8, arity 2, m = 3, 128-bit field.
+        //
+        //     curve numerator:   binom(8, 2) = 28                    -> 123.19 bits
+        //     second numerator:  2 * 7 * 9 / sqrt(1/8) = 356.38       -> 119.52 bits
+        //
+        // Invariant: the round reports the larger error, here the second term.
+        let regime = FriRegime {
+            log_blowup: 3,
+            num_queries: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            commit_pow_bits: 0,
+            query_pow_bits: 0,
+        };
+        let shape = InstanceShape {
+            log_trace_length: 0,
+            modulus_bits: 128,
+            collision_resistance: 128,
+            num_batched_functions: 1,
+        };
+        let bits = commit_phase_error_ldr_m(&regime, &shape, 3)
+            .expect("arity two folds")
+            .bits();
+
+        // The second term, computed from its formula.
+        let second = 128.0 - log2(2.0 * 7.0 * 9.0 / libm::sqrt(1.0 / 8.0));
+        assert!(
+            (bits - second).abs() < 1e-9,
+            "got {bits}, expected {second}"
+        );
+
+        // It sits below the curve term, so the curve term does not bind here.
+        assert!(bits < 128.0 - log2(28.0));
     }
 }

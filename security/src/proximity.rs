@@ -8,8 +8,8 @@
 //!
 //! References:
 //! - [2020/654] Proximity Gaps for Reed–Solomon Codes
-//! - [2024/1553] On the Security of STARKs with FRI
-//! - [2025/2055] BCHKS25 Theorem 4.2
+//! - [2024/1553] STARK-based Signatures from the RPO Permutation
+//! - [2025/2055] BCHKS25
 //! - \[DKT26\] Reed–Solomon Codes Beyond Johnson, Theorem 5.12 and
 //!   Appendix B.1–B.2 (<https://eprint.iacr.org/2026/2056>)
 
@@ -113,7 +113,9 @@ pub fn alpha_udr(log_trace_length: usize, log_blowup: usize, max_combo: usize) -
     (1.0 + rho_plus) * 0.5
 }
 
-/// LDR agreement parameter α = (1 + 1/(2m))·√ρ. BCHKS25 §4.2.
+/// List-decoding agreement parameter, alpha = (1 + 1/(2m)) sqrt(rho).
+///
+/// This is the agreement of eprint 2020/654, Theorem 8.3, and of ethSTARK, Theorem 5.
 pub fn alpha_ldr_m(log_blowup: usize, m: usize) -> f64 {
     let rho = pow(2.0, -(log_blowup as f64));
     (1.0 + 0.5 / m as f64) * sqrt(rho)
@@ -125,7 +127,7 @@ pub fn gamma_udr(log_trace_length: usize, log_blowup: usize, max_combo: usize) -
     1.0 - alpha_udr(log_trace_length, log_blowup, max_combo)
 }
 
-/// LDR proximity parameter γ = 1 − √ρ·(1 + 1/(2m)). BCHKS25 §4.2.
+/// List-decoding proximity parameter, 1 - alpha with alpha = (1 + 1/(2m)) sqrt(rho).
 pub fn gamma_ldr_m(log_blowup: usize, m: usize) -> f64 {
     let rho = pow(2.0, -(log_blowup as f64));
     1.0 - sqrt(rho) * (1.0 + 0.5 / m as f64)
@@ -149,13 +151,34 @@ pub const fn list_size_conjectured() -> f64 {
     1.0
 }
 
-/// LDR list size: L⁺ = (m + 1/2)/√ρ. Matches `soundcalc`
-/// `johnson_bound::get_max_list_size` (explicit-m branch).
+/// List size in the list-decoding regime, L^+ = (m + 1/2) / sqrt(rho).
 ///
-/// Uses the tighter [2025/2055] BCHKS25 Theorem 4.2 list size at the caller's
-/// explicit `m`, distinct from [`crate::assumption::SecurityAssumption::JohnsonBound`]'s
-/// classical Johnson bound at a fixed safety margin — the two are not
-/// interchangeable, see that variant's `list_size_bits_at_log_eta` doc.
+/// This bounds the list.
+///
+/// The ALI and DEEP rounds decode the trace and quotient words jointly.
+///
+/// Each word is a quotient of degree below k, times a linear factor, plus a constant.
+///
+/// Correlated agreement makes the candidates of all opening points coincide.
+///
+/// So the candidates are interleaved polynomials of degree at most k, at agreement alpha.
+///
+/// DKT26 (eprint 2026/2056), Theorem 5.12, Equation (67), bounds that list by B_jet.
+///
+/// Corollary 7.5 there keeps the bound at every interleaving width.
+///
+/// With degree bound k the rate is k / n = rho, which gives:
+///
+/// ```text
+///     B_jet = ceil((m' + 1/2) / sqrt(rho)) - 1
+///     m'    = max(ceil(sqrt(rho) / (2 eta_0)), 3)
+///     m'   <= m,  because eta_0 >= sqrt(rho) / (2m)
+///     → B_jet <= (m + 1/2) / sqrt(rho)
+/// ```
+///
+/// This matches soundcalc's list size at an explicit m.
+///
+/// The classical Johnson bound at a fixed margin is a different bound, used for WHIR and STIR.
 pub fn list_size_ldr_m(log_blowup: usize, m: usize) -> f64 {
     let rho = pow(2.0, -(log_blowup as f64));
     (m as f64 + 0.5) / sqrt(rho)
@@ -309,5 +332,41 @@ mod tests {
         assert!(johnson_exceptional_line_count_log2(1, 0, 3).is_infinite());
         assert!(johnson_exceptional_line_count_log2(1, 1, 2).is_infinite());
         assert!(johnson_exceptional_line_count_log2(usize::MAX, usize::MAX, 3).is_finite());
+    }
+
+    #[test]
+    fn list_size_covers_the_degree_k_list_bound() {
+        // Invariant: the list size is at least B_jet of DKT26, Equation (67), for degree <= k.
+        //
+        //     A     = ceil(alpha n)            agreements, alpha = (1 + 1/(2m)) sqrt(rho)
+        //     eta_0 = A / n - sqrt(rho)
+        //     m'    = max(ceil(sqrt(rho) / (2 eta_0)), 3)
+        //     B_jet = ceil((m' + 1/2) / sqrt(rho)) - 1
+        //
+        // Fixture state: every trace 2^1 .. 2^24, blowup 2 .. 2^8, and m = 3 .. 1000.
+        //
+        // Why: a list size below B_jet would undercount the ALI and DEEP candidates.
+        for log_trace_length in 1..=24u32 {
+            for log_blowup in 1..=8u32 {
+                // Domain size n and sqrt(rho) for this trace and blowup.
+                let n = (1u64 << (log_trace_length + log_blowup)) as f64;
+                let sqrt_rho = libm::sqrt(libm::pow(2.0, -f64::from(log_blowup)));
+                for m in (3..=1000usize).step_by(7) {
+                    // Recompute B_jet from the agreement count, as in the formula above.
+                    let alpha = super::alpha_ldr_m(log_blowup as usize, m);
+                    let agreements = libm::ceil(alpha * n);
+                    let eta0 = agreements / n - sqrt_rho;
+                    let m_prime = libm::ceil(sqrt_rho / (2.0 * eta0)).max(3.0);
+                    let b_jet = libm::ceil((m_prime + 0.5) / sqrt_rho) - 1.0;
+
+                    // The crate's list size must cover it.
+                    let list = super::list_size_ldr_m(log_blowup as usize, m);
+                    assert!(
+                        b_jet <= list + 1e-9,
+                        "trace 2^{log_trace_length}, blowup 2^{log_blowup}, m = {m}: B_jet = {b_jet}, list = {list}"
+                    );
+                }
+            }
+        }
     }
 }

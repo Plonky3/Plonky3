@@ -34,7 +34,7 @@
 //! # References
 //! - ethSTARK ([2021/582](https://eprint.iacr.org/2021/582))
 //! - Proximity Gaps for Reed–Solomon Codes ([2020/654](https://eprint.iacr.org/2020/654))
-//! - On the Security of STARKs with FRI ([2024/1553](https://eprint.iacr.org/2024/1553))
+//! - STARK-based Signatures from the RPO Permutation ([2024/1553](https://eprint.iacr.org/2024/1553))
 //! - On the Distribution of the Distances of Random Words ([2025/2010](https://eprint.iacr.org/2025/2010))
 //! - BCHKS25 — Improved LDR proximity gaps ([2025/2055](https://eprint.iacr.org/2025/2055))
 //! - DKT26 — Johnson-regime line MCA (Theorem 5.12, Appendix B.1–B.2)
