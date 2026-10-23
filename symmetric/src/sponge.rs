@@ -625,6 +625,13 @@ where
         let mut last_chunk_len = 0;
         let mut absorbed_any = false;
 
+        // Whether a full block sits in the rate, not yet permuted.
+        //
+        // As in the single-field sponge, a full block is permuted only when the next block starts.
+        //
+        // A full final block takes the capacity padding first, then its one permutation.
+        let mut pending_full = false;
+
         // Outer loop: consume RATE * num_f_elms small-field elements per iteration.
         //
         // That fills exactly RATE large-field rate slots.
@@ -632,11 +639,18 @@ where
         //   Example: RATE = 3, num_f_elms = 2
         //
         //     iter 1: [f0..f5]         -> state = [pack(f0,f1), pack(f2,f3), pack(f4,f5), cap...]
-        //     full block (3 = RATE)    -> permute, reset last_chunk_len = 0
+        //     full block (3 = RATE)    -> leave it pending, reset last_chunk_len = 0
         //
-        //     iter 2: [f6..f9]     -> state = [pack(f6,f7), pack(f8,f9), old, cap...]
-        //     partial (2 < RATE)   -> skip permute, pad below
+        //     iter 2: [f6..f9]     -> permute the pending block first
+        //                          -> state = [pack(f6,f7), pack(f8,f9), old, cap...]
+        //     partial (2 < RATE)   -> pad below
         for block_chunk in &input.into_iter().chunks(RATE * self.num_f_elms) {
+            // More input follows a full block, so that block is absorbed now.
+            if pending_full {
+                state = self.permutation.permute(state);
+                pending_full = false;
+            }
+
             absorbed_any = true;
             last_chunk_len = 0;
 
@@ -654,17 +668,17 @@ where
                 last_chunk_len = chunk_id + 1;
             }
 
-            // Only permute when the block is full.
+            // A full block waits for the next block or for the capacity padding.
             // Partial blocks fall through to the padding logic below.
             if last_chunk_len == RATE {
-                state = self.permutation.permute(state);
+                pending_full = true;
                 last_chunk_len = 0;
             }
         }
 
         // Two-case padding in the large-field domain.
         //
-        //   last_chunk_len = 0 + absorbed -> capacity pad: state[RATE] += 1
+        //   last_chunk_len = 0 + absorbed -> capacity pad on the pending block: state[RATE] += 1
         //   last_chunk_len > 0 or empty   -> rate pad:     state[pos] = 1, zeros after
         if last_chunk_len == 0 && absorbed_any {
             // Full block: add sentinel to first capacity element.
@@ -694,6 +708,7 @@ mod tests {
     use core::any::type_name;
 
     use p3_field::PrimeCharacteristicRing;
+    use p3_goldilocks::Goldilocks;
     use p3_koala_bear::KoalaBear;
     use proptest::prelude::*;
 
@@ -740,6 +755,64 @@ mod tests {
             error.to_string(),
             format!("input field `{field}` must have smaller order than packing field `{field}`")
         );
+    }
+
+    /// A position-sensitive mixing of a Goldilocks state.
+    ///
+    /// Every output depends on every input cell with its own weight.
+    ///
+    /// So a missing or an extra permutation changes the digest.
+    #[derive(Clone)]
+    struct GoldilocksMix;
+
+    impl<const WIDTH: usize> Permutation<[Goldilocks; WIDTH]> for GoldilocksMix {
+        fn permute_mut(&self, input: &mut [Goldilocks; WIDTH]) {
+            let weighted: Goldilocks = input
+                .iter()
+                .enumerate()
+                .map(|(j, &x)| x * Goldilocks::from_u64(j as u64 + 1))
+                .sum();
+            *input = core::array::from_fn(|j| weighted * Goldilocks::from_u64(j as u64 + 2));
+        }
+    }
+
+    impl<const WIDTH: usize> CryptographicPermutation<[Goldilocks; WIDTH]> for GoldilocksMix {}
+
+    #[test]
+    fn cross_field_pad10_matches_pad10_on_the_packed_input() {
+        // Fixture state: KoalaBear into Goldilocks, WIDTH = 4, RATE = 2, OUT = 2.
+        //
+        // Two KoalaBear limbs pack into one Goldilocks slot, so four limbs fill one rate block:
+        //
+        //     [1, 2 | 3, 4]  ->  [pack(1, 2), pack(3, 4) | cap]
+        //
+        // Invariant: the cross-field sponge is the 10-padded sponge over the packed slots.
+        //
+        // Mutation: permute a full block as soon as it fills.
+        //
+        // Every input that ends on a block boundary then runs one permutation too many.
+        let cross =
+            MultiField32Pad10Sponge::<KoalaBear, Goldilocks, _, 4, 2, 2>::new(GoldilocksMix)
+                .unwrap();
+        let single = Pad10Sponge::<Goldilocks, _, _, 4, 2, 2>::new(
+            GoldilocksMix,
+            Increment::new(Goldilocks::ONE),
+        );
+        let radix = absorb_radix_bits::<KoalaBear>();
+        let limbs: [KoalaBear; 9] = core::array::from_fn(|i| KoalaBear::from_u32(i as u32 + 1));
+
+        // Lengths 0 through 9 cross the slot and block boundaries: 4 and 8 limbs end on one.
+        for len in 0..=limbs.len() {
+            let packed: alloc::vec::Vec<Goldilocks> = limbs[..len]
+                .chunks(2)
+                .map(|pair| reduce_packed_shifted(pair, radix))
+                .collect();
+            assert_eq!(
+                cross.hash_iter(limbs[..len].iter().copied()),
+                single.hash_iter(packed),
+                "{len} limbs"
+            );
+        }
     }
 
     #[test]
