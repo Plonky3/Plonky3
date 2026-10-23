@@ -34,26 +34,38 @@
 //!
 //! # Security
 //!
-//! In the random-permutation model this is the overwrite-mode sponge of \[BDPA08\], up to two re-encodings.
+//! Model: the permutation is random, and every input length comes from a set S fixed in advance.
 //!
 //! - Reversing the block order is a fixed bijection on inputs of a given length.
-//! - A random oracle composed with a fixed bijection is still a random oracle.
-//! - The length IV gives every length L its own starting capacity, its own root in the sponge graph.
-//! - Every path from that root has exactly n(L) blocks.
-//! - So no padded input is a proper prefix of another one from the same root.
-//! - That is the property the "last block is non-zero" padding rule provides in \[BDPA08\].
+//! - The length IV gives every L in S its own root: the capacity (L, 0, ..., 0).
+//! - Every path from the root of L absorbs exactly n(L) blocks.
 //! - Zero padding is injective once L is fixed.
+//! - Overwriting makes the state entering the permutation (block, capacity).
+//! - That state does not depend on what the rate held before.
 //!
-//! The sponge-graph argument then runs with one root per length.
-//! After N permutation calls, a distinguisher wins with probability about:
+//! So two distinct inputs reach the same permutation input only through one of two events.
+//!
+//! After N permutation calls:
 //!
 //! ```text
-//!     N^2 / |F|^c        (two paths meeting in the same capacity)
-//!   + N * Lambda / |F|^c (a permutation output landing on one of Lambda length roots)
+//!     capacity collision:  two permutation outputs share a capacity     <= N^2 / |F|^c
+//!     root hit:            a permutation output's capacity is a root    <= N * |S| / |F|^c
 //! ```
 //!
-//! With c = WIDTH - RATE this is the usual |F|^{c/2} generic bound.
-//! Overwriting the rate instead of adding into it keeps the bound \[BDPA11\].
+//! Here c = WIDTH - RATE.
+//!
+//! These are the two events of the sponge-graph argument of \[BDPA08\].
+//!
+//! Here the graph has one root per allowed length.
+//!
+//! The root term counts every allowed length, not only the lengths queried.
+//!
+//! An adaptive adversary can aim at any root in S.
+//!
+//! So the bound needs |S| far below |F|^c:
+//!
+//! - with c = 1 and every length below p allowed, the root term is about N: no security;
+//! - with c >= 2, any set of lengths below p keeps the root term below N / |F|^(c - 1).
 //!
 //! The digest must stay inside the rate.
 //! A capacity cell in the output is no longer hidden, and the bound above stops counting it.
@@ -65,10 +77,6 @@
 //! \[BDPA08\] Bertoni, Daemen, Peeters, Van Assche.
 //! On the indifferentiability of the sponge construction. Eurocrypt 2008.
 //! <https://keccak.team/files/SpongeIndifferentiability.pdf>
-//!
-//! \[BDPA11\] Bertoni, Daemen, Peeters, Van Assche.
-//! Duplexing the sponge: single-pass authenticated encryption and other applications. SAC 2011.
-//! <https://keccak.team/files/SpongeDuplex.pdf>
 
 use alloc::vec::Vec;
 use core::iter;
