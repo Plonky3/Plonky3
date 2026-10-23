@@ -153,7 +153,7 @@ pub const fn list_size_conjectured() -> f64 {
 
 /// List size in the list-decoding regime, L^+ = (m + 1/2) / sqrt(rho).
 ///
-/// # Why this bounds the list
+/// This bounds the list.
 ///
 /// The ALI and DEEP rounds decode the trace and quotient words jointly.
 ///

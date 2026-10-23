@@ -38,8 +38,6 @@ use crate::shape::{InstanceShape, StarkAirParams};
 /// the protocol crate assembles this from its own params + instance
 /// shape, baking in protocol-specific assumptions at the call site.
 ///
-/// # Assumes one codeword height
-///
 /// The bounds assume every committed word has the largest height.
 ///
 /// A folding round then combines its words with the powers of one challenge.
@@ -212,7 +210,7 @@ pub fn commit_phase_error_udr(regime: &FriRegime, shape: &InstanceShape) -> Opti
 ///
 /// Here C = 8 n (m + 1/2)^3 / (3 rho_minus) and n is the largest evaluation domain.
 ///
-/// # Why the larger term, and not their sum
+/// The larger term suffices, not their sum.
 ///
 /// In eprint 2020/654, the second term pays for weighted agreement (Theorem 7.2, Lemma 7.6).
 ///
@@ -226,7 +224,7 @@ pub fn commit_phase_error_udr(regime: &FriRegime, shape: &InstanceShape) -> Opti
 ///
 /// For m >= 3 the curve count is always the larger one.
 ///
-/// # Why one n for every round
+/// One n serves every round.
 ///
 /// The count C shrinks with the domain, from round to round.
 ///
