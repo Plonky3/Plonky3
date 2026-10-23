@@ -1040,3 +1040,33 @@ fn dit_parallel_lde_rejects_overflowing_added_bits() {
         F::ONE,
     );
 }
+
+#[test]
+fn small_batch_ignores_values_past_the_last_row() {
+    // Fixture state: 8 rows of width 8192, then 4096 values past the last row.
+    //
+    //     buffer:  8 x 8192 = 65536 matrix values | 4096 trailing values
+    //
+    // At this width every layer runs in the parallel phase.
+    //
+    // That phase sizes its blocks from the buffer length.
+    let (h, w) = (8, 8192);
+    let mat = rand_matrix(1, h, w);
+    let mut padded = mat.clone();
+    padded.values.extend((0..4096u32).map(F::from_u32));
+    let dft = Radix2DFTSmallBatch::<F>::default();
+
+    // Invariant: the trailing values change none of the results.
+    assert_eq!(
+        dft.dft_batch(padded.clone()),
+        NaiveDft.dft_batch(mat.clone())
+    );
+    assert_eq!(
+        dft.idft_batch(padded.clone()),
+        NaiveDft.idft_batch(mat.clone())
+    );
+    assert_eq!(
+        dft.coset_lde_batch(padded, 1, F::GENERATOR),
+        NaiveDft.coset_lde_batch(mat, 1, F::GENERATOR)
+    );
+}
