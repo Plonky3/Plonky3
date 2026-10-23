@@ -241,7 +241,6 @@ impl<'a> FoldedRows<'a> {
 
     /// Entry `i`.
     #[inline]
-    #[must_use]
     pub fn at(&self, i: usize) -> Poly192 {
         match &self.0 {
             Entries::Bits {
