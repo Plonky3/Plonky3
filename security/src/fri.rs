@@ -222,7 +222,11 @@ pub fn commit_phase_error_udr(regime: &FriRegime, shape: &InstanceShape) -> Opti
 ///
 /// Taking the larger term is therefore a valid bound.
 ///
-/// For m >= 3 the curve count is always the larger one.
+/// For positive-degree codes and m >= 3, the curve count is always the larger one.
+///
+/// A constant code counts binom(n, 2) exceptional lines instead.
+///
+/// There the second term can bind.
 ///
 /// One n serves every round.
 ///
@@ -636,20 +640,22 @@ mod tests {
     }
 
     #[test]
-    fn curve_count_is_the_larger_folding_term() {
-        // Invariant: the curve count term never has more bits than the second term.
+    fn curve_count_is_the_larger_folding_term_for_positive_degree() {
+        // Invariant: for positive-degree codes, the curve count term binds.
+        //
+        // It never has more bits than the second term.
         //
         // So the round reports exactly the curve count, the term DKT26 needs.
         //
         // Fixture state: 128-bit field, no grinding, and every combination of
         //
-        //     trace   2^4 .. 2^24
+        //     trace   2^1 .. 2^24
         //     blowup  2 .. 2^8
         //     arity   2 .. 16
         //     m       3, 4, 10, 100, 1000
         //
         // Why: if the second term ever bound the round, the two values would differ.
-        for log_trace_length in 4..=24 {
+        for log_trace_length in 1..=24 {
             for log_blowup in 1..=8 {
                 for max_log_arity in 1..=4 {
                     // One regime and one shape per combination.
@@ -686,5 +692,42 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn constant_code_folding_round_reports_the_larger_term() {
+        // Fixture state: trace length 1, a constant code, blowup 8, arity 2, m = 3, 128-bit field.
+        //
+        //     curve numerator:   binom(8, 2) = 28                    -> 123.19 bits
+        //     second numerator:  2 * 7 * 9 / sqrt(1/8) = 356.38       -> 119.52 bits
+        //
+        // Invariant: the round reports the larger error, here the second term.
+        let regime = FriRegime {
+            log_blowup: 3,
+            num_queries: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            commit_pow_bits: 0,
+            query_pow_bits: 0,
+        };
+        let shape = InstanceShape {
+            log_trace_length: 0,
+            modulus_bits: 128,
+            collision_resistance: 128,
+            num_batched_functions: 1,
+        };
+        let bits = commit_phase_error_ldr_m(&regime, &shape, 3)
+            .expect("arity two folds")
+            .bits();
+
+        // The second term, computed from its formula.
+        let second = 128.0 - log2(2.0 * 7.0 * 9.0 / libm::sqrt(1.0 / 8.0));
+        assert!(
+            (bits - second).abs() < 1e-9,
+            "got {bits}, expected {second}"
+        );
+
+        // It sits below the curve term, so the curve term does not bind here.
+        assert!(bits < 128.0 - log2(28.0));
     }
 }
