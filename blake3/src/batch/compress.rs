@@ -84,22 +84,26 @@ pub(super) fn compress<V: Word, const G: usize>(
     block_len: u32,
     flags: u32,
 ) {
-    // The second half of the working vector, the same in every lane.
-    let params = [
-        IV[0],
-        IV[1],
-        IV[2],
-        IV[3],
-        counter as u32,
-        (counter >> 32) as u32,
-        block_len,
-        flags,
-    ];
+    compress_raw(
+        h,
+        m,
+        &[counter as u32, (counter >> 32) as u32, block_len, flags],
+    );
+}
+
+/// Compress with four literal words in working-vector slots 12 through 15.
+#[inline(always)]
+pub(super) fn compress_raw<V: Word, const G: usize>(
+    h: &mut [[V; STATE_WORDS]; G],
+    m: &[[V; BLOCK_WORDS]; G],
+    parameter_words: &[u32; 4],
+) {
+    let params = parameters(parameter_words);
     if V::compress_scheduled(h, m, &params) {
         return;
     }
     let v = working_vector(h, &params);
-    rounds(h, v, m);
+    compress_rounds(h, v, m);
 }
 
 /// Advance every lane of every group by one block, each lane with its own counter.
@@ -130,32 +134,64 @@ pub(super) fn compress_counters<V: Word, const G: usize>(
         v[12] = counter[0];
         v[13] = counter[1];
     }
-    rounds(h, v, m);
+    compress_rounds(h, v, m);
 }
 
 /// Run the seven rounds on the working vector, then fold it into the chaining value.
 #[inline(always)]
-fn rounds<V: Word, const G: usize>(
+fn compress_rounds<V: Word, const G: usize>(
     h: &mut [[V; STATE_WORDS]; G],
     mut v: [[V; BLOCK_WORDS]; G],
     m: &[[V; BLOCK_WORDS]; G],
 ) {
-    // Seven literal rounds, so every schedule index is a constant.
-    //
-    // Constant indices keep the working vector in registers instead of memory.
-    round::<0, V, G>(&mut v, m);
-    round::<1, V, G>(&mut v, m);
-    round::<2, V, G>(&mut v, m);
-    round::<3, V, G>(&mut v, m);
-    round::<4, V, G>(&mut v, m);
-    round::<5, V, G>(&mut v, m);
-    round::<6, V, G>(&mut v, m);
+    rounds(&mut v, m);
 
     for (h, v) in h.iter_mut().zip(&v) {
         for i in 0..STATE_WORDS {
             h[i] = v[i].xor(v[i + STATE_WORDS]);
         }
     }
+}
+
+/// The full compression output, including feed-forward from the original chaining value.
+#[inline(always)]
+pub(super) fn compress_xof(
+    h: &[u32; STATE_WORDS],
+    m: &[u32; BLOCK_WORDS],
+    parameter_words: &[u32; 4],
+) -> [u32; BLOCK_WORDS] {
+    let mut v = working_vector(&[*h], &parameters(parameter_words));
+    rounds(&mut v, &[*m]);
+    core::array::from_fn(|i| {
+        if i < STATE_WORDS {
+            v[0][i] ^ v[0][i + STATE_WORDS]
+        } else {
+            v[0][i] ^ h[i - STATE_WORDS]
+        }
+    })
+}
+
+/// The fixed IV words followed by the caller's four parameter words.
+#[inline(always)]
+const fn parameters(words: &[u32; 4]) -> [u32; STATE_WORDS] {
+    [
+        IV[0], IV[1], IV[2], IV[3], words[0], words[1], words[2], words[3],
+    ]
+}
+
+/// The shared seven-round schedule for chaining-value and full-output compression.
+#[inline(always)]
+fn rounds<V: Word, const G: usize>(v: &mut [[V; BLOCK_WORDS]; G], m: &[[V; BLOCK_WORDS]; G]) {
+    // Seven literal rounds, so every schedule index is a constant.
+    //
+    // Constant indices keep the working vector in registers instead of memory.
+    round::<0, V, G>(v, m);
+    round::<1, V, G>(v, m);
+    round::<2, V, G>(v, m);
+    round::<3, V, G>(v, m);
+    round::<4, V, G>(v, m);
+    round::<5, V, G>(v, m);
+    round::<6, V, G>(v, m);
 }
 
 /// The chaining value, then the parameters of this compression.

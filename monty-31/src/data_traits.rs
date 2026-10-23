@@ -10,7 +10,7 @@ use crate::MontyField31;
 pub trait MontyParameters:
     Copy + Default + Debug + Eq + PartialEq + Sync + Send + Hash + 'static
 {
-    // A 31-bit prime.
+    // A 31-bit prime: 2^30 < PRIME < 2^31.
     const PRIME: u32;
 
     // The log_2 of our MONTY constant.

@@ -67,6 +67,10 @@ pub enum MerkleTreeError {
         arity: usize,
     },
 
+    /// Digest-layer geometry, total digest count, or payload bytes exceed `usize`.
+    #[error("Merkle digest storage size overflows usize")]
+    DigestStorageOverflow,
+
     /// The queried row index exceeds the maximum height.
     #[error("index out of bounds: index {index} exceeds max height {max_height}")]
     IndexOutOfBounds {

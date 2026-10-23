@@ -3,9 +3,8 @@
 use alloc::vec::Vec;
 
 use p3_binary_field::Poly192;
+use p3_binary_field::byteslice::{BLOCK, subset_sums};
 use p3_field::PrimeCharacteristicRing;
-
-use crate::byteslice::{BLOCK, subset_sums};
 
 /// One 256-entry subset-sum table per byte of a row.
 #[derive(Clone, Debug)]

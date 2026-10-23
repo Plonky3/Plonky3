@@ -4,9 +4,9 @@ use alloc::vec::Vec;
 use core::arch::x86_64::__m512i;
 
 use p3_binary_field::Poly192;
+use p3_binary_field::byteslice::BLOCK;
 
 use super::{BitFold, LiveGroups, tasks};
-use crate::byteslice::BLOCK;
 use crate::zerocheck::EqHalves;
 use crate::zerocheck::planar::{F192x8, F192x8Sum};
 

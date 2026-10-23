@@ -148,7 +148,7 @@ impl TrinomialQuinticData for KoalaBearParameters {
 mod tests {
     use num_bigint::BigUint;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
+    use p3_field::{Field, InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
     use p3_field_testing::{
         test_field, test_field_dft, test_field_json_serialization, test_prime_field,
         test_prime_field_32, test_prime_field_64, test_two_adic_field,
@@ -167,6 +167,22 @@ mod tests {
                 KoalaBear::two_adic_generator(bits),
                 base.exp_power_of_2(KoalaBear::TWO_ADICITY - bits)
             );
+        }
+    }
+
+    #[test]
+    fn test_koala_bear_inverse_at_gcd_extremes() {
+        // Inversion runs a binary GCD on the stored Montgomery value m = x * 2^32 mod p.
+        //
+        // It returns v = 2^60 * m^{-1} mod p, with |v| <= 2^60.
+        //
+        // The shifted value 2^30 * p + v must then lie in [0, 2^32 * p).
+        //
+        //     x = 1057030144 = 2^{-32}:  m = 1     ->  v = 2^60, the top of the range
+        //     x = 1073674257:            m = 4095  ->  v ~ -0.99 * 2^60, near the bottom
+        for x in [1_057_030_144, 1_073_674_257] {
+            let a = F::from_u32(x);
+            assert_eq!(a * a.inverse(), F::ONE);
         }
     }
 

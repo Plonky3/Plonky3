@@ -1293,6 +1293,7 @@ mod tests {
         };
         let logup = LogUpAir {
             num_interactions: 64,
+            num_interactions_per_proof: 0,
             max_message_width: 8,
         };
 

@@ -36,7 +36,9 @@ use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 
-use crate::merkle_tree::{padded_len, select_arity_step};
+use crate::MerkleTreeError;
+use crate::merkle_tree::select_arity_step;
+use crate::mmcs::validate_commit_reachable_heights;
 
 /// Blocks per worker thread in the first pass.
 ///
@@ -161,6 +163,70 @@ where
     unsafe { Vec::from_raw_parts(ptr, len, len) }
 }
 
+/// Geometry of one retained digest layer, before attaching matrices or allocating digests.
+pub(crate) struct LayerShape {
+    pub(crate) arity: usize,
+    pub(crate) computed: usize,
+    pub(crate) padded: usize,
+    pub(crate) injected: usize,
+}
+
+/// Walk heights in descending order using the builder's binary bridges and N-ary steps.
+///
+/// Check the height envelope before any unchecked power-of-two arithmetic in arity selection.
+/// No digest buffers are allocated here.
+pub(crate) fn layer_shapes<const N: usize>(
+    heights: impl Iterator<Item = usize> + Clone,
+) -> Result<Vec<LayerShape>, MerkleTreeError> {
+    let mut heights = heights.peekable();
+    let max_height = heights
+        .peek()
+        .copied()
+        .filter(|&height| height > 0)
+        .ok_or(MerkleTreeError::EmptyBatch)?;
+    let leaf_height_npt = max_height
+        .checked_next_power_of_two()
+        .ok_or(MerkleTreeError::DigestStorageOverflow)?;
+    validate_commit_reachable_heights(heights.clone())?;
+
+    let checked_padding = |computed: usize| {
+        if computed <= 1 {
+            Ok(computed)
+        } else {
+            computed
+                .div_ceil(N)
+                .checked_mul(N)
+                .ok_or(MerkleTreeError::DigestStorageOverflow)
+        }
+    };
+    let mut len = checked_padding(max_height)?;
+    let mut shapes = vec![LayerShape {
+        arity: 0,
+        computed: max_height,
+        padded: len,
+        injected: heights
+            .peeking_take_while(|&height| height == max_height)
+            .count(),
+    }];
+
+    while len > 1 {
+        let arity = select_arity_step::<N>(len, leaf_height_npt, heights.clone())?;
+        let computed = len / arity;
+        let target = computed.next_power_of_two();
+        let injected = heights
+            .peeking_take_while(|height| height.next_power_of_two() == target)
+            .count();
+        len = checked_padding(computed)?;
+        shapes.push(LayerShape {
+            arity,
+            computed,
+            padded: len,
+            injected,
+        });
+    }
+    Ok(shapes)
+}
+
 /// One digest layer, as fixed by the plan before any hashing.
 ///
 /// A node at an upper layer is, with `a` its arity and the default digest `0` as filler:
@@ -185,6 +251,9 @@ pub(crate) struct Layer<'a, M> {
     ///
     /// The allocated layer is padded past them with default digests.
     pub(crate) computed: usize,
+
+    /// Initialized digest slots, including the padding needed by the next fold.
+    pub(crate) padded: usize,
 }
 
 /// Builds every digest layer of one tree.
@@ -227,53 +296,25 @@ where
 
     /// Plan the layers of a tree over a set of matrices.
     ///
-    /// Heights are assumed to sit on the `ceil(max_height / 2^k)` ladder.
+    /// Heights must sit on the `ceil(max_height / 2^k)` ladder.
     ///
     /// # Panics
     ///
-    /// Panics if there are no matrices.
+    /// Panics if the heights cannot form a tree or their geometry overflows `usize`.
     pub(crate) fn new(h: &'a H, c: &'a C, leaves: &'a [M]) -> Self {
-        // Matrices are consumed tallest first, each at the layer matching its height.
-        let mut by_height = leaves
-            .iter()
-            .sorted_by_key(|m| Reverse(m.height()))
-            .peekable();
-
-        let max_height = by_height.peek().expect("no matrices to commit").height();
-        let leaf_height_npt = max_height.next_power_of_two();
-
-        // The leaf layer hashes every matrix of the tallest height.
-        let tallest = by_height
-            .peeking_take_while(|m| m.height() == max_height)
-            .collect_vec();
-        let mut layers = vec![Layer {
-            arity: 0,
-            matrices: tallest,
-            computed: max_height,
-        }];
-
-        // Each further layer folds the padded layer below it, until one digest remains.
-        let mut len = padded_len(max_height, N);
-        while len > 1 {
-            // A binary bridge step lands a shorter matrix on its own layer.
-            let arity =
-                select_arity_step::<N>(len, leaf_height_npt, by_height.clone().map(|m| m.height()))
-                    .unwrap_or_else(|err| panic!("{err}"));
-            let computed = len / arity;
-
-            // Matrices whose padded height matches this layer are injected into it.
-            let target = computed.next_power_of_two();
-            let matrices = by_height
-                .peeking_take_while(|m| m.height().next_power_of_two() == target)
-                .collect_vec();
-
-            layers.push(Layer {
-                arity,
-                matrices,
-                computed,
-            });
-            len = padded_len(computed, N);
-        }
+        // Stable sorting preserves insertion order within each injection group.
+        let mut by_height = leaves.iter().sorted_by_key(|m| Reverse(m.height()));
+        let shapes = layer_shapes::<N>(by_height.clone().map(|m| m.height()))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let layers = shapes
+            .into_iter()
+            .map(|shape| Layer {
+                arity: shape.arity,
+                matrices: by_height.by_ref().take(shape.injected).collect(),
+                computed: shape.computed,
+                padded: shape.padded,
+            })
+            .collect();
 
         Self {
             h,
@@ -294,7 +335,7 @@ where
         let mut digests: Vec<_> = self
             .layers
             .iter()
-            .map(|layer| default_digest_layer(padded_len(layer.computed, N)))
+            .map(|layer| default_digest_layer(layer.padded))
             .collect();
 
         // Each pass covers a contiguous band of layers, lowest first.
@@ -336,16 +377,13 @@ where
             self.layers[0].computed,
             "one digest per row"
         );
-        leaf_digests.resize(
-            padded_len(self.layers[0].computed, N),
-            [PW::Value::default(); DIGEST_ELEMS],
-        );
+        leaf_digests.resize(self.layers[0].padded, [PW::Value::default(); DIGEST_ELEMS]);
 
         let mut digests: Vec<_> = core::iter::once(leaf_digests)
             .chain(
                 self.layers[1..]
                     .iter()
-                    .map(|layer| default_digest_layer(padded_len(layer.computed, N))),
+                    .map(|layer| default_digest_layer(layer.padded)),
             )
             .collect();
 
@@ -1031,6 +1069,7 @@ mod tests {
 
     use super::*;
     use crate::MerkleTree;
+    use crate::merkle_tree::padded_len;
 
     type F = BabyBear;
     type Packed = <F as Field>::Packing;

@@ -21,6 +21,7 @@ mod vectorized;
 pub use array::*;
 pub use batch_inverse::*;
 pub use dup::Dup;
+pub use exponentiation::FixedBase;
 pub use field::*;
 pub use helpers::*;
 pub use packed::*;

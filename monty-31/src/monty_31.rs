@@ -479,11 +479,19 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = FP::BENEFITS_FROM_LOCKSTEP_EVALUATION;
 
     fn try_inverse(&self) -> Option<Self> {
+        // The correction below needs P > 2^{30}.
+        const {
+            assert!(
+                FP::PRIME > (1 << 30),
+                "PRIME must exceed 2^30 for inversion"
+            );
+        }
+
         if self.is_zero() {
             return None;
         }
 
-        // The number of bits of FP::PRIME. By the very name of MontyField31 this should always be 31.
+        // The number of bits of FP::PRIME, which lies in (2^{30}, 2^{31}).
         const NUM_PRIME_BITS: u32 = 31;
 
         // Get the inverse using a gcd algorithm.
@@ -492,8 +500,9 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
         // The function gcd_inversion_31_bit_field maps `val mod P -> 2^{60}val mod P`
         let gcd_inverse = gcd_inversion_prime_field_32::<NUM_PRIME_BITS>(self.value, FP::PRIME);
 
-        // Currently |gcd_inverse| <= 2^{NUM_PRIME_BITS - 2} <= 2^{60}
-        // As P > 2^{30}, 0 < 2^{30}P + gcd_inverse < 2^61
+        // Currently |gcd_inverse| <= 2^{2 * NUM_PRIME_BITS - 2} = 2^{60}.
+        //
+        // As P > 2^{30}, 0 < 2^{30}P + gcd_inverse < 2^{32}P, the input range of monty_reduce.
         let pos_inverse = (((FP::PRIME as i64) << 30) + gcd_inverse) as u64;
 
         // We could do a % operation here, but monty reduction is faster.

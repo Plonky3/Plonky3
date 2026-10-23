@@ -1,79 +1,25 @@
-//! Byte-sliced GF(2)-linear maps into the challenge field, shared by the zerocheck and the lincheck.
+//! Byte-sliced GF(2)-linear maps from bytes into `Poly192`.
 //!
 //! A map from bytes to the challenge field is one `8 x 8` bit matrix per output byte.
 //!
 //! A sliced block holds 64 values, one register per byte of the values.
+//!
+//! The kernels are generic over the register, so a scalar model runs them on every target.
 
-// The sliced moves and the register they are written against.
-//
-// Tests compile them on every target, against a scalar model of the register.
-#[cfg(any(
-    test,
-    all(
-        target_arch = "x86_64",
-        target_feature = "avx512f",
-        target_feature = "avx512bw",
-        target_feature = "avx512vbmi",
-        target_feature = "gfni",
-        target_feature = "vpclmulqdq"
-    )
-))]
 mod gfni;
-#[cfg(any(
-    test,
-    all(
-        target_arch = "x86_64",
-        target_feature = "avx512f",
-        target_feature = "avx512bw",
-        target_feature = "avx512vbmi",
-        target_feature = "gfni",
-        target_feature = "vpclmulqdq"
-    )
-))]
 mod lanes;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 mod model;
 
-use p3_binary_field::{Poly192, transpose_8x8};
 use p3_field::PrimeCharacteristicRing;
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx512f",
-    target_feature = "avx512bw",
-    target_feature = "avx512vbmi",
-    target_feature = "gfni",
-    target_feature = "vpclmulqdq"
-))]
-pub(crate) use self::gfni::plane_matrices;
-#[cfg(any(
-    test,
-    all(
-        target_arch = "x86_64",
-        target_feature = "avx512f",
-        target_feature = "avx512bw",
-        target_feature = "avx512vbmi",
-        target_feature = "gfni",
-        target_feature = "vpclmulqdq"
-    )
-))]
-pub(crate) use self::gfni::{
-    IDENTITY, OUT_BYTES, Stage, store_f192, transpose_rows, weight_matrices,
+pub use self::gfni::{
+    IDENTITY, OUT_BYTES, Stage, plane_matrices, store_f192, transpose_rows, weight_matrices,
 };
-#[cfg(any(
-    test,
-    all(
-        target_arch = "x86_64",
-        target_feature = "avx512f",
-        target_feature = "avx512bw",
-        target_feature = "avx512vbmi",
-        target_feature = "gfni",
-        target_feature = "vpclmulqdq"
-    )
-))]
-pub(crate) use self::lanes::SliceRegister;
-#[cfg(test)]
-pub(crate) use self::model::Model;
+pub use self::lanes::SliceRegister;
+#[cfg(any(test, feature = "test-utils"))]
+pub use self::model::Model;
+use crate::{Poly192, transpose_8x8};
 
 /// The register the sliced kernels run on, where the build has one.
 #[cfg(all(
@@ -84,13 +30,13 @@ pub(crate) use self::model::Model;
     target_feature = "gfni",
     target_feature = "vpclmulqdq"
 ))]
-pub(crate) type Native = core::arch::x86_64::__m512i;
+pub type Native = core::arch::x86_64::__m512i;
 
 /// Values in a sliced block.
-pub(crate) const BLOCK: usize = 64;
+pub const BLOCK: usize = 64;
 
 /// The 256 subset sums of eight weights: entry `v` sums the weights of the set bits of `v`.
-pub(crate) fn subset_sums(w: &[Poly192; 8]) -> [Poly192; 256] {
+pub fn subset_sums(w: &[Poly192; 8]) -> [Poly192; 256] {
     let mut sums = [Poly192::ZERO; 256];
     for (i, &e) in w.iter().enumerate() {
         // The entries with bit `i` set are those below `2^i`, plus its weight.
@@ -104,7 +50,7 @@ pub(crate) fn subset_sums(w: &[Poly192; 8]) -> [Poly192; 256] {
 
 /// Transpose eight rows of eight bytes: bit `k` of output byte `s` is bit `s` of row `k`.
 #[inline]
-pub(crate) fn transpose_bits(rows: &[u8; 64]) -> [u8; 64] {
+pub fn transpose_bits(rows: &[u8; 64]) -> [u8; 64] {
     #[cfg(all(
         target_arch = "x86_64",
         target_feature = "avx512f",

@@ -133,7 +133,7 @@ impl HasComplexBinomialExtension<3> for Mersenne31 {
     // ```
     const W: Complex<Self> = Complex::new_imag(Self::new(5));
 
-    // DTH_ROOT = W^((p^2 - 1)/2).
+    // DTH_ROOT = W^((p^2 - 1)/3).
     const DTH_ROOT: Complex<Self> = Complex::new_real(Self::new(634005911));
 
     // Verifiable in Sage with
@@ -339,4 +339,33 @@ mod test_quadratic_complex_extension {
         &super::PACKED_ONES
     );
     p3_field_testing::test_packed_binomial_extension_division!(F, 2);
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::{Complex, HasComplexBinomialExtension};
+
+    use crate::Mersenne31;
+
+    #[test]
+    fn complex_binomial_dth_roots() {
+        // DTH_ROOT = W^((p^2 - 1)/D) for the degree-D extension of the complex field.
+        //
+        // Here p^2 - 1 is the order of the complex field's multiplicative group.
+        let p = (1u64 << 31) - 1;
+        let order = p * p - 1;
+
+        let w2 = <Mersenne31 as HasComplexBinomialExtension<2>>::W;
+        let dth2 = <Mersenne31 as HasComplexBinomialExtension<2>>::DTH_ROOT;
+        assert_eq!(w2.exp_u64(order / 2), dth2);
+
+        let w3 = <Mersenne31 as HasComplexBinomialExtension<3>>::W;
+        let dth3 = <Mersenne31 as HasComplexBinomialExtension<3>>::DTH_ROOT;
+        assert_eq!(w3.exp_u64(order / 3), dth3);
+
+        // The cubic root is a primitive cube root of unity.
+        assert_ne!(dth3, Complex::ONE);
+        assert_eq!(dth3.cube(), Complex::ONE);
+    }
 }

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 
 use p3_security::SecurityTerm;
-use p3_security::bus::{BusSecurityModel, ProductGkrSecurityProfile};
+use p3_security::bus::BusSecurityModel;
 
 use crate::BusPlan;
 
@@ -32,22 +32,8 @@ impl BusPlan {
 
     /// Derives exact soundness dimensions from the concrete product schedule.
     fn security_model(&self, field_bits: NonZeroUsize) -> BusSecurityModel {
-        let shape = self.product_shape();
-        let layers = shape.layers();
-        let sumcheck_rounds = layers.iter().map(|(_, rounds)| rounds).sum();
-        let collapse_challenges = layers
-            .iter()
-            .map(|(arity, _)| arity.trailing_zeros() as usize)
-            .sum();
         let geometry = self.security_geometry();
-        let profile = ProductGkrSecurityProfile::new(
-            shape.log_height(),
-            shape.num_trees(),
-            sumcheck_rounds,
-            layers.len(),
-            collapse_challenges,
-        )
-        .expect("a checked product shape has valid security dimensions");
+        let profile = self.product_shape().security_profile();
 
         // A checked plan supplies dimensions accepted by the numeric security model.
         BusSecurityModel::new(
