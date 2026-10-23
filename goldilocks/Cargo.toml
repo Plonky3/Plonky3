@@ -13,6 +13,12 @@ categories.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion.workspace = true
 
+[package.metadata.plonky3.ci]
+test-features = ["constant-time"]
+
+[features]
+constant-time = ["dep:subtle"]
+
 [dependencies]
 p3-dft.workspace = true
 p3-field.workspace = true
@@ -26,6 +32,7 @@ num-bigint.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 spin.workspace = true
+subtle = { workspace = true, optional = true }
 
 [dev-dependencies]
 p3-blake3 = { path = "../blake3" }

@@ -137,6 +137,17 @@ observe the adversary's calls or the deployment's other generators, and a
 A real privacy target also requires a separate bound on the complete CSPRNG
 lifecycle's `Delta_rng`. See the [exact security contract](../binary-pcs/src/zk/security.rs).
 
+## Scalar canonicalization timing
+
+**When relying on `Goldilocks::as_canonical_u64_ct` timing, use a release build and
+assess the deployed build and calling context.**
+The `constant-time` feature covers only scalar canonicalization. `subtle`'s debug
+assertions may introduce input-dependent branches. Even in release builds, timing
+depends on the dependency implementation, compiler optimizations, target hardware,
+and surrounding code. This API gives no universal constant-time guarantee for the
+method, other field operations, or callers. Neither the return type nor a runtime
+check can establish those build and deployment conditions.
+
 ## Minimum non-degenerate shapes
 
 A reduction with no rounds samples no challenge.
