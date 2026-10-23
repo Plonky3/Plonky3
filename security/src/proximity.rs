@@ -13,7 +13,7 @@
 //! - \[DKT26\] Reed–Solomon Codes Beyond Johnson, Theorem 5.12 and
 //!   Appendix B.1–B.2 (<https://eprint.iacr.org/2026/2056>)
 
-use libm::{floor, log2, pow, sqrt};
+use libm::{log2, pow, sqrt};
 
 /// Performance cap on the proximity parameter `m` searched in LDR
 /// analyses. Matches Ethereum's `soundcalc`.
@@ -199,19 +199,13 @@ pub fn list_size_ldr_m(log_blowup: usize, m: usize) -> f64 {
 /// - h is the trace length.
 /// - c is the number of extra points that out-of-domain openings add to the trace.
 ///
-/// # Why integers
-///
 /// Squaring both sides of m < X gives an equivalent integer test:
 ///
 /// ```text
 ///     4 c m^2 < h (4m + 1)
 /// ```
 ///
-/// Computed in floating point, X can round onto an integer it only approaches.
-///
-/// It can also round off an integer it equals, which would admit m = X.
-///
-/// The integer test settles both cases exactly.
+/// The search decides that test exactly, so no floating-point rounding enters the result.
 pub fn compute_upper_m(trace_length: usize, max_combo: usize) -> usize {
     // An empty trace admits no parameter.
     if trace_length == 0 {
@@ -223,13 +217,14 @@ pub fn compute_upper_m(trace_length: usize, max_combo: usize) -> usize {
         return usize::MAX;
     }
 
-    // Widen to 128 bits so the products below fit for any realistic trace.
+    // Widen to 128 bits for the products below.
     let (h, c) = (trace_length as u128, max_combo as u128);
 
     // Decide m < X through 4 c m^2 < h (4m + 1).
     //
-    // A side that overflows counts as inadmissible.
-    // That can only lower the result, which keeps the bound conservative.
+    // A side that overflows 128 bits counts as inadmissible.
+    // Overflow only grows with m, so the admissible values stay a prefix of the integers.
+    // It can only lower the result, which keeps the precondition true.
     let admissible = |m: u128| {
         // Left side: 4 c m^2.
         let lhs = m.checked_mul(m).and_then(|v| v.checked_mul(4 * c));
@@ -244,28 +239,37 @@ pub fn compute_upper_m(trace_length: usize, max_combo: usize) -> usize {
         matches!((lhs, rhs), (Some(l), Some(r)) if l < r)
     };
 
-    // Seed the search with the floating-point floor of X.
+    // Binary search between two bounds.
     //
-    // The seed is off by at most one step, so both loops below run once or twice.
-    let ratio = (trace_length as f64 + max_combo as f64) / trace_length as f64;
-    let mut m = floor(1.0 / (2.0 * (sqrt(ratio) - 1.0))) as u128;
+    // Invariant: lo is admissible and hi is not.
+    //
+    //     lo = 0:               0 < h
+    //     hi = 5h / (4c) + 2:   an admissible m >= 1 has 4 c m^2 < h (4m + 1) <= 5 h m,
+    //                           so m < 5h / (4c)
+    //
+    // The interval halves each step, so the loop runs at most about 66 times.
+    let mut lo = 0u128;
+    let mut hi = 5 * h / (4 * c) + 2;
+    while hi - lo > 1 {
+        // Midpoint, without overflow.
+        let mid = lo + (hi - lo) / 2;
 
-    // Step down while the seed violates the strict inequality.
-    while m > 0 && !admissible(m) {
-        m -= 1;
-    }
-
-    // Step up while the next value still satisfies it.
-    while admissible(m + 1) {
-        m += 1;
+        // Keep the invariant on whichever side the midpoint falls.
+        if admissible(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
     }
 
     // Saturate on targets where usize is narrower than the result.
-    usize::try_from(m).unwrap_or(usize::MAX)
+    usize::try_from(lo).unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::johnson_exceptional_line_count_log2;
     use crate::assumption::SecurityAssumption;
 
@@ -448,6 +452,45 @@ mod tests {
                 x - 1,
                 "x = {x}"
             );
+        }
+    }
+
+    #[test]
+    fn upper_m_search_is_bounded_on_extreme_inputs() {
+        // Fixture state: c = 1, where the bound has a closed form.
+        //
+        //     4 m^2 < h (4m + 1)  holds at m = h:      4 h^2 < 4 h^2 + h
+        //                         fails at m = h + 1:  4 h^2 + 8h + 4 >= 4 h^2 + 5h
+        //     → the answer is h itself
+        //
+        // At h = 2^52 the floating-point X rounds to infinity.
+        for log_h in [1, 20, 40, 52, 60] {
+            let h = 1usize << log_h;
+            assert_eq!(super::compute_upper_m(h, 1), h, "h = 2^{log_h}");
+        }
+
+        // Invariant: the largest inputs still terminate.
+        //
+        // Their products overflow 128 bits, so the search returns a smaller, still admissible m.
+        let m = super::compute_upper_m(usize::MAX, 1) as u128;
+        assert!(m > 0);
+
+        // The returned m is admissible: a right side past 128 bits exceeds any left side that fits.
+        let rhs = (usize::MAX as u128).checked_mul(4 * m + 1);
+        assert!(rhs.is_none_or(|r| 4 * m * m < r));
+    }
+
+    proptest! {
+        #[test]
+        fn upper_m_is_the_largest_admissible(h in 1usize..1 << 40, c in 1usize..1 << 20) {
+            // Invariant: the result m satisfies 4 c m^2 < h (4m + 1), and m + 1 does not.
+            //
+            // At these sizes every product fits in 128 bits.
+            let m = super::compute_upper_m(h, c) as u128;
+            let (h, c) = (h as u128, c as u128);
+            let admissible = |m: u128| 4 * c * m * m < h * (4 * m + 1);
+            prop_assert!(admissible(m));
+            prop_assert!(!admissible(m + 1));
         }
     }
 }
