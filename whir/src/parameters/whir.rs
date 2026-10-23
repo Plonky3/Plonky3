@@ -37,15 +37,15 @@ pub enum WhirConfigError {
     #[error(transparent)]
     FoldingFactor(#[from] FoldingFactorError),
 
-    /// The domain after the first fold exceeds the encoder's capacity.
+    /// A domain after a fold exceeds the encoder's capacity.
     ///
     /// - Twiddles and query equality polynomials must stay in the base field.
-    /// - A larger first-round folding factor shrinks this domain.
+    /// - A larger folding factor in that round shrinks this domain.
     #[error(
-        "folded domain 2^{log_folded_domain_size} exceeds encoder capacity 2^{max_log_domain_size}; increase the first-round folding factor"
+        "folded domain 2^{log_folded_domain_size} exceeds encoder capacity 2^{max_log_domain_size}; fold more variables in that round"
     )]
     FoldedDomainExceedsCapacity {
-        /// Base-two logarithm of the domain required after the first fold.
+        /// Base-two logarithm of the domain required after the fold.
         log_folded_domain_size: usize,
         /// Largest base-two domain dimension supported by the encoder.
         max_log_domain_size: usize,
@@ -566,7 +566,8 @@ where
         // ---------------------------------------------------------------
         //
         // After the first fold the domain has size 2^log_folded_domain_size.
-        // We restrict this to the domain's advertised maximum so that:
+        // Every later fold is checked once the schedule is derived, below.
+        // We restrict these to the domain's advertised maximum so that:
         //   - transform twiddle factors stay in the base field (faster).
         //   - WHIR query equality polynomials stay in the base field.
         //
@@ -804,6 +805,32 @@ where
             config.final_round_config().num_variables,
             config.final_sumcheck_rounds
         );
+
+        // Every folded domain must fit the encoder, not only the first one.
+        //
+        // A round that folds fewer variables than the first keeps a larger folded domain:
+        //
+        //     BabyBear, 28 variables, schedule [8, 2, 18], rates [10, 10]
+        //
+        //     round 0:  domain 2^30, fold 8  ->  2^22   (checked above)
+        //     round 1:  domain 2^30, fold 2  ->  2^28   (above the two-adicity 27)
+        //
+        // Its codeword then needs a 2^28-point transform, and its query points a generator of that order.
+        let later_folds = config
+            .round_parameters
+            .iter()
+            .map(|round| round.log_folded_domain_size)
+            .chain(core::iter::once(
+                config.final_round_config().log_folded_domain_size,
+            ));
+        if let Some(log_folded_domain_size) =
+            later_folds.max().filter(|&log| log > max_log_domain_size)
+        {
+            return Err(WhirConfigError::FoldedDomainExceedsCapacity {
+                log_folded_domain_size,
+                max_log_domain_size,
+            });
+        }
 
         // Invariant: the schedule must open at least one position.
         //
@@ -1407,6 +1434,36 @@ mod tests {
                 assert_eq!(usize_bits, usize::BITS as usize);
             }
             other => panic!("expected InitialDomainExceedsUsize, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn new_rejects_a_later_folded_domain_above_the_capacity() {
+        // Fixture state: BabyBear, two-adicity 27, 28 variables, schedule [8, 2, 18], rates [10, 10].
+        //
+        //     round 0:  domain 2^30, fold 8  ->  folded 2^22
+        //     round 1:  domain 2^30, fold 2  ->  folded 2^28 > 2^27
+        //
+        // Mutation: checking only the first fold accepts this schedule.
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![10, 10],
+            folding_factor: FoldingFactor::PerRound(vec![8, 2, 18]),
+            soundness_type: SecurityAssumption::UniqueDecoding,
+            starting_log_inv_rate: 2,
+        };
+        let err = WhirConfig::<EF4, F, MyChallenger>::new(28, params)
+            .expect_err("a later folded domain above the two-adicity must be rejected");
+        match err {
+            WhirConfigError::FoldedDomainExceedsCapacity {
+                log_folded_domain_size,
+                max_log_domain_size,
+            } => {
+                assert_eq!(log_folded_domain_size, 28);
+                assert_eq!(max_log_domain_size, 27);
+            }
+            other => panic!("expected FoldedDomainExceedsCapacity, got {other:?}"),
         }
     }
 
