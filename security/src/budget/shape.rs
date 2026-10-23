@@ -75,13 +75,19 @@ impl InstanceShape {
 /// Shape of a LogUp-style lookup argument, aggregated over every AIR in the proof.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct LookupShape {
-    /// Total lookup fractions emitted per row, summed over all AIRs.
+    /// Lookup denominator factors emitted per row, summed over every AIR, bus, and both
+    /// sides of each lookup (including sends and receives).
     ///
-    /// Bounds the number of distinct bus messages an adversary can place in an unbalanced
-    /// multiset at `fractions_per_row · 2^log_max_height`.
+    /// The total factor count is bounded by
+    /// `fractions_per_row · 2^log_max_height + fractions_per_proof`; each AIR's per-row
+    /// emissions are conservatively charged at the maximum height.
     pub fractions_per_row: u32,
-    /// Maximum message width, i.e. the highest power of the second lookup challenge a denominator
-    /// can reach.
+    /// Additional denominator factors emitted once per proof, summed over every AIR and
+    /// both lookup sides. Exclude factors already counted by [`Self::fractions_per_row`].
+    /// Set to zero for an argument containing only per-row emissions.
+    pub fractions_per_proof: u32,
+    /// Maximum message width across both per-row and once-per-proof emissions, i.e. the
+    /// highest power of the second lookup challenge any denominator can reach.
     pub max_message_width: u32,
 }
 
@@ -108,6 +114,6 @@ pub struct AirShape {
     /// field; `None` only waives the separate DEEP-composition round.
     pub num_deep_terms: Option<u32>,
     /// Lookup argument shape, or `None` when the protocol has no lookup round.
-    /// A present shape with zero fractions is invalid and reports zero security.
+    /// A present shape with both fraction counts zero is invalid and reports zero security.
     pub lookup: Option<LookupShape>,
 }

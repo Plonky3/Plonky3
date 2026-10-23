@@ -127,6 +127,7 @@ fn every_round_direction_and_tightness() {
                     num_deep_terms: Some(air_vector.num_deep_terms),
                     lookup: Some(LookupShape {
                         fractions_per_row: air_vector.fractions_per_row,
+                        fractions_per_proof: 0,
                         max_message_width: air_vector.max_message_width,
                     }),
                 };
@@ -163,14 +164,10 @@ fn check_query(report: &SecurityReport, num_queries: u32, query_pow_bits: u32) {
     };
     let p3_bits = cap(conjectured_error(&regime, &f64_instance(20)).bits());
 
-    // `bits_per_query` rounds its per-query rate down by less than 2 ulps (see its doc test's own
-    // margin), and the fixed-point total multiplies that single per-query rounding by
-    // `num_queries` before capping — the same tolerance bounds both directions.
-    let tolerance = (num_queries as f64).mul_add(2.0 / fixed::ONE as f64, TIGHT_TOL);
-    assert!(
-        fixed_bits <= p3_bits + tolerance,
-        "query: {fixed_bits} > {p3_bits} + {tolerance}"
-    );
+    // `bits_per_query` stays within 3 ulps across the standard field sizes tested in `fixed`.
+    // The total multiplies that per-query rounding by `num_queries` before capping.
+    let tolerance = (num_queries as f64).mul_add(3.0 / fixed::ONE as f64, TIGHT_TOL);
+    assert!(fixed_bits <= p3_bits, "query: {fixed_bits} > {p3_bits}");
     assert!(
         p3_bits - fixed_bits < tolerance,
         "query: gap {} >= tolerance {tolerance}, fixed drifted conservative",
@@ -182,6 +179,7 @@ fn check_lookup(report: &SecurityReport, air_vector: &AirVector, log_max_height:
     let fixed_bits = term_bits(report, LOOKUP_LABEL);
     let logup_air = LogUpAir {
         num_interactions: air_vector.fractions_per_row as usize,
+        num_interactions_per_proof: 0,
         max_message_width: air_vector.max_message_width as usize,
     };
     let p3_bits = cap(logup_security_term(
@@ -350,6 +348,7 @@ fn collision_term_is_the_cap() {
         num_deep_terms: Some(LARGE.num_deep_terms),
         lookup: Some(LookupShape {
             fractions_per_row: LARGE.fractions_per_row,
+            fractions_per_proof: 0,
             max_message_width: LARGE.max_message_width,
         }),
     };
@@ -397,6 +396,7 @@ proptest! {
             num_deep_terms: Some(SMALL.num_deep_terms),
             lookup: Some(LookupShape {
                 fractions_per_row: SMALL.fractions_per_row,
+                fractions_per_proof: 0,
                 max_message_width: SMALL.max_message_width,
             }),
         };
@@ -422,5 +422,90 @@ proptest! {
             "ood: {fixed_bits} > {p3_bits} at d={max_constraint_degree} \
              h={log_max_height} combo={max_combo} pow={ood_pow_bits}"
         );
+    }
+}
+
+/// Once-per-proof factors participate in the same error numerator, before grinding and capping.
+/// This grid reaches exact u128 sizes, normalized mantissas, and heights beyond any integer shift.
+#[test]
+fn lookup_counts_match_float_and_remain_monotone() {
+    let params = ProtocolParams {
+        log_blowup: 3,
+        log_folding_arity: 2,
+        num_queries: 100,
+        query_pow_bits: 0,
+        ood_pow_bits: 0,
+        deep_pow_bits: 0,
+        folding_pow_bits: 0,
+        lookup_pow_bits: 0,
+    };
+    let mut air = AirShape {
+        num_composed_constraints: 1,
+        max_constraint_degree: 2,
+        num_quotient_chunks: 1,
+        max_combo: 2,
+        num_deep_terms: None,
+        lookup: None,
+    };
+    for fractions_per_row in [0, 1, 4, u32::MAX] {
+        for max_message_width in [1, 4, u32::MAX] {
+            for height in [0, 1, 20, 32, 63, 64, 65, 128, u32::MAX] {
+                for pow_bits in [0, 17, 128] {
+                    let mut previous = u64::MAX;
+                    for fractions_per_proof in [0, 1, 15, u32::MAX] {
+                        if fractions_per_row == 0 && fractions_per_proof == 0 {
+                            continue;
+                        }
+                        air.lookup = Some(LookupShape {
+                            fractions_per_row,
+                            fractions_per_proof,
+                            max_message_width,
+                        });
+                        let params = ProtocolParams {
+                            lookup_pow_bits: pow_bits,
+                            ..params
+                        };
+                        let instance = InstanceShape {
+                            log_max_height: height,
+                            field_bits: fixed::from_bits(128),
+                            collision_resistance: 128,
+                        };
+                        let actual = security_report(&params, &instance, &air).terms()[0].bits;
+                        assert!(
+                            actual <= previous,
+                            "adding proof factors increased security"
+                        );
+                        previous = actual;
+                        let logup = LogUpAir {
+                            num_interactions: fractions_per_row as usize,
+                            num_interactions_per_proof: fractions_per_proof as usize,
+                            max_message_width: max_message_width as usize,
+                        };
+                        let grinding = GrindingSites {
+                            lookup_challenge: pow_bits as usize,
+                            ..GrindingSites::NONE
+                        };
+                        let truth =
+                            cap(
+                                logup_security_term(&logup, &f64_instance(height), &grinding)
+                                    .unwrap()
+                                    .bits
+                                    .bits(),
+                            );
+                        let actual = to_f64(actual);
+                        // All paths share conservative rounding, including B=0.
+                        // Exact Q16 boundary cases have integer oracles in the unit tests.
+                        assert!(
+                            actual <= truth,
+                            "lookup overstates: f={fractions_per_row}, B={fractions_per_proof}, W={max_message_width}, h={height}, pow={pow_bits}: {actual} > {truth}"
+                        );
+                        assert!(
+                            truth - actual < TIGHT_TOL,
+                            "lookup lost precision: {actual} versus {truth}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
