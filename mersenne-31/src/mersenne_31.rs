@@ -491,7 +491,7 @@ impl QuotientMap<u32> for Mersenne31 {
     /// The input must lie in the range: `[0, 2^31 - 1]`.
     #[inline(always)]
     unsafe fn from_canonical_unchecked(int: u32) -> Self {
-        debug_assert!(int < Self::ORDER_U32);
+        debug_assert!(int <= Self::ORDER_U32);
         Self::new_reduced(int)
     }
 }
@@ -709,6 +709,7 @@ impl UniformSamplingField for Mersenne31 {
 #[cfg(test)]
 mod tests {
     use num_bigint::BigUint;
+    use p3_field::integers::QuotientMap;
     use p3_field::{
         Field, InjectiveMonomial, PackedValue, PermutationMonomial, PrimeCharacteristicRing,
         PrimeField32,
@@ -737,6 +738,25 @@ mod tests {
         let p = F::new_reduced(P);
         let values = [p, F::ONE, p, F::TWO, p, F::NEG_ONE, p];
         assert_eq!(values.into_iter().sum::<F>(), F::TWO);
+    }
+
+    #[test]
+    fn from_canonical_unchecked_accepts_its_documented_range() {
+        // The documented range is [0, 2^31 - 1].
+        //
+        // Its top end 2^31 - 1 = P is the second representation of zero.
+        //
+        // SAFETY: both inputs lie in the documented range.
+        let zero = unsafe { <F as QuotientMap<u32>>::from_canonical_unchecked(0) };
+        let p = unsafe { <F as QuotientMap<u32>>::from_canonical_unchecked((1 << 31) - 1) };
+        assert_eq!(zero, F::ZERO);
+        assert_eq!(p, F::ZERO);
+
+        // The u64 conversion forwards to the u32 one, with the same range.
+        //
+        // SAFETY: the input lies in the documented range.
+        let p64 = unsafe { <F as QuotientMap<u64>>::from_canonical_unchecked((1 << 31) - 1) };
+        assert_eq!(p64, F::ZERO);
     }
 
     /// Repeated maximal products exercise the accumulator bound, including redundant zero.
