@@ -208,8 +208,12 @@ impl SecurityAssumption {
         field_size_bits as f64 - (log_combination + list_size + 1.)
     }
 
-    /// PoW bits needed at the fold step to bridge the weaker of the
-    /// proximity-gap and fold-sumcheck bounds to `security_level`.
+    /// Grinding bits that lift one fold step to the target security level.
+    ///
+    /// A fold step fails through proximity gaps or through its sumcheck.
+    ///
+    /// Its error is the sum of both, as in WHIR (eprint 2024/1586), Theorem 5.2.
+    ///
     /// Returns 0 when the algebraic bounds already meet the target.
     #[must_use]
     pub fn folding_pow_bits(
@@ -223,8 +227,16 @@ impl SecurityAssumption {
         let prox_gaps_error = self.prox_gaps_error(num_variables, log_inv_rate, field_size_bits, 2);
         let sumcheck_error = self.fold_sumcheck_error(field_size_bits, num_variables, log_inv_rate);
 
-        // The fold step is only as strong as its weakest component.
-        let error = prox_gaps_error.min(sumcheck_error);
+        // Either failure breaks the fold step, so the two error probabilities add.
+        //
+        //     bits:        a, b
+        //     probability: 2^-a + 2^-b
+        //     total bits:  -log_2(2^-a + 2^-b), at most min(a, b)
+        let error = crate::ErrorBits::sum(&[
+            crate::ErrorBits::from_log2(prox_gaps_error),
+            crate::ErrorBits::from_log2(sumcheck_error),
+        ])
+        .bits();
 
         // PoW closes the residual gap; zero means no grinding needed.
         0_f64.max(security_level as f64 - error)
@@ -397,6 +409,33 @@ mod tests {
         assert!(
             pow <= MAX_POW_BITS,
             "PoW grinding {pow:.2} bits > {MAX_POW_BITS:.0} cap"
+        );
+    }
+
+    #[test]
+    fn folding_pow_covers_both_fold_errors() {
+        // Invariant: grinding plus the fold step's summed error reaches the target.
+        //
+        // Fixture state: Johnson bound, 128-bit target, 155-bit field, 20 variables, rate 1/2.
+        let jb = SecurityAssumption::JohnsonBound;
+        let (lambda, field, vars, rate) = (128, 155, 20, 1);
+        let pow = jb.folding_pow_bits(lambda, field, vars, rate);
+
+        // Sum the two failure probabilities of the fold step.
+        //
+        //     proximity gaps + fold sumcheck → total error bits
+        //     total + grinding >= 128
+        //
+        // Grinding sized against the larger error alone falls short of 128.
+        let total = crate::ErrorBits::sum(&[
+            crate::ErrorBits::from_log2(jb.prox_gaps_error(vars, rate, field, 2)),
+            crate::ErrorBits::from_log2(jb.fold_sumcheck_error(field, vars, rate)),
+        ])
+        .bits();
+        assert!(
+            total + pow >= lambda as f64 - 1e-9,
+            "fold reaches {}",
+            total + pow
         );
     }
 }
