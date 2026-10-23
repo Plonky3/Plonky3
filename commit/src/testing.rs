@@ -341,9 +341,10 @@ mod tests {
         };
         let mut challenger = DuplexChallenger::<F, _, 16, 8>::new(default_babybear_poseidon2_16());
 
-        assert!(
-            <TrivialPcs<F, Dft> as Pcs<EF, _>>::verify(&pcs, vec![claim], &(), &mut challenger)
-                .is_err()
+        // Invariant: the scheme's only error, the unit error, rejects the claim.
+        assert_eq!(
+            <TrivialPcs<F, Dft> as Pcs<EF, _>>::verify(&pcs, vec![claim], &(), &mut challenger),
+            Err(())
         );
     }
 }
