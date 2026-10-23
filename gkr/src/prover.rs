@@ -1,6 +1,7 @@
 //! Identity-padded storage and folding state used by the product prover.
 
 use alloc::borrow::Cow;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
@@ -1401,6 +1402,11 @@ pub struct RadixFourBatch<'a, B, F: Clone, const N: usize> {
 }
 
 impl<'a, B: Field, F: ExtensionField<B>, const N: usize> RadixFourBatch<'a, B, F, N> {
+    /// One table's batch from its child level, `N` values per parent row, identity suffix optional.
+    pub fn from_level(level: Vec<F>) -> Self {
+        Self::from_states(vec![RadixFourState::new(IdentityPrefix::new(level))])
+    }
+
     /// Wraps one state per tree.
     const fn from_states(states: Vec<RadixFourState<'a, F>>) -> Self {
         Self {
@@ -1561,6 +1567,9 @@ impl<'a, B: Field, F: ExtensionField<B>, const N: usize> RadixFourBatch<'a, B, F
 ///
 /// An implementation over a cheaper leaf representation must return what the dense batch returns, so the transcript is unchanged.
 pub trait LayerRounds<F, const N: usize> {
+    /// Whether `round` reads the flat equality table; a layer that tracks its parent point itself is handed an empty one.
+    const READS_EQUALITY: bool = true;
+
     /// The round message from the normalized equality suffix, the bound coordinate's eq endpoints, the live parent rows and the tree-batching challenge.
     fn round(
         &mut self,

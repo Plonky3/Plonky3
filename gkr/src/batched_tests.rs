@@ -7,14 +7,15 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanSample, FieldChallenger, HashChallenger};
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
+use p3_multilinear_util::point::Point;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{RngExt, SeedableRng};
 use rand_xoshiro::Xoroshiro128Plus;
 
-use crate::prover::{ProductLayers, RadixFourBatch};
+use crate::prover::{LayerRounds, RadixFourBatch};
 use crate::{
     DenseLeaves, ProductGkrError, ProductGkrLayerProof, ProductGkrProof, ProductGkrShape,
-    ProductGkrShapeError, ProductLeaves,
+    ProductGkrShapeError, ProductLeaves, ROUND_POLY_LEN,
 };
 
 type Binary = BinaryField128;
@@ -127,34 +128,73 @@ fn odd_batched_heights_sum_the_binary_layer() {
 /// Leaves that prove their bottom `own` radix-four layers through the hook.
 struct OwnBottom {
     leaves: Vec<Poly192>,
-    log_height: usize,
     own: usize,
 }
 
+impl OwnBottom {
+    /// The products of `4^levels` adjacent leaves.
+    fn level(&self, levels: usize) -> Vec<Poly192> {
+        let mut level = self.leaves.clone();
+        for _ in 0..levels {
+            level = level
+                .chunks(4)
+                .map(|group| group.iter().copied().product())
+                .collect();
+        }
+        level
+    }
+}
+
+/// A bottom layer that tracks its parent point, so the prover hands it no equality table.
+struct OwnLayer<'a> {
+    batch: RadixFourBatch<'a, Poly64, Poly192, 4>,
+    point: Vec<Poly192>,
+    round: usize,
+}
+
+impl LayerRounds<Poly192, 4> for OwnLayer<'_> {
+    const READS_EQUALITY: bool = false;
+
+    fn round(
+        &mut self,
+        equality: &[Poly192],
+        equality_pair: [Poly192; 2],
+        logical_len: usize,
+        batching: Poly192,
+    ) -> [Poly192; ROUND_POLY_LEN] {
+        assert!(equality.is_empty());
+        let equality = Point::new(&self.point[self.round + 1..]).equality_weights_lsb();
+        self.batch
+            .round(&equality, equality_pair, logical_len, batching)
+    }
+
+    fn fold(&mut self, challenge: Poly192, logical_len: usize) {
+        self.batch.fold(challenge, logical_len);
+        self.round += 1;
+    }
+
+    fn children(&self) -> Vec<[Poly192; 4]> {
+        self.batch.children()
+    }
+}
+
 impl ProductLeaves<Poly192> for OwnBottom {
-    type Layer<'a> = RadixFourBatch<'a, Poly64, Poly192, 4>;
+    type Layer<'a> = OwnLayer<'a>;
 
     fn own_layers(&self) -> usize {
         self.own
     }
 
     fn materialize(&self) -> Cow<'_, [Poly192]> {
-        let mut level = self.leaves.clone();
-        for _ in 0..self.own {
-            level = level
-                .chunks(4)
-                .map(|group| group.iter().copied().product())
-                .collect();
-        }
-        Cow::Owned(level)
+        Cow::Owned(self.level(self.own))
     }
 
-    fn layer(&self, j: usize, _: usize) -> Self::Layer<'_> {
-        let mut layers = [ProductLayers::new::<Poly64>(
-            self.leaves.as_slice(),
-            self.log_height,
-        )];
-        RadixFourBatch::new_consuming(&mut layers, 2 * j)
+    fn layer(&self, j: usize, point: &[Poly192]) -> Self::Layer<'_> {
+        OwnLayer {
+            batch: RadixFourBatch::from_level(self.level(j)),
+            point: point.to_vec(),
+            round: 0,
+        }
     }
 }
 
@@ -174,7 +214,6 @@ fn own_bottom_layers_leave_proofs_and_transcripts_unchanged() {
             for own in 0..=log_height / 2 {
                 let hooked_leaves = OwnBottom {
                     leaves: leaves.clone(),
-                    log_height,
                     own,
                 };
                 let mut hooked = challenger::<Poly64>();

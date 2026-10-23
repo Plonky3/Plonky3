@@ -61,8 +61,8 @@ pub trait ProductLeaves<EF: Clone> {
     /// The flat level `2 * own_layers()` above the leaves, batch index most significant, identity suffix optional.
     fn materialize(&self) -> Cow<'_, [EF]>;
 
-    /// The rounds of bottom layer `j`, whose children are `2 * j` levels above the leaves, over `logical_len` parent rows.
-    fn layer(&self, j: usize, logical_len: usize) -> Self::Layer<'_>;
+    /// The rounds of bottom layer `j`, whose children are `2 * j` levels above the leaves, at its parent point in binding order.
+    fn layer(&self, j: usize, point: &[EF]) -> Self::Layer<'_>;
 }
 
 /// Leaves given by their values, proving no layer of their own.
@@ -83,7 +83,7 @@ impl<EF: Field> ProductLeaves<EF> for DenseLeaves<EF> {
         Cow::Borrowed(&self.0)
     }
 
-    fn layer(&self, _: usize, _: usize) -> Self::Layer<'_> {
+    fn layer(&self, _: usize, _: &[EF]) -> Self::Layer<'_> {
         unreachable!("dense leaves prove no layer of their own")
     }
 }
@@ -370,7 +370,6 @@ impl<EF> ProductGkrProof<EF> {
             let batching = transcript.begin_layer();
             debug_assert_eq!(round_count, point.len());
             let child_depth = product_depth - arity.trailing_zeros() as usize;
-            let logical_len = 1usize << round_count;
 
             if arity == 2 && round_count == 0 {
                 // The root-most binary layer has no parent variables to sum over.
@@ -412,7 +411,7 @@ impl<EF> ProductGkrProof<EF> {
                 // Four child tables share one eq-weighted degree-five sumcheck.
                 let (round_polys, round_point, children) = match leaves {
                     Some(leaves) if child_depth < own_levels => {
-                        let mut layer = leaves.layer(child_depth / 2, logical_len);
+                        let mut layer = leaves.layer(child_depth / 2, &point);
                         let (polys, round_point) =
                             Self::layer_rounds(&mut layer, &point, batching, &mut transcript);
                         (polys, round_point, layer.children())
@@ -480,7 +479,11 @@ impl<EF> ProductGkrProof<EF> {
     {
         // The current coordinate factors out of the row sum. Keep only its
         // normalized suffix table; the root-most layer can have no coordinates.
-        let mut equality = Point::new(point.get(1..).unwrap_or(&[])).equality_weights_lsb();
+        let mut equality = if R::READS_EQUALITY {
+            Point::new(point.get(1..).unwrap_or(&[])).equality_weights_lsb()
+        } else {
+            Vec::new()
+        };
         let mut spare = Vec::new();
         let mut equality_prefix = EF::ONE;
         let mut logical_len = 1usize << point.len();
@@ -495,7 +498,7 @@ impl<EF> ProductGkrProof<EF> {
             layer.fold(challenge, logical_len);
             equality_prefix = interpolate_pair(equality_pair, challenge);
             logical_len /= 2;
-            if logical_len > 1 {
+            if R::READS_EQUALITY && logical_len > 1 {
                 // Product GKR binds adjacent pairs (LSB-first), unlike Poly's
                 // leading-variable convention. No division by a prefix is needed.
                 sum_adjacent(&mut equality, &mut spare);
