@@ -33,16 +33,18 @@ const GRIND_MARGIN_BITS: usize = 8;
 
 /// A challenger for a binary tower field, driven by a challenger over bytes.
 ///
-/// A tower level is a whole number of bytes wide, and every bit pattern is an element.
+/// An element of a tower level is held in `NUM_BYTES` bytes. From `GF(2^8)` up, every bit
+/// pattern of those bytes is an element; `GF(2)`, `GF(4)` and `GF(16)` use only the low 1, 2
+/// or 4 bits of their single byte.
 ///
 /// A transcript over the field is therefore a transcript over its bytes.
 /// Nothing is encoded, decoded or rejection-sampled in either direction.
 ///
 /// **Observing**: absorbs the little-endian bytes of the element into the inner challenger.
 ///
-/// **Sampling**: reads the little-endian bytes of the element from the inner challenger.
-/// Since the field has exactly `2^(8·NUM_BYTES)` elements, uniform bytes give a uniform
-/// field element.
+/// **Sampling**: reads the little-endian bytes of the element from the inner challenger,
+/// keeping the low bits a narrow level uses. The low bits of uniform bytes are uniform, so
+/// the field element is uniform at every level.
 ///
 /// **Proof of work**: unlike the field and bit sampling above, which work at every level,
 /// grinding is only viable in the wider ones. [`GrindingChallenger::grind`] enumerates
@@ -164,8 +166,8 @@ where
 {
     fn sample(&mut self) -> EF {
         let inner = &mut self.inner;
-        // Every bit pattern is a field element, so reading `NUM_BYTES` uniform bytes per
-        // basis coefficient samples uniformly from `EF`.
+        // The low bits of `NUM_BYTES` uniform bytes give a uniform element of `F`, so one such
+        // read per basis coefficient samples uniformly from `EF`.
         EF::from_basis_coefficients_fn(|_| {
             let mut bytes = [0; 16];
             inner.sample_into_slice(&mut bytes[..F::NUM_BYTES]);
@@ -305,7 +307,7 @@ mod tests {
 
     use crate::challenger::{BITS_SAMPLE_BYTES, BinaryChallenger, candidate};
     use crate::tower::TowerLevel;
-    use crate::{BinaryField8, BinaryField32, BinaryField128, Gf2, Ghash128};
+    use crate::{BinaryField4, BinaryField8, BinaryField32, BinaryField128, Gf2, Ghash128};
 
     type Inner = HashChallenger<u8, Keccak256Hash, 32>;
 
@@ -429,6 +431,18 @@ mod tests {
         let bytes: [u8; 4] = core::array::from_fn(|_| inner.sample());
 
         assert_eq!(sampled, BinaryField32::from_le_bytes(bytes));
+    }
+
+    #[test]
+    fn a_sampled_element_of_a_sub_byte_level_keeps_the_low_bits_of_one_byte() {
+        // `GF(16)` takes a whole byte off the stream but uses only its low nibble.
+        let mut challenger = mk::<BinaryField4>();
+        let sampled: BinaryField4 = challenger.sample();
+
+        let mut inner = mk_inner();
+        let byte: u8 = inner.sample();
+
+        assert_eq!(sampled, BinaryField4::from_repr(byte & 0xf));
     }
 
     #[test]
