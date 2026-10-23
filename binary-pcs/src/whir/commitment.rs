@@ -104,7 +104,9 @@ where
                 "the packing level holds whole words"
             );
         };
-        for term_bits in params.security_bits..=params.security_bits + MAX_TERM_SLACK {
+        // Why: a target near the word size would overflow the slack, so the search saturates.
+        let last_term_bits = params.security_bits.saturating_add(MAX_TERM_SLACK);
+        for term_bits in params.security_bits..=last_term_bits {
             // Grinding can cover a whole term, leaving no query; a higher target may still need some.
             let mut commitment = match Self::with_term_bits(num_variables, params, term_bits, &mmcs)
             {
@@ -345,6 +347,7 @@ mod tests {
     use p3_keccak::Keccak256Hash;
     use p3_multilinear_util::point::Point;
     use p3_sumcheck::ring_switch::bits::BitPacking;
+    use p3_whir::WhirConfigError;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{Rng, RngExt, SeedableRng};
@@ -740,6 +743,30 @@ mod tests {
             .error()
             .bits();
         assert!(bits >= 16.0, "composes to {bits} bits");
+    }
+
+    #[test]
+    fn a_target_at_the_word_size_is_refused_rather_than_overflowing() {
+        // Invariant: the constructor refuses every target it cannot meet, and never panics.
+        //
+        // Fixture state: a target of usize::MAX bits, past every challenge field.
+        //
+        //     usize::MAX + 16  overflows the slack the search adds
+        //
+        // The search starts at the target itself, which no schedule can price.
+        let params = CommitmentParams {
+            security_bits: usize::MAX,
+            ..CommitmentParams::default()
+        };
+        assert!(matches!(
+            keccak64::witness_commitment(14, &params, 1).err(),
+            Some(CommitmentError::Profile(ProfileError::Schedule(
+                WhirConfigError::OodSamplesInfeasible {
+                    security_level: usize::MAX,
+                    field_size_bits: 190,
+                }
+            )))
+        ));
     }
 
     proptest! {
