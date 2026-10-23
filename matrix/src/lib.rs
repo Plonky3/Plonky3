@@ -343,8 +343,13 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                 .into_iter();
 
             // array::from_fn is guaranteed to always call in order.
-            let packed =
-                (0..num_packed).map(move |_| P::from_fn(|_| iter.next().unwrap_unchecked()));
+            //
+            // A safe implementation can yield fewer items than the width.
+            //
+            // A missing item must panic, never be read past the row.
+            let packed = (0..num_packed).map(move |_| {
+                P::from_fn(|_| iter.next().expect("row shorter than the matrix width"))
+            });
 
             let sfx = self
                 .row_subseq_unchecked(r, num_packed * P::WIDTH, self.width())
@@ -952,6 +957,25 @@ mod tests {
             // Just a mock implementation so we just do the easy safe thing.
             self.data[r].clone()
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "row shorter than the matrix width")]
+    fn test_horizontally_packed_row_short_row() {
+        // Fixture state: a mock whose only row has 2 items against a width of 4.
+        let m = MockMatrix {
+            data: vec![vec![1, 2]],
+            width: 4,
+            height: 1,
+        };
+
+        // Invariant: packing 4 lanes needs 4 items, and the third one is missing.
+        let (packed, _) = m.horizontally_packed_row::<[u32; 4]>(0);
+        let _ = packed.count();
+
+        // Mutation: assuming the item exists is undefined behaviour.
+        //
+        // A debug build aborts on the unchecked unwrap, and a release build packs a value read past the row.
     }
 
     #[test]
