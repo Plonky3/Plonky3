@@ -39,7 +39,7 @@ impl<F> Default for TwiddlePair<F> {
     }
 }
 
-/// An FFT algorithm which divides a butterfly network's layers into two halves.
+/// An FFT algorithm which processes the outer layers of a butterfly network in groups of three.
 ///
 /// Unlike other FFT algorithms, this algorithm is optimized for small batch sizes.
 /// It also stores its twiddle factors and only re-computes if it is asked to do a
@@ -72,13 +72,13 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
         res
     }
 
-    /// Given a field element `gen` of order n where `n = 2^lg_n`,
-    /// return a vector of vectors `table` where `table[i]` is the
-    /// vector of twiddle factors for an fft of length n/2^i. The
-    /// values g_i^k for k >= i/2 are skipped as these are just the
-    /// negatives of the other roots (using g_i^{i/2} = -1). The
-    /// value gen^0 = 1 is included to aid consistency between the
-    /// packed and non-packed variants.
+    /// Twiddle tables for FFT lengths `n, n / 2, ..., 2`, in natural order.
+    ///
+    /// Row `i` holds `g_i^k` for `k < n / 2^(i + 1)`, where `g_i` generates the subgroup of order `n / 2^i`.
+    ///
+    /// This is the first half of the twiddles for an FFT of length `n / 2^i`.
+    ///
+    /// The second half is skipped since `g_i^(k + n / 2^(i + 1)) = -g_i^k`.
     fn roots_of_unity_table(&self, n: usize) -> Vec<Vec<F>> {
         let lg_n = log2_strict_usize(n);
         let generator = F::two_adic_generator(lg_n);
@@ -949,7 +949,7 @@ const fn workload_size<T: Sized>() -> usize {
 
 /// Estimates the optimal number of rows of a `RowMajorMatrix<T>` to take in each parallel chunk.
 ///
-/// Designed to ensure that `<T> * estimate_num_rows_par() * width` is roughly the size of the L1 cache.
+/// Designed to ensure that `size_of::<T>() * rows * width` is roughly the size of the L1 cache.
 ///
 /// Assumes that height is a power of two and always outputs a power of two.
 #[must_use]
