@@ -71,9 +71,16 @@ impl<T: Clone + Send + Sync> DenseStorage<T> for Cow<'_, [T]> {
 impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
     /// Create a new dense matrix of the given dimensions, backed by a `Vec`, and filled with
     /// default values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `width * height` overflows `usize`.
     #[must_use]
     pub fn default(width: usize, height: usize) -> Self {
-        Self::new(vec![T::default(); width * height], width)
+        let len = width
+            .checked_mul(height)
+            .expect("matrix size overflows usize");
+        Self::new(vec![T::default(); len], width)
     }
 }
 
@@ -270,6 +277,17 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         )
     }
 
+    /// Number of values in the given number of rows.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the count overflows `usize`, rather than wrapping into a wrong size.
+    const fn rows_len(&self, rows: usize) -> usize {
+        self.width
+            .checked_mul(rows)
+            .expect("matrix size overflows usize")
+    }
+
     /// Get an iterator over the rows of the matrix which takes `chunk_rows` rows at a time.
     ///
     /// If `chunk_rows` does not divide the height of the matrix, the last chunk will be smaller.
@@ -280,15 +298,16 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     where
         T: Send,
     {
+        let chunk_len = self.rows_len(chunk_rows);
         self.values
             .borrow()
-            .par_chunks(self.width * chunk_rows)
+            .par_chunks(chunk_len)
             .map(|slice| RowMajorMatrixView::new(slice, self.width))
     }
 
     /// Get a parallel iterator over the rows of the matrix which takes `chunk_rows` rows at a time.
     ///
-    /// If `chunk_rows` does not divide the height of the matrix, the last chunk will be smaller.
+    /// If `chunk_rows` does not divide the height, the last `height % chunk_rows` rows are omitted.
     pub fn par_row_chunks_exact(
         &self,
         chunk_rows: usize,
@@ -296,9 +315,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     where
         T: Send,
     {
+        let chunk_len = self.rows_len(chunk_rows);
         self.values
             .borrow()
-            .par_chunks_exact(self.width * chunk_rows)
+            .par_chunks_exact(chunk_len)
             .map(|slice| RowMajorMatrixView::new(slice, self.width))
     }
 
@@ -313,9 +333,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         T: Send,
         S: BorrowMut<[T]>,
     {
+        let chunk_len = self.rows_len(chunk_rows);
         self.values
             .borrow_mut()
-            .par_chunks_mut(self.width * chunk_rows)
+            .par_chunks_mut(chunk_len)
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 
@@ -331,9 +352,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         T: Send,
         S: BorrowMut<[T]>,
     {
+        let chunk_len = self.rows_len(chunk_rows);
         self.values
             .borrow_mut()
-            .chunks_exact_mut(self.width * chunk_rows)
+            .chunks_exact_mut(chunk_len)
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 
@@ -349,9 +371,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         T: Send,
         S: BorrowMut<[T]>,
     {
+        let chunk_len = self.rows_len(chunk_rows);
         self.values
             .borrow_mut()
-            .par_chunks_exact_mut(self.width * chunk_rows)
+            .par_chunks_exact_mut(chunk_len)
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 
@@ -363,9 +386,12 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     where
         S: BorrowMut<[T]>,
     {
-        debug_assert_ne!(row_1, row_2);
+        assert!(row_1 < row_2, "Rows must be ordered as row_1 < row_2.");
+        // Checked so an index past the last row panics instead of wrapping onto another row.
+        let start_2 = row_2
+            .checked_mul(self.width)
+            .expect("Row index out of bounds.");
         let start_1 = row_1 * self.width;
-        let start_2 = row_2 * self.width;
         let (lo, hi) = self.values.borrow_mut().split_at_mut(start_2);
         (&mut lo[start_1..][..self.width], &mut hi[..self.width])
     }
@@ -395,12 +421,17 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
 
     /// Append zeros to the "end" of the given matrix, except that the matrix is in bit-reversed order,
     /// so in actuality we're interleaving zero rows.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the padded matrix has more than `usize::MAX` values.
     #[instrument(level = "debug", skip_all)]
     pub fn bit_reversed_zero_pad(self, added_bits: usize) -> RowMajorMatrix<T>
     where
         T: Field,
     {
-        if added_bits == 0 {
+        // A width-0 matrix has no rows to interleave.
+        if added_bits == 0 || self.width == 0 {
             return self.to_row_major_matrix();
         }
 
@@ -414,8 +445,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         // whose rows are zero except for rows whose low `added_bits` bits are zero.
 
         let w = self.width;
-        let mut padded =
-            RowMajorMatrix::new(T::zero_vec(self.values.borrow().len() << added_bits), w);
+        // Checked so a huge padding panics instead of wrapping into a shorter matrix.
+        let padded_len = u32::try_from(added_bits)
+            .ok()
+            .and_then(|bits| 1usize.checked_shl(bits))
+            .and_then(|scale| self.height().checked_mul(scale))
+            .and_then(|padded_h| padded_h.checked_mul(w))
+            .expect("padded matrix size overflows usize");
+        let mut padded = RowMajorMatrix::new(T::zero_vec(padded_len), w);
         padded
             .par_row_chunks_exact_mut(1 << added_bits)
             .zip(self.par_row_slices())
@@ -772,7 +809,8 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
 
     pub fn pad_to_height(&mut self, new_height: usize, fill: T) {
         assert!(new_height >= self.height());
-        self.values.resize(self.width * new_height, fill);
+        let len = self.rows_len(new_height);
+        self.values.resize(len, fill);
     }
 
     /// Pad the matrix height to the next power of two by appending rows filled with `fill`.
@@ -790,7 +828,8 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
 
         // If target_height == height, resize will have no effect.
         // Otherwise we pad the matrix to a power of two height by filling with the supplied value.
-        self.values.resize(self.width * target_height, fill);
+        let len = self.rows_len(target_height);
+        self.values.resize(len, fill);
     }
 
     /// Pad the matrix height to at least a given minimum, rounded up to the next power of two.
@@ -812,13 +851,15 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     /// - If the matrix is empty (height = 0), it is padded entirely with fill values.
     pub fn pad_to_min_power_of_two_height(&mut self, min_height: usize, fill: T) {
         // Compute the target as the larger of the two power-of-two ceilings.
-        let target_height = self
-            .height()
-            .next_power_of_two()
-            .max(min_height.next_power_of_two());
+        let target_height = self.height().next_power_of_two().max(
+            min_height
+                .checked_next_power_of_two()
+                .expect("matrix height overflows usize"),
+        );
 
         // Extend with fill values to reach the target height. No-op if already there.
-        self.values.resize(self.width * target_height, fill);
+        let len = self.rows_len(target_height);
+        self.values.resize(len, fill);
     }
 
     /// Build a matrix from a flat buffer whose length may not be a multiple of the
@@ -1416,6 +1457,33 @@ mod tests {
     }
 
     #[test]
+    fn test_bit_reversed_zero_pad_width_zero() {
+        // A width-0 matrix has no rows, so padding leaves it empty.
+        let matrix = RowMajorMatrix::<BabyBear>::new(vec![], 0);
+
+        let padded = matrix.bit_reversed_zero_pad(3);
+
+        assert_eq!(padded.width, 0);
+        assert!(padded.values.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "padded matrix size overflows usize")]
+    fn test_bit_reversed_zero_pad_rejects_wrapping_height() {
+        // Height 2 times 2^(BITS - 1) wraps to 0.
+        let matrix = RowMajorMatrix::new(vec![BabyBear::ONE; 2], 1);
+        let _ = matrix.bit_reversed_zero_pad(usize::BITS as usize - 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "padded matrix size overflows usize")]
+    fn test_bit_reversed_zero_pad_rejects_word_sized_shift() {
+        // A shift by the word size overflows even for height 1.
+        let matrix = RowMajorMatrix::new(vec![BabyBear::ONE], 1);
+        let _ = matrix.bit_reversed_zero_pad(usize::BITS as usize);
+    }
+
+    #[test]
     fn test_scale() {
         let mut matrix = RowMajorMatrix::new(
             vec![
@@ -1592,6 +1660,14 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "matrix size overflows usize")]
+    fn test_pad_to_height_rejects_overflow() {
+        // Width 3 times this row count wraps to 2, which would shrink the buffer.
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 3);
+        matrix.pad_to_height(WRAPPING_ROWS, 0);
+    }
+
+    #[test]
     fn test_pad_to_power_of_two_height() {
         // Test 1: Non-power-of-two height (3 rows -> 4 rows) with fill value 0.
         //
@@ -1717,6 +1793,21 @@ mod tests {
         assert_eq!(matrix.height(), 8);
         assert_eq!(matrix.values.len(), 24);
         assert!(matrix.values.iter().all(|&v| v == 7));
+    }
+
+    #[test]
+    #[should_panic(expected = "matrix height overflows usize")]
+    fn test_pad_to_min_power_of_two_height_rejects_overflow() {
+        // No power of two above 2^(BITS - 1) fits in usize.
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3], 3);
+        matrix.pad_to_min_power_of_two_height((1 << (usize::BITS - 1)) + 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "matrix size overflows usize")]
+    fn test_default_rejects_overflow() {
+        // usize::MAX columns times 2 rows does not fit in usize.
+        let _ = RowMajorMatrix::<u8>::default(usize::MAX, 2);
     }
 
     #[test]
@@ -1958,6 +2049,56 @@ mod tests {
     }
 
     #[test]
+    fn test_par_row_chunks_exact_omits_remainder() {
+        // Height 5 in chunks of 2 rows: the fifth row does not fill a chunk.
+        //
+        //     rows: [0 1 | 2 3 | 4]  ->  chunks of heights [2, 2]
+        let matrix = RowMajorMatrix::new(vec![0, 1, 2, 3, 4], 1);
+
+        let heights: Vec<_> = matrix.par_row_chunks_exact(2).map(|c| c.height()).collect();
+
+        assert_eq!(heights, vec![2, 2]);
+    }
+
+    /// A row count that wraps to 2 values when multiplied by width 3.
+    const WRAPPING_ROWS: usize = usize::MAX / 3 + 1;
+
+    #[test]
+    #[should_panic(expected = "matrix size overflows usize")]
+    fn test_par_row_chunks_rejects_overflow() {
+        let matrix = RowMajorMatrix::new(vec![0; 6], 3);
+        let _ = matrix.par_row_chunks(WRAPPING_ROWS).count();
+    }
+
+    #[test]
+    #[should_panic(expected = "matrix size overflows usize")]
+    fn test_par_row_chunks_exact_rejects_overflow() {
+        let matrix = RowMajorMatrix::new(vec![0; 6], 3);
+        let _ = matrix.par_row_chunks_exact(WRAPPING_ROWS).count();
+    }
+
+    #[test]
+    #[should_panic(expected = "matrix size overflows usize")]
+    fn test_par_row_chunks_mut_rejects_overflow() {
+        let mut matrix = RowMajorMatrix::new(vec![0; 6], 3);
+        let _ = matrix.par_row_chunks_mut(WRAPPING_ROWS).count();
+    }
+
+    #[test]
+    #[should_panic(expected = "matrix size overflows usize")]
+    fn test_row_chunks_exact_mut_rejects_overflow() {
+        let mut matrix = RowMajorMatrix::new(vec![0; 6], 3);
+        let _ = matrix.row_chunks_exact_mut(WRAPPING_ROWS).count();
+    }
+
+    #[test]
+    #[should_panic(expected = "matrix size overflows usize")]
+    fn test_par_row_chunks_exact_mut_rejects_overflow() {
+        let mut matrix = RowMajorMatrix::new(vec![0; 6], 3);
+        let _ = matrix.par_row_chunks_exact_mut(WRAPPING_ROWS).count();
+    }
+
+    #[test]
     fn test_row_pair_mut() {
         let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
 
@@ -1966,6 +2107,22 @@ mod tests {
         row2[1] = 10;
 
         assert_eq!(matrix.values, vec![9, 2, 3, 4, 5, 10]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Rows must be ordered")]
+    fn test_row_pair_mut_rejects_equal_rows() {
+        // Width 0 makes every slice empty, so only the ordering check can catch this.
+        let mut matrix = RowMajorMatrix::<u8>::new(vec![], 0);
+        let _ = matrix.row_pair_mut(1, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_row_pair_mut_rejects_overflowing_row_index() {
+        // Width 3 times this row count wraps to 2, which would land inside this 2 x 3 buffer.
+        let mut matrix = RowMajorMatrix::new(vec![0; 6], 3);
+        let _ = matrix.row_pair_mut(0, WRAPPING_ROWS);
     }
 
     #[test]
