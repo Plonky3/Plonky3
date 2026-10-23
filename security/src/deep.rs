@@ -13,7 +13,7 @@
 //! The caller supplies the exact chunk count. For degree `d` and `z = is_zk`, this is
 //! `c = 2^z · next_power_of_two(max(d + z, 2) − 1)`, including both ZK adjustments.
 //!
-//! # Why the list size enters linearly
+//! The list size enters linearly.
 //!
 //! The trace and quotient words are decoded jointly, as one interleaved word.
 //!
