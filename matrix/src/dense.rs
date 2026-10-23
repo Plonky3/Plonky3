@@ -387,11 +387,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         S: BorrowMut<[T]>,
     {
         assert!(row_1 < row_2, "Rows must be ordered as row_1 < row_2.");
-        // Checked so an index past the last row panics instead of wrapping onto another row.
-        let start_2 = row_2
-            .checked_mul(self.width)
-            .expect("Row index out of bounds.");
+        // Slicing alone misses width 0, where every row index yields an empty slice.
+        assert!(row_2 < self.height(), "Row index out of bounds.");
         let start_1 = row_1 * self.width;
+        let start_2 = row_2 * self.width;
         let (lo, hi) = self.values.borrow_mut().split_at_mut(start_2);
         (&mut lo[start_1..][..self.width], &mut hi[..self.width])
     }
@@ -2115,6 +2114,14 @@ mod tests {
         // Width 0 makes every slice empty, so only the ordering check can catch this.
         let mut matrix = RowMajorMatrix::<u8>::new(vec![], 0);
         let _ = matrix.row_pair_mut(1, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Row index out of bounds")]
+    fn test_row_pair_mut_rejects_rows_of_width_zero_matrix() {
+        // Height 0: both ordered rows are out of bounds, though their slices would be empty.
+        let mut matrix = RowMajorMatrix::<u8>::new(vec![], 0);
+        let _ = matrix.row_pair_mut(0, 1);
     }
 
     #[test]
