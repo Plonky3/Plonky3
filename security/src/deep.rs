@@ -25,14 +25,23 @@
 //!
 //! Eprint 2024/1553, Theorem 2, charges its square, a looser bound.
 //!
-//! The difference matters, because this term can set the reported level:
+//! The difference matters, because this term can set the reported level.
+//!
+//! Example: a degree-3 AIR over a 124-bit field, in the list-decoding regime.
 //!
 //! ```text
-//!     degree-3 AIR, 2^24 trace, blowup 8, 70 queries, 124-bit field, m = 3
+//!     trace 2^24, blowup 8, 70 queries, arity 2, m = 3
+//!     grinding: 20 bits commit phase, 16 bits query phase, 8 bits batch combination
+//!     2 batched functions
 //!
-//!     linear list size:   94.7 bits, the weakest term of the report
-//!     squared list size:  91.4 bits
+//!     air composition      117.37 bits
+//!     batch combination     95.16 bits
+//!     low-degree test      105.43 bits
+//!     DEEP, linear          94.69 bits   <- weakest, sets the level
+//!     DEEP, squared         91.39 bits
 //! ```
+//!
+//! Without batch grinding the batch term drops to 87.16 bits and sets the level instead.
 
 use libm::log2;
 
