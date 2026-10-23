@@ -87,12 +87,8 @@ impl Circuit {
         keep: bool,
     ) -> Self {
         let n_input_words = inputs.last().map_or(0, |r| r.end);
-        let port_words = outputs.last().map_or(n_input_words, |r| r.end);
-        let const_pos = 64 * port_words;
-        let digest = digest(
-            &gates,
-            [k_log, const_pos, useful_bits, n_input_words, gates.len()],
-        );
+        let const_pos = const_slot(&inputs, &outputs);
+        let digest = digest_of(&gates, &inputs, &outputs, k_log, useful_bits);
         let program = Program::new(&mut gates, !keep, const_pos, k_log, 64 * n_input_words);
         Self {
             gates,
@@ -302,6 +298,31 @@ impl Circuit {
         assert_eq!(m.len(), 1 << self.k_log, "one output per slot");
         self.program.fold_transpose_by(a, b, u, |s, v| m[s] += v);
     }
+}
+
+/// Slot of the constant one: right after the last port.
+fn const_slot(inputs: &[Range<usize>], outputs: &[Range<usize>]) -> usize {
+    let n_input_words = inputs.last().map_or(0, |r| r.end);
+    64 * outputs.last().map_or(n_input_words, |r| r.end)
+}
+
+/// The digest of a sealed gate list with its ports, as [`Circuit::digest`] gives it.
+pub(crate) fn digest_of(
+    gates: &GateList,
+    inputs: &[Range<usize>],
+    outputs: &[Range<usize>],
+    k_log: usize,
+    useful_bits: usize,
+) -> [u8; 32] {
+    let n_input_words = inputs.last().map_or(0, |r| r.end);
+    let shape = [
+        k_log,
+        const_slot(inputs, outputs),
+        useful_bits,
+        n_input_words,
+        gates.len(),
+    ];
+    digest(gates, shape)
 }
 
 /// Keccak-256 of the shape, then of the digests of fixed chunks of gates.

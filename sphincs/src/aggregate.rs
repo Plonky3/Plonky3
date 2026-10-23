@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 
 use p3_flock::{
-    Batch, BatchError, Circuit, FlockChallenger, FlockConfig, FlockProof, Port, ProvingError,
-    PublicPorts, VerificationError, Witness,
+    Batch, BatchError, Circuit, FlockChallenger, FlockConfig, FlockHash, FlockProof, Port,
+    ProvingError, PublicPorts, VerificationError, Witness,
 };
 use p3_util::log2_ceil_usize;
 
@@ -88,11 +88,11 @@ impl Aggregator {
     /// # Errors
     ///
     /// When there is no claim, the batch is out of range, or a signature does not verify.
-    pub fn prove(
+    pub fn prove<H: FlockHash>(
         &self,
         claims: &[Claim],
-        challenger: &mut FlockChallenger,
-    ) -> Result<FlockProof, AggregationError> {
+        challenger: &mut FlockChallenger<H>,
+    ) -> Result<FlockProof<H>, AggregationError> {
         let (last, batch) = self.batch(claims.len())?;
         let witness = Witness::generate(
             &self.circuit,
@@ -124,11 +124,11 @@ impl Aggregator {
     /// # Errors
     ///
     /// When there is no statement, the batch is out of range, or the proof is rejected.
-    pub fn verify(
+    pub fn verify<H: FlockHash>(
         &self,
         statements: &[Statement],
-        proof: &FlockProof,
-        challenger: &mut FlockChallenger,
+        proof: &FlockProof<H>,
+        challenger: &mut FlockChallenger<H>,
     ) -> Result<(), AggregationError> {
         let (_, batch) = self.batch(statements.len())?;
         let public = self.public(&batch, statements);
@@ -139,6 +139,20 @@ impl Aggregator {
             proof,
             challenger,
         )?)
+    }
+
+    /// The batch and public words a proof of these statements is verified against.
+    ///
+    /// # Errors
+    ///
+    /// When there is no statement or the batch is out of range.
+    pub fn statement(
+        &self,
+        statements: &[Statement],
+    ) -> Result<(Batch<'_>, PublicPorts), AggregationError> {
+        let (_, batch) = self.batch(statements.len())?;
+        let public = self.public(&batch, statements);
+        Ok((batch, public))
     }
 
     /// The last item's index and the batch of `count` items rounded up to a power of two.

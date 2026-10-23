@@ -77,6 +77,9 @@ pub enum DeferralError {
 /// Lanes one walk of a [`Matrix`] carries.
 const LANES: usize = 8;
 
+/// Bytes the register files of a [`Matrix`]'s parallel walks may take together.
+const REGISTER_BUDGET: usize = 1 << 31;
+
 /// `eq(point, s)` for every index `s`, as two half tables whose product is the entry.
 struct SplitEq {
     /// Entries of the high bits.
@@ -202,6 +205,17 @@ impl Matrix {
                 )
             })
             .collect();
+        // Each walk holds `LANES` values per register, so at most a budget's worth of walks run at once.
+        let per_walk = self.program.registers() * size_of::<[Challenge; LANES]>();
+        let walks = (REGISTER_BUDGET / per_walk).max(1);
+        parts
+            .chunks(LANES * walks)
+            .flat_map(|batch| self.evaluate_parts(batch))
+            .collect()
+    }
+
+    /// The values of prepared points, `LANES` per walk, the walks in parallel.
+    fn evaluate_parts(&self, parts: &[(Challenge, Challenge, SplitEq, SplitEq)]) -> Vec<Challenge> {
         parts
             .par_chunks(LANES)
             .flat_map_iter(|group| {

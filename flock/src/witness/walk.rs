@@ -58,11 +58,17 @@ enum Op<'a> {
 const SHORT: u32 = 1 << 31;
 
 /// Destination registers a one-word header can name.
-const SHORT_DST: u32 = 1 << 23;
+const SHORT_DST: u32 = 1 << 24;
+
+/// Terms of a short sum or copy, and twice the bits of a short product's two counts.
+const SHORT_COUNT: usize = 32;
+
+/// Terms of each form of a short product.
+const SHORT_FORM: usize = 4;
 
 /// Decode the operation at `at`, returning it and the offset of the next one; `next_slot` follows the products.
 ///
-/// A short header is the flag, the kind, six bits of counts (a product's two counts of three bits) and the destination.
+/// A short header is the flag, the kind, five bits of counts (a product's two counts of two bits) and the destination.
 ///
 /// A long header is the kind, then a sum's or copy's count, or a product's counts of 14 and 15 bits; the destination and slot follow.
 #[inline(always)]
@@ -71,7 +77,7 @@ fn decode<'c>(code: &'c [u32], at: usize, next_slot: &mut u32) -> (Op<'c>, usize
     let kind = (header >> 29) & 3;
     if header & SHORT != 0 {
         let dst = header & (SHORT_DST - 1);
-        let n = ((header >> 23) & 0x3F) as usize;
+        let n = ((header >> 24) & 0x1F) as usize;
         return match kind {
             LIN => (
                 Op::Lin {
@@ -81,7 +87,7 @@ fn decode<'c>(code: &'c [u32], at: usize, next_slot: &mut u32) -> (Op<'c>, usize
                 at + 1 + n,
             ),
             AND => {
-                let (na, nb) = (n >> 3, n & 7);
+                let (na, nb) = (n >> 2, n & 3);
                 let slot = *next_slot;
                 *next_slot += 1;
                 let a = &code[at + 1..at + 1 + na];
@@ -144,10 +150,19 @@ fn decode<'c>(code: &'c [u32], at: usize, next_slot: &mut u32) -> (Op<'c>, usize
     }
 }
 
-/// Every term of a long-form operation, in code order: the positions a register allocator rewrites.
+/// Every term of an operation, in code order: the positions a register allocator rewrites.
 #[inline(always)]
 const fn term_range(code: &[u32], at: usize) -> core::ops::Range<usize> {
     let header = code[at];
+    if header & SHORT != 0 {
+        let n = ((header >> 24) & 0x1F) as usize;
+        return match (header >> 29) & 3 {
+            LIN => at + 1..at + 1 + n,
+            AND => at + 1..at + 1 + (n >> 2) + (n & 3),
+            COPY => at + 2..at + 2 + n,
+            _ => at + 2..at + 2,
+        };
+    }
     match (header >> 29) & 3 {
         LIN => at + 2..at + 2 + (header & 0x1FFF_FFFF) as usize,
         AND => at + 3..at + 3 + ((header >> 15) & 0x3FFF) as usize + (header & 0x7FFF) as usize,
@@ -292,17 +307,41 @@ fn xor_sorted(x: &mut Vec<u32>, y: &mut Vec<u32>, out: &mut Vec<u32>) {
     out.extend_from_slice(&y[j..]);
 }
 
-/// Append a header, a destination placeholder, an optional slot and the terms.
+/// Append an operation with its destination left zero: a short header when its counts allow, else a long one.
+///
+/// A product's slot is left out when it follows the previous product's; `next_slot` follows the products.
 ///
 /// The code grows by an eighth at a time, so its slack stays small.
-fn emit(code: &mut Vec<u32>, header: u32, slot: Option<u32>, terms: [&[u32]; 2]) {
+fn emit(
+    code: &mut Vec<u32>,
+    kind: u32,
+    slot: Option<u32>,
+    terms: [&[u32]; 2],
+    next_slot: &mut u32,
+) {
     let extra = 3 + terms[0].len() + terms[1].len();
     if code.capacity() - code.len() < extra {
         code.reserve_exact(extra.max(code.len() / 8));
     }
-    code.push(header);
-    code.push(0);
-    code.extend(slot);
+    let (na, nb) = (terms[0].len(), terms[1].len());
+    let short = match kind {
+        AND => na < SHORT_FORM && nb < SHORT_FORM && slot == Some(*next_slot),
+        _ => na < SHORT_COUNT,
+    };
+    if kind == AND {
+        *next_slot = slot.expect("a product's slot") + 1;
+    }
+    if short {
+        let n = if kind == AND { (na << 2) | nb } else { na };
+        code.push(SHORT | (kind << 29) | ((n as u32) << 24));
+        if matches!(kind, COPY | FREE) {
+            code.extend(slot);
+        }
+    } else {
+        let counts = if kind == AND { (na << 15) | nb } else { na };
+        code.extend([(kind << 29) | counts as u32, 0]);
+        code.extend(slot);
+    }
     code.extend_from_slice(terms[0]);
     code.extend_from_slice(terms[1]);
 }
@@ -319,6 +358,7 @@ fn fold_xors(gates: impl Iterator<Item = Gate>, reads: &[u8]) -> (Vec<u32>, usiz
     let (mut x, mut y, mut sum) = (Vec::new(), Vec::new(), Vec::new());
     let mut ops = 0u32;
     let mut ands = 0;
+    let mut next_slot = 0;
     for (i, gate) in gates.enumerate() {
         x.clear();
         y.clear();
@@ -342,24 +382,19 @@ fn fold_xors(gates: impl Iterator<Item = Gate>, reads: &[u8]) -> (Vec<u32>, usiz
                     map[i] = slab.insert(&mut sum, n as u32);
                     continue;
                 }
-                emit(&mut code, (LIN << 29) | t as u32, None, [&sum, &[]]);
+                emit(&mut code, LIN, None, [&sum, &[]], &mut next_slot);
             }
             Gate::And(a, b, s) => {
                 slab.read(map[a as usize], &mut x);
                 slab.read(map[b as usize], &mut y);
                 ands += 1;
-                emit(
-                    &mut code,
-                    (AND << 29) | ((x.len() as u32) << 15) | y.len() as u32,
-                    Some(s),
-                    [&x, &y],
-                );
+                emit(&mut code, AND, Some(s), [&x, &y], &mut next_slot);
             }
             Gate::Copy(a, s) => {
                 slab.read(map[a as usize], &mut x);
-                emit(&mut code, (COPY << 29) | x.len() as u32, Some(s), [&x, &[]]);
+                emit(&mut code, COPY, Some(s), [&x, &[]], &mut next_slot);
             }
-            Gate::Free(s) => emit(&mut code, FREE << 29, Some(s), [&[], &[]]),
+            Gate::Free(s) => emit(&mut code, FREE, Some(s), [&[], &[]], &mut next_slot),
         }
         map[i] = ops;
         ops += 1;
@@ -399,32 +434,18 @@ impl Program {
         }
 
         // Pass 2: registers, rewritten in place; operands free theirs before the result takes one.
-        //
-        // A rewritten operation is never longer than its long form, so it is written at or before where it is read.
         let mut reg: Vec<u32> = vec![SINK; ops];
         let mut free: Vec<u32> = Vec::new();
         let mut registers = 1u32;
         let mut checkpoints = Vec::with_capacity(ops.div_ceil(CHECKPOINT));
         let mut constant_rows = Vec::new();
         let mut terms = 0;
-        let (mut at, mut out) = (0, 0);
-        let mut next_slot = 0u32;
+        let (mut at, mut next_slot) = (0, 0);
         for k in 0..ops {
             if k % CHECKPOINT == 0 {
-                checkpoints.push((out, next_slot));
+                checkpoints.push((at, next_slot));
             }
-            let header = code[at];
-            let kind = (header >> 29) & 3;
-            let slot = (kind != LIN).then(|| code[at + 2]);
             let range = term_range(&code, at);
-            let (na, nb) = if kind == AND {
-                (
-                    ((header >> 15) & 0x3FFF) as usize,
-                    (header & 0x7FFF) as usize,
-                )
-            } else {
-                (range.len(), 0)
-            };
             terms += range.len();
             for p in range.clone() {
                 let o = code[p] as usize;
@@ -444,39 +465,18 @@ impl Program {
                 SINK
             };
             reg[k] = dst;
-            if matches!(kind, COPY | FREE) {
-                constant_rows.push(slot.expect("a committed slot"));
-            }
-            let short = dst < SHORT_DST
-                && match kind {
-                    AND => na < 8 && nb < 8 && slot == Some(next_slot),
-                    _ => na < 64,
-                };
-            if kind == AND {
-                next_slot = slot.expect("a committed slot") + 1;
-            }
-            if short {
-                let n = if kind == AND { (na << 3) | nb } else { na };
-                code[out] = SHORT | (kind << 29) | ((n as u32) << 23) | dst;
-                out += 1;
-                if matches!(kind, COPY | FREE) {
-                    code[out] = slot.expect("a committed slot");
-                    out += 1;
-                }
+            if code[at] & SHORT != 0 {
+                assert!(dst < SHORT_DST, "registers fit a short header");
+                code[at] |= dst;
             } else {
-                code[out] = header;
-                code[out + 1] = dst;
-                out += 2;
-                if let Some(slot) = slot {
-                    code[out] = slot;
-                    out += 1;
-                }
+                code[at + 1] = dst;
             }
-            code.copy_within(range.clone(), out);
-            out += range.len();
+            match decode(&code, at, &mut next_slot).0 {
+                Op::Copy { slot, .. } | Op::Free { slot, .. } => constant_rows.push(slot),
+                _ => {}
+            }
             at = range.end;
         }
-        code.truncate(out);
         code.shrink_to_fit();
         Self {
             code,

@@ -527,7 +527,7 @@ fn peak_gb() -> f64 {
 }
 
 #[test]
-#[ignore = "builds and proves node circuits of 2^27 bits per instance (peak 18 GB to level 2, 22 GB with the level-3 instance); run with --release --include-ignored"]
+#[ignore = "builds and proves node circuits of 2^27 bits per instance (peak 16 GB); run with --release --include-ignored"]
 fn a_tree_of_proofs_folds_its_claims_and_reaches_a_fixed_point() {
     use alloc::sync::Arc;
     use std::time::Instant;
@@ -553,25 +553,23 @@ fn a_tree_of_proofs_folds_its_claims_and_reaches_a_fixed_point() {
             proof,
         })
         .collect();
-    let mut level1 = Vec::new();
+    let mut level1: Vec<NodeProof> = Vec::new();
     for pair in children.chunks(2) {
         let start = Instant::now();
-        let node = prove_node(
+        // Both level-1 nodes have one circuit: the second reuses the first's, compiled once.
+        let reuse = level1.first().map(|n| &n.circuit.circuit);
+        let node = build_node(
             &layout,
-            &config,
             [&pair[0], &pair[1]],
             &[Arc::clone(&leaf_matrix)],
+            reuse,
         )
+        .unwrap()
+        .prove(&config)
         .unwrap();
         report(1, &node, start.elapsed());
         level1.push(node);
     }
-    // Both level-1 proofs have one circuit, so one compiled walk serves both.
-    assert_eq!(
-        level1[0].circuit.circuit.digest(),
-        level1[1].circuit.circuit.digest()
-    );
-    level1[1].circuit.circuit = level1[0].circuit.circuit.clone();
     std::println!("peak {:.1} GB", peak_gb());
     let digests: Vec<[u8; 32]> = leaves.iter().map(|l| *l.1.digest()).collect();
     let expected1 = [
@@ -610,6 +608,7 @@ fn a_tree_of_proofs_folds_its_claims_and_reaches_a_fixed_point() {
             },
         ],
         &matrices,
+        None,
     )
     .unwrap();
     // One level-1 matrix serves both: they are one circuit.
@@ -634,7 +633,7 @@ fn a_tree_of_proofs_folds_its_claims_and_reaches_a_fixed_point() {
         postcard::to_allocvec(&level2.proof).unwrap().len() / 1024
     );
 
-    // Level 3 verifies level-2 proofs: its instance circuit is the level-2 one, so the tree has a fixed point.
+    // Level 3 verifies level-2 proofs on the level-2 circuit, which the build checks by digest: the tree has a fixed point.
     drop(level1);
     let level2_matrix = Arc::new(Matrix::new(&level2.circuit.circuit));
     let start = Instant::now();
@@ -642,18 +641,20 @@ fn a_tree_of_proofs_folds_its_claims_and_reaches_a_fixed_point() {
         config: &config,
         node: &level2,
     };
-    let (instance, _) = node_instance(
+    let level3 = build_node(
         &layout,
-        &child,
+        [&child, &child],
         &[Arc::clone(&leaf_matrix), level1_matrix, level2_matrix],
+        Some(&level2.circuit.circuit),
     )
     .unwrap();
     std::println!(
-        "level 3 instance built in {:?}: {} ANDs, digest equal to level 2: {}, peak {:.1} GB",
+        "level 3 instances built on the level-2 circuit in {:?}, peak {:.1} GB",
         start.elapsed(),
-        instance.ands,
-        instance.circuit.digest() == level2.circuit.circuit.digest(),
         peak_gb()
     );
-    assert_eq!(instance.circuit.digest(), level2.circuit.circuit.digest());
+    assert_eq!(
+        level3.circuit.circuit.digest(),
+        level2.circuit.circuit.digest()
+    );
 }

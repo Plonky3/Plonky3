@@ -38,7 +38,7 @@ pub use self::gates::{BinaryElement, Byte, Cost};
 pub use self::mmcs::CapTarget;
 pub use self::node::{
     Child, NodeCircuit, NodeError, NodeLayout, NodeOutput, NodeProof, Slot, build_node,
-    leaf_digest, node_instance, prove_node, verify_root,
+    leaf_digest, prove_node, verify_root,
 };
 pub use self::statement::WireStatement;
 pub use self::value::{Bin, Gf64, Gf192};
@@ -97,6 +97,49 @@ impl WireArith {
         k_log: Option<usize>,
     ) -> RecursionCircuit {
         let costs = self.costs();
+        let gates = self.padded(advice_words, k_log);
+        let gate_count = gates.builder.num_gates();
+        // Every pass runs the compiled walk, so the gate list goes as it compiles.
+        let circuit = gates.builder.finish_compiled();
+        if let Some(k_log) = k_log {
+            assert_eq!(circuit.k_log(), k_log, "the circuit fits its padding");
+        }
+        RecursionCircuit {
+            ands: circuit.num_ands(),
+            gates: gate_count,
+            ops: circuit.num_ops(),
+            terms: circuit.num_terms(),
+            circuit,
+            advice: gates.advice,
+            revealed: gates.revealed,
+            costs,
+        }
+    }
+
+    /// As [`Self::finish_padded`], only the circuit's digest, advice and revealed bits: nothing is compiled.
+    ///
+    /// # Panics
+    ///
+    /// When the circuit is already past a target.
+    #[must_use]
+    pub fn finish_values(
+        self,
+        advice_words: Option<usize>,
+        k_log: Option<usize>,
+    ) -> RecursionValues {
+        let costs = self.costs();
+        let gates = self.padded(advice_words, k_log);
+        RecursionValues {
+            gates: gates.builder.num_gates(),
+            digest: gates.builder.digest(),
+            advice: gates.advice,
+            revealed: gates.revealed,
+            costs,
+        }
+    }
+
+    /// The circuit under construction with the fail bit revealed and its shape padded.
+    fn padded(&self, advice_words: Option<usize>, k_log: Option<usize>) -> Gates {
         let mut gates = core::mem::replace(&mut *self.gates.lock(), Gates::new());
         // The OR of every assertion, pinned to zero last.
         let fail = gates.fail;
@@ -119,21 +162,47 @@ impl WireArith {
             "every announced value is absorbed"
         );
         assert!(gates.sampled.is_empty(), "every sample is taken");
-        let gate_count = gates.builder.num_gates();
-        // Every pass runs the compiled walk, so the gate list goes as it compiles.
-        let circuit = gates.builder.finish_compiled();
-        if let Some(k_log) = k_log {
-            assert_eq!(circuit.k_log(), k_log, "the circuit fits its padding");
-        }
+        gates
+    }
+}
+
+/// A recursion circuit's digest and values, its gates never compiled.
+#[derive(Debug)]
+pub struct RecursionValues {
+    /// The circuit's digest.
+    pub digest: [u8; 32],
+    /// The advice bits, packed 64 per word.
+    pub advice: Vec<u64>,
+    /// The revealed bits the statement pins, packed 64 per word.
+    pub revealed: Vec<u64>,
+    /// Gates of the circuit, XORs included.
+    pub gates: usize,
+    /// Products and gates per component.
+    pub costs: Vec<Cost>,
+}
+
+impl RecursionValues {
+    /// The recursion circuit these values satisfy, given its compiled circuit.
+    ///
+    /// # Panics
+    ///
+    /// When the circuit is not the one the values were built for.
+    #[must_use]
+    pub fn on(self, circuit: &Circuit) -> RecursionCircuit {
+        assert_eq!(
+            circuit.digest(),
+            &self.digest,
+            "the values were built for this circuit"
+        );
         RecursionCircuit {
+            circuit: circuit.clone(),
+            advice: self.advice,
+            revealed: self.revealed,
+            costs: self.costs,
             ands: circuit.num_ands(),
-            gates: gate_count,
+            gates: self.gates,
             ops: circuit.num_ops(),
             terms: circuit.num_terms(),
-            circuit,
-            advice: gates.advice,
-            revealed: gates.revealed,
-            costs,
         }
     }
 }

@@ -405,8 +405,21 @@ impl Builder {
         self.seal(false)
     }
 
+    /// The digest [`Self::finish`] would give the circuit, without compiling it.
+    #[must_use]
+    pub(crate) fn digest(mut self) -> [u8; 32] {
+        let (inputs, outputs, k_log, useful_bits) = self.layout();
+        super::digest_of(&self.gates, &inputs, &outputs, k_log, useful_bits)
+    }
+
     /// The finished circuit, its gates kept when `keep` is set.
     fn seal(mut self, keep: bool) -> Circuit {
+        let (inputs, outputs, k_log, useful_bits) = self.layout();
+        Circuit::new(self.gates, inputs, outputs, k_log, useful_bits, keep)
+    }
+
+    /// Relocate the advice and revealed slots, returning the ports' words, the bits per instance as a power of two and the useful bits.
+    fn layout(&mut self) -> (Vec<Range<usize>>, Vec<Range<usize>>, usize, usize) {
         let advice_words = self.advice.div_ceil(64);
         let revealed_words = self.revealed.div_ceil(64);
         let declared_inputs = 64 * self.n_input_words;
@@ -455,14 +468,12 @@ impl Builder {
             let start = declared_ports / 64 + advice_words;
             outputs.push(start..start + revealed_words);
         }
-        Circuit::new(
-            self.gates,
+        (
             inputs,
             outputs,
             // At least one packed word per instance.
             useful_bits.next_power_of_two().trailing_zeros().max(6) as usize,
             useful_bits,
-            keep,
         )
     }
 }

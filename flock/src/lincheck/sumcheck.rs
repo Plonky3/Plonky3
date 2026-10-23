@@ -222,11 +222,14 @@ impl<'a> ProductSumcheck<'a> {
         self.comb = Vec::new();
     }
 
-    /// The witness as it stands.
-    pub(crate) fn into_z(self) -> Vec<Challenge> {
+    /// The witness as it stands, its buffer cut to its length.
+    pub(crate) fn into_z(mut self) -> Vec<Challenge> {
         match self.unbound {
             Some(f) => f.to_vec(),
-            None => self.z,
+            None => {
+                self.z.shrink_to_fit();
+                self.z
+            }
         }
     }
 }

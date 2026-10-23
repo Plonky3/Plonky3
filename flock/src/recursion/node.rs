@@ -24,7 +24,7 @@ use super::{
     Bit, Blake3Mirror, Gf192, Matrix, MatrixClaim, RecursionCircuit, RecursionError, WireArith,
     fold_claims_in, line_polynomial,
 };
-use crate::circuit::Wire;
+use crate::circuit::{Circuit, Wire};
 use crate::{
     Batch, BatchError, Challenge, FlockChallenger, FlockConfig, FlockProof, ProvingError,
     PublicPorts, Witness,
@@ -511,19 +511,13 @@ fn node_public(
     })
 }
 
-/// Build the node instance circuit verifying one child, with the advice its proof satisfies.
-///
-/// `matrices` holds the compiled matrices of every circuit a carried claim may name, for the folds.
-///
-/// # Errors
-///
-/// When the child is rejected.
+/// The node instance verifying one child, before its circuit is sealed.
 #[tracing::instrument(skip_all, name = "node instance")]
-pub fn node_instance(
+fn instance_arith(
     layout: &NodeLayout,
     child: &Child<'_>,
     matrices: &[Arc<Matrix>],
-) -> Result<(RecursionCircuit, NodeOutput), RecursionError> {
+) -> Result<(WireArith, NodeOutput), RecursionError> {
     let mut arith = WireArith::new().with_matrices(matrices);
     let mut mirror = Blake3Mirror::new(&arith, Vec::new());
     let zero_slot = |arith: &WireArith| {
@@ -637,10 +631,7 @@ pub fn node_instance(
         }
     });
     drop(mirror);
-    Ok((
-        arith.finish_padded(layout.advice_words, layout.k_log),
-        output,
-    ))
+    Ok((arith, output))
 }
 
 /// A node's instance circuit with the advice of its two instances, ready to prove.
@@ -656,38 +647,39 @@ pub struct NodeCircuit {
 
 /// Build a node: one instance circuit, two instances each verifying one child.
 ///
+/// `reuse` is a compiled instance circuit of the same shape, such as a sibling node's: it is checked by digest and nothing is compiled.
+///
 /// # Errors
 ///
 /// When a child is rejected.
 ///
 /// # Panics
 ///
-/// When the two instance circuits differ, which would make the circuit depend on a child's values.
+/// When the two instance circuits differ, which would make the circuit depend on a child's values, or `reuse` is not their circuit.
 pub fn build_node(
     layout: &NodeLayout,
     children: [&Child<'_>; 2],
     matrices: &[Arc<Matrix>],
+    reuse: Option<&Circuit>,
 ) -> Result<NodeCircuit, NodeError> {
-    // The second instance first, keeping only its advice, so one circuit is alive at a time.
-    let (second, out1) = node_instance(layout, children[1], matrices)?;
-    let digest = *second.circuit.digest();
-    let RecursionCircuit {
-        circuit,
-        advice,
-        revealed,
-        ..
-    } = second;
-    drop(circuit);
-    let second_values = (advice, revealed);
-    let (first, out0) = node_instance(layout, children[0], matrices)?;
+    // The second instance first, keeping only its digest and values: its circuit is never compiled.
+    let (arith, out1) = instance_arith(layout, children[1], matrices)?;
+    let second = arith.finish_values(layout.advice_words, layout.k_log);
+    let (arith, out0) = instance_arith(layout, children[0], matrices)?;
+    let first = match reuse {
+        Some(circuit) => arith
+            .finish_values(layout.advice_words, layout.k_log)
+            .on(circuit),
+        None => arith.finish_padded(layout.advice_words, layout.k_log),
+    };
     assert_eq!(
         first.circuit.digest(),
-        &digest,
+        &second.digest,
         "a node instance circuit does not depend on its child's values"
     );
     Ok(NodeCircuit {
         circuit: first,
-        second: second_values,
+        second: (second.advice, second.revealed),
         outputs: [out0, out1],
     })
 }
@@ -740,7 +732,7 @@ pub fn prove_node(
     children: [&Child<'_>; 2],
     matrices: &[Arc<Matrix>],
 ) -> Result<NodeProof, NodeError> {
-    build_node(layout, children, matrices)?.prove(config)
+    build_node(layout, children, matrices, None)?.prove(config)
 }
 
 /// Why a node cannot be made or is rejected.

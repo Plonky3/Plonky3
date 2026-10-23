@@ -122,6 +122,7 @@ fn two_xmss_aggregation_proofs_aggregate_into_one() {
         &layout,
         [&children[0], &children[1]],
         &[Arc::clone(&leaf_matrix)],
+        None,
     )
     .unwrap()
     .prove(&config)
