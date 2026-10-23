@@ -1,6 +1,6 @@
 use alloc::collections::BTreeMap;
-use alloc::collections::btree_map::Entry;
 use alloc::sync::Arc;
+use core::mem;
 
 use spin::RwLock;
 
@@ -10,10 +10,19 @@ use spin::RwLock;
 /// runs on Rayon, whose workers may pick up another transform sharing this cache while they
 /// wait, and that transform must be able to read the cache. Concurrent misses may compute the
 /// same table twice; every caller receives the entry published first.
+///
+/// Publishing a new key into a full cache first evicts every entry, which bounds its memory.
 #[derive(Debug)]
 pub(crate) struct TwiddleCache<K, V: ?Sized> {
     entries: RwLock<BTreeMap<K, Arc<V>>>,
 }
+
+/// Maximum number of cached tables.
+///
+/// - Size-keyed caches hold at most one table per two-adic size, far below this.
+/// - Coset-keyed caches hold one table per shift, so arbitrary shifts would otherwise grow without bound.
+/// - 256 still covers every coset of an LDE with blowup up to 2^8.
+const CAPACITY: usize = 256;
 
 impl<K, V: ?Sized> Default for TwiddleCache<K, V> {
     fn default() -> Self {
@@ -32,10 +41,18 @@ impl<K: Ord, V: ?Sized> TwiddleCache<K, V> {
         let value = compute();
         // Declare the guard after `value` so an unused table is dropped after unlocking.
         let mut entries = self.entries.write();
-        match entries.entry(key) {
-            Entry::Occupied(entry) => entry.get().clone(),
-            Entry::Vacant(entry) => entry.insert(value).clone(),
+        if let Some(published) = entries.get(&key) {
+            return published.clone();
         }
+        let _evicted = if entries.len() >= CAPACITY {
+            mem::take(&mut *entries)
+        } else {
+            BTreeMap::new()
+        };
+        entries.insert(key, value.clone());
+        // Unlock before freeing the evicted tables.
+        drop(entries);
+        value
     }
 }
 
@@ -133,5 +150,26 @@ mod tests {
 
         assert!(Arc::ptr_eq(&result, &inserted));
         assert!(dropped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn full_cache_evicts_before_publishing() {
+        // Fill the cache: keys 0..CAPACITY each hold their own key.
+        let cache = TwiddleCache::<usize, usize>::default();
+        for key in 0..CAPACITY {
+            cache.get_or_compute(key, || Arc::new(key));
+        }
+        assert_eq!(cache.entries.read().len(), CAPACITY);
+
+        // One more key evicts every entry, then publishes itself.
+        //
+        //     before: {0, 1, ..., 255}  ->  after: {256}
+        let value = cache.get_or_compute(CAPACITY, || Arc::new(CAPACITY));
+        assert_eq!(*value, CAPACITY);
+        assert_eq!(cache.entries.read().len(), 1);
+
+        // An evicted key is computed again on its next use.
+        let recomputed = cache.get_or_compute(0, || Arc::new(42));
+        assert_eq!(*recomputed, 42);
     }
 }

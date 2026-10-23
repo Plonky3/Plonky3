@@ -9,7 +9,7 @@ use p3_util::log2_strict_usize;
 
 use crate::butterflies::{Butterfly, DitButterfly, TwiddleFreeButterfly};
 use crate::twiddle_cache::TwiddleCache;
-use crate::util::coset_shift_cols;
+use crate::util::{coset_shift_cols, lde_shape};
 use crate::{Layout, TwoAdicSubgroupDft};
 
 /// Radix-2 Decimation-in-Time FFT over a two-adic subgroup.
@@ -62,7 +62,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
 
     fn coset_lde_batch_with_transform<T>(
         &self,
-        mat: RowMajorMatrix<F>,
+        mut mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
         transform: T,
@@ -72,7 +72,11 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
     {
         let w = mat.width();
         let h = mat.height();
-        let padded_h = h << added_bits;
+        let live_len = w * h;
+        let (_, total_len) = lde_shape(w, h, added_bits);
+
+        // Values past the last full row are not part of the matrix.
+        mat.values.truncate(live_len);
 
         // Recover polynomial coefficients.
         let mut coeffs = self.idft_batch(mat);
@@ -86,8 +90,6 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
 
         // Grow the buffer to full padded capacity without touching existing elements.
         // The tail must hold zeros; we zero-initialize only the new slots.
-        let live_len = w * h;
-        let total_len = w * padded_h;
         coeffs.values.reserve_exact(total_len - live_len);
         coeffs.values.resize(total_len, F::ZERO);
         coeffs.width = w;

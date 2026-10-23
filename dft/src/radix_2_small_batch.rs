@@ -13,6 +13,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::{as_base_slice, log2_strict_usize, reverse_slice_index_bits};
 use spin::RwLock;
 
+use crate::util::lde_shape;
 use crate::{
     Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, TwiddleFreeButterfly,
     TwoAdicSubgroupDft,
@@ -296,8 +297,9 @@ where
         let h = mat.height();
         let w = mat.width();
         let log_h = log2_strict_usize(h);
+        let (output_height, output_len) = lde_shape(w, h, added_bits);
 
-        self.update_twiddles(h << added_bits);
+        self.update_twiddles(output_height);
         let cached = self.cache.read().clone();
         let g = &cached.twiddles;
         let start = g
@@ -311,10 +313,9 @@ where
             .checked_sub(log_h)
             .expect("log_h exceeds inv_twiddles length");
         let inv_root_table = &ig[start..];
-        let output_height = h << added_bits;
 
         // The matrix which we will use to store the output.
-        let output_values = F::zero_vec(output_height * w);
+        let output_values = F::zero_vec(output_len);
         let mut out = RowMajorMatrix::new(output_values, w);
 
         // The strategy is reasonably straightforward.
@@ -466,7 +467,8 @@ fn dft_layer_par<F: Field, B: Butterfly<F>>(
 
             // If num_blocks is small, we probably are not using all available threads.
             let num_threads = current_num_threads();
-            let inner_block_size = size / (2 * num_blocks).max(num_threads);
+            // More threads than elements would leave empty sub-blocks, so keep at least one element each.
+            let inner_block_size = (size / (2 * num_blocks).max(num_threads)).max(1);
 
             hi_chunk
                 .par_chunks_mut(inner_block_size)

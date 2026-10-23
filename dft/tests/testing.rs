@@ -871,3 +871,85 @@ proptest! {
         prop_assert_eq!(&naive, &small_batch);
     }
 }
+
+#[test]
+fn small_batch_matches_naive_on_pool_larger_than_matrix() {
+    // 40-byte elements leave room for 819 of them in L1, so one 2 x 410 block does not fit:
+    //
+    //     rows per L1 block:  819 / 410 = 1 < height 2  ->  the top layer runs in parallel
+    //     elements:           2 * 410 = 820 < 900 threads
+    type EF = BinomialExtensionField<Goldilocks, 5>;
+    let mut rng = SmallRng::seed_from_u64(7);
+    let mat = RowMajorMatrix::<EF>::rand(&mut rng, 2, 410);
+    let shift = EF::GENERATOR;
+
+    // Reference results do not depend on the pool.
+    let dft = NaiveDft.dft_batch(mat.clone());
+    let idft = NaiveDft.idft_batch(mat.clone());
+    let lde = NaiveDft.coset_lde_batch(mat.clone(), 1, shift);
+
+    // Run on more threads than the matrix has elements.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(900)
+        .build()
+        .unwrap();
+    pool.install(|| {
+        let small_batch = Radix2DFTSmallBatch::<EF>::default();
+        assert_eq!(small_batch.dft_batch(mat.clone()), dft);
+        assert_eq!(small_batch.idft_batch(mat.clone()), idft);
+        assert_eq!(small_batch.coset_lde_batch(mat, 1, shift), lde);
+    });
+}
+
+#[test]
+fn radix2dit_coset_lde_ignores_values_past_last_row() {
+    // A 2 x 2 matrix has exactly 4 values.
+    let mat = rand_matrix(11, 2, 2);
+    let shift = F::GENERATOR;
+    let expected = NaiveDft.coset_lde_batch(mat.clone(), 1, shift);
+
+    // Mutation: push a fifth value through the public field.
+    //
+    //     values: [a, b, c, d, EXTRA]  ->  height = 5 / 2 = 2, so EXTRA is not a matrix entry
+    let mut ragged = mat;
+    ragged.values.push(F::from_u8(9));
+
+    // The extension must match the 2 x 2 matrix, not treat EXTRA as a coefficient.
+    let lde = Radix2Dit::default().coset_lde_batch(ragged, 1, shift);
+    assert_eq!(lde, expected);
+}
+
+/// Extension bits that make a height-2 matrix overflow: `2 << (BITS - 1)` wraps to 0.
+const OVERFLOWING_ADDED_BITS: usize = usize::BITS as usize - 1;
+
+#[test]
+#[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
+fn naive_lde_rejects_overflowing_added_bits() {
+    NaiveDft.coset_lde_batch(rand_matrix(13, 2, 1), OVERFLOWING_ADDED_BITS, F::ONE);
+}
+
+#[test]
+#[should_panic(expected = "LDE height overflows usize")]
+fn radix2dit_lde_rejects_overflowing_added_bits() {
+    Radix2Dit::default().coset_lde_batch(rand_matrix(13, 2, 1), OVERFLOWING_ADDED_BITS, F::ONE);
+}
+
+#[test]
+#[should_panic(expected = "LDE height overflows usize")]
+fn small_batch_lde_rejects_overflowing_added_bits() {
+    Radix2DFTSmallBatch::default().coset_lde_batch(
+        rand_matrix(13, 2, 1),
+        OVERFLOWING_ADDED_BITS,
+        F::ONE,
+    );
+}
+
+#[test]
+#[should_panic(expected = "LDE height overflows usize")]
+fn dit_parallel_lde_rejects_overflowing_added_bits() {
+    Radix2DitParallel::default().coset_lde_batch(
+        rand_matrix(13, 2, 1),
+        OVERFLOWING_ADDED_BITS,
+        F::ONE,
+    );
+}
