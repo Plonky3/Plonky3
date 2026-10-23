@@ -12,6 +12,7 @@
 
 mod compress;
 mod lanes;
+pub(crate) mod raw;
 mod spread;
 
 use blake3::{BLOCK_LEN, CHUNK_LEN, OUT_LEN};

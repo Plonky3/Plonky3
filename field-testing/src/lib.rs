@@ -23,7 +23,7 @@ pub use extension_testing::*;
 use num_bigint::BigUint;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32,
+    Algebra, ExtensionField, Field, FixedBase, PackedValue, PrimeCharacteristicRing, PrimeField32,
     PrimeField64, TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_util::iter_array_chunks_padded;
@@ -2064,4 +2064,80 @@ macro_rules! test_frobenius {
             }
         }
     };
+}
+
+/// `base^exponent` by left-to-right square-and-multiply over the bits of a little-endian exponent.
+pub fn square_and_multiply<F: Field, const L: usize>(base: F, exponent: &[u64; L]) -> F {
+    exponent.iter().rev().fold(F::ONE, |acc, &limb| {
+        (0..64).rev().fold(acc, |acc, bit| {
+            let acc = acc.square();
+            if (limb >> bit) & 1 == 1 {
+                acc * base
+            } else {
+                acc
+            }
+        })
+    })
+}
+
+/// Checks `FixedBase::pow` and `FixedBase::pow_into` over the packing of `F` over `B` against square-and-multiply.
+///
+/// Every exponent is cut to each tested bound, and edge exponents plus derived ones fill a lockstep group and a tail.
+pub fn test_fixed_base<B: Field, F: ExtensionField<B>, const L: usize>(
+    base: F,
+    exponents: &[[u64; L]],
+) {
+    let full = 64 * L as u32;
+    // Windows that divide the bound, that straddle limbs, and a bound that is not a limb multiple.
+    for (max_bits, window) in [
+        (full, 1),
+        (full, 3),
+        (full, 8),
+        (full - 5, 7),
+        (full - 5, 11),
+    ] {
+        let mask = |e: &[u64; L]| -> [u64; L] {
+            array::from_fn(|i| {
+                let keep = max_bits.saturating_sub(64 * i as u32).min(64);
+                if keep == 64 {
+                    e[i]
+                } else {
+                    e[i] & ((1 << keep) - 1)
+                }
+            })
+        };
+        let top = mask(&[u64::MAX; L]);
+        let mut high_bit = [0; L];
+        high_bit[(max_bits as usize - 1) / 64] = 1 << ((max_bits - 1) % 64);
+        let mut cases: Vec<[u64; L]> =
+            [[0; L], array::from_fn(|i| u64::from(i == 0)), top, high_bit]
+                .into_iter()
+                .chain(exponents.iter().map(mask))
+                .collect();
+        // Enough exponents for two groups of eight packed chains and a ragged tail.
+        let group = 8 * B::Packing::WIDTH;
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        while cases.len() < 2 * group + 3 {
+            cases.push(mask(&array::from_fn(|_| {
+                seed = seed.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);
+                seed
+            })));
+        }
+
+        let table = FixedBase::with_window(base, max_bits, window);
+        let expected: Vec<F> = cases.iter().map(|e| square_and_multiply(base, e)).collect();
+        for (e, &x) in cases.iter().zip(&expected) {
+            assert_eq!(table.pow(e), x, "pow at window {window}, bound {max_bits}");
+        }
+        // Lengths below a group, at a group boundary and past it.
+        for len in [cases.len(), group, group - 1, 1, 0] {
+            let mut out = F::zero_vec(len);
+            table.pow_into::<B, L>(&cases[..len], &mut out);
+            assert_eq!(
+                out,
+                expected[..len],
+                "pow_into at window {window}, bound {max_bits}"
+            );
+        }
+    }
 }

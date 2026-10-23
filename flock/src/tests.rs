@@ -269,3 +269,37 @@ fn a_wrong_witness_or_a_tampered_proof_is_rejected() {
     // Mutation: a witness of another batch size is refused before anything is sent.
     assert!(crate::prove(&config, &wider, &bare, w, &mut sponge()).is_err());
 }
+
+// A parallel grinding search may return any witness, so the pin needs the sequential one.
+#[test]
+#[cfg(not(feature = "parallel"))]
+fn a_proof_on_fixed_seeds_has_a_pinned_digest() {
+    use tiny_keccak::{Hasher, Keccak};
+
+    // Invariant: proofs on fixed seeds serialize to the same bytes across refactors.
+    let mut keccak = Keccak::v256();
+    for (seed, extra) in [(0xF10C, 0), (0x5EED, 3)] {
+        let (c, w, log_n) = proof_fixture(seed);
+        let w = if extra == 0 {
+            w
+        } else {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let (rows, padding) = random_rows(&mut rng, (1 << (log_n + extra)) - 5);
+            Witness::generate(&c, log_n + extra, &rows, &padding, |row, words| {
+                words.copy_from_slice(row);
+            })
+        };
+        let batch = crate::Batch::new(&c, log_n + extra).unwrap();
+        let config = crate::FlockConfig::default();
+        let bare = crate::PublicPorts::default();
+        let proof = crate::prove(&config, &batch, &bare, w, &mut sponge()).unwrap();
+        crate::verify(&config, &batch, &bare, &proof, &mut sponge()).unwrap();
+        keccak.update(&postcard::to_allocvec(&proof).unwrap());
+    }
+    let mut digest = [0u8; 32];
+    keccak.finalize(&mut digest);
+    assert_eq!(
+        digest,
+        hex_literal::hex!("a7c678c7d48a8a692045d1229a493d2f208d5d7cd6bead20db0b53ec1d79505c")
+    );
+}

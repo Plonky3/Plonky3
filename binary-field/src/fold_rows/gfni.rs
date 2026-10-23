@@ -9,7 +9,7 @@ use p3_field::PrimeCharacteristicRing;
 use p3_maybe_rayon::prelude::*;
 
 use super::Stripes;
-use crate::Challenge;
+use crate::Poly192;
 use crate::byteslice::{OUT_BYTES, SliceRegister, store_f192, transpose_rows, weight_matrices};
 
 /// Stripes one sweep over the accumulators covers, when the batch has enough of them.
@@ -36,8 +36,8 @@ pub(crate) const fn fits(stripes: &Stripes<'_>, tile: usize) -> bool {
 pub(crate) fn partial_fold<R: SliceRegister + Send, const TILE: usize>(
     stripes: Stripes<'_>,
     groups: usize,
-    eq_outer: &[Challenge],
-) -> Vec<Challenge> {
+    eq_outer: &[Poly192],
+) -> Vec<Poly192> {
     assert!(fits(&stripes, TILE), "whole lines and whole tiles");
     let blocks = groups.div_ceil(8);
     let tiles = stripes.len() / TILE;
@@ -64,7 +64,7 @@ pub(crate) fn partial_fold<R: SliceRegister + Send, const TILE: usize>(
             },
         );
     // Groups past the useful ones fold zero padding, so only the useful ones are stored.
-    let mut out = vec![Challenge::ZERO; stripes.positions()];
+    let mut out = vec![Poly192::ZERO; stripes.positions()];
     for (acc, out) in acc.iter().take(groups).zip(out.as_chunks_mut::<64>().0) {
         store_f192(acc, out);
     }
@@ -75,7 +75,7 @@ pub(crate) fn partial_fold<R: SliceRegister + Send, const TILE: usize>(
 #[inline(always)]
 fn fold_tile<R: SliceRegister, const TILE: usize>(
     stripes: Stripes<'_>,
-    eq: &[Challenge],
+    eq: &[Poly192],
     tile: usize,
     acc: &mut [[R; OUT_BYTES]],
 ) {

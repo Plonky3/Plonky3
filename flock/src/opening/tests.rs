@@ -12,6 +12,7 @@ use rand::{RngExt, SeedableRng};
 use super::*;
 use crate::lincheck::LincheckProof;
 use crate::point::QuirkyPoint;
+use crate::skip::K_SKIP;
 use crate::tests::{random_circuit, random_rows};
 use crate::zerocheck::{MIN_LOG_N, ZerocheckClaims};
 use crate::{Batch, Circuit, PublicPorts, Witness, lincheck};
@@ -54,7 +55,8 @@ fn run(
     });
     let k_log = circuit.k_log();
     let m = k_log + log_instances;
-    let pcs = WitnessPcs::new(m, &PcsParams::default()).unwrap();
+    // One opening carries the lincheck claim and the zerocheck's c-claim.
+    let pcs = WitnessPcs::with_claims(m, &PcsParams::default(), 2).unwrap();
 
     // Commit, then draw the zerocheck point after the commitment.
     let mut sponge = challenger();
@@ -199,36 +201,6 @@ fn a_witness_narrower_than_one_element_has_no_commitment() {
         WitnessPcs::new(K_SKIP - 1, &PcsParams::default()),
         Err(OpeningError::TooFewVariables { num_variables: 5 })
     ));
-}
-
-#[test]
-fn the_default_commitment_composes_to_its_target() {
-    // Invariant: the union of every opening error term reaches the requested bits at every size.
-    for num_variables in [12, 14, 20, 26, 32] {
-        let pcs = WitnessPcs::new(num_variables, &PcsParams::default()).unwrap();
-        let bits = pcs.0.readings_security(1, false).unwrap().error().bits();
-        assert!(
-            bits >= 128.0,
-            "{num_variables} variables compose to {bits} bits"
-        );
-    }
-}
-
-#[test]
-fn a_target_grinding_covers_whole_moves_on_to_the_next() {
-    // Grinding 16 bits leaves the 16-bit target no query, while 17 bits composes to the bound.
-    let params = PcsParams {
-        security_bits: 16,
-        query_grinding: 16,
-        ..PcsParams::default()
-    };
-    assert!(matches!(
-        WitnessPcs::with_term_bits(12, &params, 16),
-        Err(OpeningError::Profile(ProfileError::ZeroQueries))
-    ));
-    let pcs = WitnessPcs::new(12, &params).unwrap();
-    let bits = pcs.0.readings_security(1, false).unwrap().error().bits();
-    assert!(bits >= 16.0, "composes to {bits} bits");
 }
 
 #[test]

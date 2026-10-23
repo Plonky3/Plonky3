@@ -38,6 +38,8 @@ pub const fn to_bits(value: u64) -> u32 {
 
 /// Returns `log2(x)` in fixed point, rounded down.
 ///
+/// Q32 truncation can put the result just below the exact Q16 floor, but it remains less than two units in the last place below the true value.
+///
 /// # Panics
 /// Panics if `x` is zero, which has no logarithm.
 pub const fn floor_log2(x: u64) -> u64 {
@@ -70,17 +72,19 @@ pub const fn floor_log2(x: u64) -> u64 {
 
 /// Returns `log2(x)` in fixed point, rounded up.
 ///
-/// Exact for powers of two; otherwise one unit in the last place above [`floor_log2`], which is at
-/// most `2^-16` of a bit coarser than the true value.
+/// Exact for powers of two; otherwise less than two units in the last place (`2^-15` bits) above the true value.
+/// The extra guard covers the Q32 truncation in [`floor_log2`].
 ///
 /// # Panics
 /// Panics if `x` is zero, which has no logarithm.
 pub const fn ceil_log2(x: u64) -> u64 {
-    if x.is_power_of_two() {
-        from_bits(x.trailing_zeros())
-    } else {
-        floor_log2(x) + 1
-    }
+    // Normalization and each squared/renormalized Q32 mantissa lose less than 2^-31 logarithm bits.
+    // Referred back to the input, these losses form a geometric series totaling less than 2^-30 bits, on top of a fractional tail below one Q16 unit.
+    let guarded = floor_log2(x) + 2;
+    // Both bounds are monotone upper bounds.
+    // Their minimum preserves that property and makes powers of two exact, without a guard that drops at the power.
+    let whole = from_bits(u64::BITS - (x - 1).leading_zeros());
+    if guarded < whole { guarded } else { whole }
 }
 
 /// Returns the conjectured security contributed by a single FRI query, in fixed point.
@@ -138,9 +142,8 @@ mod tests {
         assert!(bits_per_query(u32::MAX, from_bits(u32::MAX)) > 0);
     }
 
-    /// The true value of `log2` must never be understated by [`ceil_log2`] nor overstated by
-    /// [`floor_log2`], and both must track it to within one unit in the last place. These are the
-    /// directions a round budget built on this module relies on to stay conservative.
+    /// The true value of `log2` must never be understated by [`ceil_log2`] nor overstated by [`floor_log2`], and both must track it to within two units in the last place.
+    /// These are the directions a round budget built on this module relies on to stay conservative.
     #[test]
     fn log2_brackets_the_true_logarithm() {
         let mut x = 1u64;
@@ -156,15 +159,15 @@ mod tests {
                 );
                 assert!(
                     truth - floor < 2.0,
-                    "floor_log2({candidate}) is more than 1 ulp low"
+                    "floor_log2({candidate}) is at least 2 ulps low"
                 );
                 assert!(
                     ceil + 1e-3 >= truth,
                     "ceil_log2({candidate}) understates log2"
                 );
                 assert!(
-                    ceil - truth < 2.0,
-                    "ceil_log2({candidate}) is more than 1 ulp high"
+                    ceil - truth <= 2.0,
+                    "ceil_log2({candidate}) is more than 2 ulps high"
                 );
             }
             x *= 2;
@@ -190,8 +193,27 @@ mod tests {
         }
     }
 
-    /// The fixed-point per-query rate must never exceed the real-valued random-words formula, and
-    /// must track it within one ulp, across every blowup the PCS parameters admit.
+    #[test]
+    fn ceil_log2_guards_q32_truncation_at_a_q16_boundary() {
+        // 2^16 * log2(x) = 4_091_133.0000162..., just above a Q16 boundary.
+        // Returning floor_log2(x) + 1 loses the truncation error from Q32 squaring.
+        assert!(ceil_log2(6_194_680_031_105_957_265) > 4_091_133);
+    }
+
+    #[test]
+    fn ceil_log2_is_monotone_at_powers_of_two() {
+        for exponent in 1..64 {
+            let power = 1u64 << exponent;
+            let at_power = ceil_log2(power);
+            assert!(ceil_log2(power - 1) <= at_power);
+            assert!(at_power <= ceil_log2(power + 1));
+        }
+        assert!(ceil_log2(u64::MAX - 1) <= ceil_log2(u64::MAX));
+    }
+
+    /// The fixed-point per-query rate must never exceed the real-valued random-words formula.
+    /// It must track it within three ulps for these field sizes, across every blowup the PCS parameters admit.
+    /// The correction combines an upper numerator logarithm, a lower denominator logarithm, and the upward rounding of `LOG2_E`.
     #[test]
     fn bits_per_query_never_overstates_the_random_words_rate() {
         for log_blowup in 1..=8u32 {
@@ -207,8 +229,8 @@ mod tests {
                     "bits_per_query({log_blowup}, {field_bits}) overstates the rate"
                 );
                 assert!(
-                    truth - actual < 2.0,
-                    "bits_per_query({log_blowup}, {field_bits}) is more than 1 ulp low"
+                    truth - actual < 3.0,
+                    "bits_per_query({log_blowup}, {field_bits}) is at least 3 ulps low"
                 );
             }
         }
@@ -250,7 +272,7 @@ mod tests {
             );
             assert!(
                 f64_bits - fixed_bits < 2.0 / ONE as f64 + 1e-9,
-                "log_blowup={log_blowup}: fixed is more than 1 ulp below f64"
+                "log_blowup={log_blowup}: fixed is at least 2 ulps below f64"
             );
         }
     }

@@ -80,6 +80,25 @@ impl Goldilocks {
         Self { value }
     }
 
+    /// Return the canonical representative using `subtle`'s constant-time operations.
+    ///
+    /// Requires the `constant-time` feature.
+    ///
+    /// Only scalar canonicalization is covered; other field operations and calling code are not made constant-time.
+    /// Timing properties depend on `subtle`, compiler optimizations, and target hardware.
+    /// Use release builds: `subtle`'s debug assertions may introduce input-dependent branches.
+    /// Callers relying on timing must assess their build and calling context; see the [caller obligations](https://github.com/Plonky3/Plonky3/blob/main/docs/caller-obligations.md#scalar-canonicalization-timing).
+    #[cfg(feature = "constant-time")]
+    #[inline]
+    #[must_use]
+    pub fn as_canonical_u64_ct(&self) -> u64 {
+        use subtle::{ConditionallySelectable, ConstantTimeGreater};
+
+        // Every u64 is less than 2 * P, so at most one subtraction is needed.
+        let reduced = self.value.wrapping_sub(P);
+        u64::conditional_select(&reduced, &self.value, P.ct_gt(&self.value))
+    }
+
     /// Convert a `[u64; N]` array to an array of field elements.
     ///
     /// Const version of `input.map(Goldilocks::new)`.
@@ -385,7 +404,7 @@ impl PrimeCharacteristicRing for Goldilocks {
         // 2. It is greater than the maximum possible product of two u64s.
         const OFFSET: u128 = ((P as u128) << 64) - (P as u128) + ((P as u128) << 32);
         const {
-            assert!((N as u32) <= (1 << 31));
+            assert!(N <= 1 << 31);
         }
         match N {
             0 => Self::ZERO,
@@ -416,7 +435,7 @@ impl PrimeCharacteristicRing for Goldilocks {
                         // Split val into (hi, lo) where hi is the upper 32 bits and lo is the lower 96 bits.
                         let val_hi = (val >> 96) as u64;
                         // acc_hi accumulates hi, acc_lo accumulates lo + 2^{96}hi.
-                        // As N <= 2^32, acc_hi cannot overflow.
+                        // As N <= 2^31 and val_hi < 2^32, acc_hi cannot overflow.
                         unsafe { (acc_lo.wrapping_add(val), acc_hi.unchecked_add(val_hi)) }
                     });
                 // First, remove the hi part from lo_plus_hi.
@@ -567,7 +586,7 @@ quotient_map_large_iint!(
     Goldilocks,
     i64,
     "`[-(2^63 - 2^31), 2^63 - 2^31]`",
-    "`[1 + 2^32 - 2^64, 2^64 - 1]`",
+    "`[-2^63, 2^63 - 1]`",
     [(i128, u128)]
 );
 
@@ -610,7 +629,7 @@ impl QuotientMap<u64> for Goldilocks {
 
     /// Convert a given `u64` integer into an element of the `Goldilocks` field.
     ///
-    /// Return `None` if the given integer is greater than `p = 2^64 - 2^32 + 1`.
+    /// Return `None` if the given integer is at least `p = 2^64 - 2^32 + 1`.
     #[inline]
     fn from_canonical_checked(int: u64) -> Option<Self> {
         (int < Self::ORDER_U64).then(|| Self::new(int))
@@ -642,7 +661,7 @@ impl QuotientMap<i64> for Goldilocks {
 
     /// Convert a given `i64` integer into an element of the `Goldilocks` field.
     ///
-    /// Returns none if the input does not lie in the range `(-(2^63 - 2^31), 2^63 - 2^31)`.
+    /// Returns none if the input does not lie in the range `[-(2^63 - 2^31), 2^63 - 2^31]`.
     #[inline]
     fn from_canonical_checked(int: i64) -> Option<Self> {
         const POS_BOUND: i64 = (P >> 1) as i64;
@@ -961,6 +980,47 @@ mod tests {
 
     type F = Goldilocks;
     type EF = BinomialExtensionField<F, 5>;
+
+    #[test]
+    fn quotient_map_documented_ranges() {
+        // Unchecked i128 conversion: the body casts to i64.
+        //
+        // So the documented range is exactly the i64 range.
+        for x in [i64::MIN, -1, 0, 1, i64::MAX] {
+            // SAFETY: x lies in the documented range [-2^63, 2^63 - 1].
+            let got = unsafe { <F as QuotientMap<i128>>::from_canonical_unchecked(x as i128) };
+            assert_eq!(got, F::from_int(x as i128));
+        }
+
+        // Checked i64 conversion: the bound (p - 1)/2 = 2^63 - 2^31 is included.
+        let bound = (P >> 1) as i64;
+        assert!(F::from_canonical_checked(bound).is_some());
+        assert!(F::from_canonical_checked(-bound).is_some());
+        assert!(F::from_canonical_checked(bound + 1).is_none());
+        assert!(F::from_canonical_checked(-bound - 1).is_none());
+
+        // Checked u64 conversion: p itself is rejected.
+        assert!(F::from_canonical_checked(P - 1).is_some());
+        assert!(F::from_canonical_checked(P).is_none());
+    }
+
+    #[test]
+    fn dot_product_extreme_values() {
+        // Stored values may be any u64, so u64::MAX is a valid representative.
+        //
+        // Its square has the largest top 32 bits, the worst case for the accumulators.
+        let x = F::new(u64::MAX);
+
+        // Reference: each product reduced modulo p, then summed modulo p.
+        let p = P as u128;
+        let square = (u64::MAX as u128 * u64::MAX as u128) % p;
+
+        let expected = |n: u128| F::from_int(((square * n) % p) as u64);
+
+        // N = 9 and N = 64 take the general path, above the unrolled cases.
+        assert_eq!(F::dot_product(&[x; 9], &[x; 9]), expected(9));
+        assert_eq!(F::dot_product(&[x; 64], &[x; 64]), expected(64));
+    }
 
     /// Check both product limbs, not just the residue: a lost carry could otherwise
     /// be hidden by the field reduction. Includes noncanonical field representatives.
@@ -1307,6 +1367,48 @@ mod tests {
         // The canonical encoding round-trips back to the same field element.
         let roundtrip: F = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtrip, non_canonical);
+    }
+
+    #[cfg(feature = "constant-time")]
+    #[test]
+    fn canonical_u64_ct_handles_boundary_representatives() {
+        for (raw, expected) in [
+            (0, 0),
+            (1, 1),
+            (P - 1, P - 1),
+            (P, 0),
+            (P + 1, 1),
+            (u64::MAX, 0xFFFF_FFFE),
+        ] {
+            assert_eq!(F::new(raw).as_canonical_u64_ct(), expected, "raw={raw}");
+        }
+
+        for canonical in [0, 1, 2, 0x7FFF_FFFF, 0xFFFF_FFFD, 0xFFFF_FFFE] {
+            assert_eq!(
+                F::new(canonical).as_canonical_u64_ct(),
+                F::new(P + canonical).as_canonical_u64_ct(),
+            );
+        }
+    }
+
+    #[cfg(feature = "constant-time")]
+    #[test]
+    fn canonical_u64_ct_matches_u128_modulo() {
+        let check = |raw: u64| {
+            let expected = (u128::from(raw) % u128::from(P)) as u64;
+            assert_eq!(F::new(raw).as_canonical_u64_ct(), expected, "raw={raw}");
+        };
+        let mut rng = SmallRng::seed_from_u64(0xCACA_0011_5EED);
+        for _ in 0..10_000 {
+            check(rng.random());
+            // Uniform u64 sampling almost never hits the noncanonical interval.
+            check(P + rng.random_range(0..=u64::MAX - P));
+        }
+        for offset in 0..256 {
+            check(P - offset);
+            check(P + offset);
+            check(u64::MAX - offset);
+        }
     }
 
     #[test]

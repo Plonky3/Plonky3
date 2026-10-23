@@ -4,16 +4,15 @@
 //!
 //! One affine instruction applies an `8 x 8` bit matrix to 64 input bytes.
 
-use p3_binary_field::Poly192;
-
 use super::BLOCK;
 use super::lanes::SliceRegister;
+use crate::Poly192;
 
 /// Bytes of a challenge-field element.
-pub(crate) const OUT_BYTES: usize = 24;
+pub const OUT_BYTES: usize = 24;
 
 /// Every byte offset in place.
-pub(crate) const IDENTITY: [u8; 64] = {
+pub const IDENTITY: [u8; 64] = {
     let mut sigma = [0u8; 64];
     let mut f = 0;
     while f < 64 {
@@ -36,7 +35,7 @@ const TO_QWORDS: [u8; 64] = {
 
 /// One butterfly stage: registers `z` and `z | zbit` exchange bytes through two permutes.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Stage {
+pub struct Stage {
     /// Byte sources of the low register of each pair; bit 6 picks the high one.
     lo: [u8; 64],
     /// Byte sources of the high register of each pair.
@@ -45,7 +44,7 @@ pub(crate) struct Stage {
 
 impl Stage {
     /// Swap byte-offset bit `fbit` with the stage's register bit, then permute each output by `sigma`.
-    pub(crate) const fn swap(fbit: usize, sigma: &[u8; 64]) -> Self {
+    pub const fn swap(fbit: usize, sigma: &[u8; 64]) -> Self {
         let (mut lo, mut hi) = ([0u8; 64], [0u8; 64]);
         let mut f = 0;
         while f < 64 {
@@ -60,7 +59,7 @@ impl Stage {
 
     /// Exchange bytes between registers `z` and `z | zbit`, for every `z` with that bit clear.
     #[inline(always)]
-    pub(crate) fn apply<R: SliceRegister, const N: usize>(&self, zbit: usize, regs: &mut [R; N]) {
+    pub fn apply<R: SliceRegister, const N: usize>(&self, zbit: usize, regs: &mut [R; N]) {
         // SAFETY: both index arrays are 64 bytes.
         let (lo, hi) = unsafe { (R::load(self.lo.as_ptr()), R::load(self.hi.as_ptr())) };
         for k in 0..N / 2 {
@@ -101,7 +100,7 @@ const INTERLEAVE2_MASK: [u8; 3] = [0b0010_0100, 0b0100_1001, 0b1001_0010];
 
 /// Store 24 registers of output bytes, register `o` holding byte `o` of 64 values, as those values.
 #[inline(always)]
-pub(crate) fn store_f192<R: SliceRegister>(acc: &[R; OUT_BYTES], out: &mut [Poly192; BLOCK]) {
+pub fn store_f192<R: SliceRegister>(acc: &[R; OUT_BYTES], out: &mut [Poly192; BLOCK]) {
     // Per coefficient, eight registers of output bytes become eight registers of quadwords.
     let mut c: [[R; 8]; 3] = core::array::from_fn(|i| core::array::from_fn(|o| acc[8 * i + o]));
     for (s, stage) in OUTPUT_STAGES.iter().enumerate() {
@@ -161,7 +160,7 @@ const REVERSED_IDENTITY: u64 = 0x0102_0408_1020_4080;
 
 /// The matrices of eight weights: matrix `o` maps byte `x` to byte `o` of `sum_{s in x} w_s`.
 #[inline(always)]
-pub(crate) fn weight_matrices<R: SliceRegister>(w: &[Poly192; 8]) -> [u64; OUT_BYTES] {
+pub fn weight_matrices<R: SliceRegister>(w: &[Poly192; 8]) -> [u64; OUT_BYTES] {
     let src = w.as_ptr().cast::<u8>();
     // SAFETY: eight weights are 192 bytes, exactly three registers.
     let v: [R; 3] = core::array::from_fn(|i| unsafe { R::load(src.add(64 * i)) });
@@ -198,7 +197,7 @@ const PLANE_GATHER: [u8; 64] = {
 ///
 /// Quadword `j` of register `k` maps an input byte to byte `8 k + j` of the weighted sum, as in `weight_matrices`.
 #[inline(always)]
-pub(crate) fn plane_matrices<R: SliceRegister>(planes: &[R; 3]) -> [R; 3] {
+pub fn plane_matrices<R: SliceRegister>(planes: &[R; 3]) -> [R; 3] {
     // SAFETY: the index array is 64 bytes.
     let gather = unsafe { R::load(PLANE_GATHER.as_ptr()) };
     let unit = R::splat(REVERSED_IDENTITY);
@@ -223,7 +222,7 @@ const BIT_REVERSE: u64 = 0x8040_2010_0804_0201;
 ///
 /// Quadword `k` of the input is row `k`.
 #[inline(always)]
-pub(crate) fn transpose_rows<R: SliceRegister>(rows: R) -> R {
+pub fn transpose_rows<R: SliceRegister>(rows: R) -> R {
     // SAFETY: the index array is 64 bytes.
     let columns = rows.permute(unsafe { R::load(COLUMNS.as_ptr()) });
     R::splat(BIT_REVERSE).affine(columns)
@@ -233,13 +232,13 @@ pub(crate) fn transpose_rows<R: SliceRegister>(rows: R) -> R {
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_binary_field::Poly64;
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::Poly64;
     use crate::byteslice::model::Model;
 
     /// The weighted sum of the set bits of a byte, the definition every matrix is checked against.
