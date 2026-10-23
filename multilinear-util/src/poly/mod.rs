@@ -1038,7 +1038,7 @@ pub(crate) mod test {
     type EF = BinomialExtensionField<F, 4>;
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "assertion `left == right` failed\n  left: 2\n right: 3")]
     fn eval_base_rejects_a_point_with_fewer_variables() {
         // Invariant: a point is evaluated only with the polynomial's number of variables.
         //
@@ -1048,19 +1048,23 @@ pub(crate) mod test {
         //     and returns f~(0, 5, 7)
         //
         // Mutation: dropping the check makes a release build return that value.
+        //
+        // The panic names the point's 2 variables against the table's 3.
         let poly = Poly::new((1..=8).map(F::from_u32).collect::<Vec<_>>());
         let short = Point::new(vec![F::from_u32(5), F::from_u32(7)]);
         let _ = poly.eval_base::<F>(&short);
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "assertion `left == right` failed\n  left: 2\n right: 3")]
     fn eval_ext_rejects_a_point_with_fewer_variables() {
         // Invariant: the extension evaluation applies the same check.
         //
         // Fixture state: 3 variables over EF, point with 2 coordinates.
         //
         // Mutation: dropping the check makes a release build return f~(0, r_0, r_1).
+        //
+        // The panic names the point's 2 variables against the table's 3.
         let poly = Poly::new(
             (1..=8)
                 .map(|i| EF::from(F::from_u32(i)))
