@@ -9,6 +9,7 @@ pub struct LookupTraceBuilder<'a, F: Field, EF: ExtensionField<F>> {
     main: ViewPair<'a, F>,
     preprocessed: RowWindow<'a, F>,
     public_values: &'a [F],
+    periodic_values: &'a [F],
     permutation_challenges: &'a [EF],
     height: usize,
     row: usize,
@@ -19,6 +20,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> LookupTraceBuilder<'a, F, EF> {
         main: ViewPair<'a, F>,
         preprocessed: ViewPair<'a, F>,
         public_values: &'a [F],
+        periodic_values: &'a [F],
         permutation_challenges: &'a [EF],
         height: usize,
         row: usize,
@@ -30,6 +32,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> LookupTraceBuilder<'a, F, EF> {
                 preprocessed.bottom.values,
             ),
             public_values,
+            periodic_values,
             permutation_challenges,
             height,
             row,
@@ -85,6 +88,11 @@ impl<'a, F: Field, EF: ExtensionField<F>> AirBuilder for LookupTraceBuilder<'a, 
     #[inline]
     fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values
+    }
+
+    #[inline]
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_values
     }
 }
 

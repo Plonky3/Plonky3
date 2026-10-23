@@ -471,6 +471,7 @@ impl LookupProtocol for LogUpGadget {
         &self,
         main: &RowMajorMatrix<F>,
         preprocessed: &Option<RowMajorMatrix<F>>,
+        periodic_columns: &[Vec<F>],
         public_values: &[F],
         lookups: &[Lookup<F>],
         challenges: &[EF],
@@ -650,12 +651,21 @@ impl LookupProtocol for LogUpGadget {
                         ),
                     };
 
+                    // Each periodic column repeats with its own period.
+                    //
+                    // A lookup may read it, as the constraint folders let every other constraint.
+                    let periodic_row: Vec<F> = periodic_columns
+                        .iter()
+                        .map(|col| col[i % col.len()])
+                        .collect();
+
                     // Concrete evaluator: resolves symbolic expressions to field values
                     // using the current row's data.
                     let row_ctx: RowEvalContext<'_, F, EF> = RowEvalContext::new(
                         main_rows,
                         preprocessed_rows,
                         public_values,
+                        &periodic_row,
                         challenges,
                         height,
                         i,
