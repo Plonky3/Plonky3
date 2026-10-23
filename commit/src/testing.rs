@@ -225,11 +225,71 @@ where
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
         let mut coeffs = prover_data[idx].clone();
-        assert!(domain.log_size() >= self.log_n);
-        coeffs.values.resize(
-            coeffs.values.len() << (domain.log_size() - self.log_n),
-            Val::ZERO,
-        );
+        // The coefficients hold one row per point of the domain they were committed over.
+        // A smaller target domain would fold coefficients onto each other.
+        assert!(domain.size() >= coeffs.height());
+        // Zero rows extend them to one row per point of the target domain.
+        // Why: the target height is the domain's size, whatever height the commit domain had.
+        coeffs
+            .values
+            .resize(coeffs.width() * domain.size(), Val::ZERO);
         self.dft.coset_dft_batch(coeffs, domain.shift())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_dft::Radix2DitParallel;
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::*;
+
+    type F = BabyBear;
+    type Dft = Radix2DitParallel<F>;
+
+    // A challenger the trivial scheme never reads.
+    struct Unused;
+
+    impl CanSample<F> for Unused {
+        fn sample(&mut self) -> F {
+            F::ZERO
+        }
+    }
+
+    fn trivial(log_n: usize) -> TrivialPcs<F, Dft> {
+        TrivialPcs {
+            dft: Dft::default(),
+            log_n,
+            _phantom: PhantomData,
+        }
+    }
+
+    #[test]
+    fn evaluations_have_the_domain_size_when_committed_above_the_degree_bound() {
+        // Fixture state: degree bound 2^0, one column committed over the 2 points {1, -1}.
+        //
+        //     p(1) = 3, p(-1) = 5   ->   p(X) = 4 - X
+        let pcs = trivial(0);
+        let trace = TwoAdicMultiplicativeCoset::new(F::ONE, 1).unwrap();
+        let evals = RowMajorMatrix::new_col(vec![F::from_u8(3), F::from_u8(5)]);
+        let (_, data) =
+            <TrivialPcs<F, Dft> as Pcs<F, Unused>>::commit(&pcs, [(trace, evals)]).unwrap();
+
+        // Read back over a coset of 4 points.
+        let lde = TwoAdicMultiplicativeCoset::new(F::GENERATOR, 2).unwrap();
+        let out = <TrivialPcs<F, Dft> as UnivariateStarkPcs<F, Unused>>::get_evaluations_on_domain(
+            &pcs, &data, 0, lde,
+        );
+
+        // Invariant: one row per point of the target domain, holding p at that point.
+        //
+        // Mutation: padding by 2^(log_size - log_n) gives 2 * 2^2 = 8 rows here.
+        assert_eq!(out.height(), lde.size());
+        for (i, x) in lde.iter().enumerate() {
+            assert_eq!(out.get(i, 0), Some(F::from_u8(4) - x), "row {i}");
+        }
     }
 }
