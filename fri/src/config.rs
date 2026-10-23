@@ -19,6 +19,14 @@ pub enum FriProverError {
     },
     #[error("FRI terminal log height overflows usize")]
     FinalHeightOverflow,
+    /// A committed matrix is opened at no point.
+    ///
+    /// The verifier pins each matrix width to its claimed evaluation count.
+    /// With no claim it cannot authenticate the matrix, so it rejects the proof.
+    #[error(
+        "batch {batch}, matrix {matrix}: opened at no points; its width cannot be authenticated"
+    )]
+    MatrixWithoutOpeningPoints { batch: usize, matrix: usize },
 }
 
 /// A set of parameters defining a specific instance of the FRI protocol.
