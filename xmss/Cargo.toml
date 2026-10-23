@@ -1,6 +1,6 @@
 [package]
 name = "p3-xmss"
-description = "XMSS-style hash-based signatures over a tweakable hash: Poseidon2 signatures aggregated in recursive circuits, BLAKE3 signatures in one binary-field proof."
+description = "XMSS-style hash-based signatures over a tweakable hash: keyed-BLAKE3 signatures aggregated in binary-field Flock proofs and binary recursion."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,14 +17,9 @@ parallel = ["p3-maybe-rayon/parallel", "p3-flock/parallel"]
 
 [dependencies]
 p3-challenger.workspace = true
-p3-circuit.workspace = true
 p3-commit.workspace = true
-p3-field.workspace = true
 p3-flock.workspace = true
-p3-koala-bear.workspace = true
 p3-maybe-rayon.workspace = true
-p3-poseidon2-air.workspace = true
-p3-symmetric.workspace = true
 p3-util.workspace = true
 p3-verifier-arith.workspace = true
 
@@ -33,17 +28,10 @@ rand.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-p3-air = { path = "../air" }
-p3-batch-stark = { path = "../batch-stark" }
 p3-blake3 = { path = "../blake3" }
-p3-dft = { path = "../dft" }
-p3-fri = { path = "../fri" }
 p3-keccak = { path = "../keccak" }
-p3-merkle-tree = { path = "../merkle-tree" }
-p3-uni-stark = { path = "../uni-stark" }
 
 postcard = { workspace = true, features = ["alloc"] }
-proptest.workspace = true
 rand = { workspace = true, features = ["std_rng"] }
 
 [lints]

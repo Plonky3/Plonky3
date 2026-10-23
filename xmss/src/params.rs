@@ -1,15 +1,10 @@
 //! The parameters of one instance of the scheme.
 
-use crate::hash::DIGEST_LEN;
-
-/// Digit bits taken from each digest element: its low 24 bits, nearly uniform since `2^24` divides `p - 1`.
-pub(crate) const BITS_PER_ELEMENT: usize = 24;
-
 /// Lifetime, Winternitz chunking and target sum of an instance.
 ///
 /// [`Params::with_lifetime`] picks `w = 4`, 64 chains and target sum 96: about 123 bits of conjectured classical security.
 ///
-/// That bound is the logarithm of the number of codewords, `4^64 / 22.4`, and every hash keeps 248-bit outputs.
+/// That bound is the logarithm of the number of codewords, `4^64 / 22.4`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Params {
     log_lifetime: usize,
@@ -23,7 +18,7 @@ impl Params {
     ///
     /// # Panics
     ///
-    /// When `log_lifetime` is not in `1..=30`, `chunk_bits` not in `1..=4`, the digits overflow one digest, or the target is unreachable.
+    /// When `log_lifetime` is not in `1..=30`, `chunk_bits` not in `1..=4`, there is no chain, or the target is unreachable.
     pub const fn new(
         log_lifetime: usize,
         chunk_bits: usize,
@@ -38,10 +33,7 @@ impl Params {
             1 <= chunk_bits && chunk_bits <= 4,
             "a chunk has 1 to 4 bits"
         );
-        assert!(
-            num_chains >= 1 && num_chains * chunk_bits <= DIGEST_LEN * BITS_PER_ELEMENT,
-            "the digits fit in one digest"
-        );
+        assert!(num_chains >= 1, "at least one chain");
         assert!(
             target_sum <= num_chains * ((1 << chunk_bits) - 1),
             "the target sum is reachable"
@@ -86,10 +78,5 @@ impl Params {
     /// The number of hash steps from a chain's start to its end, `2^chunk_bits - 1`.
     pub const fn chain_len(&self) -> usize {
         (1 << self.chunk_bits) - 1
-    }
-
-    /// The number of digest elements the digits come from.
-    pub(crate) const fn digit_elements(&self) -> usize {
-        (self.num_chains * self.chunk_bits).div_ceil(BITS_PER_ELEMENT)
     }
 }

@@ -3,12 +3,12 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::hash::{PARAMETER_LEN, TweakableHash};
-use crate::{Digest, F, Params};
+use crate::Params;
+use crate::hash::TweakableHash;
 
 /// A public key: the Merkle root over every epoch, and the hash parameter all its hashes take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PublicKey<D = Digest, P = [F; PARAMETER_LEN]> {
+pub struct PublicKey<D, P> {
     /// The root of the tree whose leaves are the epochs' chain ends.
     pub root: D,
     /// The parameter that separates this key's hashes from every other key's.
@@ -17,7 +17,7 @@ pub struct PublicKey<D = Digest, P = [F; PARAMETER_LEN]> {
 
 /// A secret key: the seed its chains derive from, and the tree over its active epochs.
 #[derive(Clone, Debug)]
-pub struct SecretKey<D = Digest, P = [F; PARAMETER_LEN]> {
+pub struct SecretKey<D, P> {
     /// The parameters the key was generated for.
     pub(crate) params: Params,
     /// The public key's hash parameter.

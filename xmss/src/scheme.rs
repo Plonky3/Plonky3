@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use p3_maybe_rayon::prelude::*;
 use rand::CryptoRng;
 
-use crate::hash::{Poseidon2Hash, TweakableHash};
+use crate::hash::TweakableHash;
 use crate::keys::Tree;
 use crate::{Params, PublicKey, SecretKey, Signature};
 
@@ -40,16 +40,9 @@ pub struct InvalidSignature;
 
 /// The scheme for one set of parameters, over a tweakable hash.
 #[derive(Clone, Debug)]
-pub struct Xmss<H = Poseidon2Hash> {
+pub struct Xmss<H> {
     params: Params,
     hasher: H,
-}
-
-impl Xmss {
-    /// The scheme with `params`, hashing with the standard KoalaBear Poseidon2 permutation.
-    pub fn new(params: Params) -> Self {
-        Self::with_hash(params, Poseidon2Hash::new())
-    }
 }
 
 impl<H: TweakableHash> Xmss<H> {
