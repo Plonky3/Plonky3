@@ -1,5 +1,7 @@
 //! The lookup protocol trait.
 
+use alloc::vec::Vec;
+
 use p3_air::{Air, PermutationAirBuilder};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
@@ -87,10 +89,15 @@ pub trait LookupProtocol {
     /// - A trace matrix with the accumulator at column `0` and one fraction
     ///   column per declared lookup.
     /// - The AIR's terminal: `Some(_)` when any lookup is declared, `None` otherwise.
+    ///
+    /// # Arguments
+    ///
+    /// - `periodic_columns`: the AIR's periodic columns, which lookup expressions may read.
     fn generate_permutation<F: Field, EF: ExtensionField<F>>(
         &self,
         main: &RowMajorMatrix<F>,
         preprocessed: &Option<RowMajorMatrix<F>>,
+        periodic_columns: &[Vec<F>],
         public_values: &[F],
         lookups: &[Lookup<F>],
         challenges: &[EF],

@@ -4284,3 +4284,68 @@ fn batch_preflight_preserves_shape_error_order() {
         );
     }
 }
+
+/// One column pinned to a periodic column, looked up against it under a periodic count.
+#[derive(Clone)]
+struct PeriodicLookupAir;
+
+impl<F: Field> BaseAir<F> for PeriodicLookupAir {
+    fn width(&self) -> usize {
+        1
+    }
+
+    fn num_periodic_columns(&self) -> usize {
+        2
+    }
+
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+        // Column 0: the values. Column 1: the count, active on even rows.
+        Cow::Owned(vec![
+            vec![
+                F::from_u64(3),
+                F::from_u64(5),
+                F::from_u64(7),
+                F::from_u64(9),
+            ],
+            vec![F::ONE, F::ZERO],
+        ])
+    }
+}
+
+impl<AB> Air<AB> for PeriodicLookupAir
+where
+    AB: AirBuilder + PermutationAirBuilder + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        let value: AB::Expr = builder.main().current_slice()[0].into();
+        let expected: AB::Expr = builder.periodic_values()[0].into();
+        let count: AB::Expr = builder.periodic_values()[1].into();
+        builder.assert_eq(value.clone(), expected.clone());
+        builder.push_local_interaction(vec![
+            (vec![value], Count::bounded(count.clone(), 1)),
+            (vec![expected], Count::provided(-count)),
+        ]);
+    }
+}
+
+#[test]
+fn a_lookup_may_read_periodic_columns() {
+    // Invariant: lookup tuples and counts see the same periodic values as the constraints.
+    //
+    // Fixture state: 64 rows, values [3, 5, 7, 9] repeating, count [1, 0] repeating.
+    let config = make_config(42);
+    let air = PeriodicLookupAir;
+    let values: Vec<Val> = (0..64)
+        .map(|i| Val::from_u64([3, 5, 7, 9][i % 4]))
+        .collect();
+    let trace = RowMajorMatrix::new(values, 1);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    verify_batch(&config, &[air], &proof, &[vec![]], common).expect("the proof verifies");
+}

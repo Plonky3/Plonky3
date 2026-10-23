@@ -294,6 +294,7 @@ where
                     .generate_permutation::<Val<SC>, SC::Challenge>(
                         inst.trace,
                         &inst.air.preprocessed_trace(),
+                        &inst.air.periodic_columns(),
                         &inst.public_values,
                         all_lookups[i],
                         &challenges_per_instance[i],
@@ -336,14 +337,20 @@ where
             .iter()
             .map(|inst| inst.air.preprocessed_trace())
             .collect();
+        let periodic_columns: Vec<_> = instances
+            .iter()
+            .map(|inst| inst.air.periodic_columns())
+            .collect();
         let debug_instances: Vec<_> = instances
             .iter()
             .zip(preprocessed_traces.iter())
+            .zip(periodic_columns.iter())
             .zip(all_lookups.iter())
-            .map(|((inst, prep), lookups)| LookupDebugInstance {
+            .map(|(((inst, prep), periodic), lookups)| LookupDebugInstance {
                 main_trace: inst.trace,
                 preprocessed_trace: prep,
                 public_values: &inst.public_values,
+                periodic_columns: periodic,
                 lookups,
                 permutation_challenges: &[],
             })
