@@ -82,12 +82,12 @@ impl Goldilocks {
 
     /// Return the canonical representative using `subtle`'s constant-time operations.
     ///
-    /// Requires the `constant-time` feature. This covers only scalar canonicalization;
-    /// other field operations and calling code are not made constant-time.
+    /// Requires the `constant-time` feature.
+    ///
+    /// Only scalar canonicalization is covered; other field operations and calling code are not made constant-time.
     /// Timing properties depend on `subtle`, compiler optimizations, and target hardware.
     /// Use release builds: `subtle`'s debug assertions may introduce input-dependent branches.
-    /// Callers relying on timing must assess their build and calling context; see the
-    /// [caller obligations](https://github.com/Plonky3/Plonky3/blob/main/docs/caller-obligations.md#scalar-canonicalization-timing).
+    /// Callers relying on timing must assess their build and calling context; see the [caller obligations](https://github.com/Plonky3/Plonky3/blob/main/docs/caller-obligations.md#scalar-canonicalization-timing).
     #[cfg(feature = "constant-time")]
     #[inline]
     #[must_use]
