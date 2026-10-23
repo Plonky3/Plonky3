@@ -288,7 +288,8 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
 
     /// Get a parallel iterator over the rows of the matrix which takes `chunk_rows` rows at a time.
     ///
-    /// If `chunk_rows` does not divide the height of the matrix, the last chunk will be smaller.
+    /// If `chunk_rows` does not divide the height of the matrix, the last up to `chunk_rows - 1` rows
+    /// of the matrix will be omitted.
     pub fn par_row_chunks_exact(
         &self,
         chunk_rows: usize,
@@ -865,8 +866,8 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
         Self::new(values, width)
     }
 
-    /// Return a new matrix with additional columns appended to the right of
-    /// every row, filled with a constant value.
+    /// Append columns filled with a constant value to the right of every row,
+    /// modifying this matrix in place.
     ///
     /// Useful when a trace matrix needs extra selector or flag columns that are
     /// initialised to a default.
