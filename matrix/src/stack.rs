@@ -23,6 +23,10 @@ pub type ViewPair<'a, T> = VerticalPair<RowMajorMatrixView<'a, T>, RowMajorMatri
 /// - `width`: The same as the inputs.
 /// - `height`: The sum of the `heights` of the input matrices.
 ///
+/// The fields are public, so a pair can hold two widths.
+///
+/// Its width is then the smaller one, so every checked read stays inside both matrices.
+///
 /// Element access and iteration will first access the rows of the top matrix,
 /// followed by the rows of the bottom matrix.
 #[derive(Copy, Clone, Debug)]
@@ -39,6 +43,10 @@ pub struct VerticalPair<Top, Bottom> {
 /// The resulting matrix has dimensions:
 /// - `width`: The sum of the `widths` of the input matrices.
 /// - `height`: The same as the inputs.
+///
+/// The fields are public, so a pair can hold two heights.
+///
+/// Its height is then the smaller one, so every checked read stays inside both matrices.
 ///
 /// Element access and iteration for a given row `i` will first access the elements in the `i`'th row of the left matrix,
 /// followed by elements in the `i'`th row of the right matrix.
@@ -94,7 +102,12 @@ impl<T: Send + Sync + Clone, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T>
     for VerticalPair<Top, Bottom>
 {
     fn width(&self) -> usize {
-        self.top.width()
+        // A checked read passes any column below this width to either matrix.
+        //
+        // A pair built from its public fields can hold two widths.
+        //
+        // The smaller width keeps every such column inside both.
+        self.top.width().min(self.bottom.width())
     }
 
     fn height(&self) -> usize {
@@ -186,7 +199,12 @@ impl<T: Send + Sync + Clone, Left: Matrix<T>, Right: Matrix<T>> Matrix<T>
     }
 
     fn height(&self) -> usize {
-        self.left.height()
+        // A checked read passes any row below this height to both matrices.
+        //
+        // A pair built from its public fields can hold two heights.
+        //
+        // The smaller height keeps every such row inside both.
+        self.left.height().min(self.right.height())
     }
 
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
@@ -295,6 +313,45 @@ mod tests {
 
     use super::*;
     use crate::RowMajorMatrix;
+
+    #[test]
+    fn test_vertical_pair_widths_differ() {
+        // Fixture state: a pair built from its public fields, skipping the width check.
+        //
+        //     top:    1 x 3   [ 1 2 3 ]
+        //     bottom: 1 x 1   [ 4 ]
+        let pair = VerticalPair {
+            top: RowMajorMatrix::new(vec![1, 2, 3], 3),
+            bottom: RowMajorMatrix::new(vec![4], 1),
+        };
+
+        // Invariant: the width is the smaller one, so column 2 is out of range on every row.
+        assert_eq!(pair.width(), 1);
+        assert_eq!(pair.get(1, 0), Some(4));
+
+        // Mutation: with the top's width, this reads index 2 of the one-element bottom buffer.
+        assert_eq!(pair.get(1, 2), None);
+    }
+
+    #[test]
+    fn test_horizontal_pair_heights_differ() {
+        // Fixture state: a pair built from its public fields, skipping the height check.
+        //
+        //     left:  3 x 1   [ 1 ]      right: 1 x 1   [ 4 ]
+        //                    [ 2 ]
+        //                    [ 3 ]
+        let pair = HorizontalPair {
+            left: RowMajorMatrix::new(vec![1, 2, 3], 1),
+            right: RowMajorMatrix::new(vec![4], 1),
+        };
+
+        // Invariant: the height is the smaller one, so row 2 is out of range in every column.
+        assert_eq!(pair.height(), 1);
+        assert_eq!(pair.get(0, 1), Some(4));
+
+        // Mutation: with the left's height, this reads index 2 of the one-element right buffer.
+        assert_eq!(pair.get(2, 1), None);
+    }
 
     #[test]
     fn test_vertical_pair_empty_top() {
