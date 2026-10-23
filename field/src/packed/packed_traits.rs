@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::iter::{Product, Sum};
 use core::mem::MaybeUninit;
 use core::ops::{Div, DivAssign};
@@ -15,6 +16,17 @@ pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {
     #[inline]
     fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
         p3_util::transpose::transpose(input, output, width, height);
+    }
+
+    /// Transpose into an owned vector of exactly input.len() elements.
+    ///
+    /// This independent hook defaults to typed copies. Overriding transpose
+    /// does not change it; audited representations can override both hooks.
+    /// Panics if dimensions overflow or input has the wrong length.
+    #[inline]
+    #[must_use]
+    fn transpose_owned(input: &[Self], width: usize, height: usize) -> Vec<Self> {
+        p3_util::transpose::transpose_owned(input, width, height)
     }
 
     /// Transpose separately stored rows into contiguous columns.
@@ -726,6 +738,12 @@ impl Packable for u16 {}
 
 impl Packable for u32 {
     #[inline]
+    fn transpose_owned(input: &[Self], width: usize, height: usize) -> Vec<Self> {
+        // SAFETY: integers have initialized, padding-free, pointer-free representations.
+        unsafe { p3_util::transpose::transpose_words_owned(input, width, height) }
+    }
+
+    #[inline]
     fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
         // SAFETY: integers have initialized, padding-free, pointer-free representations.
         unsafe { p3_util::transpose::transpose_words(input, output, width, height) };
@@ -744,6 +762,12 @@ impl Packable for u32 {
 }
 
 impl Packable for u64 {
+    #[inline]
+    fn transpose_owned(input: &[Self], width: usize, height: usize) -> Vec<Self> {
+        // SAFETY: integers have initialized, padding-free, pointer-free representations.
+        unsafe { p3_util::transpose::transpose_words_owned(input, width, height) }
+    }
+
     #[inline]
     fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
         // SAFETY: integers have initialized, padding-free, pointer-free representations.

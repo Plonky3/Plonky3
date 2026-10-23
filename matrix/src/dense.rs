@@ -943,18 +943,12 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     }
 }
 
-impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
+impl<T: Copy + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
     /// Return the transpose of this matrix.
     /// Field matrices should use [`Self::transpose_packable`] to retain audited register kernels.
     pub fn transpose(&self) -> RowMajorMatrix<T> {
-        let nelts = self.height() * self.width();
-        let mut values = vec![T::default(); nelts];
-        p3_util::transpose::transpose(
-            self.values.borrow(),
-            &mut values,
-            self.width(),
-            self.height(),
-        );
+        let values =
+            p3_util::transpose::transpose_owned(self.values.borrow(), self.width(), self.height());
         RowMajorMatrix::new(values, self.height())
     }
 
@@ -979,12 +973,11 @@ impl<T: Packable, V: DenseStorage<T>> DenseMatrix<T, V> {
     /// Transpose using the element type's `Packable` implementation.
     #[must_use]
     pub fn transpose_packable(&self) -> RowMajorMatrix<T> {
-        let mut values = vec![T::default(); self.values.borrow().len()];
-        T::transpose(
-            self.values.borrow(),
-            &mut values,
-            self.width(),
-            self.height(),
+        let values = T::transpose_owned(self.values.borrow(), self.width(), self.height());
+        assert_eq!(
+            values.len(),
+            self.values.borrow().len(),
+            "transpose output has the wrong length"
         );
         RowMajorMatrix::new(values, self.height())
     }
@@ -1019,6 +1012,84 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
+
+    #[test]
+    fn owned_transpose_does_not_initialize_defaults() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        struct Element(u32);
+        impl Default for Element {
+            fn default() -> Self {
+                panic!("transpose must not default-fill output");
+            }
+        }
+        impl Packable for Element {}
+        let input = RowMajorMatrix::new((0..6).map(Element).collect(), 3);
+        let expected = [
+            Element(0),
+            Element(3),
+            Element(1),
+            Element(4),
+            Element(2),
+            Element(5),
+        ];
+        assert_eq!(input.transpose().values, expected);
+        assert_eq!(input.transpose_packable().values, expected);
+    }
+
+    #[test]
+    fn audited_owned_field_hooks_match_generic_transpose() {
+        fn check<F: Packable + PrimeCharacteristicRing + core::fmt::Debug>() {
+            let input = RowMajorMatrix::new((0..17 * 16).map(F::from_usize).collect(), 17);
+            assert_eq!(input.transpose_packable(), input.transpose());
+        }
+        check::<BabyBear>();
+        check::<p3_mersenne_31::Mersenne31>();
+        check::<p3_goldilocks::Goldilocks>();
+        check::<p3_binary_field::Poly64>();
+        check::<p3_binary_field::BinaryField32>();
+        check::<p3_binary_field::BinaryField64>();
+    }
+
+    #[test]
+    fn transpose_supports_non_default_elements() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        struct Element(u32);
+        let input = RowMajorMatrix::new((0..6).map(Element).collect(), 3);
+        assert_eq!(
+            input.transpose().values,
+            [
+                Element(0),
+                Element(3),
+                Element(1),
+                Element(4),
+                Element(2),
+                Element(5)
+            ]
+        );
+    }
+
+    #[test]
+    fn safe_packable_default_keeps_padding() {
+        #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+        #[repr(C, align(8))]
+        struct Padded(u8);
+        impl Packable for Padded {}
+        let input = RowMajorMatrix::new((0..17 * 16).map(|i| Padded(i as u8)).collect(), 17);
+        assert_eq!(input.transpose_packable(), input.transpose());
+    }
+
+    #[test]
+    #[should_panic(expected = "transpose output has the wrong length")]
+    fn rejects_incorrect_safe_owned_hook_length() {
+        #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+        struct Element(u32);
+        impl Packable for Element {
+            fn transpose_owned(_: &[Self], _: usize, _: usize) -> Vec<Self> {
+                vec![]
+            }
+        }
+        let _ = RowMajorMatrix::new(vec![Element(1); 6], 3).transpose_packable();
+    }
 
     #[test]
     fn packing_aware_transpose_matches_generic_transpose() {

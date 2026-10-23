@@ -67,9 +67,9 @@
 //! - **Medium (<`MEDIUM_LEN` elements)**: `TILE_SIZE`×`TILE_SIZE` Tiled - L2-friendly tiles
 //! - **Large (≥`MEDIUM_LEN` elements)**: Recursive + Tiled - Cache-oblivious
 
+use alloc::vec::Vec;
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use core::arch::aarch64::*;
-#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use core::mem::MaybeUninit;
 #[cfg(all(target_arch = "aarch64", feature = "parallel"))]
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -193,7 +193,10 @@ pub fn transpose<T: Copy + Send + Sync>(
     width: usize,
     height: usize,
 ) {
-    super::portable::transpose(input, output, width, height);
+    // SAFETY: the typed engine only writes valid input copies and never
+    // deinitializes an output slot, including if shape validation panics.
+    let output = unsafe { initialized_output(output) };
+    super::portable::transpose_uninit(input, output, width, height);
 }
 
 /// Transpose elements whose representation can be copied through integer words.
@@ -212,6 +215,94 @@ pub fn transpose<T: Copy + Send + Sync>(
 pub unsafe fn transpose_words<T: Copy + Send + Sync>(
     input: &[T],
     output: &mut [T],
+    width: usize,
+    height: usize,
+) {
+    // SAFETY: valid output may be viewed as MaybeUninit, and the engine only
+    // writes whole valid copies without ever deinitializing existing values.
+    unsafe { transpose_words_uninit(input, initialized_output(output), width, height) };
+}
+
+/// View initialized storage as writable slots without changing its validity.
+///
+/// # Safety
+/// Every returned slot must remain initialized with a valid T, including on
+/// panic paths. Callers may only overwrite slots with valid values, never
+/// deinitialize them, because the original storage remains initialized T.
+#[inline]
+pub(super) const unsafe fn initialized_output<T>(output: &mut [T]) -> &mut [MaybeUninit<T>] {
+    // SAFETY: MaybeUninit<T> has T's layout and alignment, and permits every
+    // initialized T. Users of this private view must never deinitialize slots.
+    unsafe { core::slice::from_raw_parts_mut(output.as_mut_ptr().cast(), output.len()) }
+}
+
+/// Transpose into a new vector without a preliminary default-fill pass.
+///
+/// Arbitrary Copy representations, including references and padding, are copied
+/// as typed values. Panics if dimensions overflow or input has the wrong length.
+#[inline]
+#[must_use]
+pub fn transpose_owned<T: Copy + Send + Sync>(input: &[T], width: usize, height: usize) -> Vec<T> {
+    let len = width
+        .checked_mul(height)
+        .expect("transpose dimensions overflow");
+    assert_eq!(input.len(), len, "transpose input has the wrong length");
+    let mut output = Vec::<T>::with_capacity(len);
+    super::portable::transpose_uninit(
+        input,
+        &mut output.spare_capacity_mut()[..len],
+        width,
+        height,
+    );
+    // SAFETY: the engine initializes every output slot with a valid input T.
+    // Until it returns, length stays zero, so partial writes are panic-safe.
+    unsafe { output.set_len(len) };
+    output
+}
+
+/// Transpose integer-compatible elements into a new vector using register kernels.
+///
+/// Panics if dimensions overflow or input has the wrong length.
+///
+/// # Safety
+/// If T has size/alignment 4/4 or 8/8, every input byte must be initialized,
+/// without padding or pointer provenance, and copying a whole element through
+/// u32/u64 must preserve its validity and value. Other layouts use typed copies.
+#[inline]
+#[must_use]
+pub unsafe fn transpose_words_owned<T: Copy + Send + Sync>(
+    input: &[T],
+    width: usize,
+    height: usize,
+) -> Vec<T> {
+    let len = width
+        .checked_mul(height)
+        .expect("transpose dimensions overflow");
+    assert_eq!(input.len(), len, "transpose input has the wrong length");
+    let mut output = Vec::<T>::with_capacity(len);
+    // SAFETY: forwarded input representation contract; spare capacity is writable.
+    unsafe {
+        transpose_words_uninit(
+            input,
+            &mut output.spare_capacity_mut()[..len],
+            width,
+            height,
+        );
+    };
+    // SAFETY: all slots now hold valid input copies; a panic leaves length zero.
+    unsafe { output.set_len(len) };
+    output
+}
+
+/// Shared register dispatcher. Output can be uninitialized and is never read.
+///
+/// # Safety
+/// Input satisfies the owned word contract. The checked shape is fully written
+/// with valid input copies; initialized output slots are never deinitialized.
+#[inline]
+unsafe fn transpose_words_uninit<T: Copy + Send + Sync>(
+    input: &[T],
+    output: &mut [MaybeUninit<T>],
     width: usize,
     height: usize,
 ) {
@@ -276,7 +367,7 @@ pub unsafe fn transpose_words<T: Copy + Send + Sync>(
 
     // Fallback for non-ARM64 or unsupported element sizes.
     // SAFETY: the caller supplies the integer-word representation guarantee.
-    unsafe { super::portable::transpose_words(input, output, width, height) };
+    unsafe { super::portable::transpose_words_uninit(input, output, width, height) };
 }
 
 /// Top-level NEON transpose dispatcher for 4-byte elements.
@@ -305,8 +396,9 @@ pub unsafe fn transpose_words<T: Copy + Send + Sync>(
 ///
 /// # Safety
 ///
-/// Caller must ensure `input` and `output` point to valid memory regions
-/// of at least `width * height` elements each.
+/// Caller must ensure input contains initialized words and output is writable
+/// for at least `width * height` words. Output may be uninitialized; kernels
+/// only store whole input words and never read the output.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_neon_4b(input: *const u32, output: *mut u32, width: usize, height: usize) {
@@ -1244,8 +1336,9 @@ unsafe fn transpose_4x4_neon(src: *const u32, dst: *mut u32, src_stride: usize, 
 ///
 /// # Safety
 ///
-/// Caller must ensure `input` and `output` point to valid memory regions
-/// of at least `width * height` elements each.
+/// Caller must ensure input contains initialized words and output is writable
+/// for at least `width * height` words. Output may be uninitialized; kernels
+/// only store whole input words and never read the output.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_neon_8b(input: *const u64, output: *mut u64, width: usize, height: usize) {
@@ -1916,6 +2009,159 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    fn owned_oracle<T: Copy>(input: &[T], width: usize, height: usize) -> Vec<T> {
+        (0..width)
+            .flat_map(|col| (0..height).map(move |row| input[row * width + col]))
+            .collect()
+    }
+
+    #[test]
+    fn owned_matches_index_oracle() {
+        for (width, height) in [
+            (0, 0),
+            (0, 17),
+            (17, 0),
+            (1, 257),
+            (257, 1),
+            (15, 17),
+            (16, 16),
+            (17, 15),
+            (17, 33),
+            (33, 17),
+            (127, 129),
+            (129, 127),
+            (1024, 1024),
+            (1025, 1024),
+            (1024, 1025),
+            (1, 4_194_305),
+            (2, 2_097_151),
+            (2, 2_097_152),
+            (2, 2_097_153),
+            (4, 1_048_577),
+            (2049, 2049),
+        ] {
+            let input: Vec<_> = (0..width * height).map(|i| i as u32).collect();
+            let expected = owned_oracle(&input, width, height);
+            assert_eq!(transpose_owned(&input, width, height), expected);
+            // SAFETY: u32 has an initialized integer representation.
+            assert_eq!(
+                unsafe { transpose_words_owned(&input, width, height) },
+                expected
+            );
+            let mut initialized = vec![u32::MAX; input.len()];
+            u32::transpose(&input, &mut initialized, width, height);
+            assert_eq!(initialized, expected);
+
+            let input: Vec<_> = input.into_iter().map(u64::from).collect();
+            let expected = owned_oracle(&input, width, height);
+            assert_eq!(transpose_owned(&input, width, height), expected);
+            // SAFETY: u64 has an initialized integer representation.
+            assert_eq!(
+                unsafe { transpose_words_owned(&input, width, height) },
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn owned_generic_representations() {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        struct NoDefault(u32);
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(C, align(4))]
+        struct Padded4(u8);
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(C, align(8))]
+        struct Padded8(u8);
+        fn check<T: Copy + Send + Sync + Eq + core::fmt::Debug>(make: impl Fn(usize) -> T) {
+            let input: Vec<_> = (0..17 * 16).map(make).collect();
+            assert_eq!(
+                transpose_owned(&input, 17, 16),
+                owned_oracle(&input, 17, 16)
+            );
+        }
+        check(|i| NoDefault(i as u32));
+        check(|i| Padded4(i as u8));
+        check(|i| Padded8(i as u8));
+        check(|_| ());
+        let values = [3u64, 9];
+        let input: Vec<_> = (0..17 * 16).map(|i| &values[i % 2]).collect();
+        let output = transpose_owned(&input, 17, 16);
+        for row in 0..16 {
+            for col in 0..17 {
+                assert!(core::ptr::eq(output[col * 16 + row], input[row * 17 + col]));
+            }
+        }
+        let mut input = [MaybeUninit::<u32>::uninit(); 17 * 16];
+        input[19].write(73);
+        let output = transpose_owned(&input, 17, 16);
+        // SAFETY: this position was copied from initialized input[19].
+        assert_eq!(unsafe { output[2 * 16 + 1].assume_init() }, 73);
+
+        let input: Vec<_> = (0..17 * 16)
+            .map(|i| Size8Align4((i as u64).to_ne_bytes()))
+            .collect();
+        // SAFETY: this padding-free byte array has no provenance. Its unsupported
+        // word alignment must select the typed fallback.
+        let output = unsafe { transpose_words_owned(&input, 17, 16) };
+        assert_eq!(output, owned_oracle(&input, 17, 16));
+    }
+
+    #[test]
+    fn owned_packable_fields_match_index_oracle() {
+        fn check<F: Packable + PrimeCharacteristicRing + core::fmt::Debug>() {
+            for (width, height) in [(1, 17), (17, 1), (15, 17), (17, 33), (129, 127)] {
+                let input: Vec<_> = (0..width * height).map(F::from_usize).collect();
+                assert_eq!(
+                    F::transpose_owned(&input, width, height),
+                    owned_oracle(&input, width, height)
+                );
+            }
+        }
+        check::<BabyBear>();
+        check::<Goldilocks>();
+    }
+
+    #[test]
+    #[should_panic(expected = "transpose dimensions overflow")]
+    fn owned_rejects_dimension_overflow_before_allocating() {
+        let _ = transpose_owned(&[0u32; 2], usize::MAX / 2 + 2, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "transpose dimensions overflow")]
+    fn owned_words_rejects_dimension_overflow_before_allocating() {
+        // SAFETY: u32 supports integer-word copies.
+        let _ = unsafe { transpose_words_owned(&[0u32; 2], usize::MAX / 2 + 2, 2) };
+    }
+
+    #[test]
+    fn owned_validates_dimensions() {
+        extern crate std;
+        for words in [false, true] {
+            for (input, width, height) in [
+                (&[0u32; 2][..], 1, 1),
+                (&[][..], 0, 1),
+                (&[0u32; 2][..], 0, 17),
+                (&[0u32; 2][..], usize::MAX / 2 + 2, 2),
+            ] {
+                let run = || {
+                    if words {
+                        // SAFETY: the initialized u32 input supports word copying.
+                        unsafe { transpose_words_owned(input, width, height) }
+                    } else {
+                        transpose_owned(input, width, height)
+                    }
+                };
+                if width == 0 && input.is_empty() {
+                    assert!(run().is_empty());
+                } else {
+                    assert!(std::panic::catch_unwind(run).is_err());
+                }
+            }
+        }
+    }
 
     #[test]
     #[should_panic(expected = "transpose dimensions overflow")]
