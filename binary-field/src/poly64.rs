@@ -144,6 +144,12 @@ impl Poly64 {
 
 impl Packable for Poly64 {
     #[inline]
+    fn transpose_owned(input: &[Self], width: usize, height: usize) -> Vec<Self> {
+        // SAFETY: Self is repr(transparent) over an initialized u64.
+        unsafe { p3_util::transpose::transpose_words_owned(input, width, height) }
+    }
+
+    #[inline]
     fn transpose(input: &[Self], output: &mut [Self], width: usize, height: usize) {
         // SAFETY: Self is repr(transparent) over an initialized u64.
         unsafe { p3_util::transpose::transpose_words(input, output, width, height) };

@@ -118,6 +118,9 @@ pub(crate) fn transpose_rows_strided<'a, T, R>(
         "transpose output is too short for its stride"
     );
 
+    // SAFETY: the scalar engine only writes valid copies and never deinitializes
+    // a slot, including if the row callback panics.
+    let dst = unsafe { super::rectangular::initialized_output(dst) };
     transpose_rows_scalar(rows, cols, row, dst, stride);
 }
 
@@ -245,11 +248,7 @@ pub(crate) unsafe fn transpose_rows_strided_words_uninit<'a, T, R>(
         return;
     }
 
-    for r in 0..rows {
-        for (c, &value) in row(r)[..cols].iter().enumerate() {
-            dst[c * stride + r].write(value);
-        }
-    }
+    transpose_rows_scalar(rows, cols, row, dst, stride);
 }
 
 /// Scalar reference transpose, with the contract of the strided entry point.
@@ -260,7 +259,7 @@ pub(crate) fn transpose_rows_scalar<'a, T, R>(
     rows: usize,
     cols: usize,
     row: R,
-    dst: &mut [T],
+    dst: &mut [MaybeUninit<T>],
     stride: usize,
 ) where
     T: Copy + 'a,
@@ -270,7 +269,7 @@ pub(crate) fn transpose_rows_scalar<'a, T, R>(
         // Slicing to the column count rejects a short row and drops a long row's tail.
         for (c, &x) in row(r)[..cols].iter().enumerate() {
             // Column c of the input becomes output run c.
-            dst[c * stride + r] = x;
+            dst[c * stride + r].write(x);
         }
     }
 }
@@ -1079,7 +1078,10 @@ mod tests {
         let mut fast = vec![0u32; 16 * 17];
         let mut reference = vec![0u32; 16 * 17];
         u32::transpose_rows(16, 17, |r| &src[r], &mut fast);
-        transpose_rows_scalar(16, 17, |r| &src[r], &mut reference, 16);
+        // SAFETY: the scalar engine only writes valid copies, including on panic.
+        let reference_slots =
+            unsafe { super::super::rectangular::initialized_output(&mut reference) };
+        transpose_rows_scalar(16, 17, |r| &src[r], reference_slots, 16);
         assert_eq!(fast, reference);
     }
 
@@ -1162,7 +1164,10 @@ mod tests {
         let mut reference = vec![sentinel; stride * cols];
         // SAFETY: integers have initialized, padding-free, pointer-free representations.
         unsafe { transpose_rows_strided_words(rows, cols, |r| &src[r], &mut fast, stride) };
-        transpose_rows_scalar(rows, cols, |r| &src[r], &mut reference, stride);
+        // SAFETY: the scalar engine only writes valid copies, including on panic.
+        let reference_slots =
+            unsafe { super::super::rectangular::initialized_output(&mut reference) };
+        transpose_rows_scalar(rows, cols, |r| &src[r], reference_slots, stride);
         assert_eq!(fast, reference);
     }
 

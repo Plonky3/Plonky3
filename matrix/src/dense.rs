@@ -1045,6 +1045,9 @@ mod tests {
         check::<BabyBear>();
         check::<p3_mersenne_31::Mersenne31>();
         check::<p3_goldilocks::Goldilocks>();
+        check::<p3_binary_field::Poly64>();
+        check::<p3_binary_field::BinaryField32>();
+        check::<p3_binary_field::BinaryField64>();
     }
 
     #[test]
