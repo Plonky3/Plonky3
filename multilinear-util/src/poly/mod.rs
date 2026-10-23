@@ -794,9 +794,16 @@ where
     /// ```text
     ///     eq(x, point) = \prod_{i=1}^{n} (1 - p_i + 2 p_i x_i).
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the point does not have the polynomial's number of variables.
     #[must_use]
     #[inline]
     pub fn eval_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
+        // The recursive path reads only a prefix of a larger table.
+        // So the arity is checked on every path.
+        assert_eq!(point.num_variables(), self.num_variables());
         if point.num_variables() < mle_recursion_threshold::<F>() {
             eval_multilinear_recursive(self.as_slice(), point.as_slice())
         } else {
@@ -828,12 +835,19 @@ where
     /// ```text
     ///     eq(x, point) = \prod_{i=1}^{n} (1 - p_i + 2 p_i x_i).
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the point does not have the polynomial's number of variables.
     #[must_use]
     #[inline]
     pub fn eval_ext<BaseField: Field>(&self, point: &Point<F>) -> F
     where
         F: ExtensionField<BaseField>,
     {
+        // The recursive path reads only a prefix of a larger table.
+        // So the arity is checked on every path.
+        assert_eq!(point.num_variables(), self.num_variables());
         if point.num_variables() < mle_recursion_threshold::<BaseField>() {
             eval_multilinear_recursive(self.as_slice(), point.as_slice())
         } else {
@@ -1022,6 +1036,39 @@ pub(crate) mod test {
     type F = BabyBear;
     type PackedF = <F as p3_field::Field>::Packing;
     type EF = BinomialExtensionField<F, 4>;
+
+    #[test]
+    #[should_panic]
+    fn eval_base_rejects_a_point_with_fewer_variables() {
+        // Invariant: a point is evaluated only with the polynomial's number of variables.
+        //
+        // Fixture state: 3 variables, table 1..=8, point (5, 7) with 2 coordinates.
+        //
+        //     without the check, a release build reads the first 4 entries only
+        //     and returns f~(0, 5, 7)
+        //
+        // Mutation: dropping the check makes a release build return that value.
+        let poly = Poly::new((1..=8).map(F::from_u32).collect::<Vec<_>>());
+        let short = Point::new(vec![F::from_u32(5), F::from_u32(7)]);
+        let _ = poly.eval_base::<F>(&short);
+    }
+
+    #[test]
+    #[should_panic]
+    fn eval_ext_rejects_a_point_with_fewer_variables() {
+        // Invariant: the extension evaluation applies the same check.
+        //
+        // Fixture state: 3 variables over EF, point with 2 coordinates.
+        //
+        // Mutation: dropping the check makes a release build return f~(0, r_0, r_1).
+        let poly = Poly::new(
+            (1..=8)
+                .map(|i| EF::from(F::from_u32(i)))
+                .collect::<Vec<_>>(),
+        );
+        let short = Point::new(vec![EF::from(F::from_u32(5)), EF::from(F::from_u32(7))]);
+        let _ = poly.eval_ext::<F>(&short);
+    }
 
     #[test]
     fn new_next_from_point_shifts_and_repeats_last_row() {
