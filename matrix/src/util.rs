@@ -99,6 +99,11 @@ where
 /// - `i`: The first row index (must be less than `j`).
 /// - `j`: The second row index.
 pub fn swap_rows<F: Clone + Send + Sync>(mat: &mut RowMajorMatrix<F>, i: usize, j: usize) {
+    // Checked up front: slicing alone misses width 0 and wraps huge indices in release builds.
+    assert!(
+        i < j && j < mat.height(),
+        "rows must satisfy i < j < height"
+    );
     let w = mat.width();
     let (upper, lower) = mat.values.split_at_mut(j * w);
     let row_i = &mut upper[i * w..(i + 1) * w];
@@ -170,6 +175,29 @@ mod tests {
                 10, 11, 12, // row 3 (unchanged)
             ]
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "rows must satisfy i < j < height")]
+    fn test_swap_rows_rejects_unordered_rows() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
+        swap_rows(&mut matrix, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "rows must satisfy i < j < height")]
+    fn test_swap_rows_rejects_out_of_range_row() {
+        // Height 2: row 2 is one past the end.
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
+        swap_rows(&mut matrix, 0, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "rows must satisfy i < j < height")]
+    fn test_swap_rows_rejects_rows_of_width_zero_matrix() {
+        // Width 0 makes every row slice empty, so only the index check can catch this.
+        let mut matrix = RowMajorMatrix::<u8>::new(vec![], 0);
+        swap_rows(&mut matrix, 5, 3);
     }
 
     #[test]
