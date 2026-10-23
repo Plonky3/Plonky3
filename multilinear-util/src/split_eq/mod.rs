@@ -804,6 +804,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
 
         // A constant table has a single row, and its successor is itself.
         // The shift leaves the value unchanged, and only the table's total weight remains.
+        //
         // With no variable, the prefix half is one entry, the scale absorbed at construction.
         if let Some(constant) = poly.as_constant() {
             return self.eq0.as_slice()[0] * constant;
@@ -811,6 +812,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
 
         // With a single variable the successor of row 0 is row 1, and row 1 repeats.
         // Both successor reads land on row 1, so the value is that entry times the total weight.
+        //
         // The split puts the only variable in the suffix half.
         // So the prefix half is still the scale.
         if poly.num_variables() == 1 {
