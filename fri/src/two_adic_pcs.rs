@@ -28,9 +28,8 @@ use p3_commit::{
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, FieldArray, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
-    PrimeField64, TwoAdicField, batch_multiplicative_inverse, batch_multiplicative_inverse_general,
-    dot_product,
+    ExtensionField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, PrimeField64,
+    TwoAdicField, batch_multiplicative_inverse, batch_multiplicative_inverse_map, dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -1086,36 +1085,8 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
         .map(|(z, log_height)| {
             // As coset is stored in bit-reversed order, the prefix is the right subgroup.
             let xs = &coset[..(1 << log_height)];
-            // Match the block size and four independent Montgomery chains used by
-            // batch_multiplicative_inverse, without materializing every difference at once.
-            const BLOCK_SIZE: usize = 1024;
-            if xs.len() < BLOCK_SIZE {
-                return (
-                    z,
-                    batch_multiplicative_inverse(&xs.iter().map(|&x| z - x).collect_vec()),
-                );
-            }
             let mut inverses = EF::zero_vec(xs.len());
-            xs.par_chunks(BLOCK_SIZE)
-                .zip(inverses.par_chunks_mut(BLOCK_SIZE))
-                .with_min_task_bytes(5 * BLOCK_SIZE * size_of::<EF>())
-                .for_each(|(xs, inverses)| {
-                    // Heights are powers of two, so these blocks are all full. Scratch is
-                    // 1024 extension elements per active callback, independent of height.
-                    let mut differences = [EF::ZERO; BLOCK_SIZE];
-                    for (difference, &x) in differences.iter_mut().zip(xs) {
-                        *difference = z - x;
-                    }
-                    let differences = FieldArray::<EF, 4>::pack_slice(&differences);
-                    let inverses = FieldArray::<EF, 4>::pack_slice_mut(inverses);
-                    batch_multiplicative_inverse_general(differences, inverses, |product| {
-                        let mut inverse = FieldArray::<EF, 4>::ZERO;
-                        batch_multiplicative_inverse_general(&product.0, &mut inverse.0, |x| {
-                            x.inverse()
-                        });
-                        inverse
-                    });
-                });
+            batch_multiplicative_inverse_map(xs, |&x| z - x, &mut inverses);
             (z, inverses)
         })
         .collect()
@@ -1227,7 +1198,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "Tried to invert zero")]
     fn inverse_denominators_reject_zero_in_a_small_domain() {
         let points = vec![vec![EF::ONE]];
         let rounds = vec![(vec![RowMajorMatrix::new(vec![F::ZERO], 1)], &points)];
@@ -1235,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "Tried to invert zero")]
     fn inverse_denominators_reject_zero_in_a_later_block() {
         let coset = F::two_adic_generator(11)
             .shifted_powers(F::GENERATOR)
