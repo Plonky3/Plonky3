@@ -3,6 +3,10 @@
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 
+use p3_sumcheck::ring_switch::bits::SuffixTensors;
+
+use crate::whir::WeightedClaim;
+
 /// Where every region lies in a commitment of `2^num_variables` bits.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegionLayout {
@@ -19,6 +23,16 @@ pub struct Region {
     pub log_bits: usize,
     /// First bit of the region.
     pub offset_bits: usize,
+}
+
+/// The claim a reduction leaves on a region, lifted to the whole commitment, with its element split for the deferred ring switch.
+#[must_use = "the claim is sound only once opened against the commitment"]
+#[derive(Clone, Debug)]
+pub struct RegionClaim<F, EF> {
+    /// The claim on the whole commitment.
+    pub claim: WeightedClaim<EF>,
+    /// The claim's element, split from the folded witness rather than from the commitment.
+    pub split: Option<SuffixTensors<EF, F>>,
 }
 
 impl RegionLayout {

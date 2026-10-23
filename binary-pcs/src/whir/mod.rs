@@ -22,5 +22,5 @@ pub use error::{BooleanWhirError, BudgetError, CommitmentError, ProfileError};
 pub use p3_sumcheck::ring_switch::bits::{BitTensor, SuffixTensors};
 pub use profile::BinaryWhirProfile;
 pub use proof::{BooleanWhirDeferredProof, BooleanWhirProof};
-pub use region::{Region, RegionLayout};
+pub use region::{Region, RegionClaim, RegionLayout};
 pub use shape::{ProofShape, ProofShapeError};
