@@ -164,14 +164,10 @@ fn check_query(report: &SecurityReport, num_queries: u32, query_pow_bits: u32) {
     };
     let p3_bits = cap(conjectured_error(&regime, &f64_instance(20)).bits());
 
-    // `bits_per_query` rounds its per-query rate down by less than 2 ulps (see its doc test's own
-    // margin), and the fixed-point total multiplies that single per-query rounding by
-    // `num_queries` before capping — the same tolerance bounds both directions.
-    let tolerance = (num_queries as f64).mul_add(2.0 / fixed::ONE as f64, TIGHT_TOL);
-    assert!(
-        fixed_bits <= p3_bits + tolerance,
-        "query: {fixed_bits} > {p3_bits} + {tolerance}"
-    );
+    // `bits_per_query` stays within 3 ulps across the standard field sizes tested in `fixed`.
+    // The total multiplies that per-query rounding by `num_queries` before capping.
+    let tolerance = (num_queries as f64).mul_add(3.0 / fixed::ONE as f64, TIGHT_TOL);
+    assert!(fixed_bits <= p3_bits, "query: {fixed_bits} > {p3_bits}");
     assert!(
         p3_bits - fixed_bits < tolerance,
         "query: gap {} >= tolerance {tolerance}, fixed drifted conservative",
@@ -497,13 +493,10 @@ fn lookup_counts_match_float_and_remain_monotone() {
                                     .bits(),
                             );
                         let actual = to_f64(actual);
-                        // The legacy B=0 path retains its existing rounding convention.
-                        // New paths must stay below the floating reference without an
-                        // upward tolerance; exact Q16 boundary cases have integer oracles
-                        // in the budget unit tests.
-                        let upward_tolerance = if fractions_per_proof == 0 { 1e-9 } else { 0.0 };
+                        // All paths share conservative rounding, including B=0.
+                        // Exact Q16 boundary cases have integer oracles in the unit tests.
                         assert!(
-                            actual <= truth + upward_tolerance,
+                            actual <= truth,
                             "lookup overstates: f={fractions_per_row}, B={fractions_per_proof}, W={max_message_width}, h={height}, pow={pow_bits}: {actual} > {truth}"
                         );
                         assert!(

@@ -199,7 +199,7 @@ const fn lookup_round(
     let width = lookup.max_message_width as u64 + 2;
     let per_row = width * lookup.fractions_per_row as u64;
     let per_proof = width * lookup.fractions_per_proof as u64;
-    // Keep the previous fixed-point rounding exactly when there are no one-time factors.
+    // Without an additive size, use the shared coefficient-times-height bound directly.
     if per_proof == 0 {
         return round(
             LOOKUP_LABEL,
@@ -211,7 +211,7 @@ const fn lookup_round(
         );
     }
     let error = if per_row == 0 {
-        lookup_ceil_log2(per_proof)
+        fixed::ceil_log2(per_proof)
     } else if instance.log_max_height <= 64 {
         // Each coefficient fits in u64. Even at height 2^64 their sum fits in u128.
         let size = ((per_row as u128) << instance.log_max_height) + per_proof as u128;
@@ -226,31 +226,17 @@ const fn lookup_round(
             Some(mantissa)
         };
         match rounded {
-            Some(mantissa) => lookup_ceil_log2(mantissa) + fixed::from_bits(shift),
+            Some(mantissa) => fixed::ceil_log2(mantissa) + fixed::from_bits(shift),
             None => fixed::from_bits(64 + shift),
         }
     } else {
-        // B/(f·H) < 2^-32 here because B fits in u32 and f >= 1. Thus the additive
-        // correction log2(1 + B/(f·H)) is smaller than one fixed-point ulp, without
-        // materializing a height whose shift could overflow.
+        // B/(f·H) < 2^-33 here because B fits in u32, f >= 1, and H >= 2^65.
+        // The shared logarithm bound already guards Q32 truncation.
+        // This extra Q16 ulp covers only the additive correction log2(1 + B/(f·H)) < 2^-32, without materializing a height whose shift could overflow.
         fixed::ceil_log2(per_row) + fixed::from_bits(instance.log_max_height) + 1
     };
     let bits = instance.field_bits.saturating_sub(error) + fixed::from_bits(pow_bits);
     SecurityTerm::new(LOOKUP_LABEL, min(bits, cap))
-}
-
-/// Upper logarithm for the new lookup paths, accounting for the Q32 truncation inside
-/// `fixed::ceil_log2`. Normalization and each squared/renormalized mantissa lose less
-/// than 2^-31 logarithm bits. Referred back to the input, these losses form a geometric
-/// series totaling less than 2^-30 bits. The floor also leaves a fractional tail below
-/// one Q16 unit, so one extra unit above the nominal ceiling covers both. Cap that
-/// guarded bound at the exact whole-bit ceiling: both bounds are monotone upper
-/// bounds, so their minimum remains conservative and monotone, and powers of two
-/// remain exact without a guard that drops at the power.
-const fn lookup_ceil_log2(value: u64) -> u64 {
-    let guarded = fixed::ceil_log2(value) + 1;
-    let whole = fixed::from_bits(u64::BITS - (value - 1).leading_zeros());
-    min(guarded, whole)
 }
 
 /// Coefficient `2 · (2^log_folding_arity − 1)` of the folding round, or `None` when the arity is
@@ -483,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn per_row_only_lookup_preserves_previous_rounding() {
+    fn per_row_only_lookup_is_exact_at_power_of_two_sizes() {
         let mut air = air();
         air.lookup = Some(LookupShape {
             fractions_per_row: 2,
@@ -547,11 +533,11 @@ mod tests {
     }
 
     #[test]
-    fn once_per_proof_logarithms_round_up_at_q16_boundaries() {
+    fn lookup_logarithms_round_up_at_q16_boundaries() {
         // These exact Q16 expectations catch Q32 normalization losing a logarithm bit.
-        // The first two numerators lie just above a Q16 logarithm boundary; the rest
-        // are exact powers of two, including one that requires u128 normalization.
+        // The first three numerators lie just above a Q16 logarithm boundary; the rest are exact powers of two, including one that requires u128 normalization.
         for (per_row, per_proof, width, height, expected) in [
+            (2_970_122_603, 0, 2_085_664_753, 0, 4_297_474),
             (0, 2_970_122_603, 2_085_664_753, 0, 4_297_474),
             (2_298_374_928, 694_652_501, 1_542_241_952, 5, 4_021_687),
             (0, 8, 2, 0, 8_060_928),
