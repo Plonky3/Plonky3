@@ -184,27 +184,84 @@ pub fn list_size_ldr_m(log_blowup: usize, m: usize) -> f64 {
     (m as f64 + 0.5) / sqrt(rho)
 }
 
-/// Largest proximity parameter `m` such that the η > 0 precondition of
-/// Theorem 1 in [2021/582] holds. Caller applies [`LDR_M_CAP`].
+/// Largest proximity parameter m that ethSTARK (eprint 2021/582), Theorem 1, admits.
 ///
-/// `max_combo` accounts for the trace-side expansion from out-of-domain
-/// openings, matching [`alpha_udr`]'s `rho_plus`. The precondition is the
-/// strict inequality `m < X` where `X = 1 / (2 * (sqrt((h + max_combo) / h) - 1))`,
-/// so the admissible maximum is `floor(X)`, or `X - 1` on the non-generic
-/// chance that `X` is itself an integer.
+/// The caller applies its own cap on top.
+///
+/// # Overview
+///
+/// Theorem 1 needs eta > 0, which is the strict inequality m < X with
+///
+/// ```text
+///     X = 1 / (2 (sqrt((h + c) / h) - 1))
+/// ```
+///
+/// - h is the trace length.
+/// - c is the number of extra points that out-of-domain openings add to the trace.
+///
+/// # Why integers
+///
+/// Squaring both sides of m < X gives an equivalent integer test:
+///
+/// ```text
+///     4 c m^2 < h (4m + 1)
+/// ```
+///
+/// Computed in floating point, X can round onto an integer it only approaches.
+///
+/// It can also round off an integer it equals, which would admit m = X.
+///
+/// The integer test settles both cases exactly.
 pub fn compute_upper_m(trace_length: usize, max_combo: usize) -> usize {
+    // An empty trace admits no parameter.
     if trace_length == 0 {
         return 0;
     }
-    let h = trace_length as f64;
-    let ratio = (h + max_combo as f64) / h;
-    let x = 1.0 / (2.0 * (sqrt(ratio) - 1.0));
-    let m = floor(x);
-    if m == x {
-        (m - 1.0) as usize
-    } else {
-        m as usize
+
+    // With no extra points, X is infinite and every m is admissible.
+    if max_combo == 0 {
+        return usize::MAX;
     }
+
+    // Widen to 128 bits so the products below fit for any realistic trace.
+    let (h, c) = (trace_length as u128, max_combo as u128);
+
+    // Decide m < X through 4 c m^2 < h (4m + 1).
+    //
+    // A side that overflows counts as inadmissible.
+    // That can only lower the result, which keeps the bound conservative.
+    let admissible = |m: u128| {
+        // Left side: 4 c m^2.
+        let lhs = m.checked_mul(m).and_then(|v| v.checked_mul(4 * c));
+
+        // Right side: h (4m + 1).
+        let rhs = m
+            .checked_mul(4)
+            .and_then(|v| v.checked_add(1))
+            .and_then(|v| v.checked_mul(h));
+
+        // Admissible only when both sides fit and the inequality is strict.
+        matches!((lhs, rhs), (Some(l), Some(r)) if l < r)
+    };
+
+    // Seed the search with the floating-point floor of X.
+    //
+    // The seed is off by at most one step, so both loops below run once or twice.
+    let ratio = (trace_length as f64 + max_combo as f64) / trace_length as f64;
+    let mut m = floor(1.0 / (2.0 * (sqrt(ratio) - 1.0))) as u128;
+
+    // Step down while the seed violates the strict inequality.
+    while m > 0 && !admissible(m) {
+        m -= 1;
+    }
+
+    // Step up while the next value still satisfies it.
+    while admissible(m + 1) {
+        m += 1;
+    }
+
+    // Saturate on targets where usize is narrower than the result.
+    usize::try_from(m).unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]
@@ -367,6 +424,30 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn upper_m_is_strict_on_integer_boundaries() {
+        // Invariant: the result m satisfies m < X strictly.
+        //
+        // Fixture state: h = 144, c = 25.
+        //
+        //     sqrt((144 + 25) / 144) = 13 / 12
+        //     X = 1 / (2 (13 / 12 - 1)) = 6
+        //     → m = 6 breaks m < X, so the answer is 5
+        assert_eq!(super::compute_upper_m(144, 25), 5);
+
+        // Family: h = 4 x^2 and c = 4x + 1 give X = x exactly.
+        //
+        //     4 c x^2 = 4 (4x + 1) x^2 = h (4x + 1)
+        //     → equality at m = x, so the answer is x - 1
+        for x in 1usize..2000 {
+            assert_eq!(
+                super::compute_upper_m(4 * x * x, 4 * x + 1),
+                x - 1,
+                "x = {x}"
+            );
         }
     }
 }
