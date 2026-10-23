@@ -491,14 +491,15 @@ mod tests {
 
     proptest! {
         #[test]
-        fn upper_m_is_the_largest_admissible(h in 1u64..1 << 40, c in 1u64..1 << 20) {
-            // Inputs past a 32-bit usize are skipped on 32-bit targets.
-            prop_assume!(usize::try_from(h).is_ok() && usize::try_from(c).is_ok());
-
+        fn upper_m_is_the_largest_admissible(
+            // 2^40 - 1 with 64-bit pointers, usize::MAX with 32-bit ones.
+            h in 1usize..=usize::MAX >> usize::BITS.saturating_sub(40),
+            c in 1usize..1 << 20,
+        ) {
             // Invariant: the result m satisfies 4 c m^2 < h (4m + 1), and m + 1 does not.
             //
             // At these sizes the direct products fit in 128 bits.
-            let m = super::compute_upper_m(h as usize, c as usize) as u128;
+            let m = super::compute_upper_m(h, c) as u128;
             let (h, c) = (h as u128, c as u128);
             let admissible = |m: u128| 4 * c * m * m < h * (4 * m + 1);
             prop_assert!(admissible(m));
