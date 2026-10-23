@@ -89,6 +89,8 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
     /// * If the packing widths of `P` and `PW` differ.
     /// * If any leaf height is off the `ceil(max_height / 2^k)` ladder.
     /// * If an injection requires a binary bridge that padding prevents from progressing.
+    ///
+    /// The shared layer planner rejects invalid heights before allocating digest layers.
     #[instrument(name = "build merkle tree", level = "debug", skip_all,
                  fields(dimensions = alloc::format!("{:?}", leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>())))]
     pub fn new<P, PW, H, C>(h: &H, c: &C, leaves: Vec<M>) -> Self
@@ -107,17 +109,6 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
             assert!(N >= 2, "Arity N must be at least 2");
             assert!(N.is_power_of_two(), "Arity N must be a power of two");
             assert!(P::WIDTH == PW::WIDTH, "Packing widths must match");
-        }
-
-        // Geometry gate: every height must sit on the `ceil(max_height / 2^k)`
-        // ladder anchored at the tallest matrix, or no tree can be built from
-        // them. `Mmcs::commit` enforces the same gate; this constructor is
-        // public, so it must enforce it too rather than fail later with an
-        // out-of-bounds panic deep inside layer construction.
-        if let Err(err) =
-            crate::mmcs::validate_commit_reachable_heights(leaves.iter().map(|l| l.height()))
-        {
-            panic!("{err}");
         }
 
         // The plan borrows the matrices, so it lives only until the layers are built.
