@@ -129,12 +129,21 @@ impl<T: Send + Sync + Clone, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T>
         &self,
         r: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        // A row has exactly the pair's width, the smaller of the two widths.
+        //
+        // Reading a column range of that width keeps a wider child's extra columns out.
+        let width = self.width();
         unsafe {
-            // Safety: The caller must ensure that r < self.height()
+            // Safety: The caller must ensure that r < self.height().
+            // Both children have at least `width` columns, so the range is in bounds.
             if r < self.top.height() {
-                EitherRow::Left(self.top.row_unchecked(r).into_iter())
+                EitherRow::Left(self.top.row_subseq_unchecked(r, 0, width).into_iter())
             } else {
-                EitherRow::Right(self.bottom.row_unchecked(r - self.top.height()).into_iter())
+                EitherRow::Right(
+                    self.bottom
+                        .row_subseq_unchecked(r - self.top.height(), 0, width)
+                        .into_iter(),
+                )
             }
         }
     }
@@ -160,12 +169,19 @@ impl<T: Send + Sync + Clone, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T>
     }
 
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
+        // A row slice has exactly the pair's width, as for the row iterator.
+        let width = self.width();
         unsafe {
-            // Safety: The caller must ensure that r < self.height()
+            // Safety: The caller must ensure that r < self.height().
+            // Both children have at least `width` columns, so the range is in bounds.
             if r < self.top.height() {
-                EitherRow::Left(self.top.row_slice_unchecked(r))
+                EitherRow::Left(self.top.row_subslice_unchecked(r, 0, width))
             } else {
-                EitherRow::Right(self.bottom.row_slice_unchecked(r - self.top.height()))
+                EitherRow::Right(self.bottom.row_subslice_unchecked(
+                    r - self.top.height(),
+                    0,
+                    width,
+                ))
             }
         }
     }
@@ -237,9 +253,24 @@ impl<T: Send + Sync + Clone, Left: Matrix<T>, Right: Matrix<T>> Matrix<T>
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        self.left
-            .vertically_packed_row::<P>(r)
-            .chain(self.right.vertically_packed_row::<P>(r))
+        // Packing wraps past the last row of the pair.
+        //
+        // Each child wraps at its own height, which is the pair's height only when they agree.
+        if self.left.height() == self.right.height() {
+            // Equal heights: each child packs its own columns, wrapping at the shared height.
+            EitherRow::Left(
+                self.left
+                    .vertically_packed_row::<P>(r)
+                    .chain(self.right.vertically_packed_row::<P>(r)),
+            )
+        } else {
+            // Unequal heights: gather the pair's own rows, wrapping at the smaller height.
+            //
+            //     left column [10, 20, 30], right column [100], height 1, from row 0:
+            //     rows read: 0, 0  ->  left lanes [10, 10], right lanes [100, 100]
+            let rows = self.wrapping_row_slices(r, P::WIDTH);
+            EitherRow::Right((0..self.width()).map(move |c| P::from_fn(|i| rows[i][c])))
+        }
     }
 
     #[inline]
@@ -351,6 +382,53 @@ mod tests {
 
         // Mutation: with the left's height, this reads index 2 of the one-element right buffer.
         assert_eq!(pair.get(2, 1), None);
+    }
+
+    #[test]
+    fn test_vertical_pair_widths_differ_rows() {
+        // Fixture state: a pair built from its public fields, with two widths.
+        //
+        //     top:    1 x 3   [ 1 2 3 ]
+        //     bottom: 1 x 1   [ 4 ]
+        //     pair:   2 x 1
+        let pair = VerticalPair {
+            top: RowMajorMatrix::new(vec![1, 2, 3], 3),
+            bottom: RowMajorMatrix::new(vec![4], 1),
+        };
+
+        // Invariant: every row has the pair's width, so the top's extra columns stay hidden.
+        assert_eq!(pair.row(0).unwrap().into_iter().collect_vec(), vec![1]);
+        assert_eq!(pair.row(1).unwrap().into_iter().collect_vec(), vec![4]);
+        assert_eq!(&*pair.row_slice(0).unwrap(), &[1]);
+
+        // The dense conversion has the pair's shape: 2 x 1, not 1 x 4.
+        let dense = pair.to_row_major_matrix();
+        assert_eq!((dense.height(), dense.width()), (2, 1));
+        assert_eq!(dense.values, vec![1, 4]);
+    }
+
+    #[test]
+    fn test_horizontal_pair_heights_differ_packing() {
+        // Fixture state: a pair built from its public fields, with two heights.
+        //
+        //     left:  3 x 1   [ 10 ]     right: 1 x 1   [ 100 ]
+        //                    [ 20 ]
+        //                    [ 30 ]
+        //     pair:  1 x 2
+        let pair = HorizontalPair {
+            left: RowMajorMatrix::new(vec![10u32, 20, 30], 1),
+            right: RowMajorMatrix::new(vec![100u32], 1),
+        };
+
+        // Invariant: packing 2 rows from row 0 wraps at the pair's height of 1.
+        //
+        //     rows read: 0, 0  ->  [10, 10] and [100, 100]
+        let packed = pair.vertically_packed_row::<[u32; 2]>(0).collect_vec();
+        assert_eq!(packed, vec![[10, 10], [100, 100]]);
+
+        // The row pair wraps the same way: the next row of row 0 is row 0 again.
+        let pair_rows = pair.vertically_packed_row_pair::<[u32; 2]>(0, 1);
+        assert_eq!(pair_rows, vec![[10, 10], [100, 100], [10, 10], [100, 100]]);
     }
 
     #[test]
