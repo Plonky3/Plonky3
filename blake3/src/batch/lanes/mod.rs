@@ -18,6 +18,17 @@
 macro_rules! out_of_line_steps {
     ($w:ident $(, $feature:literal)?) => {
         $(#[target_feature(enable = $feature)])?
+        unsafe fn compress_raw_packed<const G: usize>(
+            cv: &[u32],
+            block: &[u32],
+            parameter_words: &[u32; 4],
+            out: &mut [u32],
+            lanes: usize,
+        ) {
+            $crate::batch::raw::packed_with::<Self, $w, G>(cv, block, parameter_words, out, lanes);
+        }
+
+        $(#[target_feature(enable = $feature)])?
         unsafe fn hash_group<const G: usize>(
             mode: $crate::batch::Mode,
             lanes: &$crate::batch::Lanes<'_, $w, G>,
@@ -190,6 +201,9 @@ const KERNELS: &[Kernel] = &[
 /// Messages the widest compiled backend advances at once.
 pub(crate) const LANES: usize = KERNELS[0].lanes;
 
+/// Raw compression driver on flattened word-major arrays.
+type RawKernel = unsafe fn(&[u32], &[u32], &[u32; 4], &mut [u32], usize);
+
 /// The batched driver of one backend, picked at run time.
 #[derive(Clone, Copy)]
 pub(crate) struct Kernel {
@@ -203,6 +217,8 @@ pub(crate) struct Kernel {
     supported: fn() -> bool,
     /// The driver compiled for the backend, sound to call only when `supported` holds.
     run: unsafe fn(Mode, &[u8], usize, &mut [[u8; OUT_LEN]]),
+    /// Raw compression on flattened word-major arrays, compiled for this backend.
+    raw: RawKernel,
     /// The spreading driver alone, so tests reach it whatever the cost model picks.
     #[cfg(test)]
     spread: unsafe fn(Mode, &[u8], usize, &mut [[u8; OUT_LEN]]),
@@ -217,6 +233,7 @@ impl Kernel {
             lanes: W * G,
             supported: V::supported,
             run: super::hash_many_with::<V, W, G>,
+            raw: V::compress_raw_packed::<G>,
             #[cfg(test)]
             spread: V::spread::<G>,
         }
@@ -229,6 +246,27 @@ impl Kernel {
     pub(crate) fn hash_many(self, mode: Mode, input: &[u8], len: usize, out: &mut [[u8; OUT_LEN]]) {
         // SAFETY: kernels only leave this module through `supported`, which checks the CPU.
         unsafe { (self.run)(mode, input, len, out) }
+    }
+
+    /// Compress independent lanes held in word-major arrays.
+    pub(crate) fn compress_raw_packed<const L: usize>(
+        self,
+        cv: &[[u32; L]; STATE_WORDS],
+        block: &[[u32; L]; BLOCK_WORDS],
+        parameter_words: &[u32; 4],
+    ) -> [[u32; L]; STATE_WORDS] {
+        let mut out = [[0; L]; STATE_WORDS];
+        // SAFETY: kernels only leave this module through `supported`, which checks the CPU.
+        unsafe {
+            (self.raw)(
+                cv.as_flattened(),
+                block.as_flattened(),
+                parameter_words,
+                out.as_flattened_mut(),
+                L,
+            );
+        };
+        out
     }
 
     /// Hash through the spreading driver, whatever the cost model would pick.
@@ -354,6 +392,19 @@ pub(super) trait Backend<const W: usize>: Word {
     /// Write the chaining value of every lane as a digest.
     fn store_digests(state: &[Self; STATE_WORDS], out: &mut [[u8; OUT_LEN]; W]);
 
+    /// Raw compression on flattened arrays with `lanes` entries per word.
+    ///
+    /// # Safety
+    ///
+    /// The running CPU has this backend's target features.
+    unsafe fn compress_raw_packed<const G: usize>(
+        cv: &[u32],
+        block: &[u32],
+        parameter_words: &[u32; 4],
+        out: &mut [u32],
+        lanes: usize,
+    );
+
     /// [`super::hash_group`], compiled with this backend's target features.
     ///
     /// # Safety
@@ -433,7 +484,6 @@ pub(super) trait Backend<const W: usize>: Word {
 }
 
 /// Every lane of one vector, in lane order.
-#[cfg(test)]
 pub(super) const fn to_lanes<V: Backend<W>, const W: usize>(vector: V) -> [u32; W] {
     const { assert!(size_of::<V>() == size_of::<[u32; W]>()) };
     // SAFETY: a vector is exactly its lanes, packed from lane 0 at the lowest address.
@@ -445,4 +495,46 @@ pub(super) const fn from_lanes<V: Backend<W>, const W: usize>(lanes: [u32; W]) -
     const { assert!(size_of::<V>() == size_of::<[u32; W]>()) };
     // SAFETY: a vector is exactly its lanes, packed from lane 0 at the lowest address.
     unsafe { core::mem::transmute_copy(&lanes) }
+}
+
+impl Word for u32 {
+    #[inline(always)]
+    fn splat(value: u32) -> Self {
+        value
+    }
+
+    #[inline(always)]
+    fn add(self, rhs: Self) -> Self {
+        self.wrapping_add(rhs)
+    }
+
+    #[inline(always)]
+    fn and(self, rhs: Self) -> Self {
+        self & rhs
+    }
+
+    #[inline(always)]
+    fn xor(self, rhs: Self) -> Self {
+        self ^ rhs
+    }
+
+    #[inline(always)]
+    fn rotr_16(self) -> Self {
+        self.rotate_right(16)
+    }
+
+    #[inline(always)]
+    fn rotr_12(self) -> Self {
+        self.rotate_right(12)
+    }
+
+    #[inline(always)]
+    fn rotr_8(self) -> Self {
+        self.rotate_right(8)
+    }
+
+    #[inline(always)]
+    fn rotr_7(self) -> Self {
+        self.rotate_right(7)
+    }
 }

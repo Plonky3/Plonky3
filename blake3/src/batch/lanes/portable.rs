@@ -2,7 +2,7 @@
 
 use blake3::{BLOCK_LEN, OUT_LEN};
 
-use super::{Backend, Kernel, Word};
+use super::{Backend, Kernel};
 use crate::batch::compress::{BLOCK_WORDS, STATE_WORDS};
 
 /// Lanes in one register.
@@ -12,48 +12,6 @@ const WIDTH: usize = 1;
 ///
 /// One state already fills a general-purpose register file, so a second only spills.
 const GROUPS: usize = 1;
-
-impl Word for u32 {
-    #[inline(always)]
-    fn splat(value: u32) -> Self {
-        value
-    }
-
-    #[inline(always)]
-    fn add(self, rhs: Self) -> Self {
-        self.wrapping_add(rhs)
-    }
-
-    #[inline(always)]
-    fn and(self, rhs: Self) -> Self {
-        self & rhs
-    }
-
-    #[inline(always)]
-    fn xor(self, rhs: Self) -> Self {
-        self ^ rhs
-    }
-
-    #[inline(always)]
-    fn rotr_16(self) -> Self {
-        self.rotate_right(16)
-    }
-
-    #[inline(always)]
-    fn rotr_12(self) -> Self {
-        self.rotate_right(12)
-    }
-
-    #[inline(always)]
-    fn rotr_8(self) -> Self {
-        self.rotate_right(8)
-    }
-
-    #[inline(always)]
-    fn rotr_7(self) -> Self {
-        self.rotate_right(7)
-    }
-}
 
 /// The batched driver on this backend.
 pub(super) const KERNEL: Kernel = Kernel::new::<u32, WIDTH, GROUPS>("portable");
