@@ -1,3 +1,5 @@
+#![allow(deprecated, reason = "Keep benchmarking p3-rescue until its removal.")]
+
 use core::any::type_name;
 use core::array;
 

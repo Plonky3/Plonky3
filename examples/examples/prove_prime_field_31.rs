@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "Keep the existing Poseidon AIR examples working until the crates are removed."
+)]
+
 use clap::Parser;
 use p3_baby_bear::{
     BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16,

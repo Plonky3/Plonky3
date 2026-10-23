@@ -1,5 +1,10 @@
 //! End-to-end Poseidon1 STARK proof using BabyBear and Keccak.
 
+#![allow(
+    deprecated,
+    reason = "Keep the p3-poseidon1-air example working until the crate is removed."
+)]
+
 use core::fmt::Debug;
 
 use p3_baby_bear::{

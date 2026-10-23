@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "Keep the p3-poseidon2-air example working until the crate is removed."
+)]
+
 use core::fmt::Debug;
 
 use p3_challenger::{HashChallenger, SerializingChallenger32};

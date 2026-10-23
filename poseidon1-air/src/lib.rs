@@ -1,3 +1,6 @@
+//! **Deprecated since 0.9.0.** This crate is planned for removal in a future release.
+//! Avoid using it in new projects.
+//!
 //! Algebraic Intermediate Representation (AIR) for the Poseidon1 permutation.
 //!
 //! # Overview
@@ -55,6 +58,10 @@
 //!   round (the S-box output for `state[0]`) instead of the full WIDTH-element
 //!   post-state.
 
+#![deprecated(
+    since = "0.9.0",
+    note = "p3-poseidon1-air is planned for removal in a future release."
+)]
 #![no_std]
 
 extern crate alloc;

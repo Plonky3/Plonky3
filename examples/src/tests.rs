@@ -1,5 +1,10 @@
 //! Adding tests for all our End-to-End proofs.
 
+#![allow(
+    deprecated,
+    reason = "Keep testing the existing Poseidon AIR examples until the crates are removed."
+)]
+
 use std::fmt::Debug;
 
 use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear};

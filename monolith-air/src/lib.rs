@@ -1,3 +1,6 @@
+//! **Deprecated since 0.9.0.** This crate is planned for removal in a future release.
+//! Avoid using it in new projects.
+//!
 //! Algebraic Intermediate Representation (AIR) for the Monolith permutation.
 //!
 //! # Overview
@@ -8,6 +11,14 @@
 //!
 //! [Monolith]: https://eprint.iacr.org/2023/1025
 
+#![deprecated(
+    since = "0.9.0",
+    note = "p3-monolith-air is planned for removal in a future release."
+)]
+#![allow(
+    deprecated,
+    reason = "This AIR depends on p3-monolith until both deprecated crates are removed."
+)]
 #![no_std]
 
 extern crate alloc;
