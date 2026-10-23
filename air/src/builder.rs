@@ -67,12 +67,24 @@ pub trait AirBuilder: Sized {
     fn preprocessed(&self) -> &Self::PreprocessedWindow;
 
     /// Expression evaluating to a non-zero value only on the first row.
+    ///
+    /// The value on the first row is not always 1.
+    /// The two-adic STARK uses n on a trace of n rows, while the debug checker uses 1.
+    /// Use it to filter a whole constraint, never to weight one term of a sum.
     fn is_first_row(&self) -> Self::Expr;
 
     /// Expression evaluating to a non-zero value only on the last row.
+    ///
+    /// The value on the last row is not always 1.
+    /// The two-adic STARK uses n omega on a trace of n rows, while the debug checker uses 1.
+    /// Use it to filter a whole constraint, never to weight one term of a sum.
     fn is_last_row(&self) -> Self::Expr;
 
     /// Expression evaluating to zero only on the last row.
+    ///
+    /// The value on the other rows is not always 1.
+    /// The two-adic STARK uses omega^i - omega^(n-1) on row i, while the debug checker uses 1.
+    /// Use it to filter a whole constraint, never to weight one term of a sum.
     fn is_transition(&self) -> Self::Expr;
 
     /// Expression evaluating to zero only on the last `size - 1` rows.
