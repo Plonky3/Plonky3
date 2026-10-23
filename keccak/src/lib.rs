@@ -221,7 +221,7 @@ mod tests {
 
     use hex_literal::hex;
     use proptest::prelude::*;
-    use sha3::{Digest, Sha3_256};
+    use sha3::{Digest, Keccak256, Sha3_256};
 
     use super::*;
     use crate::batch::{KECCAK_DOMAIN, LANES, LAST_RATE_WORD, RATE, SHA3_DOMAIN, supported};
@@ -427,6 +427,37 @@ mod tests {
             for kernel in supported() {
                 let mut batched = vec![[0u8; 32]; count];
                 kernel.hash_many(SHA3_DOMAIN, &messages, len, &mut batched);
+                prop_assert_eq!(&batched, &expected, "{:?}", kernel);
+            }
+        }
+
+        #[test]
+        fn keccak256_matches_an_independent_implementation(
+            len in 0usize..=600,
+            count in 1usize..=2 * LANES + 1,
+            seed in any::<u64>(),
+        ) {
+            // Fixture: `count` random messages of `len` bytes, back to back.
+            let messages = stream(seed, len * count);
+
+            // Digests of the RustCrypto implementation, which shares no code with this one.
+            // Its Keccak-256 pads with the first byte 0x01 of the SHA-3 submission.
+            let expected: Vec<[u8; 32]> = (0..count)
+                .map(|k| Keccak256::digest(&messages[k * len..(k + 1) * len]).into())
+                .collect();
+
+            // One-message digests, through tiny-keccak.
+            prop_assert_eq!(&reference(&Keccak256Hash, &messages, len, count), &expected);
+
+            // The batched path, on the backend picked at run time.
+            let mut batched = vec![[0u8; 32]; count];
+            Keccak256Hash.hash_many(&messages, &mut batched);
+            prop_assert_eq!(&batched, &expected);
+
+            // Every backend the CPU supports, including the narrower ones.
+            for kernel in supported() {
+                let mut batched = vec![[0u8; 32]; count];
+                kernel.hash_many(KECCAK_DOMAIN, &messages, len, &mut batched);
                 prop_assert_eq!(&batched, &expected, "{:?}", kernel);
             }
         }

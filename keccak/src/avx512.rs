@@ -825,3 +825,65 @@ mod tests {
         assert_eq!(expected, computed);
     }
 }
+
+#[cfg(test)]
+mod lane_tests {
+    use alloc::vec::Vec;
+
+    use proptest::prelude::*;
+    use tiny_keccak::keccakf;
+
+    use super::*;
+
+    fn check(states: &[[u64; 25]]) {
+        // Pack state l into lane l of every word.
+        let mut packed: [[u64; WIDTH]; 25] =
+            core::array::from_fn(|word| core::array::from_fn(|lane| states[lane][word]));
+        // SAFETY: the test returns early on a CPU without the feature.
+        unsafe { keccak_perm(&mut packed) };
+
+        // Invariant: lane l of the packed permutation is the scalar permutation of state l.
+        for (lane, state) in states.iter().enumerate() {
+            let mut expected = *state;
+            keccakf(&mut expected);
+            let computed: [u64; 25] = core::array::from_fn(|word| packed[word][lane]);
+            assert_eq!(computed, expected, "lane {lane}");
+        }
+    }
+
+    #[test]
+    fn every_lane_permutes_like_the_scalar_code_on_edge_states() {
+        if !supported() {
+            return;
+        }
+
+        // Fixture state: lanes cycle through all zeros, all ones, and one set bit.
+        //
+        //     lane 0: 0 ... 0      lane 1: 1 ... 1      lane 2: a single 1 at word 14, bit 2
+        let states: Vec<[u64; 25]> = (0..WIDTH)
+            .map(|lane| match lane % 3 {
+                0 => [0; 25],
+                1 => [u64::MAX; 25],
+                _ => {
+                    let mut state = [0; 25];
+                    state[(7 * lane) % 25] = 1 << lane;
+                    state
+                }
+            })
+            .collect();
+        check(&states);
+    }
+
+    proptest! {
+        #[test]
+        fn every_lane_permutes_like_the_scalar_code(words in prop::collection::vec(any::<u64>(), 25 * WIDTH)) {
+            if !supported() {
+                return Ok(());
+            }
+
+            // Fixture state: independent random states, one per lane.
+            let states: Vec<[u64; 25]> = words.chunks(25).map(|c| c.try_into().unwrap()).collect();
+            check(&states);
+        }
+    }
+}
