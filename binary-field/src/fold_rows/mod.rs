@@ -99,9 +99,17 @@ pub fn fold_rows(
     useful_bits: usize,
     weights: &[Poly192],
 ) -> Vec<Poly192> {
+    assert!(log_row_bits >= LOG_WORD_BITS, "a row is whole words");
+    // The output holds one value per position of a row.
+    assert!(
+        log_row_bits < usize::BITS as usize,
+        "a row's positions fit usize"
+    );
+    // Count in words: the bit count of a valid input can overflow a 32-bit usize.
+    let row_words = 1 << (log_row_bits - LOG_WORD_BITS);
     assert_eq!(
-        words.len() << LOG_WORD_BITS,
-        weights.len() << log_row_bits,
+        weights.len().checked_mul(row_words),
+        Some(words.len()),
         "one weight per row"
     );
     assert!(useful_bits <= 1 << log_row_bits, "useful bits fit a row");
@@ -112,7 +120,7 @@ pub fn fold_rows(
     // The rows past the last whole stripe fold bit by bit, on top of the striped fold.
     let whole = weights.len() / 8 * 8;
     if whole < weights.len() {
-        let split = (whole << log_row_bits) >> LOG_WORD_BITS;
+        let split = whole * row_words;
         let mut out = fold_rows(
             &words[..split],
             log_row_bits,
@@ -249,6 +257,26 @@ mod tests {
                 "{k_log} {rows}"
             );
         }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "32")]
+    fn a_partial_last_stripe_splits_in_words_on_32_bit_targets() {
+        // 65,537 rows of 2^16 bits: the stripes cover 65,536 rows, then one row remains.
+        //
+        //     stripe prefix in bits:   65,536 * 2^16 = 2^32  ->  wraps to 0 on 32-bit
+        //     stripe prefix in words:  65,536 * 2^10 = 2^26  ->  fits
+        let (log_row_bits, rows) = (16, 65_537);
+        let mut z = vec![0u64; rows << (log_row_bits - 6)];
+        // Only row 0 has a set bit, but its weight is zero.
+        z[0] = 1;
+        let mut eq = vec![Poly192::ZERO; rows];
+        // Only the last row has a nonzero weight, but its bits are zero.
+        eq[rows - 1] = Poly192::ONE;
+
+        // Every product is zero, so the fold is zero at every position.
+        let folded = fold_rows(&z, log_row_bits, 1, &eq);
+        assert!(folded.iter().all(|&x| x == Poly192::ZERO));
     }
 
     proptest! {
