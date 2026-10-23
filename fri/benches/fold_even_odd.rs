@@ -65,5 +65,34 @@ fn bench_fold_even_odd(c: &mut Criterion) {
     bench::<Complex<Mersenne31>, Complex<Mersenne31>>(c, "Complex<Mersenne31>", &log_sizes);
 }
 
-criterion_group!(benches, bench_fold_even_odd);
+fn bench_fold_row(c: &mut Criterion) {
+    fn bench<F: TwoAdicField, EF: ExtensionField<F>>(c: &mut Criterion, label: &str)
+    where
+        StandardUniform: Distribution<EF>,
+    {
+        let mut group = c.benchmark_group(format!("fold_row::<{label}>"));
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+        let mut rng = SmallRng::seed_from_u64(42);
+        for log_arity in 1..=4 {
+            let evals: Vec<EF> = (0..1 << log_arity).map(|_| rng.random()).collect();
+            let beta: EF = rng.random();
+            group.bench_function(BenchmarkId::from_parameter(1 << log_arity), |b| {
+                b.iter(|| {
+                    black_box(FriFoldingStrategy::<F, EF>::fold_row(
+                        &folding,
+                        black_box(73),
+                        10,
+                        log_arity,
+                        black_box(beta),
+                        black_box(&evals).iter().copied(),
+                    ))
+                });
+            });
+        }
+    }
+    bench::<BabyBear, BinomialExtensionField<BabyBear, 4>>(c, "BabyBear, BabyBear^4");
+    bench::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>(c, "Goldilocks, Goldilocks^2");
+}
+
+criterion_group!(benches, bench_fold_even_odd, bench_fold_row);
 criterion_main!(benches);
