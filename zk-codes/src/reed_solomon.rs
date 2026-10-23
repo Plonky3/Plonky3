@@ -219,12 +219,20 @@ where
         let mut cache: Vec<(usize, F)> = Vec::with_capacity(query_set.len());
         let out: Vec<F> = query_set
             .iter()
-            .map(|&p| match cache.iter().find(|(q, _)| *q == p) {
-                Some(&(_, v)) => v,
-                None => {
-                    let v: F = rng.random();
-                    cache.push((p, v));
-                    v
+            .map(|&p| {
+                // The real codeword has positions 0 to m - 1 only.
+                //
+                // Positions p and p + m share one evaluation point, so their real values are equal.
+                // Two independent samples would break that, so out-of-range positions are rejected.
+                assert!(p < self.m, "Query position out of range");
+
+                match cache.iter().find(|(q, _)| *q == p) {
+                    Some(&(_, v)) => v,
+                    None => {
+                        let v: F = rng.random();
+                        cache.push((p, v));
+                        v
+                    }
                 }
             })
             .collect();
@@ -780,6 +788,24 @@ mod tests {
         assert_eq!(sim[0], sim[2]);
         assert_eq!(sim[0], sim[4]);
         assert_eq!(sim[1], sim[3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Query position out of range")]
+    fn test_simulate_rejects_out_of_range_position() {
+        // Fixture state: m = 8, t = 2, positions 1 and 9 = 1 + m.
+        //
+        //     evaluation point of 1 == evaluation point of 9
+        //     real view:       two equal values
+        //     simulated view:  two independent values, unless 9 is rejected
+        //
+        // Invariant: a simulated view matches the real codeword's distribution.
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(2, 2, 8, Radix2Dit::default());
+        assert_eq!(encoding.evaluation_point(1), encoding.evaluation_point(9));
+
+        // The real codeword has no position 9, so the simulator panics.
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);
+        let _ = encoding.simulate(&[1, 9], &mut rng);
     }
 
     #[test]
