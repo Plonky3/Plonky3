@@ -6,6 +6,7 @@ use core::ops::Deref;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_security::ErrorBits;
 use thiserror::Error;
 
 use super::{FoldingFactor, FoldingFactorError, ProtocolParameters, SecurityAssumption};
@@ -697,10 +698,10 @@ where
                     field_size_bits,
                 })?;
 
-            // Two independent error sources bound the STIR round:
+            // Two error sources bound the STIR round:
             //   - query_error: (1 - delta)^num_queries proximity test.
             //   - combination_error: random linear combination of OOD + queries.
-            // The weaker bound determines how much PoW is needed.
+            // Either failure breaks the round, so the two probabilities add (WHIR, Theorem 5.2).
             let query_error = whir_parameters
                 .soundness_type
                 .queries_error(log_inv_rate, num_queries);
@@ -712,9 +713,17 @@ where
                 num_queries,
             );
 
-            // PoW bridges the gap between the target and the weaker bound.
-            let pow_bits = 0_f64
-                .max(whir_parameters.security_level as f64 - (query_error.min(combination_error)));
+            // PoW bridges the gap between the target and the summed error.
+            //
+            //     bits:        a, b
+            //     probability: 2^-a + 2^-b
+            //     total bits:  -log_2(2^-a + 2^-b), at most min(a, b)
+            let round_error = ErrorBits::sum(&[
+                ErrorBits::from_log2(query_error),
+                ErrorBits::from_log2(combination_error),
+            ])
+            .bits();
+            let pow_bits = 0_f64.max(whir_parameters.security_level as f64 - round_error);
 
             // PoW difficulty for the folding sumcheck at the new rate.
             let folding_pow_bits = whir_parameters.soundness_type.folding_pow_bits(
@@ -1146,7 +1155,7 @@ mod tests {
         // Queries test proximity to the code before this round's fold.
         let mut old_rate = config.params.starting_log_inv_rate;
         for cfg in &config.round_parameters {
-            // Query phase is bounded by the weaker of two error sources.
+            // Query phase fails through either error source, so the two add.
             let query_error = soundness.queries_error(old_rate, cfg.num_queries);
             let combination_error = soundness.queries_combination_error(
                 field_bits,
@@ -1155,7 +1164,11 @@ mod tests {
                 cfg.ood_samples,
                 cfg.num_queries,
             );
-            let algebraic = query_error.min(combination_error);
+            let algebraic = ErrorBits::sum(&[
+                ErrorBits::from_log2(query_error),
+                ErrorBits::from_log2(combination_error),
+            ])
+            .bits();
 
             // Ceil keeps the sum at or above target; floor would drop below it.
             assert!(
@@ -1174,6 +1187,49 @@ mod tests {
             "final query phase undershoots: {} + {final_error} < {target}",
             config.terminal.pow_bits
         );
+    }
+
+    #[test]
+    fn round_query_pow_covers_both_query_errors() {
+        // Invariant: grinding plus the summed query and combination errors reaches the target.
+        //
+        // Fixture state: BabyBear^4, capacity bound, 80-bit target, 10-bit budget, 24 variables, rate 1/2.
+        //
+        //     round 0:  query error 79.44 bits, combination error 80.36 bits
+        //     summed:   78.82 bits
+        //
+        // Mutation: sizing the grinding against the larger error alone gives 1 bit, and 79.82 < 80.
+        let soundness = SecurityAssumption::CapacityBound;
+        let params = ProtocolParameters {
+            security_level: 80,
+            pow_bits: 10,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: soundness,
+            starting_log_inv_rate: 1,
+        };
+        let config = WhirConfig::<EF4, F, MyChallenger>::new(24, params).unwrap();
+        let field_bits = EF4::bits() - 1;
+        let mut old_rate = config.params.starting_log_inv_rate;
+        for round in &config.round_parameters {
+            let summed = ErrorBits::sum(&[
+                ErrorBits::from_log2(soundness.queries_error(old_rate, round.num_queries)),
+                ErrorBits::from_log2(soundness.queries_combination_error(
+                    field_bits,
+                    round.num_variables,
+                    round.log_inv_rate,
+                    round.ood_samples,
+                    round.num_queries,
+                )),
+            ])
+            .bits();
+            assert!(
+                summed + round.pow_bits as f64 >= 80.0 - 1e-9,
+                "round reaches {}",
+                summed + round.pow_bits as f64
+            );
+            old_rate = round.log_inv_rate;
+        }
     }
 
     #[test]
