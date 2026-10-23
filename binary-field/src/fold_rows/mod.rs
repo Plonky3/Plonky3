@@ -29,9 +29,11 @@ mod gfni;
 )]
 mod portable;
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::PrimeCharacteristicRing;
+use p3_maybe_rayon::prelude::*;
 
 use crate::byteslice::transpose_bits;
 use crate::{PackedGf2x64, Poly192};
@@ -154,6 +156,136 @@ pub fn fold_bits<E: PrimeCharacteristicRing>(
     out
 }
 
+/// Rows, as a power of two, up to which a folded entry is read from the bits.
+const LOG_BIT_READS: usize = 4;
+
+/// Packed bit rows folded under one weight each, entry `i` being `sum_o weights[o] * row_o[i]`.
+///
+/// A few rows are read from the bits through a table of every subset's weight; more are folded into a table once.
+#[derive(Debug)]
+pub struct FoldedRows<'a>(Entries<'a>);
+
+/// The two ways a folded entry is held.
+#[derive(Debug)]
+enum Entries<'a> {
+    /// Read from the bits: entry `i` is `sums[s]`, `s` the rows whose bit `i` is set.
+    Bits {
+        /// The rows, row-major.
+        words: &'a [u64],
+        /// Words per row.
+        row_words: usize,
+        /// Rows.
+        rows: usize,
+        /// The weight of every subset of rows.
+        sums: Vec<Poly192>,
+    },
+    /// Folded once.
+    Table(Vec<Poly192>),
+}
+
+impl<'a> FoldedRows<'a> {
+    /// The fold of `words` as in [`fold_rows`], each row `2^log_row_bits` bits, zero from `useful_bits` on.
+    ///
+    /// # Panics
+    ///
+    /// - There is not one weight per row, or a row is not whole words.
+    #[must_use]
+    pub fn new(
+        words: &'a [u64],
+        log_row_bits: usize,
+        useful_bits: usize,
+        weights: &[Poly192],
+    ) -> Self {
+        let rows = weights.len();
+        if rows > 1 << LOG_BIT_READS {
+            return Self(Entries::Table(fold_rows(
+                words,
+                log_row_bits,
+                useful_bits,
+                weights,
+            )));
+        }
+        assert!(log_row_bits >= LOG_WORD_BITS, "a row is whole words");
+        assert_eq!(
+            words.len() << LOG_WORD_BITS,
+            rows << log_row_bits,
+            "one weight per row"
+        );
+        let mut sums = vec![Poly192::ZERO; 1 << rows];
+        for set in 1..sums.len() {
+            let low = set.trailing_zeros() as usize;
+            sums[set] = sums[set & (set - 1)] + weights[low];
+        }
+        Self(Entries::Bits {
+            words,
+            row_words: 1 << (log_row_bits - LOG_WORD_BITS),
+            rows,
+            sums,
+        })
+    }
+
+    /// Entries.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        match &self.0 {
+            Entries::Bits { row_words, .. } => row_words << LOG_WORD_BITS,
+            Entries::Table(t) => t.len(),
+        }
+    }
+
+    /// Whether there is no entry.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Entry `i`.
+    #[inline]
+    #[must_use]
+    pub fn at(&self, i: usize) -> Poly192 {
+        match &self.0 {
+            Entries::Bits {
+                words,
+                row_words,
+                rows,
+                sums,
+            } => {
+                let (w, b) = (i / 64, i % 64);
+                let set = (0..*rows).fold(0, |set, o| {
+                    set | ((((words[o * row_words + w] >> b) & 1) as usize) << o)
+                });
+                sums[set]
+            }
+            Entries::Table(t) => t[i],
+        }
+    }
+
+    /// Every entry.
+    #[must_use]
+    pub fn to_vec(&self) -> Vec<Poly192> {
+        match &self.0 {
+            Entries::Bits { .. } => (0..self.len())
+                .into_par_iter()
+                .map(|i| self.at(i))
+                .collect(),
+            Entries::Table(t) => t.clone(),
+        }
+    }
+
+    /// The entries with the top variable bound at `r`: entry `i` is `e_i + r (e_(i + n/2) + e_i)`.
+    #[must_use]
+    pub fn bind_top(&self, r: Poly192) -> Vec<Poly192> {
+        let half = self.len() / 2;
+        (0..half)
+            .into_par_iter()
+            .map(|i| {
+                let lo = self.at(i);
+                lo + r * (self.at(half + i) + lo)
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -174,6 +306,25 @@ mod tests {
             }
         }
         z
+    }
+
+    #[test]
+    fn a_folded_entry_read_from_the_bits_is_the_fold() {
+        // Invariant: the subset table and the folded table agree entry by entry, and on a bound top variable.
+        let mut rng = SmallRng::seed_from_u64(0xF01);
+        for (k_log, n_log) in [(6, 0), (8, 1), (9, 2), (7, 4), (8, 5)] {
+            let z = witness(&mut rng, k_log, n_log, 1 << k_log);
+            let eq: Vec<Poly192> = (0..1 << n_log).map(|_| rng.random()).collect();
+            let folded = FoldedRows::new(&z, k_log, 1 << k_log, &eq);
+            let table = fold_bits(&z, k_log, &eq);
+            assert_eq!(folded.to_vec(), table);
+            let r: Poly192 = rng.random();
+            let half = table.len() / 2;
+            let bound: Vec<Poly192> = (0..half)
+                .map(|i| table[i] + r * (table[half + i] + table[i]))
+                .collect();
+            assert_eq!(folded.bind_top(r), bound);
+        }
     }
 
     #[test]

@@ -304,19 +304,115 @@ fn a_proof_on_fixed_seeds_has_a_pinned_digest() {
     );
 }
 
+/// `(a A_0 + b B_0)^T u` by one backward walk of the gate list, an adjoint per gate.
+fn fold_transpose_by_gates<V: Field>(c: &Circuit, a: V, b: V, u: &[V]) -> Vec<V> {
+    use crate::circuit::Gate;
+    let gates: Vec<Gate> = c.gates().iter().collect();
+    let (k, cp) = (c.k_log(), c.const_pos());
+    let mut m = V::zero_vec(1 << k);
+    let mut adj = V::zero_vec(gates.len());
+    for (i, &gate) in gates.iter().enumerate().rev() {
+        let g = adj[i];
+        match gate {
+            Gate::Free(s) => {
+                let s = s as usize;
+                m[s] += g + a * u[s];
+                m[cp] += b * u[s];
+            }
+            Gate::Xor(x, y) => {
+                adj[x as usize] += g;
+                adj[y as usize] += g;
+            }
+            Gate::And(x, y, s) => {
+                let s = s as usize;
+                m[s] += g;
+                adj[x as usize] += a * u[s];
+                adj[y as usize] += b * u[s];
+            }
+            Gate::Copy(x, s) => {
+                let s = s as usize;
+                m[s] += g;
+                adj[x as usize] += a * u[s];
+                m[cp] += b * u[s];
+            }
+        }
+    }
+    m
+}
+
+/// Every committed row's `(A_0 w, B_0 w)` by one forward walk of the gate list, a value per gate.
+fn rows_by_gates<V: Field>(c: &Circuit, w: &[V]) -> Vec<Option<(V, V)>> {
+    use crate::circuit::Gate;
+    let mut rows = vec![None; w.len()];
+    let wc = w[c.const_pos()];
+    let mut wires: Vec<V> = Vec::with_capacity(c.gates().len());
+    for gate in c.gates().iter() {
+        let v = match gate {
+            Gate::Free(s) => {
+                rows[s as usize] = Some((w[s as usize], wc));
+                w[s as usize]
+            }
+            Gate::Xor(x, y) => wires[x as usize] + wires[y as usize],
+            Gate::And(x, y, s) => {
+                rows[s as usize] = Some((wires[x as usize], wires[y as usize]));
+                w[s as usize]
+            }
+            Gate::Copy(x, s) => {
+                rows[s as usize] = Some((wires[x as usize], wc));
+                w[s as usize]
+            }
+        };
+        wires.push(v);
+    }
+    rows
+}
+
 #[test]
-fn the_register_backward_walk_is_the_plain_one() {
+fn the_compiled_walks_are_the_gate_walks() {
+    // Invariant: folding XORs into linear forms leaves every row of `A` and `B`, forward and transposed.
     use crate::Challenge;
     let mut rng = SmallRng::seed_from_u64(0xBAC);
-    for _ in 0..8 {
+    for _ in 0..16 {
         let c = random_circuit(&mut rng, 400);
         let n = 1 << c.k_log();
-        let u: Vec<Challenge> = (0..n).map(|_| rng.random()).collect();
+        let w: Vec<Challenge> = (0..n).map(|_| rng.random()).collect();
+        let mut rows = vec![None; n];
+        c.walk_rows(&w, |s, a, b| rows[s] = Some((a, b)));
+        assert_eq!(rows, rows_by_gates(&c, &w));
         let (a, b): (Challenge, Challenge) = (rng.random(), rng.random());
-        let mut plain = Challenge::zero_vec(n);
-        c.add_fold_transpose(a, b, &u, &mut plain);
-        let mut registers = Challenge::zero_vec(n);
-        c.add_fold_transpose_registers(a, b, &u, &mut registers);
-        assert_eq!(plain, registers);
+        let mut m = Challenge::zero_vec(n);
+        c.add_fold_transpose(a, b, &w, &mut m);
+        assert_eq!(m, fold_transpose_by_gates(&c, a, b, &w));
     }
+}
+
+#[test]
+fn a_wide_xor_tree_folds_into_its_reader() {
+    // Invariant: a sum read once costs no operation, and one read twice is kept once.
+    let mut c = Builder::new(&[64], &[2]);
+    let bits = c.input(0).to_vec();
+    let once = bits[..40].iter().fold(Wire::ZERO, |acc, &w| c.xor(acc, w));
+    let twice = bits[40..].iter().fold(Wire::ZERO, |acc, &w| c.xor(acc, w));
+    let p = c.and(once, twice);
+    let q = c.and(twice, bits[0]);
+    c.output(0, 0, p);
+    c.output(0, 1, q);
+    let c = c.finish();
+    // The constant, 64 inputs, two products, two copies and the shared sum.
+    assert_eq!(c.num_ops(), 1 + 64 + 2 + 2 + 1);
+    // Forty terms in the first product, the shared sum's 24, one each elsewhere.
+    assert_eq!(c.num_terms(), 40 + 1 + 24 + 1 + 1 + 1 + 1);
+
+    // Tamper: the folded forms still reject a witness that breaks one row.
+    let mut rng = SmallRng::seed_from_u64(0x7A3);
+    let z = (0..2).map(|_| rng.next_u64()).collect::<Vec<_>>();
+    let words = (1 << c.k_log()) / 64;
+    let mut honest = vec![0u64; words];
+    let (mut az, mut bz) = (vec![0; words], vec![0; words]);
+    c.witness_instance(&z[..1], &mut honest, &mut az, &mut bz);
+    assert!(satisfies(&c, &honest));
+    let product_slot = c.const_pos() + 1;
+    let mut bad = honest.clone();
+    bad[product_slot / 64] ^= 1 << (product_slot % 64);
+    assert!(!satisfies(&c, &bad));
 }

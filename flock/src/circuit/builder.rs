@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use core::mem;
 use core::ops::Range;
 
+use super::list::GateList;
 use super::{Circuit, Gate, Wire, Word, slot};
 
 /// Tag of a provisional advice slot, relocated when the circuit is finished.
@@ -17,7 +18,7 @@ const REVEALED: u32 = 1 << 30;
 #[derive(Debug)]
 pub struct Builder {
     /// Gates so far.
-    gates: Vec<Gate>,
+    gates: GateList,
     /// Slot of the next product.
     next_slot: usize,
     /// The constant wire.
@@ -53,7 +54,7 @@ impl Builder {
         let n_output_words = output_bits.iter().map(|&b| words(b)).sum::<usize>();
         let const_pos = 64 * (n_input_words + n_output_words);
         let mut c = Self {
-            gates: Vec::new(),
+            gates: GateList::default(),
             next_slot: const_pos + 1,
             one: Wire::ZERO,
             inputs: Vec::new(),
@@ -91,8 +92,7 @@ impl Builder {
 
     /// Append a gate, returning its wire.
     fn push(&mut self, gate: Gate) -> Wire {
-        self.gates.push(gate);
-        Wire::gate(slot(self.gates.len() - 1))
+        Wire::gate(self.gates.push(gate))
     }
 
     /// The constant one.
@@ -395,7 +395,18 @@ impl Builder {
     ///
     /// The advice port follows the declared inputs and the revealed port the declared outputs, every later slot moving up past them.
     #[must_use]
-    pub fn finish(mut self) -> Circuit {
+    pub fn finish(self) -> Circuit {
+        self.seal(true)
+    }
+
+    /// As [`Self::finish`], the gate list freed as it compiles: the circuit proves and verifies but holds no gates.
+    #[must_use]
+    pub fn finish_compiled(self) -> Circuit {
+        self.seal(false)
+    }
+
+    /// The finished circuit, its gates kept when `keep` is set.
+    fn seal(mut self, keep: bool) -> Circuit {
         let advice_words = self.advice.div_ceil(64);
         let revealed_words = self.revealed.div_ceil(64);
         let declared_inputs = 64 * self.n_input_words;
@@ -415,14 +426,7 @@ impl Builder {
                 };
                 slot(s)
             };
-            for gate in &mut self.gates {
-                *gate = match *gate {
-                    Gate::Free(s) => Gate::Free(relocate(s)),
-                    Gate::Xor(x, y) => Gate::Xor(x, y),
-                    Gate::And(x, y, s) => Gate::And(x, y, relocate(s)),
-                    Gate::Copy(x, s) => Gate::Copy(x, relocate(s)),
-                };
-            }
+            self.gates.relocate(relocate);
             self.next_slot += 64 * (advice_words + revealed_words);
         }
         let useful_bits = self.next_slot;
@@ -458,6 +462,7 @@ impl Builder {
             // At least one packed word per instance.
             useful_bits.next_power_of_two().trailing_zeros().max(6) as usize,
             useful_bits,
+            keep,
         )
     }
 }

@@ -2,9 +2,10 @@
 
 use alloc::vec::Vec;
 
-use p3_binary_field::fold_rows;
+use p3_binary_field::FoldedRows;
 use p3_challenger::{CanObserve, CanSample};
 use p3_field::PrimeCharacteristicRing;
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::lagrange::extrapolate_01inf;
 use p3_verifier_arith::Native;
@@ -13,11 +14,61 @@ use tracing::{info_span, instrument};
 use super::sumcheck::ProductSumcheck;
 use super::transcript::{LincheckShape, ProverTranscript};
 use super::{LincheckProof, slice_claim, split_point};
-use crate::point::QuirkyClaim;
+use crate::point::{QuirkyClaim, QuirkyPoint};
 use crate::ports::PublicPorts;
 use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
 use crate::zerocheck::ZerocheckClaims;
 use crate::{Batch, Challenge, Val, Witness};
+
+/// The row weights `L_v(skip) eq(inner, i)` at row `64 i + v`, a high table times a low one, so no table spans the rows.
+struct RowWeights {
+    /// `eq` of the high inner coordinates.
+    hi: Vec<Challenge>,
+    /// `eq` of the low inner coordinates, times the Lagrange weights of the skip.
+    lo: Vec<Challenge>,
+    /// Row bits the low table spans.
+    shift: usize,
+}
+
+impl RowWeights {
+    /// The weights of a point's last `vars` multilinear coordinates.
+    fn new(point: &QuirkyPoint, vars: usize) -> Self {
+        let inner = &point.rest[point.rest.len() - vars..];
+        let (hi, lo) = inner.split_at(vars - vars / 2);
+        let lagrange = lagrange_weights(&point.skip, SKIP_SIZE);
+        let lo = Poly::new_from_point(lo, Challenge::ONE)
+            .as_slice()
+            .iter()
+            .flat_map(|&e| lagrange.iter().map(move |&l| e * l))
+            .collect();
+        Self {
+            hi: Poly::new_from_point(hi, Challenge::ONE).into_evals(),
+            lo,
+            shift: vars / 2 + K_SKIP,
+        }
+    }
+
+    /// The weight of row `s`.
+    #[inline]
+    fn at(&self, s: usize) -> Challenge {
+        self.hi[s >> self.shift] * self.lo[s & ((1 << self.shift) - 1)]
+    }
+
+    /// Every weight times `scale`, filled in parallel.
+    fn table(&self, scale: Challenge) -> Vec<Challenge> {
+        let lo_len = self.lo.len();
+        let mut out = Challenge::zero_vec(self.hi.len() * lo_len);
+        out.par_chunks_mut(lo_len)
+            .zip(self.hi.par_iter())
+            .for_each(|(chunk, &h)| {
+                let h = scale * h;
+                for (o, &l) in chunk.iter_mut().zip(&self.lo) {
+                    *o = h * l;
+                }
+            });
+        out
+    }
+}
 
 /// Reduce the zerocheck's claims on a batch, and its public words, to one claim on `z`.
 ///
@@ -40,19 +91,19 @@ where
 
 /// As [`prove`] over the witness bits alone, also returning them folded over the instances.
 ///
-/// Entry `64 i + v` is the folded bit `v` of inner row `i`, before the sumcheck binds anything.
+/// Entry `64 i + v` of the fold is bit `v` of inner row `i`, before the sumcheck binds anything.
 ///
 /// # Panics
 ///
 /// - The witness, the claims or the public words are not the batch's.
 #[instrument(skip_all, name = "lincheck prove", fields(log_n = batch.log_n()))]
-pub fn prove_folded<C>(
+pub fn prove_folded<'z, C>(
     batch: &Batch<'_>,
-    z: &[u64],
+    z: &'z [u64],
     claims: &ZerocheckClaims,
     public: &PublicPorts,
     challenger: &mut C,
-) -> (LincheckProof, QuirkyClaim, Vec<Challenge>)
+) -> (LincheckProof, QuirkyClaim, FoldedRows<'z>)
 where
     C: CanObserve<Val> + CanSample<Val>,
 {
@@ -74,14 +125,12 @@ where
     );
     let alpha_sq = alpha.square();
 
-    // Phase 2: the column weights of A_0 + alpha B_0 by one backward walk, then C = I and the pin.
-    let eq_inner = info_span!("eq table").in_scope(|| claims.point.eq_weights(inner.len()));
-    let mut comb = Challenge::zero_vec(eq_inner.len());
-    info_span!("fold transpose")
-        .in_scope(|| circuit.add_fold_transpose(Challenge::ONE, alpha, &eq_inner, &mut comb));
-    for (c, &e) in comb.iter_mut().zip(&eq_inner) {
-        *c += alpha_sq * e;
-    }
+    // Phase 2: the column weights of A_0 + alpha B_0 by one backward walk, onto C = I and the pin.
+    let rows = RowWeights::new(&claims.point, inner.len());
+    let mut comb = info_span!("identity weights").in_scope(|| rows.table(alpha_sq));
+    info_span!("fold transpose").in_scope(|| {
+        circuit.add_fold_transpose_by(Challenge::ONE, alpha, |s| rows.at(s), &mut comb);
+    });
     comb[circuit.const_pos()] += alpha_sq * alpha;
 
     // Each public word's weight at its slots, at the port skip coordinate.
@@ -95,10 +144,10 @@ where
         }
     }
 
-    // Phase 3: the witness folded at the instance coordinates.
+    // Phase 3: the witness folded at the instance coordinates, read from the bits until the first bind when it can be.
+    let eq_outer = Poly::new_from_point(outer, Challenge::ONE);
     let folded = info_span!("partial fold").in_scope(|| {
-        let eq_outer = Poly::new_from_point(outer, Challenge::ONE);
-        fold_rows(
+        FoldedRows::new(
             z,
             circuit.k_log(),
             circuit.useful_bits(),
@@ -108,7 +157,7 @@ where
 
     // Phase 4: the product sumcheck over the inner variables past the skip, top first.
     let rounds = shape.rounds();
-    let mut sumcheck = ProductSumcheck::new(comb, folded.clone());
+    let mut sumcheck = ProductSumcheck::folded(comb, &folded);
     let mut running = sumcheck.claim();
     let mut messages = Vec::with_capacity(rounds);
     let mut point = Vec::with_capacity(rounds);

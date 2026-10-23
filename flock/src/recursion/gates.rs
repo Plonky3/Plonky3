@@ -262,6 +262,8 @@ impl Gates {
     }
 
     /// The carry-less product of two `n`-bit operands from the sum of their leaf products, `2n - 1` bits.
+    ///
+    /// An even split shares `L1 + H0` between the two middle blocks, `5n/2 - 3` XORs a level (Bernstein, "Batch binary Edwards", Section 2).
     pub(crate) fn recombine(&mut self, leaves: &[Wire], n: usize) -> Vec<Wire> {
         if n == 1 {
             return leaves.to_vec();
@@ -273,14 +275,39 @@ impl Gates {
         let (lh, lr) = (leaf_count(h), leaf_count(n - h));
         let low = self.recombine(&leaves[..lh], h);
         let high = self.recombine(&leaves[lh..lh + lr], n - h);
-        let mut middle = self.recombine(&leaves[lh + lr..], n - h);
+        let middle = self.recombine(&leaves[lh + lr..], n - h);
+        let mut out = vec![Wire::ZERO; 2 * n - 1];
+        if 2 * h == n {
+            // Blocks of h: L0 | S + L0 + M0 | S + H1 + M1 | H1, with S = L1 + H0.
+            let s: Vec<Wire> = (0..h)
+                .map(|i| {
+                    let l1 = low.get(h + i).copied().unwrap_or(Wire::ZERO);
+                    self.builder.xor(l1, high[i])
+                })
+                .collect();
+            out[..h].copy_from_slice(&low[..h]);
+            for i in 0..h {
+                let t = self.builder.xor(s[i], low[i]);
+                out[h + i] = self.builder.xor(t, middle[i]);
+                let (h1, m1) = (
+                    high.get(h + i).copied().unwrap_or(Wire::ZERO),
+                    middle.get(h + i).copied().unwrap_or(Wire::ZERO),
+                );
+                let t = self.builder.xor(s[i], h1);
+                out[2 * h + i] = self.builder.xor(t, m1);
+                if 3 * h + i < out.len() {
+                    out[3 * h + i] = h1;
+                }
+            }
+            return out;
+        }
         // The middle term is (x0 + x1)(y0 + y1) + x0 y0 + x1 y1.
+        let mut middle = middle;
         for part in [&low, &high] {
             for (i, &w) in part.iter().enumerate() {
                 middle[i] = self.builder.xor(middle[i], w);
             }
         }
-        let mut out = vec![Wire::ZERO; 2 * n - 1];
         out[..low.len()].copy_from_slice(&low);
         out[2 * h..].copy_from_slice(&high);
         for (i, &w) in middle.iter().enumerate() {

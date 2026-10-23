@@ -1,20 +1,18 @@
 //! The arithmetic a Flock verifier runs over.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_binary_field::{fold_bits, fold_rows};
 use p3_challenger::CanObserve;
 use p3_field::{Dup, PrimeCharacteristicRing};
 use p3_sumcheck::ring_switch::bits::BitTensorArith;
-use p3_verifier_arith::{Lift, Native};
+use p3_verifier_arith::{Arith, Lift, Native};
 
 use crate::circuit::Circuit;
 use crate::ports::{PortsError, PublicPorts};
-use crate::skip::{SKIP_SIZE, lagrange_weights};
+use crate::skip::{K_SKIP, SKIP_SIZE, lagrange_weights};
 use crate::{Batch, Challenge, Val};
-
-/// Slots of an instance up to which the lincheck's weight tables are whole.
-const SPLIT_LOG: usize = 24;
 
 /// Values and operations a Flock verifier computes with, natively or inside a circuit.
 pub trait FlockArith: BitTensorArith + Lift<Val = Val, Challenge = Challenge> {
@@ -49,7 +47,7 @@ pub trait FlockArith: BitTensorArith + Lift<Val = Val, Challenge = Challenge> {
     ///
     /// Row `64 i + u` weighs `L_u(skip) eq(inner, i)` and column `64 j + v` weighs `eq(point, j) slices[v]`.
     ///
-    /// The default walks the circuit once, linear in its gates.
+    /// The default walks the circuit once, linear in its gates; each weight is a high table entry times a low one.
     fn circuit_form(
         &mut self,
         circuit: &Circuit,
@@ -60,44 +58,41 @@ pub trait FlockArith: BitTensorArith + Lift<Val = Val, Challenge = Challenge> {
         alpha: &Self::EF,
     ) -> Self::EF {
         let lagrange = lagrange_weights(skip, SKIP_SIZE);
-        let mut form = Self::EF::ZERO;
-        if circuit.k_log() <= SPLIT_LOG {
-            let rows: Vec<Self::EF> = self
-                .eq_table(inner)
-                .into_iter()
-                .flat_map(|e| lagrange.iter().map(move |l| e.dup() * l.dup()))
-                .collect();
-            let columns: Vec<Self::EF> = self
-                .eq_table(point)
-                .into_iter()
-                .flat_map(|e| slices.iter().map(move |v| e.dup() * v.dup()))
-                .collect();
-            circuit.walk_rows(&columns, |row, a, b| {
-                form += rows[row].dup() * (a + alpha.dup() * b);
-            });
-            return form;
-        }
-        // Past `2^SPLIT_LOG` slots, each weight table splits into two halves whose product is the entry.
-        let half = |arith: &mut Self, point: &[Self::EF]| {
-            let lo_bits = point.len() / 2;
-            let (hi, lo) = point.split_at(point.len() - lo_bits);
-            (arith.eq_table(hi), arith.eq_table(lo), lo_bits)
-        };
-        let (row_hi, row_lo, row_bits) = half(self, inner);
-        let (col_hi, col_lo, col_bits) = half(self, point);
-        let at = |hi: &[Self::EF], lo: &[Self::EF], bits: usize, i: usize| {
-            hi[i >> bits].dup() * lo[i & ((1 << bits) - 1)].dup()
-        };
+        let (row_hi, row_lo, row_bits) = split_weights(self, inner, &lagrange);
+        let (col_hi, col_lo, col_bits) = split_weights(self, point, slices);
+        let (row_mask, col_mask) = ((1 << row_bits) - 1, (1 << col_bits) - 1);
+        // Rows sum per high entry, which scales each sum once.
+        let mut sums = vec![(Self::EF::ZERO, Self::EF::ZERO); row_hi.len()];
         circuit.walk_rows_by(
-            |s| at(&col_hi, &col_lo, col_bits, s / SKIP_SIZE) * slices[s % SKIP_SIZE].dup(),
+            |s| col_hi[s >> col_bits].dup() * col_lo[s & col_mask].dup(),
             |row, a, b| {
-                let weight = at(&row_hi, &row_lo, row_bits, row / SKIP_SIZE)
-                    * lagrange[row % SKIP_SIZE].dup();
-                form += weight * (a + alpha.dup() * b);
+                let low = &row_lo[row & row_mask];
+                let (sa, sb) = &mut sums[row >> row_bits];
+                *sa += low.dup() * a;
+                *sb += low.dup() * b;
             },
         );
-        form
+        sums.into_iter()
+            .zip(row_hi)
+            .map(|((sa, sb), hi)| hi * (sa + alpha.dup() * sb))
+            .sum()
     }
+}
+
+/// The equality weights of `point`, then 64 low entries, as a high table, a low table with the 64 folded in, and the low table's index bits.
+fn split_weights<A: Arith + ?Sized>(
+    arith: &mut A,
+    point: &[A::EF],
+    low: &[A::EF],
+) -> (Vec<A::EF>, Vec<A::EF>, usize) {
+    let lo_bits = point.len() / 2;
+    let (hi, lo) = point.split_at(point.len() - lo_bits);
+    let lo_table = arith
+        .eq_table(lo)
+        .into_iter()
+        .flat_map(|e| low.iter().map(move |l| e.dup() * l.dup()))
+        .collect();
+    (arith.eq_table(hi), lo_table, lo_bits + K_SKIP)
 }
 
 impl FlockArith for Native<Val, Challenge> {

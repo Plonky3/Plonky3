@@ -63,6 +63,10 @@ pub struct RecursionCircuit {
     pub ands: usize,
     /// Gates of the circuit, XORs included.
     pub gates: usize,
+    /// Operations of its compiled walk.
+    pub ops: usize,
+    /// Terms of its compiled walk's linear forms.
+    pub terms: usize,
 }
 
 impl WireArith {
@@ -86,6 +90,7 @@ impl WireArith {
     ///
     /// When the circuit is already past a target.
     #[must_use]
+    #[tracing::instrument(skip_all, name = "finish circuit")]
     pub fn finish_padded(
         self,
         advice_words: Option<usize>,
@@ -114,13 +119,17 @@ impl WireArith {
             "every announced value is absorbed"
         );
         assert!(gates.sampled.is_empty(), "every sample is taken");
-        let circuit = gates.builder.finish();
+        let gate_count = gates.builder.num_gates();
+        // Every pass runs the compiled walk, so the gate list goes as it compiles.
+        let circuit = gates.builder.finish_compiled();
         if let Some(k_log) = k_log {
             assert_eq!(circuit.k_log(), k_log, "the circuit fits its padding");
         }
         RecursionCircuit {
             ands: circuit.num_ands(),
-            gates: circuit.gates().len(),
+            gates: gate_count,
+            ops: circuit.num_ops(),
+            terms: circuit.num_terms(),
             circuit,
             advice: gates.advice,
             revealed: gates.revealed,
@@ -151,6 +160,7 @@ impl WireArith {
     /// # Errors
     ///
     /// When the proof or the deferral is rejected.
+    #[tracing::instrument(skip_all, name = "verify in circuit")]
     pub fn verify_proof(
         &mut self,
         config: &FlockConfig,

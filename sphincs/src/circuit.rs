@@ -115,7 +115,7 @@ pub(crate) fn circuit() -> (Circuit, usize) {
     for (bit, &wire) in node.iter().enumerate() {
         c.output(COMPUTED_ROOT_PORT, bit, wire);
     }
-    (c.finish(), compressions)
+    (c.finish_compiled(), compressions)
 }
 
 impl Verifier {

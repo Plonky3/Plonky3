@@ -59,6 +59,38 @@ proptest! {
     }
 }
 
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+
+    #[test]
+    fn the_equality_element_is_the_native_one(len in 0usize..9, seed in any::<u64>()) {
+        use p3_sumcheck::ring_switch::bits::BitTensorArith;
+        use p3_verifier_arith::Native;
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let a: Vec<Poly192> = (0..len).map(|_| rng.random()).collect();
+        let b: Vec<Poly192> = (0..len).map(|_| rng.random()).collect();
+        let native = Native::<Poly64, Poly192>::new().equality_rows(&a, &b);
+        let mut arith = WireArith::new();
+        let wa: Vec<Gf192> = a.iter().map(|&v| arith.advice(v)).collect();
+        let wb: Vec<Gf192> = b.iter().map(|&v| arith.advice(v)).collect();
+        let rows = arith.equality_rows(&wa, &wb);
+        for (row, &expected) in rows.iter().zip(&native) {
+            prop_assert_eq!(row.value(), expected);
+            arith.reveal(row);
+        }
+        let rc = arith.finish();
+        prop_assert!(satisfied(&rc, &rc.advice));
+        // Tamper: a flipped coordinate moves the revealed rows.
+        if len > 0 {
+            let mut advice = rc.advice.clone();
+            advice[0] ^= 1;
+            prop_assert!(!satisfied(&rc, &advice));
+        }
+    }
+}
+
 #[test]
 fn products_cost_the_stated_ands() {
     let arith = WireArith::new();
@@ -147,7 +179,7 @@ fn compression_proof(log_instances: usize, config: &FlockConfig) -> (Circuit, Fl
 }
 
 #[test]
-#[ignore = "builds and proves a circuit of 2^26 bits (peak 12 GB); run with --release --include-ignored"]
+#[ignore = "builds and proves a circuit of 2^26 bits (peak 5 GB); run with --release --include-ignored"]
 fn a_proof_verifies_in_a_circuit_and_its_claim_natively() {
     let mut config = FlockConfig::default();
     config.pcs.log_inv_rate = 4;
@@ -172,10 +204,12 @@ fn a_proof_verifies_in_a_circuit_and_its_claim_natively() {
     assert_eq!(evaluate_claim(&circuit, &point), claim.value.value());
     let rc = arith.finish();
     std::println!(
-        "outer: 2^{} bits, {} ANDs, {} gates",
+        "outer: 2^{} bits, {} ANDs, {} gates, {} ops, {} terms",
         rc.circuit.k_log(),
         rc.ands,
-        rc.gates
+        rc.gates,
+        rc.ops,
+        rc.terms
     );
     for cost in &rc.costs {
         std::println!(
@@ -344,6 +378,52 @@ fn the_streamed_matrix_is_the_dense_one() {
 }
 
 #[test]
+fn the_row_fold_of_a_form_is_the_dense_one() {
+    // Invariant: the backward walk's `h(v)` is the form weighed column by column.
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+    let mut rng = SmallRng::seed_from_u64(0xF0);
+    for _ in 0..4 {
+        let circuit = crate::tests::random_circuit(&mut rng, 300);
+        let k = circuit.k_log();
+        let n = 1 << k;
+        let (skip, alpha): (Poly192, Poly192) = (rng.random(), rng.random());
+        let inner: Vec<Poly192> = (0..k - 6).map(|_| rng.random()).collect();
+        let point: Vec<Poly192> = (0..k - 6).map(|_| rng.random()).collect();
+        let h = deferred::form_rows(&Matrix::new(&circuit), skip, &inner, &point, alpha);
+        let lagrange = crate::skip::lagrange_weights(&skip, 64);
+        let eq = |p: &[Poly192], i: usize| -> Poly192 {
+            p.iter()
+                .enumerate()
+                .map(|(t, &r)| {
+                    if (i >> (p.len() - 1 - t)) & 1 == 1 {
+                        r
+                    } else {
+                        Poly192::ONE + r
+                    }
+                })
+                .product()
+        };
+        for (v, &hv) in h.iter().enumerate() {
+            let columns: Vec<Poly192> = (0..n)
+                .map(|c| {
+                    if c % 64 == v {
+                        eq(&point, c / 64)
+                    } else {
+                        Poly192::ZERO
+                    }
+                })
+                .collect();
+            let mut expected = Poly192::ZERO;
+            circuit.walk_rows(&columns, |r, a, b| {
+                expected += lagrange[r % 64] * eq(&inner, r / 64) * (a + alpha * b);
+            });
+            assert_eq!(hv, expected, "v = {v}");
+        }
+    }
+}
+
+#[test]
 fn two_claims_fold_into_one_the_matrix_satisfies() {
     use p3_verifier_arith::Native;
     use rand::rngs::SmallRng;
@@ -416,10 +496,12 @@ fn public_compression_proof(
 /// Print a node's figures.
 fn report(level: usize, node: &NodeProof, elapsed: std::time::Duration) {
     std::println!(
-        "level {level}: instance 2^{} bits, {} ANDs, {} gates, {} advice words, built and proved in {elapsed:.1?}",
+        "level {level}: instance 2^{} bits, {} ANDs, {} gates, {} ops, {} terms, {} advice words, built and proved in {elapsed:.1?}",
         node.circuit.circuit.k_log(),
         node.circuit.ands,
         node.circuit.gates,
+        node.circuit.ops,
+        node.circuit.terms,
         node.circuit.advice.len(),
     );
     for cost in &node.circuit.costs {
@@ -445,7 +527,7 @@ fn peak_gb() -> f64 {
 }
 
 #[test]
-#[ignore = "builds and proves node circuits of 2^27 bits per instance (peak 40 GB); run with --release --include-ignored"]
+#[ignore = "builds and proves node circuits of 2^27 bits per instance (peak 18 GB to level 2, 22 GB with the level-3 instance); run with --release --include-ignored"]
 fn a_tree_of_proofs_folds_its_claims_and_reaches_a_fixed_point() {
     use alloc::sync::Arc;
     use std::time::Instant;
@@ -484,6 +566,12 @@ fn a_tree_of_proofs_folds_its_claims_and_reaches_a_fixed_point() {
         report(1, &node, start.elapsed());
         level1.push(node);
     }
+    // Both level-1 proofs have one circuit, so one compiled walk serves both.
+    assert_eq!(
+        level1[0].circuit.circuit.digest(),
+        level1[1].circuit.circuit.digest()
+    );
+    level1[1].circuit.circuit = level1[0].circuit.circuit.clone();
     std::println!("peak {:.1} GB", peak_gb());
     let digests: Vec<[u8; 32]> = leaves.iter().map(|l| *l.1.digest()).collect();
     let expected1 = [

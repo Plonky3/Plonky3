@@ -1,6 +1,5 @@
 //! A bit commitment: packed words under WHIR, opened at weighted claims through the deferred ring switch.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_binary_field::TowerLevel;
@@ -8,6 +7,7 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs, MmcsArith};
 use p3_field::{ExtensionField, Field};
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::ring_switch::bits::{BitRingSwitch, BitTensor, BitTensorArith, SuffixTensors};
 use p3_verifier_arith::Lift;
@@ -263,25 +263,50 @@ where
         high: &[EF],
         log_outer: usize,
     ) -> Option<SuffixTensors<EF, F>> {
+        self.suffix_tensors_by(folded.len(), |i| folded[i], high, log_outer)
+    }
+
+    /// As [`Self::suffix_tensors`], entry `i` of the `len` folded values being `entry(i)`.
+    ///
+    /// # Returns
+    ///
+    /// As [`Self::suffix_tensors`].
+    #[must_use]
+    pub fn suffix_tensors_by(
+        &self,
+        len: usize,
+        entry: impl Fn(usize) -> EF + Sync,
+        high: &[EF],
+        log_outer: usize,
+    ) -> Option<SuffixTensors<EF, F>> {
         let width = 1 << BitRingSwitch::<F, EF>::ABSORBED;
         let depth = self.first_folding();
         let inner = high.get(log_outer..)?;
         let head = inner.len().checked_sub(depth)?;
-        if folded.len() != width << inner.len() {
+        if len != width << inner.len() {
             return None;
         }
         let weights = Poly::new_from_point(&inner[..head], EF::ONE);
-        let banks = (0..1usize << depth)
-            .map(|bank| {
-                let mut slices = vec![EF::ZERO; width];
-                for (high, &weight) in weights.as_slice().iter().enumerate() {
-                    let row = &folded[((high << depth) | bank) * width..][..width];
-                    for (slice, &value) in slices.iter_mut().zip(row) {
-                        *slice += weight * value;
-                    }
+        // Each high row weighs its banks' slices, the rows summed in parallel.
+        let row = width << depth;
+        let sums = weights.as_slice().par_iter().enumerate().par_fold_reduce(
+            || EF::zero_vec(row),
+            |mut acc, (high, &weight)| {
+                for (j, a) in acc.iter_mut().enumerate() {
+                    *a += weight * entry(high * row + j);
                 }
-                BitTensor::from_columns(&slices)
-            })
+                acc
+            },
+            |mut x, y| {
+                for (a, b) in x.iter_mut().zip(y) {
+                    *a += b;
+                }
+                x
+            },
+        );
+        let banks = sums
+            .chunks_exact(width)
+            .map(BitTensor::from_columns)
             .collect();
         SuffixTensors::new(banks)
     }

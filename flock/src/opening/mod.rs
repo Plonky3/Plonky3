@@ -7,6 +7,7 @@ mod tests;
 
 use alloc::vec::Vec;
 
+use p3_binary_field::FoldedRows;
 use p3_binary_pcs::whir::preset::{hash64, keccak64};
 use p3_binary_pcs::whir::{CommitmentError, SuffixTensors, WeightedClaim};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
@@ -124,11 +125,12 @@ impl<H: FlockHash> WitnessPcs<H> {
     #[must_use]
     pub fn suffix_tensors(
         &self,
-        folded: &[Challenge],
+        folded: &FoldedRows<'_>,
         point: &QuirkyPoint,
         log_instances: usize,
     ) -> Option<SuffixTensors<Challenge, Val>> {
-        self.0.suffix_tensors(folded, &point.rest, log_instances)
+        self.0
+            .suffix_tensors_by(folded.len(), |i| folded.at(i), &point.rest, log_instances)
     }
 
     /// Open the committed witness at every claim, in one proof.

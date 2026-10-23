@@ -99,6 +99,18 @@ impl SplitEq {
         }
     }
 
+    /// The tables of `eq(point, s / 64) low[s % 64]`, the 64 low entries folded into the low table.
+    fn with_low(point: &[Challenge], low: &[Challenge]) -> Self {
+        let mut split = Self::new(point);
+        split.lo = split
+            .lo
+            .iter()
+            .flat_map(|&e| low.iter().map(move |&l| e * l))
+            .collect();
+        split.lo_bits += K_SKIP;
+        split
+    }
+
     /// `eq(point, s)`.
     #[inline]
     fn at(&self, s: usize) -> Challenge {
@@ -193,7 +205,9 @@ impl Matrix {
         parts
             .par_chunks(LANES)
             .flat_map_iter(|group| {
-                let mut acc = [Challenge::ZERO; LANES];
+                // Rows sum per high entry of their weight, which scales each sum once.
+                let mut sums: Vec<[(Challenge, Challenge); LANES]> =
+                    vec![[(Challenge::ZERO, Challenge::ZERO); LANES]; group[0].2.hi.len()];
                 self.program.walk_rows_lanes::<Challenge, LANES>(
                     |s| {
                         core::array::from_fn(|l| {
@@ -201,15 +215,26 @@ impl Matrix {
                         })
                     },
                     |s, a, b| {
+                        let block = &mut sums[s >> group[0].2.lo_bits];
                         for (l, part) in group.iter().enumerate() {
-                            acc[l] += part.2.at(s) * (a[l] + part.0 * (a[l] + b[l]));
+                            let low = part.2.lo[s & ((1 << part.2.lo_bits) - 1)];
+                            block[l].0 += low * a[l];
+                            block[l].1 += low * b[l];
                         }
                     },
                 );
                 group
                     .iter()
-                    .zip(acc)
-                    .map(|(p, v)| p.1 * v)
+                    .enumerate()
+                    .map(|(l, p)| {
+                        let (sa, sb) = sums
+                            .iter()
+                            .zip(&p.2.hi)
+                            .fold((Challenge::ZERO, Challenge::ZERO), |(x, y), (block, &h)| {
+                                (x + h * block[l].0, y + h * block[l].1)
+                            });
+                        p.1 * (sa + p.0 * (sa + sb))
+                    })
                     .collect::<Vec<_>>()
             })
             .collect()
@@ -223,32 +248,23 @@ impl Matrix {
         point: &[Challenge],
         alpha: Challenge,
     ) -> Vec<Challenge> {
-        let lagrange = lagrange_weights(&skip, SKIP_SIZE);
-        let rows = SplitEq::new(inner);
+        // One backward walk: the rows' weights flow to the columns, each column summed into its low bits' entry.
+        let rows = SplitEq::with_low(inner, &lagrange_weights(&skip, SKIP_SIZE));
         let words = SplitEq::new(point);
-        (0..SKIP_SIZE / LANES)
-            .into_par_iter()
-            .flat_map_iter(|group| {
-                let mut acc = [Challenge::ZERO; LANES];
-                self.program.walk_rows_lanes::<Challenge, LANES>(
-                    |s| {
-                        core::array::from_fn(|l| {
-                            if s % SKIP_SIZE == group * LANES + l {
-                                words.at(s / SKIP_SIZE)
-                            } else {
-                                Challenge::ZERO
-                            }
-                        })
-                    },
-                    |s, a, b| {
-                        let w = lagrange[s % SKIP_SIZE] * rows.at(s / SKIP_SIZE);
-                        for l in 0..LANES {
-                            acc[l] += w * (a[l] + alpha * b[l]);
-                        }
-                    },
-                );
-                acc
-            })
+        let mask = (1 << words.lo_bits) - 1;
+        // Per high entry of the column word, the 64 sums still to be scaled by it.
+        let mut sums = vec![[Challenge::ZERO; SKIP_SIZE]; words.hi.len()];
+        self.program.fold_transpose_by(
+            Challenge::ONE,
+            alpha,
+            |s| rows.at(s),
+            |c, v| {
+                let word = c / SKIP_SIZE;
+                sums[word >> words.lo_bits][c % SKIP_SIZE] += words.lo[word & mask] * v;
+            },
+        );
+        (0..SKIP_SIZE)
+            .map(|v| sums.iter().zip(&words.hi).map(|(s, &h)| h * s[v]).sum())
             .collect()
     }
 
@@ -261,6 +277,7 @@ impl Matrix {
 }
 
 /// `h(v)` of a circuit form, for the arithmetic that defers it.
+#[tracing::instrument(skip_all, name = "form rows")]
 pub(crate) fn form_rows(
     matrix: &Matrix,
     skip: Challenge,
@@ -355,6 +372,7 @@ where
 
 /// The prover's side of [`reduce_form_in`], on a copy of the transcript it will replay.
 #[must_use]
+#[tracing::instrument(skip_all, name = "prove form")]
 pub fn prove_form<C: FieldChallenger<Val>>(
     matrix: &Matrix,
     form: &PendingForm<Challenge>,
@@ -373,21 +391,44 @@ pub fn prove_form<C: FieldChallenger<Val>>(
     observe(&form.h, challenger);
     let rho = sample(K_SKIP, challenger);
     let columns: Vec<Challenge> = form.point.iter().chain(&rho).copied().collect();
+    // Rows sum per high entry of their weight, which scales each sum once.
+    let zero = (Challenge::ZERO, Challenge::ZERO);
     let words = SplitEq::new(&form.inner);
-    let mut g = vec![Challenge::ZERO; SKIP_SIZE];
+    let mask = (1 << words.lo_bits) - 1;
+    let mut sums = vec![[zero; SKIP_SIZE]; words.hi.len()];
     matrix.row_sums(&columns, |s, a, b| {
-        g[s % SKIP_SIZE] += words.at(s / SKIP_SIZE) * (a + form.alpha * b);
+        let word = s / SKIP_SIZE;
+        let low = words.lo[word & mask];
+        let sum = &mut sums[word >> words.lo_bits][s % SKIP_SIZE];
+        sum.0 += low * a;
+        sum.1 += low * b;
     });
+    let g: Vec<Challenge> = (0..SKIP_SIZE)
+        .map(|v| {
+            sums.iter()
+                .zip(&words.hi)
+                .map(|(s, &h)| h * (s[v].0 + form.alpha * s[v].1))
+                .sum()
+        })
+        .collect();
     observe(&g, challenger);
     let rho_rows = sample(K_SKIP, challenger);
     let row_point: Vec<Challenge> = form.inner.iter().chain(&rho_rows).copied().collect();
     let rows = SplitEq::new(&row_point);
-    let mut ab = [Challenge::ZERO; 2];
+    let mask = (1 << rows.lo_bits) - 1;
+    let mut sums = vec![zero; rows.hi.len()];
     matrix.row_sums(&columns, |s, a, b| {
-        let w = rows.at(s);
-        ab[0] += w * a;
-        ab[1] += w * b;
+        let low = rows.lo[s & mask];
+        let sum = &mut sums[s >> rows.lo_bits];
+        sum.0 += low * a;
+        sum.1 += low * b;
     });
+    let ab = sums
+        .iter()
+        .zip(&rows.hi)
+        .fold([Challenge::ZERO; 2], |[x, y], (s, &h)| {
+            [x + h * s.0, y + h * s.1]
+        });
     observe(&ab, challenger);
     let _stack: Vec<Challenge> = sample(1, challenger);
     FormProof { g, ab }
@@ -443,6 +484,7 @@ where
 ///
 /// The restriction has degree at most the number of coordinates the points differ in, so that many plus one evaluations suffice.
 #[must_use]
+#[tracing::instrument(skip_all, name = "line polynomial")]
 pub fn line_polynomial(
     matrix: &Matrix,
     first: &MatrixClaim,

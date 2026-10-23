@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 
+use p3_binary_field::FoldedRows;
 use p3_field::PrimeCharacteristicRing;
 use p3_maybe_rayon::prelude::*;
 
@@ -31,33 +32,87 @@ fn add(x: Pair, y: Pair) -> Pair {
 }
 
 /// The two tables of a product sumcheck, halving per bound variable.
-#[derive(Clone, Debug)]
-pub(crate) struct ProductSumcheck {
+#[derive(Debug)]
+pub(crate) struct ProductSumcheck<'a> {
     /// The batched column weights.
     comb: Vec<Challenge>,
-    /// The witness, folded over the instances.
+    /// The witness, folded over the instances, once a variable is bound.
     z: Vec<Challenge>,
+    /// The witness before any variable is bound, read entry by entry.
+    unbound: Option<&'a FoldedRows<'a>>,
 }
 
-impl ProductSumcheck {
+impl<'a> ProductSumcheck<'a> {
     /// The sumcheck of `sum_i comb[i] z[i]`.
     ///
     /// # Panics
     ///
     /// - The tables differ in length, or are not a power of two.
+    #[cfg(test)]
     pub(crate) fn new(comb: Vec<Challenge>, z: Vec<Challenge>) -> Self {
         assert_eq!(comb.len(), z.len(), "one weight per witness value");
         assert!(z.len().is_power_of_two(), "a hypercube table");
-        Self { comb, z }
+        Self {
+            comb,
+            z,
+            unbound: None,
+        }
+    }
+
+    /// The sumcheck of `sum_i comb[i] z[i]`, the witness table formed only at the first bind, at half size.
+    ///
+    /// # Panics
+    ///
+    /// - The tables differ in length, or are not a power of two.
+    pub(crate) fn folded(comb: Vec<Challenge>, z: &'a FoldedRows<'a>) -> Self {
+        assert_eq!(comb.len(), z.len(), "one weight per witness value");
+        assert!(z.len().is_power_of_two(), "a hypercube table");
+        Self {
+            comb,
+            z: Vec::new(),
+            unbound: Some(z),
+        }
     }
 
     /// The whole sum.
     pub(crate) fn claim(&self) -> Challenge {
-        self.comb.iter().zip(&self.z).map(|(&c, &z)| c * z).sum()
+        self.unbound.map_or_else(
+            || {
+                self.comb
+                    .par_iter()
+                    .zip(self.z.par_iter())
+                    .map(|(&c, &z)| c * z)
+                    .sum()
+            },
+            |f| {
+                self.comb
+                    .par_iter()
+                    .enumerate()
+                    .map(|(i, &c)| c * f.at(i))
+                    .sum()
+            },
+        )
     }
 
     /// The current round's `(q(1), q(inf))`, splitting both tables at their top variable.
     pub(crate) fn round(&self) -> Pair {
+        if let Some(f) = self.unbound {
+            let half = self.comb.len() / 2;
+            let (c_lo, c_hi) = self.comb.split_at(half);
+            let zero = || (Challenge::ZERO, Challenge::ZERO);
+            return c_lo
+                .par_iter()
+                .zip(c_hi.par_iter())
+                .enumerate()
+                .par_fold_reduce(
+                    zero,
+                    |acc, (i, (&cl, &ch))| {
+                        let (zl, zh) = (f.at(i), f.at(half + i));
+                        add(acc, (ch * zh, (cl + ch) * (zl + zh)))
+                    },
+                    add,
+                );
+        }
         let half = self.z.len() / 2;
         let (c_lo, c_hi) = self.comb.split_at(half);
         let (z_lo, z_hi) = self.z.split_at(half);
@@ -90,6 +145,11 @@ impl ProductSumcheck {
     ///
     /// - Fewer than four values remain.
     pub(crate) fn bind_and_round(&mut self, r: Challenge) -> Pair {
+        if let Some(f) = self.unbound.take() {
+            self.z = f.bind_top(r);
+            self.bind_comb(r);
+            return self.round();
+        }
         let len = self.z.len();
         let (half, quarter) = (len / 2, len / 4);
         assert!(quarter >= 1, "a next round needs two values after binding");
@@ -135,8 +195,24 @@ impl ProductSumcheck {
         next
     }
 
+    /// Bind the weights' top variable at `r` in place, giving back the freed half.
+    fn bind_comb(&mut self, r: Challenge) {
+        let half = self.comb.len() / 2;
+        let (lo, hi) = self.comb.split_at_mut(half);
+        lo.par_iter_mut().zip(hi.par_iter()).for_each(|(l, &h)| {
+            *l += r * (h + *l);
+        });
+        self.comb.truncate(half);
+        self.comb.shrink_to_fit();
+    }
+
     /// Bind the last variable at `r`, in the witness only, since the weights are never read again.
     pub(crate) fn bind_last(&mut self, r: Challenge) {
+        if let Some(f) = self.unbound.take() {
+            self.z = f.bind_top(r);
+            self.comb = Vec::new();
+            return;
+        }
         let half = self.z.len() / 2;
         let (lo, hi) = self.z.split_at_mut(half);
         for (l, &h) in lo.iter_mut().zip(hi.iter()) {
@@ -148,7 +224,10 @@ impl ProductSumcheck {
 
     /// The witness as it stands.
     pub(crate) fn into_z(self) -> Vec<Challenge> {
-        self.z
+        match self.unbound {
+            Some(f) => f.to_vec(),
+            None => self.z,
+        }
     }
 }
 

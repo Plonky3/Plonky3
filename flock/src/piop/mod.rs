@@ -145,10 +145,12 @@ pub fn prove<H: FlockHash>(
     let (lincheck, claim, folded) = lincheck::prove_folded(batch, z, &claims, public, challenger);
 
     // The selector's eq is one on the region, so the fold over the instances is the fold over the commitment.
-    let split =
-        placement
-            .commitment
-            .suffix_tensors(&folded, &claim.point.rest, batch.log_instances());
+    let split = placement.commitment.suffix_tensors_by(
+        folded.len(),
+        |i| folded.at(i),
+        &claim.point.rest,
+        batch.log_instances(),
+    );
     let claim = placement.lift(claim);
     Ok((
         PiopProof {

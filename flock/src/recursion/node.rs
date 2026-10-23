@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 
 use p3_blake3::Blake3;
 use p3_field::{Dup, PrimeCharacteristicRing};
+use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicHasher;
 use p3_verifier_arith::Arith;
 
@@ -517,6 +518,7 @@ fn node_public(
 /// # Errors
 ///
 /// When the child is rejected.
+#[tracing::instrument(skip_all, name = "node instance")]
 pub fn node_instance(
     layout: &NodeLayout,
     child: &Child<'_>,
@@ -696,6 +698,7 @@ impl NodeCircuit {
     /// # Errors
     ///
     /// When the circuit is too small or the proof cannot be made.
+    #[tracing::instrument(skip_all, name = "prove node")]
     pub fn prove(self, config: &FlockConfig) -> Result<NodeProof, NodeError> {
         let batch = Batch::new(&self.circuit.circuit, 1)?;
         let public = node_public(
@@ -717,11 +720,8 @@ impl NodeCircuit {
         );
         let mut challenger = FlockChallenger::<Blake3>::from_hasher(Vec::new(), Blake3);
         let proof = crate::prove(config, &batch, &public, witness, &mut challenger)?;
-        // Verifiers only walk the circuit, so its gates make way for the compiled walk.
-        let mut circuit = self.circuit;
-        circuit.circuit = circuit.circuit.compile();
         Ok(NodeProof {
-            circuit,
+            circuit: self.circuit,
             public,
             proof,
             outputs: self.outputs,
@@ -780,6 +780,7 @@ pub enum NodeError {
 /// # Errors
 ///
 /// The first check that fails.
+#[tracing::instrument(skip_all, name = "verify root")]
 pub fn verify_root(
     layout: &NodeLayout,
     config: &FlockConfig,
@@ -808,15 +809,44 @@ pub fn verify_root(
     if public != root.public {
         return Err(NodeError::Commitment);
     }
-    let mut challenger = FlockChallenger::<Blake3>::from_hasher(Vec::new(), Blake3);
-    crate::verify(config, &batch, &public, &root.proof, &mut challenger)?;
-    for output in &root.outputs {
-        for slot in output.slots.iter().flatten() {
-            let matrix = find(matrices, &slot.digest).ok_or(NodeError::UnknownMatrix)?;
-            if matrix.evaluate(core::slice::from_ref(&slot.claim.point))[0] != slot.claim.value {
-                return Err(NodeError::Claim);
-            }
+    // Every carried claim, grouped by matrix so that one walk evaluates a matrix's points together.
+    let slots: Vec<&Slot> = root
+        .outputs
+        .iter()
+        .flat_map(|o| o.slots.iter().flatten())
+        .collect();
+    let mut groups: Vec<(&Matrix, Vec<&Slot>)> = Vec::new();
+    for slot in slots {
+        let matrix = find(matrices, &slot.digest).ok_or(NodeError::UnknownMatrix)?;
+        match groups
+            .iter_mut()
+            .find(|(m, _)| m.digest() == matrix.digest())
+        {
+            Some((_, group)) => group.push(slot),
+            None => groups.push((matrix, vec![slot])),
         }
+    }
+    // The root proof and the matrix walks are independent, so they run at once.
+    let (verified, claims) = join(
+        || {
+            let mut challenger = FlockChallenger::<Blake3>::from_hasher(Vec::new(), Blake3);
+            crate::verify(config, &batch, &public, &root.proof, &mut challenger)
+        },
+        || {
+            groups.par_iter().all(|(matrix, group)| {
+                let points: Vec<Vec<Challenge>> =
+                    group.iter().map(|s| s.claim.point.clone()).collect();
+                matrix
+                    .evaluate(&points)
+                    .iter()
+                    .zip(group)
+                    .all(|(&v, s)| v == s.claim.value)
+            })
+        },
+    );
+    verified?;
+    if !claims {
+        return Err(NodeError::Claim);
     }
     let combined =
         Blake3.hash_slice(&[root.outputs[0].leaf_acc, root.outputs[1].leaf_acc].concat());

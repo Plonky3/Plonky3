@@ -55,7 +55,7 @@ impl Witness {
         let words = (1usize << circuit.k_log()) / 64;
         let n_in = circuit.n_input_words();
         let live_words = circuit.useful_bits().div_ceil(64);
-        let program = Program::new(circuit);
+        let program = circuit.program();
         Self::fill(
             words,
             log_instances,

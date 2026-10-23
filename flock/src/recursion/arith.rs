@@ -13,7 +13,7 @@ use p3_verifier_arith::{Arith, Lift};
 use spin::Mutex;
 
 use super::deferred::{Matrix, PendingForm, form_rows};
-use super::gates::{BinaryElement, Byte, Cost, Gates, Sample};
+use super::gates::{Byte, Cost, Gates, Sample};
 use super::statement::WireStatement;
 use super::value::{Bin, Gf64, Gf192, Lowering, Shared};
 use crate::circuit::{Circuit, Wire};
@@ -436,10 +436,26 @@ impl BitTensorArith for WireArith {
     }
 
     fn equality_rows(&mut self, a: &[Gf192], b: &[Gf192]) -> Vec<Gf192> {
-        // The native algorithm: per factor, rows scaled by `1 + b`, plus the original's columns scaled by `a`.
         let previous = self.component("equality element");
-        let mut rows = one_rows();
-        for (a, b) in a.iter().zip(b) {
+        // The first factors as a sum of pure tensors `x ⊗ y`: each factor splits a term into `x a ⊗ y` and `x ⊗ y (1 + b)`.
+        let low = a.len().min(LOW_RANK);
+        let mut terms = vec![(Gf192::ONE, Gf192::ONE)];
+        for (a, b) in a[..low].iter().zip(&b[..low]) {
+            let factor = Gf192::ONE + b.dup();
+            terms = terms
+                .into_iter()
+                .flat_map(|(x, y)| [(x.dup() * a.dup(), y.dup()), (x, y * factor.dup())])
+                .collect();
+        }
+        // Row `u` of `x ⊗ y` is `x_u y`, a select per bit.
+        let mut rows = vec![Gf192::ZERO; 192];
+        for (x, y) in terms {
+            for (row, bit) in rows.iter_mut().zip(self.bits(&x)) {
+                *row += self.scale(&bit, y.dup());
+            }
+        }
+        // The native algorithm for the rest: rows scaled by `1 + b`, plus the original's columns scaled by `a`.
+        for (a, b) in a.iter().zip(b).skip(low) {
             let columns: Vec<Gf192> = self.transpose(&rows);
             let scaled: Vec<Gf192> = columns.into_iter().map(|c| c * a.dup()).collect();
             let back: Vec<Gf192> = self.transpose(&scaled);
@@ -455,18 +471,8 @@ impl BitTensorArith for WireArith {
     }
 }
 
-/// The rows of `1 ⊗ 1`: row `u` is one exactly where coordinate `u` of one is set.
-fn one_rows() -> Vec<Gf192> {
-    (0..192)
-        .map(|u| {
-            if Poly192::ONE.bit(u) {
-                Gf192::ONE
-            } else {
-                Gf192::ZERO
-            }
-        })
-        .collect()
-}
+/// Factors of the equality element kept as a sum of pure tensors: past six, the `2^m` selects outgrow the 384 products of a factor on rows.
+const LOW_RANK: usize = 6;
 
 impl FlockArith for WireArith {
     fn bind_statement<C: CanObserve<Val>>(

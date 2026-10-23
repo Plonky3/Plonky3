@@ -445,7 +445,7 @@ fn circuit(params: &Params) -> Circuit {
     for (bit, &wire) in root.iter().flat_map(|word| word.iter()).enumerate() {
         c.output(ROOT_PORT, bit, wire);
     }
-    c.finish()
+    c.finish_compiled()
 }
 
 /// The keyed BLAKE3 hash of `input`, one chunk at most, truncated to a digest.
