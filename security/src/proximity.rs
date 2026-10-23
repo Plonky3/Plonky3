@@ -220,23 +220,30 @@ pub fn compute_upper_m(trace_length: usize, max_combo: usize) -> usize {
     // Widen to 128 bits for the products below.
     let (h, c) = (trace_length as u128, max_combo as u128);
 
-    // Decide m < X through 4 c m^2 < h (4m + 1).
+    // Decide m < X through 4 c m^2 < h (4m + 1), without forming m^2.
     //
-    // A side that overflows 128 bits counts as inadmissible.
-    // Overflow only grows with m, so the admissible values stay a prefix of the integers.
-    // It can only lower the result, which keeps the precondition true.
+    // Divide by m >= 1, writing h = q m + r with 0 <= r < m:
+    //
+    //     4 c m^2 < 4 h m + q m + r
+    //     <=>  m (4 c m - 4 h - q) < r
+    //     <=>  4 c m < 4 h + q,  or  4 c m = 4 h + q with r > 0
+    //
+    // On the search range c m < 5h / 4 + 2c, so every quantity stays below 2^68.
     let admissible = |m: u128| {
-        // Left side: 4 c m^2.
-        let lhs = m.checked_mul(m).and_then(|v| v.checked_mul(4 * c));
+        // m = 0 is always admissible: 0 < h.
+        if m == 0 {
+            return true;
+        }
 
-        // Right side: h (4m + 1).
-        let rhs = m
-            .checked_mul(4)
-            .and_then(|v| v.checked_add(1))
-            .and_then(|v| v.checked_mul(h));
+        // Quotient and remainder of h by m.
+        let (q, r) = (h / m, h % m);
 
-        // Admissible only when both sides fit and the inequality is strict.
-        matches!((lhs, rhs), (Some(l), Some(r)) if l < r)
+        // Both sides of the divided inequality, exact in 128 bits.
+        let lhs = 4 * c * m;
+        let rhs = 4 * h + q;
+
+        // Strict below, or equal with a positive remainder.
+        lhs < rhs || (lhs == rhs && r > 0)
     };
 
     // Binary search between two bounds.
@@ -456,37 +463,42 @@ mod tests {
     }
 
     #[test]
-    fn upper_m_search_is_bounded_on_extreme_inputs() {
+    fn upper_m_search_is_exact_on_extreme_inputs() {
         // Fixture state: c = 1, where the bound has a closed form.
         //
         //     4 m^2 < h (4m + 1)  holds at m = h:      4 h^2 < 4 h^2 + h
         //                         fails at m = h + 1:  4 h^2 + 8h + 4 >= 4 h^2 + 5h
         //     → the answer is h itself
         //
-        // At h = 2^52 the floating-point X rounds to infinity.
-        for log_h in [1, 20, 40, 52, 60] {
+        // Invariant: the search returns exactly h, also where the floating-point X is infinite.
+        for log_h in [1, 20, 31] {
             let h = 1usize << log_h;
             assert_eq!(super::compute_upper_m(h, 1), h, "h = 2^{log_h}");
         }
 
-        // Invariant: the largest inputs still terminate.
+        // Larger traces only exist with 64-bit pointers.
         //
-        // Their products overflow 128 bits, so the search returns a smaller, still admissible m.
-        let m = super::compute_upper_m(usize::MAX, 1) as u128;
-        assert!(m > 0);
+        // At h = 2^52 the floating-point X rounds to infinity.
+        #[cfg(target_pointer_width = "64")]
+        for log_h in [40, 52, 60] {
+            let h = 1usize << log_h;
+            assert_eq!(super::compute_upper_m(h, 1), h, "h = 2^{log_h}");
+        }
 
-        // The returned m is admissible: a right side past 128 bits exceeds any left side that fits.
-        let rhs = (usize::MAX as u128).checked_mul(4 * m + 1);
-        assert!(rhs.is_none_or(|r| 4 * m * m < r));
+        // The largest trace length: the answer is still exactly h.
+        assert_eq!(super::compute_upper_m(usize::MAX, 1), usize::MAX);
     }
 
     proptest! {
         #[test]
-        fn upper_m_is_the_largest_admissible(h in 1usize..1 << 40, c in 1usize..1 << 20) {
+        fn upper_m_is_the_largest_admissible(h in 1u64..1 << 40, c in 1u64..1 << 20) {
+            // Inputs past a 32-bit usize are skipped on 32-bit targets.
+            prop_assume!(usize::try_from(h).is_ok() && usize::try_from(c).is_ok());
+
             // Invariant: the result m satisfies 4 c m^2 < h (4m + 1), and m + 1 does not.
             //
-            // At these sizes every product fits in 128 bits.
-            let m = super::compute_upper_m(h, c) as u128;
+            // At these sizes the direct products fit in 128 bits.
+            let m = super::compute_upper_m(h as usize, c as usize) as u128;
             let (h, c) = (h as u128, c as u128);
             let admissible = |m: u128| 4 * c * m * m < h * (4 * m + 1);
             prop_assert!(admissible(m));
