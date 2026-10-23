@@ -48,12 +48,16 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
     /// for the suffix (remaining elements).
     ///
     /// The transformation is done in-place.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the rows have different lengths.
     #[inline]
     fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
+        // Equal lengths pair every element with its partner, whatever the packing width.
+        assert_eq!(row_1.len(), row_2.len());
         let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix_mut(row_1);
         let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
-        debug_assert_eq!(shorts_1.len(), shorts_2.len());
-        debug_assert_eq!(suffix_1.len(), suffix_2.len());
         for (x_1, x_2) in shorts_1.iter_mut().zip(shorts_2) {
             self.apply_in_place(x_1, x_2);
         }
@@ -72,6 +76,12 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
     ///
     /// - `src_1`, `src_2`: input slices
     /// - `dst_1`, `dst_2`: output slices to write to (must be MaybeUninit)
+    ///
+    /// Every destination slot is written.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the four slices do not all have the same length.
     #[inline]
     fn apply_to_rows_oop(
         &self,
@@ -80,16 +90,15 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
         src_2: &[F],
         dst_2: &mut [MaybeUninit<F>],
     ) {
+        // Equal lengths make the loops below cover every destination slot.
+        let len = src_1.len();
+        assert!(src_2.len() == len && dst_1.len() == len && dst_2.len() == len);
         let (src_shorts_1, src_suffix_1) = F::Packing::pack_slice_with_suffix(src_1);
         let (src_shorts_2, src_suffix_2) = F::Packing::pack_slice_with_suffix(src_2);
         let (dst_shorts_1, dst_suffix_1) =
             F::Packing::pack_maybe_uninit_slice_with_suffix_mut(dst_1);
         let (dst_shorts_2, dst_suffix_2) =
             F::Packing::pack_maybe_uninit_slice_with_suffix_mut(dst_2);
-        debug_assert_eq!(src_shorts_1.len(), src_shorts_2.len());
-        debug_assert_eq!(src_suffix_1.len(), src_suffix_2.len());
-        debug_assert_eq!(dst_shorts_1.len(), dst_shorts_2.len());
-        debug_assert_eq!(dst_suffix_1.len(), dst_suffix_2.len());
         for (s_1, s_2, d_1, d_2) in izip!(src_shorts_1, src_shorts_2, dst_shorts_1, dst_shorts_2) {
             let (res_1, res_2) = self.apply(*s_1, *s_2);
             d_1.write(res_1);
@@ -129,10 +138,9 @@ impl<F: Field> Butterfly<F> for DifButterfly<F> {
     /// Mirrors the [`DitButterfly`] override.
     #[inline]
     fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
+        assert_eq!(row_1.len(), row_2.len());
         let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix_mut(row_1);
         let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
-        debug_assert_eq!(shorts_1.len(), shorts_2.len());
-        debug_assert_eq!(suffix_1.len(), suffix_2.len());
         let twiddle_packed = F::Packing::from(self.0);
         let (c1, rem1) = shorts_1.as_chunks_mut::<4>();
         let (c2, rem2) = shorts_2.as_chunks_mut::<4>();
@@ -165,7 +173,7 @@ impl<F: Field> Butterfly<F> for DifButterfly<F> {
     }
 }
 
-/// DIF (Decimation-In-Frequency) butterfly operation where `x_2` is guaranteed to be zero.
+/// DIF (Decimation-In-Frequency) butterfly operation for a zero second input.
 ///
 /// Useful in scenarios where the input has just been padded with zeros.
 ///
@@ -175,6 +183,12 @@ impl<F: Field> Butterfly<F> for DifButterfly<F> {
 ///   output_1 = x1
 ///   output_2 = x1 * twiddle
 /// ```
+///
+/// This equals the DIF butterfly when `x2 = 0`.
+///
+/// Callers must pass `x2 = 0`.
+///
+/// Debug builds check this, release builds ignore `x2`.
 #[derive(Copy, Clone)]
 #[repr(transparent)] // Allows safe transmutes from F to this.
 pub struct DifButterflyZeros<F>(pub F);
@@ -188,10 +202,9 @@ impl<F: Field> Butterfly<F> for DifButterflyZeros<F> {
 
     #[inline]
     fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
+        assert_eq!(row_1.len(), row_2.len());
         let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix(row_1);
         let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
-        debug_assert_eq!(shorts_1.len(), shorts_2.len());
-        debug_assert_eq!(suffix_1.len(), suffix_2.len());
         for (x_1, x_2) in shorts_1.iter().zip(shorts_2) {
             debug_assert!(x_2.as_slice().iter().all(|x| x.is_zero())); // Slightly convoluted but PF may not implement equality.
             *x_2 = *x_1 * self.0; // x_2 is guaranteed to be zero, so we just set it to x_1 * twiddle. 
@@ -232,10 +245,9 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
     /// to the compiler's scheduler, hiding the ~12–15 cyc Montgomery mul latency.
     #[inline]
     fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
+        assert_eq!(row_1.len(), row_2.len());
         let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix_mut(row_1);
         let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
-        debug_assert_eq!(shorts_1.len(), shorts_2.len());
-        debug_assert_eq!(suffix_1.len(), suffix_2.len());
         let twiddle_packed = F::Packing::from(self.0);
         let (c1, rem1) = shorts_1.as_chunks_mut::<4>();
         let (c2, rem2) = shorts_2.as_chunks_mut::<4>();
@@ -281,16 +293,14 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
         src_2: &[F],
         dst_2: &mut [MaybeUninit<F>],
     ) {
+        let len = src_1.len();
+        assert!(src_2.len() == len && dst_1.len() == len && dst_2.len() == len);
         let (src_shorts_1, src_suffix_1) = F::Packing::pack_slice_with_suffix(src_1);
         let (src_shorts_2, src_suffix_2) = F::Packing::pack_slice_with_suffix(src_2);
         let (dst_shorts_1, dst_suffix_1) =
             F::Packing::pack_maybe_uninit_slice_with_suffix_mut(dst_1);
         let (dst_shorts_2, dst_suffix_2) =
             F::Packing::pack_maybe_uninit_slice_with_suffix_mut(dst_2);
-        debug_assert_eq!(src_shorts_1.len(), src_shorts_2.len());
-        debug_assert_eq!(src_suffix_1.len(), src_suffix_2.len());
-        debug_assert_eq!(dst_shorts_1.len(), dst_shorts_2.len());
-        debug_assert_eq!(dst_suffix_1.len(), dst_suffix_2.len());
         let twiddle_packed = F::Packing::from(self.0);
         let n = src_shorts_1.len();
         let n4 = n - (n & 3);
@@ -349,15 +359,12 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
 ///
 /// This is used to merge a uniform scaling step (e.g., 1/N normalization in inverse DFT)
 /// into a butterfly pass, avoiding a separate memory pass over the data.
-///
-/// The struct stores `scale` and `twiddle_times_scale = twiddle * scale` so that the
-/// `apply` method only needs 2 multiplications instead of 3.
 #[derive(Copy, Clone)]
 pub struct ScaledDitButterfly<F> {
-    pub twiddle: F,
-    pub scale: F,
-    /// Precomputed product `twiddle * scale` to reduce multiplications in the hot loop.
-    pub twiddle_times_scale: F,
+    /// Factor applied to both outputs.
+    scale: F,
+    /// Precomputed `twiddle * scale`, saving one multiplication per butterfly.
+    twiddle_times_scale: F,
 }
 
 impl<F: Field> ScaledDitButterfly<F> {
@@ -365,7 +372,6 @@ impl<F: Field> ScaledDitButterfly<F> {
     #[inline]
     pub fn new(twiddle: F, scale: F) -> Self {
         Self {
-            twiddle,
             scale,
             twiddle_times_scale: twiddle * scale,
         }
@@ -389,10 +395,9 @@ impl<F: Field> Butterfly<F> for ScaledDitButterfly<F> {
     /// into packed fields once before the inner loop.
     #[inline]
     fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
+        assert_eq!(row_1.len(), row_2.len());
         let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix_mut(row_1);
         let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
-        debug_assert_eq!(shorts_1.len(), shorts_2.len());
-        debug_assert_eq!(suffix_1.len(), suffix_2.len());
         let scale_packed = F::Packing::from(self.scale);
         let twiddle_times_scale_packed = F::Packing::from(self.twiddle_times_scale);
         // ScaledDitButterfly has 2 muls per butterfly (scale + twiddle_scale), so unroll-4

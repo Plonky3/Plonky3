@@ -4,12 +4,14 @@
 
 use core::mem::MaybeUninit;
 use std::cell::Cell;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use p3_baby_bear::BabyBear;
 use p3_dft::{
     Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, Layout, NaiveDft, Radix2Bowers,
-    Radix2DFTSmallBatch, Radix2Dit, Radix2DitParallel, TwiddleFreeButterfly, TwoAdicSubgroupDft,
+    Radix2DFTSmallBatch, Radix2Dit, Radix2DitParallel, ScaledDitButterfly, TwiddleFreeButterfly,
+    TwoAdicSubgroupDft,
 };
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
@@ -101,6 +103,18 @@ proptest! {
 
         prop_assert_eq!(y1, x1 + x2);
         prop_assert_eq!(y2, x1 - x2);
+    }
+
+    #[test]
+    fn scaled_dit_butterfly_matches_definition(
+        x1 in arb_field_elem(), x2 in arb_field_elem(),
+        twiddle in arb_field_elem(), scale in arb_field_elem(),
+    ) {
+        // Scaled DIT gate: ((x_1 + x_2 * t) * s, (x_1 - x_2 * t) * s).
+        let (y1, y2) = ScaledDitButterfly::new(twiddle, scale).apply(x1, x2);
+
+        prop_assert_eq!(y1, (x1 + x2 * twiddle) * scale);
+        prop_assert_eq!(y2, (x1 - x2 * twiddle) * scale);
     }
 
     #[test]
@@ -206,6 +220,26 @@ proptest! {
     }
 
     #[test]
+    fn scaled_dit_apply_to_rows_matches_scalar(
+        seed: u64, w in 1usize..=33, twiddle in arb_field_elem(), scale in arb_field_elem(),
+    ) {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut row1: Vec<F> = (0..w).map(|_| rng.random()).collect();
+        let mut row2: Vec<F> = (0..w).map(|_| rng.random()).collect();
+        let orig1 = row1.clone();
+        let orig2 = row2.clone();
+
+        let butterfly = ScaledDitButterfly::new(twiddle, scale);
+        butterfly.apply_to_rows(&mut row1, &mut row2);
+
+        for i in 0..w {
+            let (expected1, expected2) = butterfly.apply(orig1[i], orig2[i]);
+            prop_assert_eq!(row1[i], expected1, "mismatch at index {}", i);
+            prop_assert_eq!(row2[i], expected2, "mismatch at index {}", i);
+        }
+    }
+
+    #[test]
     fn dif_zeros_apply_to_rows_matches_scalar(seed: u64, w in 1usize..=33, twiddle in arb_field_elem()) {
         let mut rng = SmallRng::seed_from_u64(seed);
         let mut row1: Vec<F> = (0..w).map(|_| rng.random()).collect();
@@ -295,6 +329,54 @@ proptest! {
         prop_assert_eq!(ip1, oop1);
         prop_assert_eq!(ip2, oop2);
     }
+}
+
+/// Assert that the row-level methods of a butterfly reject rows of unequal lengths.
+fn assert_rejects_unequal_rows<B: Butterfly<F>>(butterfly: B) {
+    // Widths straddle every packing width (1, 4, 8, 16), so some pairs split differently:
+    //
+    //     width 8 on AVX2:  [8 packed | 0 scalar]
+    //     width 9 on AVX2:  [8 packed | 1 scalar]
+    for len in [1, 7, 8, 15, 16] {
+        // In place: the second row is one element longer.
+        let mut row1 = F::zero_vec(len);
+        let mut row2 = F::zero_vec(len + 1);
+        let in_place = catch_unwind(AssertUnwindSafe(|| {
+            butterfly.apply_to_rows(&mut row1, &mut row2);
+        }));
+        assert!(
+            in_place.is_err(),
+            "in place accepted lengths {len} and {}",
+            len + 1
+        );
+
+        // Out of place: each slice in turn is one element longer than the others.
+        for longer in 0..4 {
+            let mut lens = [len; 4];
+            lens[longer] += 1;
+            let src1 = F::zero_vec(lens[0]);
+            let src2 = F::zero_vec(lens[2]);
+            let mut dst1 = vec![MaybeUninit::uninit(); lens[1]];
+            let mut dst2 = vec![MaybeUninit::uninit(); lens[3]];
+            let out_of_place = catch_unwind(AssertUnwindSafe(|| {
+                butterfly.apply_to_rows_oop(&src1, &mut dst1, &src2, &mut dst2);
+            }));
+            assert!(
+                out_of_place.is_err(),
+                "out of place accepted lengths {lens:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn butterflies_reject_unequal_rows() {
+    // Cover the shared default and every specialized row loop.
+    assert_rejects_unequal_rows(TwiddleFreeButterfly);
+    assert_rejects_unequal_rows(DitButterfly(F::TWO));
+    assert_rejects_unequal_rows(DifButterfly(F::TWO));
+    assert_rejects_unequal_rows(DifButterflyZeros(F::TWO));
+    assert_rejects_unequal_rows(ScaledDitButterfly::new(F::TWO, F::TWO));
 }
 
 proptest! {
