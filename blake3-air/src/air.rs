@@ -14,7 +14,9 @@ use crate::columns::{Blake3Cols, NUM_BLAKE3_COLS};
 use crate::constants::{BITS_PER_LIMB, IV, permute};
 use crate::{Blake3State, FullRound, QuarterRound, generate_trace_rows};
 
-/// Assumes the field size is at least 16 bits.
+/// Assumes the field characteristic is greater than `3 * 2^16`.
+///
+/// The evaluation panics over any smaller prime field.
 #[derive(Debug)]
 pub struct Blake3Air {}
 
