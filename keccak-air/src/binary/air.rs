@@ -129,6 +129,16 @@ impl<F> BaseAir<F> for KeccakBinaryAir {
 impl<AB: AirBuilder> Air<AB> for KeccakBinaryAir {
     #[inline]
     fn eval(&self, builder: &mut AB) {
+        // Every constraint writes XOR as a field sum, which is XOR only in characteristic 2.
+        //
+        // In odd characteristic each constraint fixes one cell from earlier ones.
+        // Any input row then extends to a satisfying row unrelated to the hash.
+        assert_eq!(
+            <AB::F as PrimeCharacteristicRing>::PrimeSubfield::TWO,
+            <AB::F as PrimeCharacteristicRing>::PrimeSubfield::ZERO,
+            "the binary Keccak AIR requires a field of characteristic 2"
+        );
+
         let main = builder.main();
         let local: &KeccakBinaryCols<AB::Var> = main.current_slice().borrow();
         let next: &KeccakBinaryCols<AB::Var> = main.next_slice().borrow();

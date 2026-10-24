@@ -271,6 +271,7 @@ mod tests {
     use alloc::vec;
     use core::borrow::Borrow;
 
+    use p3_air::{AirLayout, get_symbolic_constraints};
     use p3_binary_field::{BinaryField128, Gf2};
     use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
@@ -281,7 +282,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::binary::KeccakBinaryAir;
+    use crate::binary::{KeccakBinaryAir, NUM_KECCAK_BINARY_COLS};
 
     type F = BinaryField128;
 
@@ -360,6 +361,21 @@ mod tests {
     #[should_panic(expected = "characteristic 2")]
     fn rejects_odd_characteristic() {
         let _ = generate_binary_trace_rows::<Goldilocks>(vec![[0; 25]], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "the binary Keccak AIR requires a field of characteristic 2")]
+    fn constraints_reject_odd_characteristic() {
+        // Invariant: the evaluation refuses an odd characteristic before emitting a constraint.
+        //
+        // Fixture state: Goldilocks, characteristic 2^64 - 2^32 + 1.
+        //
+        // The trace generator refuses it too, so the constraints are built directly.
+        let layout = AirLayout {
+            main_width: NUM_KECCAK_BINARY_COLS,
+            ..Default::default()
+        };
+        let _ = get_symbolic_constraints::<Goldilocks, _>(&KeccakBinaryAir::default(), layout);
     }
 
     #[test]
