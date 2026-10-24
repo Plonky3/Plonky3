@@ -20,7 +20,7 @@ use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::VerifierAir;
 use crate::indexed::IndexedPlan;
 use crate::instance::{BatchRole, RunPoints, trace_suffix};
-use crate::lookup::{LookupError, verify_lookup};
+use crate::lookup::{LookupError, LookupPlan, verify_lookup};
 use crate::opening::TableOpening;
 use crate::proof::MultiStarkProof;
 use crate::security::{SecurityError, security_report};
@@ -201,6 +201,14 @@ where
 /// Returns an error when an instance supplies a public-value count its AIR does not declare.
 /// Returns an error when the proof and the AIRs disagree on whether a lookup exists.
 /// Returns an error when an AIR names a public boundary cell it does not have.
+/// Returns an error when the worst-case lookup multiplicity sum reaches the field characteristic.
+/// Returns an error when a characteristic-two AIR declares an active lookup.
+/// Returns an error when two declarations on one named bus disagree on payload width.
+/// Returns an error when an AIR declares mutually exclusive interactions.
+/// Returns an error when a lookup expression reads a periodic column.
+/// Returns an error when every declared lookup tuple is empty.
+///
+/// The lookup statement errors are returned before the transcript is touched.
 ///
 /// # Panics
 ///
@@ -312,6 +320,11 @@ where
         .map_err(VerificationError::IndexedLookup)?;
     let bus = BusContext::<C::Val, C::Challenge>::build(&airs, &log_heights)?;
 
+    // The lookup layout comes from the AIRs and the trace heights alone.
+    // An unsupported declaration is a statement error, refused before the transcript is touched.
+    let lookup_plan =
+        LookupPlan::from_lookups(lookups, &log_heights).map_err(VerificationError::Lookup)?;
+
     let mut transcript = MultiStarkVerifierTranscript::<C::Challenger, C::Val>::new(
         challenger,
         MultiStarkShape::new::<C::Val, A>(
@@ -374,12 +387,7 @@ where
     // 5. Verify the lookup reduction, inside the delegation bracket.
     // Its claim feeds the coupled AIR sumcheck below, so a rejection stops the replay here.
     let lookup = match transcript.lookup_argument(|challenger| {
-        verify_lookup::<C::Val, C::Challenge, _>(
-            lookups,
-            &log_heights,
-            proof.lookup.as_ref(),
-            challenger,
-        )
+        verify_lookup::<C::Val, C::Challenge, _>(lookup_plan, proof.lookup.as_ref(), challenger)
     }) {
         Ok(lookup) => lookup,
         // Releasing the completeness check keeps this rejection the only failure in flight.

@@ -133,12 +133,13 @@ impl<F: Field> LookupPlan<F> {
     /// Returns an error for active characteristic-two lookups: the counting argument needs
     /// multiplicities that do not wrap, which an odd characteristic gives.
     /// Returns an error if two declarations share a bus name but disagree on payload width.
+    /// Returns an error if an AIR declares mutually exclusive interactions.
+    /// Returns an error if a lookup expression reads a periodic column.
+    /// Returns an error if every declared tuple is empty.
     ///
     /// # Panics
     ///
-    /// Panics if an AIR declares mutually-exclusive interactions.
-    /// Panics if a lookup expression reads a periodic column.
-    /// Panics if no declaration carries a payload element.
+    /// Panics if the two slices disagree on length.
     pub fn build<EF, A>(airs: &[&A], num_variables: &[usize]) -> Result<Option<Self>, LookupError>
     where
         EF: ExtensionField<F>,
@@ -179,20 +180,26 @@ impl<F: Field> LookupPlan<F> {
         {
             return Err(LookupError::UnsupportedCharacteristic);
         }
-        for lookup in lookups.iter().flat_map(|lookups| lookups.iter()) {
-            assert!(
-                lookup.flags.is_none(),
-                "multi-STARK lookups do not support exclusive interactions"
-            );
-            assert!(
-                !lookup
+        for (air, lookups) in lookups.iter().enumerate() {
+            for lookup in lookups.iter() {
+                // An exclusive interaction folds several branches into one denominator.
+                // The block layout gives each tuple its own block, so it has no place for one.
+                if lookup.flags.is_some() {
+                    return Err(LookupError::ExclusiveInteraction { air });
+                }
+
+                // Materialization reads committed columns only and never expands a periodic one.
+                // Such an expression would resolve against values that are not there.
+                if lookup
                     .elements
                     .iter()
                     .flatten()
                     .chain(lookup.multiplicities.iter())
-                    .any(uses_periodic_column),
-                "multi-STARK lookup expressions do not support periodic columns"
-            );
+                    .any(uses_periodic_column)
+                {
+                    return Err(LookupError::PeriodicColumn { air });
+                }
+            }
         }
         let trace_heights = num_variables
             .iter()
@@ -311,10 +318,9 @@ impl<F: Field> LookupPlan<F> {
 
         // The bus offset sits one beta power above every payload coordinate.
         // An all-empty payload leaves no power free for it.
-        assert!(
-            max_width > 0,
-            "lookup declarations must carry at least one payload element"
-        );
+        if max_width == 0 {
+            return Err(LookupError::EmptyPayloads);
+        }
 
         Ok(Some(Self {
             instances: active,
@@ -672,6 +678,21 @@ pub enum LookupError {
     /// Two declarations on one named bus disagree on payload width.
     #[error(transparent)]
     BusWidth(p3_lookup::LookupError),
+    /// An AIR declares mutually exclusive interactions, which the block layout cannot place.
+    #[error("AIR {air} declares exclusive interactions, which multi-STARK lookups do not support")]
+    ExclusiveInteraction {
+        /// Position of the declaring AIR, in caller order.
+        air: usize,
+    },
+    /// A lookup expression reads a periodic column, which materialization never expands.
+    #[error("AIR {air} reads a periodic column in a lookup expression")]
+    PeriodicColumn {
+        /// Position of the declaring AIR, in caller order.
+        air: usize,
+    },
+    /// Every declared tuple is empty, which leaves no challenge power for the bus offset.
+    #[error("every lookup tuple is empty")]
+    EmptyPayloads,
     /// The fractional reduction failed its own consistency checks.
     #[error("fractional GKR: {0}")]
     FractionGkr(#[from] FractionGkrError),
@@ -692,6 +713,9 @@ pub enum LookupError {
 /// Panics if the worst-case multiplicity sum reaches the field characteristic.
 /// Panics if a characteristic-two AIR declares an active lookup.
 /// Panics if two declarations on one named bus disagree on payload width.
+/// Panics if an AIR declares mutually exclusive interactions.
+/// Panics if a lookup expression reads a periodic column.
+/// Panics if every declared tuple is empty.
 /// Panics if a lookup-active trace is shorter than the prover's SIMD packing width.
 pub(crate) fn prove_lookup<F, EF, A, Challenger>(
     airs: &[&A],
@@ -719,7 +743,7 @@ where
         .map(|table| table.num_variables())
         .collect::<Vec<_>>();
     let Some(plan) = LookupPlan::build::<EF, A>(airs, &num_variables)
-        .expect("lookup field, multiplicity height bound and bus widths must be supported")
+        .expect("the lookup declarations must describe a supported plan")
     else {
         return (None, LookupRuntime::Inactive);
     };
@@ -778,22 +802,15 @@ where
 ///
 /// Returns nothing when no AIR declares a lookup and the proof agrees.
 ///
+/// `plan` is the layout the verifier built from its own AIRs and trace heights.
+/// No layout metadata from the proof is trusted.
+///
 /// # Errors
 ///
 /// Returns an error when the proof and the AIRs disagree on whether a lookup exists.
-/// Returns an error when the worst-case multiplicity sum reaches the field characteristic.
-/// Returns an error when a characteristic-two AIR declares an active lookup.
-/// Returns an error when two declarations on one named bus disagree on payload width.
 /// Returns an error when the reduction fails its own consistency checks.
-///
-/// `lookups` holds what each of the verifier's own AIRs declares, in caller order.
-///
-/// # Panics
-///
-/// Panics if the lookups and the trace heights disagree on length.
 pub(crate) fn verify_lookup<F, EF, Challenger>(
-    lookups: Vec<Lookups<F>>,
-    num_variables: &[usize],
+    plan: Option<LookupPlan<F>>,
     proof: Option<&FractionGkrProof<EF>>,
     challenger: &mut Challenger,
 ) -> Result<Option<AirLinkClaim<EF>>, LookupError>
@@ -802,10 +819,6 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F>,
 {
-    // Rebuild the layout from the verifier's own AIRs and trace heights.
-    // No layout metadata from the proof is trusted.
-    let plan = LookupPlan::from_lookups(lookups, num_variables)?;
-
     // A lookup proof exists exactly when at least one AIR emits a tuple.
     let (plan, proof) = match (plan, proof) {
         (None, None) => return Ok(None),
@@ -844,6 +857,7 @@ mod tests {
 
     use alloc::borrow::Cow;
     use alloc::vec;
+    use core::iter;
 
     use p3_air::{AirBuilder, BoundaryEnd, BoundaryPublic, WindowAccess};
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -874,6 +888,15 @@ mod tests {
         airs.iter()
             .map(|&air| Lookups::from_air::<EF, _>(air))
             .collect()
+    }
+
+    /// The layout the verifier builds from its own AIRs and trace heights.
+    fn planned<A>(airs: &[&A], num_variables: &[usize]) -> Option<LookupPlan<F>>
+    where
+        A: Air<InteractionSymbolicBuilder<F, EF>>,
+    {
+        LookupPlan::from_lookups(declared(airs), num_variables)
+            .expect("the declarations describe a supported plan")
     }
     type Perm = Poseidon2BabyBear<16>;
     type Challenger = DuplexChallenger<F, Perm, 16, 8>;
@@ -1040,22 +1063,17 @@ mod tests {
         //
         // Invariant: [a] would fingerprint like [a, 0], so the widths must agree.
         //
-        // Invariant: the mismatch is an error, returned before any lookup challenge is drawn.
+        // Invariant: the plan reports the mismatch, and building it needs no transcript.
         let narrow = PairBusAir { width: 1 };
         let wide = PairBusAir { width: 2 };
-        let result = verify_lookup::<F, EF, _>(
-            declared(&[&narrow, &wide]),
-            &[3, 3],
-            None,
-            &mut challenger(),
-        );
+        let result = LookupPlan::from_lookups(declared(&[&narrow, &wide]), &[3, 3]);
         let Err(LookupError::BusWidth(BusWidthMismatch {
             bus,
             expected,
             actual,
         })) = result
         else {
-            panic!("expected a bus width mismatch, got {result:?}");
+            panic!("expected a bus width mismatch");
         };
         assert_eq!((bus.as_str(), expected, actual), ("pair", 1, 2));
     }
@@ -1275,21 +1293,109 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "multi-STARK lookups do not support exclusive interactions")]
     fn lookup_plan_rejects_exclusive_interactions() {
-        // A mutually-exclusive interaction multiplexes several branches into one denominator,
-        // which the block layout here has no place for. Reject it rather than mislay it.
-        let air = ExclusiveLookupAir;
-        let _ = LookupPlan::build::<EF, _>(&[&air], &[test_lookup_num_variables()]);
+        // Fixture state: AIR 1 declares one exclusive interaction with a single branch.
+        //
+        //     AIR 0   [a], [b]          plain
+        //     AIR 1   flag -> [value]   exclusive
+        //
+        // Invariant: an exclusive interaction folds its branches into one denominator.
+        // The block layout gives each tuple its own block, so the plan refuses it.
+        let plain = declared(&[&BalancedLookupAir]);
+        let exclusive = declared(&[&ExclusiveLookupAir]);
+        let num_variables = test_lookup_num_variables();
+        let result = LookupPlan::from_lookups(
+            plain.into_iter().chain(exclusive).collect(),
+            &[num_variables, num_variables],
+        );
+        let Err(LookupError::ExclusiveInteraction { air }) = result else {
+            panic!("expected an exclusive interaction error");
+        };
+        assert_eq!(air, 1);
     }
 
     #[test]
-    #[should_panic(expected = "multi-STARK lookup expressions do not support periodic columns")]
     fn lookup_plan_rejects_periodic_expressions() {
-        // Materialization never expands periodic columns, so a lookup expression that reads
-        // one would resolve against values that are not there.
-        let air = PeriodicLookupAir;
-        let _ = LookupPlan::build::<EF, _>(&[&air], &[test_lookup_num_variables()]);
+        // Fixture state: AIR 1 sends the periodic column [0, 1] as its payload.
+        //
+        //     AIR 0   [a], [b]     committed columns
+        //     AIR 1   [periodic]   a periodic column
+        //
+        // Invariant: materialization reads committed columns only.
+        // The plan refuses the expression rather than resolve it against missing values.
+        let plain = declared(&[&BalancedLookupAir]);
+        let periodic = declared(&[&PeriodicLookupAir]);
+        let num_variables = test_lookup_num_variables();
+        let result = LookupPlan::from_lookups(
+            plain.into_iter().chain(periodic).collect(),
+            &[num_variables, num_variables],
+        );
+        let Err(LookupError::PeriodicColumn { air }) = result else {
+            panic!("expected a periodic column error");
+        };
+        assert_eq!(air, 1);
+    }
+
+    struct EmptyPayloadAir;
+
+    impl BaseAir<F> for EmptyPayloadAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB> Air<AB> for EmptyPayloadAir
+    where
+        AB: AirBuilder<F = F> + InteractionBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let count = builder.main().current_slice()[0];
+            builder.push_interaction(
+                "empty",
+                iter::empty::<AB::Expr>(),
+                Count::bounded(count.into(), 1),
+            );
+            builder.push_local_interaction([(Vec::new(), Count::bounded(count.into(), 1))]);
+        }
+    }
+
+    #[test]
+    fn lookup_plan_rejects_all_empty_payloads() {
+        // Fixture state: one AIR sends two tuples of width 0.
+        //
+        //     global "empty"   []   width 0
+        //     local            []   width 0
+        //
+        //     max width 0  ->  no beta power is left above the payload for the bus offset
+        //
+        // Invariant: the plan refuses the batch instead of building a layout with no bus offset.
+        let result = LookupPlan::from_lookups(
+            declared(&[&EmptyPayloadAir]),
+            &[test_lookup_num_variables()],
+        );
+        let Err(LookupError::EmptyPayloads) = result else {
+            panic!("expected an empty payload error");
+        };
+    }
+
+    #[test]
+    fn lookup_plan_accepts_an_empty_payload_beside_a_nonempty_one() {
+        // Fixture state: one AIR sends width-0 tuples, another sends width-1 tuples.
+        //
+        //     AIR 0   []        width 0, on "empty" and on a local bus
+        //     AIR 1   [value]   width 1, on a local bus
+        //
+        // Invariant: one nonempty tuple leaves a beta power free for the bus offset.
+        let empty = declared(&[&EmptyPayloadAir]);
+        let plain = declared(&[&BalancedLookupAir]);
+        let num_variables = test_lookup_num_variables();
+        let plan = LookupPlan::from_lookups(
+            empty.into_iter().chain(plain).collect(),
+            &[num_variables, num_variables],
+        )
+        .expect("a nonempty tuple gives the bus offset a power")
+        .expect("both AIRs emit tuples");
+        assert_eq!((plan.max_width, plan.num_buses), (1, 3));
     }
 
     #[test]
@@ -1302,17 +1408,8 @@ mod tests {
         //     2^32 - 1 rows worth of weight >> the BabyBear characteristic
         //     -----> rejected before any transcript is replayed
         let air = ExcessiveMultiplicityAir;
-        let mut challenger = challenger();
         assert!(matches!(
-            verify_lookup::<F, EF, _>(
-                declared(&[&air]),
-                &[test_lookup_num_variables()],
-                Some(&FractionGkrProof {
-                    root_denominator: EF::ONE,
-                    layers: Vec::new(),
-                }),
-                &mut challenger,
-            ),
+            LookupPlan::from_lookups(declared(&[&air]), &[test_lookup_num_variables()]),
             Err(LookupError::MultiplicityHeightBound(
                 p3_lookup::LookupError::MultiplicityHeightBoundExceeded { .. }
             ))
@@ -1343,8 +1440,7 @@ mod tests {
 
         let mut verifier_challenger = challenger();
         let verifier = verify_lookup::<F, EF, _>(
-            declared(&[&air]),
-            &[main.num_variables()],
+            planned(&[&air], &[main.num_variables()]),
             Some(&lookup_proof),
             &mut verifier_challenger,
         )
@@ -1465,8 +1561,7 @@ mod tests {
 
         let mut verifier_challenger = challenger();
         let verifier_lookup = verify_lookup::<F, EF, _>(
-            declared(&[&air]),
-            &[main.num_variables()],
+            planned(&[&air], &[main.num_variables()]),
             Some(&lookup_proof),
             &mut verifier_challenger,
         )
@@ -1588,8 +1683,7 @@ mod tests {
         let check = |air: &PermutationSumAir| {
             let mut verifier_challenger = challenger();
             let lookup = verify_lookup::<F, EF, _>(
-                declared(&[air]),
-                &[main.num_variables()],
+                planned(&[air], &[main.num_variables()]),
                 Some(&lookup_proof),
                 &mut verifier_challenger,
             )
@@ -1658,8 +1752,7 @@ mod tests {
         let log_heights = tables.iter().map(Table::num_variables).collect::<Vec<_>>();
         let mut verifier_challenger = challenger();
         let verifier_lookup = verify_lookup::<F, EF, _>(
-            declared(&air_refs),
-            &log_heights,
+            planned(&air_refs, &log_heights),
             Some(&lookup_proof),
             &mut verifier_challenger,
         )
@@ -1706,8 +1799,7 @@ mod tests {
                 runtime.air_link.claimed_sum
             );
             verify_lookup::<F, EF, _>(
-                declared(&airs),
-                &[short_log, 6, short_log],
+                planned(&airs, &[short_log, 6, short_log]),
                 proof.as_ref(),
                 &mut challenger(),
             )
@@ -1750,8 +1842,7 @@ mod tests {
 
         let mut verifier_challenger = challenger();
         let verifier_lookup = verify_lookup::<F, EF, _>(
-            declared(&airs),
-            &[tall.num_variables(), short.num_variables()],
+            planned(&airs, &[tall.num_variables(), short.num_variables()]),
             Some(&lookup_proof),
             &mut verifier_challenger,
         )
@@ -1845,8 +1936,7 @@ mod tests {
         let mut verifier_challenger = challenger();
         assert!(matches!(
             verify_lookup::<F, EF, _>(
-                declared(&[&air]),
-                &[main.num_variables()],
+                planned(&[&air], &[main.num_variables()]),
                 Some(&proof),
                 &mut verifier_challenger,
             ),
