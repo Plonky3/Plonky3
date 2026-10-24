@@ -8,6 +8,7 @@ mod compression;
 mod hash;
 mod hasher;
 mod permutation;
+mod rtl_sponge;
 mod serializing_hasher;
 mod sponge;
 
@@ -15,5 +16,6 @@ pub use compression::*;
 pub use hash::*;
 pub use hasher::*;
 pub use permutation::*;
+pub use rtl_sponge::*;
 pub use serializing_hasher::*;
 pub use sponge::*;
