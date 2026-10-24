@@ -104,6 +104,21 @@ impl<F> BaseAir<F> for Sha256Air {
 impl<AB: AirBuilder> Air<AB> for Sha256Air {
     #[inline]
     fn eval(&self, builder: &mut AB) {
+        // Three packed intermediate sums carry no range check on their limbs.
+        //
+        // The next addition pins each sum modulo 2^32 by comparing integers.
+        //
+        //     spread of those integers <= 7 * 2^16    (at the round's new a)
+        //
+        // A smaller characteristic lets the comparison wrap and accept a wrong sum.
+        assert!(
+            <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(
+                7u32 << 16
+            )
+            .is_some(),
+            "characteristic must exceed 7 * 2^16"
+        );
+
         // Read the current row as a typed column struct.
         let main = builder.main();
         let local: &Sha256Cols<AB::Var> = main.current_slice().borrow();
@@ -415,6 +430,10 @@ fn eval_compression<AB: AirBuilder>(
 /// - That consumer's `acc_16` check pins its own low limb modulo `2^16`.
 /// - The alias shifts by a multiple of `2^16`, so it cancels there.
 ///
+/// This needs a characteristic above `7 * 2^16`, which the evaluation checks.
+///
+/// Over a smaller prime, a check can wrap around the characteristic and accept a wrong sum.
+///
 /// `h_out` has no consumer.
 ///
 /// Committing it as bits makes both limbs 16-bit by construction.
@@ -511,9 +530,9 @@ fn add2_expr_out<AB: AirBuilder>(
 ) {
     // Materialize 2^16 and 2^32 as field constants.
     let two_16 = <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(
-        1 << BITS_PER_LIMB,
+        1u32 << BITS_PER_LIMB,
     )
-    .expect("characteristic must exceed 2^17");
+    .expect("characteristic must exceed 2^16");
     let two_32 = two_16.square();
 
     // 16-bit accumulator: difference of the low limbs.
@@ -551,9 +570,9 @@ fn add3_expr_out<AB: AirBuilder>(
 ) {
     // Materialize 2^16 and 2^32.
     let two_16 = <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(
-        1 << BITS_PER_LIMB,
+        1u32 << BITS_PER_LIMB,
     )
-    .expect("characteristic must exceed 3 * 2^16");
+    .expect("characteristic must exceed 2^16");
     let two_32 = two_16.square();
 
     // 16-bit accumulator with four addends.
