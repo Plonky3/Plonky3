@@ -181,14 +181,19 @@ pub fn conjectured_commit_phase_error(
 /// Returns `None` when `regime.max_log_arity` is `0` (folding factor `1`,
 /// i.e. no fold at all) — such a regime has no commit-phase round, rather
 /// than being indistinguishable from arity 2.
+///
+/// It also returns nothing when the domain does not reach above the final polynomial.
 pub fn commit_phase_error_udr(regime: &FriRegime, shape: &InstanceShape) -> Option<ErrorBits> {
     let folding_minus_one = regime.folding_factor() - 1.0;
     if folding_minus_one <= 0.0 {
         return None;
     }
     let lde_log = shape.log_trace_length + regime.log_blowup;
-    let num_layers = lde_log.saturating_sub(regime.log_final_poly_len) / regime.max_log_arity;
-    if num_layers == 0 {
+    // A fold happens whenever the domain sits above the final height.
+    //
+    // The last round may fold by less than the configured arity.
+    // Such a round is still a round, so it is charged at the full arity.
+    if lde_log <= regime.log_final_poly_len {
         return None;
     }
     let n = (1u64 << lde_log) as f64;
@@ -519,6 +524,41 @@ mod tests {
             LowDegreeTest::conjectured_terms(&no_folds, &shape).len(),
             1,
             "a fold-free regime reports the query phase only"
+        );
+    }
+
+    #[test]
+    fn a_round_shorter_than_the_arity_is_still_charged() {
+        // Fixture state: a trace of 2^1 rows at blowup 2^1, so the domain has 2^2 points.
+        // The arity cap is 2^3, and the final polynomial is a constant.
+        //
+        //     domain height 2, final height 1  ->  p3-fri folds once, by 2
+        //     arity cap 3 > height 2           ->  fewer layers than one full arity
+        //
+        // Invariant: every fold the protocol runs has a commit-phase term.
+        let regime = FriRegime {
+            log_blowup: 1,
+            num_queries: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 3,
+            commit_pow_bits: 0,
+            query_pow_bits: 0,
+        };
+        let shape = InstanceShape {
+            log_trace_length: 1,
+            modulus_bits: 124,
+            collision_resistance: 128,
+            num_batched_functions: 1,
+        };
+
+        // The round is charged at the full arity 8, on n = 4 points:
+        //
+        //     124 - log_2((8 - 1) (4 + 1)) = 124 - log_2(35)
+        let expected = ErrorBits::from_log2(124.0 - log2(35.0));
+        assert_eq!(commit_phase_error_udr(&regime, &shape), Some(expected));
+        assert_eq!(
+            conjectured_commit_phase_error(&regime, &shape),
+            Some(expected)
         );
     }
 
