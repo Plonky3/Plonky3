@@ -124,6 +124,14 @@ pub enum ZerocheckError {
     /// The reduced sum did not match the constraint evaluated at the random point.
     #[error("zerocheck final sum does not match the constraint at the challenge point")]
     FinalSumMismatch,
+    /// Every lookup payload and count of an AIR is constant.
+    ///
+    /// Such a family has no round polynomial of its own to send.
+    #[error("zerocheck AIR {air} declares only constant lookup tuples")]
+    ConstantInteractions {
+        /// Position of the offending AIR in caller order.
+        air: usize,
+    },
 }
 
 /// Opening claims and the sumcheck transcript produced by the zerocheck prover.
@@ -280,39 +288,10 @@ where
     // Score them here so the round polynomials carry enough evaluations for both groups.
     let constraint_degree = own_constraint_degree.max(pins.degree);
 
-    let has_interactions = !builder.global_interactions().is_empty()
-        || builder
-            .local_interactions()
-            .iter()
-            .any(|local| !local.tuples.is_empty());
-    let global_interaction_degree = builder
-        .global_interactions()
-        .iter()
-        .flat_map(|interaction| {
-            interaction
-                .fields
-                .iter()
-                .chain(iter::once(&interaction.count))
-        })
-        .map(|expression| expression.poly_degree(2, &[]))
-        .max()
-        .unwrap_or(0);
-    let local_interaction_degree = builder
-        .local_interactions()
-        .iter()
-        .flat_map(|interaction| &interaction.tuples)
-        .map(|(fields, count)| {
-            let fields_degree = fields
-                .iter()
-                .map(|expression| expression.poly_degree(2, &[]))
-                .max()
-                .unwrap_or(0);
-            let (count, _) = count.clone().into_parts();
-            fields_degree.max(count.poly_degree(2, &[]))
-        })
-        .max()
-        .unwrap_or(0);
-    let interaction_degree = global_interaction_degree.max(local_interaction_degree);
+    // The lookup family is scored apart from the constraints, with its own degree.
+    let interactions = builder.interaction_degree();
+    let has_interactions = interactions.is_some();
+    let interaction_degree = interactions.unwrap_or(0);
 
     assert!(
         !has_constraints || constraint_degree > 0,

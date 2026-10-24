@@ -2952,3 +2952,107 @@ fn security_report_rejects_unsupported_lookup_declarations() {
         panic!("expected an empty payload error, got {report:?}");
     };
 }
+
+/// An AIR whose only lookup tuple is constant.
+enum ConstantLookupAir {
+    /// A local tuple [1] with count 1.
+    ConstantPayload,
+    /// A global tuple [] on the bus "empty", with count 1.
+    EmptyPayload,
+}
+
+impl BaseAir<F> for ConstantLookupAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB> Air<AB> for ConstantLookupAir
+where
+    AB: AirBuilder<F = F> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        match self {
+            Self::ConstantPayload => builder
+                .push_local_interaction([(vec![AB::Expr::ONE], Count::bounded(AB::Expr::ONE, 1))]),
+            Self::EmptyPayload => builder.push_interaction(
+                "empty",
+                iter::empty::<AB::Expr>(),
+                Count::bounded(AB::Expr::ONE, 1),
+            ),
+        }
+    }
+}
+
+#[test]
+fn verify_rejects_constant_lookup_tuples_before_the_transcript() {
+    // Fixture state: an honest 64-row lookup proof, checked against an AIR of width 2.
+    //
+    //     constant payload   [1]  count 1   degree 0
+    //     empty payload      []   count 1   degree 0
+    //
+    // Invariant: a degree-0 lookup family has no round polynomial to send.
+    //
+    // Invariant: the empty payload is refused as constant, before the empty-payload check runs.
+    //
+    // Invariant: the AIR alone decides this, so the challenger is never touched.
+    let (config, vk, log_height, proof) = honest_lookup();
+    for air in [
+        ConstantLookupAir::ConstantPayload,
+        ConstantLookupAir::EmptyPayload,
+    ] {
+        let mut used = challenger();
+        let verdict = verify(
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+            &proof,
+            0,
+            &mut used,
+        );
+        let Err(VerificationError::Zerocheck(ZerocheckError::ConstantInteractions { air: index })) =
+            verdict
+        else {
+            panic!("expected a constant lookup error, got {verdict:?}");
+        };
+        assert_eq!(index, 0);
+
+        // The next draws match a fresh challenger's, so nothing was observed.
+        let mut fresh = challenger();
+        for _ in 0..4 {
+            assert_eq!(
+                CanSample::<F>::sample(&mut used),
+                CanSample::<F>::sample(&mut fresh)
+            );
+        }
+    }
+}
+
+#[test]
+fn security_report_rejects_constant_lookup_tuples() {
+    // Fixture state: one AIR of width 2 at the 64-row height of the honest lookup proof.
+    //
+    //     constant payload   [1]  count 1   degree 0
+    //     empty payload      []   count 1   degree 0
+    //
+    // Invariant: the report refuses the statement the verifier refuses.
+    //
+    // Invariant: the empty payload is refused as constant, before the empty-payload check runs.
+    let (config, vk, log_height, _) = honest_lookup();
+    for air in [
+        ConstantLookupAir::ConstantPayload,
+        ConstantLookupAir::EmptyPayload,
+    ] {
+        let report = security_report(
+            &config,
+            &VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        );
+        let Err(SecurityError::InvalidShape(reason)) = report else {
+            panic!("expected an invalid shape error");
+        };
+        assert_eq!(reason, "constant lookup families are unsupported");
+    }
+}

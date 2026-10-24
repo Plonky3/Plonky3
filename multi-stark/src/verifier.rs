@@ -8,9 +8,7 @@ use p3_air::{Air, BoundaryIoError, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
-use p3_lookup::{
-    IndexedLookupError, IndexedLookups, InteractionSymbolicBuilder, Lookups, TraceWindow,
-};
+use p3_lookup::{IndexedLookups, InteractionSymbolicBuilder, Lookups, TraceWindow};
 use p3_sumcheck::{OpeningEvals, PrescribedPointPcs};
 use thiserror::Error;
 
@@ -207,6 +205,7 @@ where
 /// Returns an error when an AIR declares mutually exclusive interactions.
 /// Returns an error when a lookup expression reads a periodic column.
 /// Returns an error when every declared lookup tuple is empty.
+/// Returns an error when every lookup payload and count of an AIR is constant.
 ///
 /// The lookup statement errors are returned before the transcript is touched.
 ///
@@ -312,8 +311,8 @@ where
     // One symbolic pass per AIR serves both lookup plans.
     //
     // Both sides derive them from the AIRs alone, so no proof value reaches them.
-    let (indexed, lookups) =
-        declarations::<C::Val, C::Challenge, A>(&airs).map_err(VerificationError::IndexedLookup)?;
+    let Declarations { indexed, lookups } =
+        Declarations::<C::Val>::from_airs::<C::Challenge, A, PcsError<C>>(&airs)?;
 
     // Indexed lookups change the described sequence, so the plan is settled first.
     let indexed_plan = IndexedPlan::from_declared::<C::Val>(&indexed, &log_heights)
@@ -644,28 +643,50 @@ where
         .map_err(VerificationError::Zerocheck)
 }
 
-/// What every AIR declares to the two lookup plans, from one symbolic pass per AIR.
-///
-/// A pass costs about as much as the AIR is wide, and both plans read the same builder.
-///
-/// # Errors
-///
-/// Returns an error when an indexed declaration names a column its AIR does not have.
-fn declarations<F, EF, A>(
-    airs: &[&A],
-) -> Result<(Vec<IndexedLookups>, Vec<Lookups<F>>), IndexedLookupError>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    A: Air<InteractionSymbolicBuilder<F, EF>>,
-{
-    airs.iter()
-        .map(|&air| {
-            let layout = AirLayout::from_air(air);
-            let builder = InteractionSymbolicBuilder::<F, EF>::from_air(air, layout);
-            let indexed = IndexedLookups::from_builder(&builder, &layout)?;
-            Ok((indexed, Lookups::from_builder(&builder)))
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(|declared| declared.into_iter().unzip())
+/// What every AIR declares to the two lookup plans, in caller order.
+struct Declarations<F: Field> {
+    /// Each AIR's indexed declarations.
+    indexed: Vec<IndexedLookups>,
+    /// Each AIR's ordinary lookups.
+    lookups: Vec<Lookups<F>>,
+}
+
+impl<F: Field> Declarations<F> {
+    /// Collect the declarations from one symbolic pass per AIR.
+    ///
+    /// A pass costs about as much as the AIR is wide, and both plans read the same builder.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an indexed declaration names a column its AIR does not have.
+    /// Returns an error when every lookup payload and count of an AIR is constant.
+    fn from_airs<EF, A, E>(airs: &[&A]) -> Result<Self, VerificationError<E>>
+    where
+        EF: ExtensionField<F>,
+        A: Air<InteractionSymbolicBuilder<F, EF>>,
+        E: Debug,
+    {
+        let (indexed, lookups) = airs
+            .iter()
+            .enumerate()
+            .map(|(index, &air)| {
+                let layout = AirLayout::from_air(air);
+                let builder = InteractionSymbolicBuilder::<F, EF>::from_air(air, layout);
+                let indexed = IndexedLookups::from_builder(&builder, &layout)
+                    .map_err(VerificationError::IndexedLookup)?;
+
+                // The zerocheck gives each lookup family round polynomials of the family's degree.
+                // A family of constant tuples has degree zero, so it would have none to send.
+                if builder.interaction_degree() == Some(0) {
+                    return Err(VerificationError::Zerocheck(
+                        ZerocheckError::ConstantInteractions { air: index },
+                    ));
+                }
+                Ok((indexed, Lookups::from_builder(&builder)))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .unzip();
+        Ok(Self { indexed, lookups })
+    }
 }
