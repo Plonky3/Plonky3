@@ -959,8 +959,17 @@ where
         //     bits = 0 -> prover emits zero, verifier reads nothing -> pin the field here
         //     bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
         //
-        // The FRI verifier repeats the check for the two phases it owns.
+        // The FRI verifier repeats it, since it can also be called on its own.
         verifier::check_canonical_pow_witnesses(&self.fri, proof)?;
+
+        // Reject a grinding difficulty the base field cannot sample, before the batching grind.
+        //
+        // The FRI verifier repeats it, since it can also be called on its own.
+        verifier::check_pow_bits::<Val, _, _>(
+            self.fri.batch_proof_of_work_bits,
+            self.fri.commit_proof_of_work_bits,
+            self.fri.query_proof_of_work_bits,
+        )?;
 
         // Describe the transcript from the claims, which are this verifier's own input.
         //
@@ -1584,6 +1593,29 @@ mod tests {
 
         match err {
             FriError::InvalidPowWitness(PowPhase::Batch) => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_batch_difficulty_past_the_field_order_is_rejected() {
+        // Invariant: a batching difficulty the field cannot sample is a rejection, not a panic.
+        //
+        // Fixture state: BabyBear, p = 15 * 2^27 + 1 < 2^31.
+        //
+        // Mutation: verify under a batching difficulty of 31 bits.
+        // The batching grind runs before the low-degree test, so it is checked first.
+        let (mut pcs, claims, proof, mut challenger) = make_pcs_fixture();
+        pcs.fri.batch_proof_of_work_bits = 31;
+
+        let err = run_pcs_verify(&pcs, claims, &proof, &mut challenger)
+            .expect_err("a 31-bit batching difficulty must be rejected over BabyBear");
+
+        match err {
+            FriError::UnsupportedPowBits {
+                phase: PowPhase::Batch,
+                bits: 31,
+            } => {}
             other => panic!("wrong error variant: {other:?}"),
         }
     }

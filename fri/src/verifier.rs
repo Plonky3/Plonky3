@@ -273,6 +273,20 @@ where
     FinalPolyMismatch,
     #[error("invalid proof-of-work witness for the {0} phase")]
     InvalidPowWitness(PowPhase),
+    /// A grinding difficulty the base field cannot sample.
+    ///
+    /// A grind of b bits reads the low b bits of one sampled field element.
+    ///
+    /// That needs b below the word size and 2^b below the field order p.
+    ///
+    /// Past that bound the challenger's bit sampler panics.
+    #[error("{bits}-bit grinding difficulty for the {phase} phase does not fit the field order")]
+    UnsupportedPowBits {
+        /// Phase whose difficulty is out of range.
+        phase: PowPhase,
+        /// The configured difficulty.
+        bits: usize,
+    },
     /// A grinding witness that is not the value a zero difficulty budget admits.
     ///
     /// Checked with the other proof-shape rejections, before any transcript work.
@@ -434,6 +448,45 @@ where
     Ok(())
 }
 
+/// Checks that every positive grinding difficulty can be sampled from the base field.
+///
+/// A difficulty of b bits passes when b is zero, or when b is below the word size and 2^b < p.
+///
+/// The three phases are checked independently, because their difficulties are independent.
+//
+// Why: the challenger draws the b low bits of one field element, and asserts both bounds.
+//
+//     BabyBear, p = 15 * 2^27 + 1
+//
+//     b = 30:  2^30 < p     -> the grind runs
+//     b = 31:  2^31 > p     -> the bit sampler panics
+//
+// Rejecting here turns a configuration the field cannot run into an error.
+pub(crate) fn check_pow_bits<Val, CommitMmcsErr, InputErr>(
+    batch_bits: usize,
+    commit_bits: usize,
+    query_bits: usize,
+) -> Result<(), FriError<CommitMmcsErr, InputErr>>
+where
+    Val: PrimeField64,
+    CommitMmcsErr: core::fmt::Debug,
+    InputErr: core::fmt::Debug,
+{
+    for (phase, bits) in [
+        (PowPhase::Batch, batch_bits),
+        (PowPhase::CommitPhase, commit_bits),
+        (PowPhase::Query, query_bits),
+    ] {
+        // Zero difficulty never samples, so any field supports it.
+        // A positive one must pass the same two bounds the bit sampler asserts.
+        let fits = bits < usize::BITS as usize && (1u64 << bits) < Val::ORDER_U64;
+        if bits != 0 && !fits {
+            return Err(FriError::UnsupportedPowBits { phase, bits });
+        }
+    }
+    Ok(())
+}
+
 /// Verifies a FRI proof.
 ///
 /// # Overview
@@ -523,6 +576,15 @@ where
     if params.max_log_arity == 0 {
         return Err(FriError::ZeroFoldingArity);
     }
+
+    // Reject a grinding difficulty the base field cannot sample.
+    //
+    // The commit and query phases grind inside this run, so an unsupported one would panic below.
+    check_pow_bits::<Val, _, _>(
+        params.batch_proof_of_work_bits,
+        params.commit_proof_of_work_bits,
+        params.query_proof_of_work_bits,
+    )?;
 
     // Reject an instance with nothing committed.
     //
@@ -3081,6 +3143,99 @@ mod tests {
             matches!(err, FriError::ZeroFoldingArity),
             "expected ZeroFoldingArity, got {err:?}"
         );
+    }
+
+    #[test]
+    fn rejects_a_query_difficulty_past_the_field_order() {
+        // Invariant: a grinding difficulty the field cannot sample is a rejection, not a panic.
+        //
+        // Fixture state: BabyBear, p = 15 * 2^27 + 1, an honest proof at zero difficulty.
+        //
+        //     2^30 = 1073741824 < p = 2013265921 < 2^31 = 2147483648
+        //
+        // Mutation: verify under a query difficulty of 31 bits.
+        // The challenger's bit sampler asserts 2^31 < p, so the run must stop before it.
+        let f = make_test_fixture();
+        let mut params = f.fri_params.clone();
+        params.query_proof_of_work_bits = 31;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+            f.alpha,
+        )
+        .expect_err("a 31-bit query difficulty must be rejected over BabyBear");
+
+        assert!(
+            matches!(
+                err,
+                FriError::UnsupportedPowBits {
+                    phase: PowPhase::Query,
+                    bits: 31,
+                }
+            ),
+            "expected UnsupportedPowBits for the query phase at 31 bits, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_commit_difficulty_past_the_field_order() {
+        // Invariant: each phase's difficulty is checked on its own, and the phase is named.
+        //
+        // Fixture state: BabyBear, an honest proof at zero difficulty.
+        //
+        // Mutation: verify under a commit difficulty of 64 bits.
+        // That is past the word size, so the shift that builds the mask cannot even be formed.
+        let f = make_test_fixture();
+        let mut params = f.fri_params.clone();
+        params.commit_proof_of_work_bits = 64;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+            f.alpha,
+        )
+        .expect_err("a 64-bit commit difficulty must be rejected");
+
+        assert!(
+            matches!(
+                err,
+                FriError::UnsupportedPowBits {
+                    phase: PowPhase::CommitPhase,
+                    bits: 64,
+                }
+            ),
+            "expected UnsupportedPowBits for the commit phase at 64 bits, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn pow_bits_bound_is_the_field_order() {
+        // Invariant: a difficulty b passes exactly when b = 0, or b < 64 and 2^b < p.
+        //
+        //     BabyBear, p = 2013265921
+        //
+        //     b =  0 : never samples        -> accepted
+        //     b = 30 : 2^30 = 1073741824 < p -> accepted
+        //     b = 31 : 2^31 = 2147483648 > p -> rejected
+        let check = |bits| check_pow_bits::<Val, (), ()>(0, 0, bits);
+        assert!(check(0).is_ok());
+        assert!(check(30).is_ok());
+        assert!(matches!(
+            check(31),
+            Err(FriError::UnsupportedPowBits {
+                phase: PowPhase::Query,
+                bits: 31,
+            })
+        ));
     }
 
     #[test]
