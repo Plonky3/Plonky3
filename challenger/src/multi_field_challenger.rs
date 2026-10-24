@@ -60,6 +60,19 @@ pub enum MultiField32ChallengerError {
         /// Field that holds the duplex sponge state.
         sponge_field: &'static str,
     },
+    /// The transcript field cannot hold a near-uniform element of the sampled field.
+    ///
+    /// Each squeezed transcript cell must exceed the square of the sampled field's order.
+    /// A smaller cell would leave every sample empty.
+    #[error(
+        "transcript field `{sponge_field}` is too small to squeeze near-uniform elements of sampled field `{input_field}`"
+    )]
+    SqueezeHasNoLimbs {
+        /// Field whose elements the challenger samples.
+        input_field: &'static str,
+        /// Field that holds the duplex sponge state.
+        sponge_field: &'static str,
+    },
     /// One absorb batch cannot encode its scalar count in the one-byte length tag.
     #[error(
         "a full absorb batch contains {batch_len} sampled-field elements, exceeding the u8 length-tag limit of {max}"
@@ -118,10 +131,22 @@ where
     ///
     /// Returns an error if the transcript field cannot injectively encode the sampled field.
     ///
+    /// Returns an error if the transcript field is too small.
+    ///
+    /// It must hold a near-uniform element of the sampled field.
+    ///
     /// Returns an error if a full absorb batch cannot fit in the one-byte length tag.
     pub fn new(permutation: P) -> Result<Self, MultiField32ChallengerError> {
         if F::order() >= PF::order() {
             return Err(MultiField32ChallengerError::FieldOrderNotIncreasing {
+                input_field: type_name::<F>(),
+                sponge_field: type_name::<PF>(),
+            });
+        }
+        // Each squeezed cell yields the limbs whose bias stays below 1/|F|.
+        // With |PF| <= |F|^2 there are none, and every sample would find an empty queue.
+        if squeeze_field_order_num_limbs::<PF, F>() == 0 {
+            return Err(MultiField32ChallengerError::SqueezeHasNoLimbs {
                 input_field: type_name::<F>(),
                 sponge_field: type_name::<PF>(),
             });
@@ -514,6 +539,35 @@ mod tests {
                 type_name::<F>()
             )
         );
+    }
+
+    #[test]
+    fn test_new_rejects_a_transcript_field_without_squeeze_limbs() {
+        use p3_koala_bear::KoalaBear;
+
+        // Invariant: a challenger that constructs can sample.
+        //
+        // Fixture state: BabyBear (p ~ 2^30.9) sampled from a KoalaBear (q ~ 2^31.0) sponge.
+        //
+        //     p < q          -> the absorb packing is injective, one limb per cell
+        //     p^2 >= q       -> no squeeze limb has bias below 1/p
+        //     limbs per cell -> 0, so every refill leaves the sample queue empty
+        assert_eq!(squeeze_field_order_num_limbs::<KoalaBear, F>(), 0);
+
+        let error = MultiField32Challenger::<F, KoalaBear, _, 8, 4>::new(WideIdentityPermutation)
+            .err()
+            .expect("a sponge field below the square of the sampled field must fail");
+        assert_eq!(
+            error,
+            MultiField32ChallengerError::SqueezeHasNoLimbs {
+                input_field: type_name::<F>(),
+                sponge_field: type_name::<KoalaBear>(),
+            }
+        );
+
+        // Mutation: drop the check, and the first sample panics on an empty queue.
+        //
+        //     observe(1) -> flush -> refill: 4 cells * 0 limbs = [] -> pop -> panic
     }
 
     #[test]
