@@ -59,7 +59,7 @@ pub struct Radix2DFTSmallBatch<F> {
     /// updated atomically.  For each `i`, `twiddles[i]` contains a list
     /// of twiddles stored in bit reversed order.  The final set of
     /// twiddles `twiddles[-1]` is the one element vectors `[1]` and more
-    /// general `twiddles[-i]` has length `2^i`.
+    /// general `twiddles[-i]` has length `2^(i-1)`.
     cache: Arc<RwLock<TwiddlePair<F>>>,
 }
 
@@ -143,6 +143,11 @@ where
         let w = mat.width();
         let log_h = log2_strict_usize(h);
 
+        // Values past the last full row are not part of the matrix.
+        //
+        // The parallel layers size their blocks from the buffer length, so those values go first.
+        mat.values.truncate(h * w);
+
         self.update_twiddles(h);
         let g = self.cache.read().twiddles.clone(); // Lock is dropped immediately
         let root_table = &g[g.len() - log_h..];
@@ -211,6 +216,11 @@ where
         let h = mat.height();
         let w = mat.width();
         let log_h = log2_strict_usize(h);
+
+        // Values past the last full row are not part of the matrix.
+        //
+        // The parallel layers size their blocks from the buffer length, so those values go first.
+        mat.values.truncate(h * w);
 
         self.update_twiddles(h);
         let g = self.cache.read().inv_twiddles.clone(); // Lock is dropped immediately
@@ -298,6 +308,11 @@ where
         let w = mat.width();
         let log_h = log2_strict_usize(h);
         let (output_height, output_len) = lde_shape(w, h, added_bits);
+
+        // Values past the last full row are not part of the matrix.
+        //
+        // The parallel layers size their blocks from the buffer length, so those values go first.
+        mat.values.truncate(h * w);
 
         self.update_twiddles(output_height);
         let cached = self.cache.read().clone();
