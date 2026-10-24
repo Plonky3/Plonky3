@@ -29,7 +29,8 @@ use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
 use p3_lookup::{
-    Challenges, InteractionSymbolicBuilder, Kind, Lookups, check_multiplicity_height_bound,
+    Challenges, InteractionSymbolicBuilder, Kind, Lookups, check_bus_widths,
+    check_multiplicity_height_bound,
 };
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
@@ -131,12 +132,12 @@ impl<F: Field> LookupPlan<F> {
     /// A multiplicity could otherwise wrap around and forge a balanced bus.
     /// Returns an error for active characteristic-two lookups: the counting argument needs
     /// multiplicities that do not wrap, which an odd characteristic gives.
+    /// Returns an error if two declarations share a bus name but disagree on payload width.
     ///
     /// # Panics
     ///
     /// Panics if an AIR declares mutually-exclusive interactions.
     /// Panics if a lookup expression reads a periodic column.
-    /// Panics if two declarations share a bus name but disagree on payload width.
     /// Panics if no declaration carries a payload element.
     pub fn build<EF, A>(airs: &[&A], num_variables: &[usize]) -> Result<Option<Self>, LookupError>
     where
@@ -198,6 +199,13 @@ impl<F: Field> LookupPlan<F> {
             .map(|&num_variables| 1usize << num_variables)
             .collect::<Vec<_>>();
         check_multiplicity_height_bound(&lookups, &trace_heights)?;
+
+        // A short tuple on a shared bus would fingerprint like a longer one ending in zeros.
+        //
+        //     [a]  and  [a, 0]   ->   the same denominator
+        //
+        // The widths come from the AIRs alone, so a mismatch is a statement error, not a panic.
+        check_bus_widths(&lookups).map_err(LookupError::BusWidth)?;
 
         // Keep only the AIRs that emit at least one tuple.
         // A local declaration with no tuple is inert.
@@ -284,15 +292,10 @@ impl<F: Field> LookupPlan<F> {
                             next_id
                         }
                         Entry::Occupied(entry) => {
+                            // Only a named global bus is shared, and its widths were checked above.
                             let &(bus_id, established_width) = entry.get();
-                            match entry.key() {
-                                LookupBus::Global { name } => assert_eq!(
-                                    width, established_width,
-                                    "named global lookup bus `{name}` uses payload width {width}, \
-                                     but its established width is {established_width}"
-                                ),
-                                _ => unreachable!(),
-                            }
+                            debug_assert!(matches!(entry.key(), LookupBus::Global { .. }));
+                            debug_assert_eq!(width, established_width);
                             bus_id
                         }
                     };
@@ -666,6 +669,9 @@ pub enum LookupError {
     /// The worst-case multiplicity sum could wrap around the field characteristic.
     #[error(transparent)]
     MultiplicityHeightBound(#[from] p3_lookup::LookupError),
+    /// Two declarations on one named bus disagree on payload width.
+    #[error(transparent)]
+    BusWidth(p3_lookup::LookupError),
     /// The fractional reduction failed its own consistency checks.
     #[error("fractional GKR: {0}")]
     FractionGkr(#[from] FractionGkrError),
@@ -685,6 +691,7 @@ pub enum LookupError {
 /// Panics if the input slices disagree on length.
 /// Panics if the worst-case multiplicity sum reaches the field characteristic.
 /// Panics if a characteristic-two AIR declares an active lookup.
+/// Panics if two declarations on one named bus disagree on payload width.
 /// Panics if a lookup-active trace is shorter than the prover's SIMD packing width.
 pub(crate) fn prove_lookup<F, EF, A, Challenger>(
     airs: &[&A],
@@ -712,7 +719,7 @@ where
         .map(|table| table.num_variables())
         .collect::<Vec<_>>();
     let Some(plan) = LookupPlan::build::<EF, A>(airs, &num_variables)
-        .expect("lookup field and multiplicity height bound must be supported")
+        .expect("lookup field, multiplicity height bound and bus widths must be supported")
     else {
         return (None, LookupRuntime::Inactive);
     };
@@ -776,6 +783,7 @@ where
 /// Returns an error when the proof and the AIRs disagree on whether a lookup exists.
 /// Returns an error when the worst-case multiplicity sum reaches the field characteristic.
 /// Returns an error when a characteristic-two AIR declares an active lookup.
+/// Returns an error when two declarations on one named bus disagree on payload width.
 /// Returns an error when the reduction fails its own consistency checks.
 ///
 /// `lookups` holds what each of the verifier's own AIRs declares, in caller order.
@@ -842,6 +850,7 @@ mod tests {
     use p3_challenger::DuplexChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_lookup::LookupError::BusWidthMismatch;
     use p3_lookup::{Count, InteractionBuilder};
     use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
     use p3_sumcheck::generic_degree::GenericDegreeProof;
@@ -996,6 +1005,59 @@ mod tests {
             LookupPlan::build::<p3_binary_field::BinaryField128, _>(&[&BinaryLookupAir], &[2]),
             Err(LookupError::UnsupportedCharacteristic)
         ));
+    }
+
+    struct PairBusAir {
+        width: usize,
+    }
+
+    impl BaseAir<F> for PairBusAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    impl<AB> Air<AB> for PairBusAir
+    where
+        AB: AirBuilder<F = F> + InteractionBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let row = builder.main().current_slice().to_vec();
+            builder.push_interaction(
+                "pair",
+                row[..self.width].iter().map(|&value| value.into()),
+                Count::bounded(AB::Expr::ONE, 1),
+            );
+        }
+    }
+
+    #[test]
+    fn bus_width_mismatch_across_airs_is_rejected() {
+        // Fixture state: two AIRs share the bus "pair".
+        //
+        //     AIR 0 sends [a]      width 1
+        //     AIR 1 sends [a, b]   width 2
+        //
+        // Invariant: [a] would fingerprint like [a, 0], so the widths must agree.
+        //
+        // Invariant: the mismatch is an error, returned before any lookup challenge is drawn.
+        let narrow = PairBusAir { width: 1 };
+        let wide = PairBusAir { width: 2 };
+        let result = verify_lookup::<F, EF, _>(
+            declared(&[&narrow, &wide]),
+            &[3, 3],
+            None,
+            &mut challenger(),
+        );
+        let Err(LookupError::BusWidth(BusWidthMismatch {
+            bus,
+            expected,
+            actual,
+        })) = result
+        else {
+            panic!("expected a bus width mismatch, got {result:?}");
+        };
+        assert_eq!((bus.as_str(), expected, actual), ("pair", 1, 2));
     }
 
     struct BalancedLookupAir;
