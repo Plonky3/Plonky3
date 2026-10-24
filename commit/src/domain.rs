@@ -336,12 +336,19 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
 
     /// Compute the Lagrange selectors of our space at every point in the coset.
     ///
-    /// This will error if our space is not the group `H` and if the given
-    /// coset is not disjoint from `H`.
+    /// # Panics
+    ///
+    /// Panics if our space is not a subgroup `H`, if the coset is smaller, or if it meets `H`.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Val>> {
         assert_eq!(self.shift(), Val::ONE);
-        assert_ne!(coset.shift(), Val::ONE);
         assert!(coset.log_size() >= self.log_size());
+        // H lies inside H', so the coset t H' meets H exactly when t^|H'| = 1.
+        // A shared point would zero a denominator below.
+        assert_ne!(
+            coset.shift().exp_power_of_2(coset.log_size()),
+            Val::ONE,
+            "the coset meets the subgroup"
+        );
         let rate_bits = coset.log_size() - self.log_size();
 
         let s_pow_n = coset.shift().exp_power_of_2(self.log_size());
@@ -474,6 +481,34 @@ mod tests {
         let actual = domain.evaluate_periodic_columns_at(screened, point);
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn selectors_on_a_disjoint_coset_match_the_selectors_at_each_point() {
+        // Fixture state: H of order 4, and the quotient coset g H_16 for the field generator g.
+        let subgroup = TwoAdicMultiplicativeCoset::<F>::new(F::ONE, 2).unwrap();
+        let coset = subgroup.create_disjoint_domain(16);
+        let on = subgroup.selectors_on_coset(coset);
+
+        // Invariant: entry i of each vector is that selector at coset point i, constants included.
+        for (i, x) in coset.iter().enumerate() {
+            let at = subgroup.selectors_at_point(x);
+            assert_eq!(on.is_first_row[i], at.is_first_row, "row {i}");
+            assert_eq!(on.is_last_row[i], at.is_last_row, "row {i}");
+            assert_eq!(on.is_transition[i], at.is_transition, "row {i}");
+            assert_eq!(on.inv_vanishing[i], at.inv_vanishing, "row {i}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "the coset meets the subgroup")]
+    fn selectors_on_a_coset_meeting_the_subgroup_panic_with_the_reason() {
+        // Fixture state: H of order 4, and the coset w_8 H_8, which is H_8 itself and contains H.
+        //
+        //     w_8 != 1, so a check on the shift alone lets this coset through.
+        let subgroup = TwoAdicMultiplicativeCoset::<F>::new(F::ONE, 2).unwrap();
+        let coset = TwoAdicMultiplicativeCoset::new(F::two_adic_generator(3), 3).unwrap();
+        let _ = subgroup.selectors_on_coset(coset);
     }
 
     #[test]
