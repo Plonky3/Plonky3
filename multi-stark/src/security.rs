@@ -490,6 +490,7 @@ impl IndexedPlan {
 /// Returns an error when every declared lookup tuple is empty.
 /// Returns an error when the lookup, indexed or bus declarations do not describe a supported plan.
 /// Returns an error when every lookup payload and count of an AIR is constant.
+/// Returns an error when two tuples of one lookup declaration differ in width.
 pub fn security_report<C, A>(
     config: &C,
     instances: &VerifierInstances<'_, C, A>,
@@ -663,7 +664,8 @@ where
     let lookups = lookup_interactions
         .into_iter()
         .map(|(global, local)| Lookups::from_interactions(&global, &local, &[]))
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(LookupError::TupleWidth)?;
     let plan = LookupPlan::from_lookups(lookups, &heights)?;
     let lookup = plan.map(|plan| MultilinearLookupParams {
         num_variables: plan.num_variables,

@@ -516,6 +516,12 @@ where
         return Err(InvalidProofShapeError::InstanceCountMismatch.into());
     }
 
+    // The challenge layout reads one payload width per lookup.
+    // Common data built from the AIRs already agrees, but the verifier does not rely on that.
+    for lookups in all_lookups {
+        lookups.check_tuple_widths()?;
+    }
+
     validate_randomization_presence::<SC>(commitments, opened_values)?;
 
     // Validate opened values shape per instance and observe per-instance binding data.

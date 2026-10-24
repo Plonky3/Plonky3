@@ -10,6 +10,7 @@ use p3_challenger::{CanSample, DuplexChallenger};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
+use p3_lookup::LookupError::TupleWidthMismatch;
 use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
@@ -3055,4 +3056,106 @@ fn security_report_rejects_constant_lookup_tuples() {
         };
         assert_eq!(reason, "constant lookup families are unsupported");
     }
+}
+
+/// An AIR whose one local lookup sends [a] and receives [a, b].
+struct MixedWidthLookupAir;
+
+impl BaseAir<F> for MixedWidthLookupAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB> Air<AB> for MixedWidthLookupAir
+where
+    AB: AirBuilder<F = F> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        let row = builder.main().current_slice().to_vec();
+        builder.push_local_interaction([
+            (vec![row[0].into()], Count::bounded(AB::Expr::ONE, 1)),
+            (
+                vec![row[0].into(), row[1].into()],
+                Count::provided(-AB::Expr::ONE),
+            ),
+        ]);
+    }
+}
+
+#[test]
+fn verify_rejects_mixed_tuple_widths_before_the_transcript() {
+    // Fixture state: an honest 64-row lookup proof, checked against an AIR of width 2.
+    //
+    //     slot 0, local   sends [a]        width 1
+    //                     receives [a, b]  width 2
+    //
+    // Invariant: [a] would fingerprint like [0, a], so one lookup's tuples share a width.
+    //
+    // Invariant: the AIR alone decides this, so the challenger is never touched.
+    let (config, vk, log_height, proof) = honest_lookup();
+    let mut used = challenger();
+    let verdict = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &MixedWidthLookupAir,
+            &vk,
+            log_height,
+            &[],
+        )]),
+        &proof,
+        0,
+        &mut used,
+    );
+    let Err(VerificationError::Lookup(LookupError::TupleWidth(TupleWidthMismatch {
+        column,
+        expected,
+        actual,
+    }))) = verdict
+    else {
+        panic!("expected a tuple width mismatch, got {verdict:?}");
+    };
+    assert_eq!((column, expected, actual), (0, 1, 2));
+
+    // The next draws match a fresh challenger's, so nothing was observed.
+    let mut fresh = challenger();
+    for _ in 0..4 {
+        assert_eq!(
+            CanSample::<F>::sample(&mut used),
+            CanSample::<F>::sample(&mut fresh)
+        );
+    }
+}
+
+#[test]
+fn security_report_rejects_mixed_tuple_widths() {
+    // Fixture state: one AIR of width 2 at the 64-row height of the honest lookup proof.
+    //
+    //     slot 0, local   sends [a]        width 1
+    //                     receives [a, b]  width 2
+    //
+    // Invariant: the report refuses the statement the verifier refuses.
+    let (config, vk, log_height, _) = honest_lookup();
+    let report = security_report(
+        &config,
+        &VerifierInstances::new(vec![VerifierInstance::new(
+            &MixedWidthLookupAir,
+            &vk,
+            log_height,
+            &[],
+        )]),
+    );
+    let Err(SecurityError::Lookup(LookupError::TupleWidth(TupleWidthMismatch {
+        column,
+        expected,
+        actual,
+    }))) = report
+    else {
+        panic!("expected a tuple width mismatch");
+    };
+    assert_eq!((column, expected, actual), (0, 1, 2));
 }

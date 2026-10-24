@@ -136,6 +136,7 @@ impl<F: Field> LookupPlan<F> {
     /// Returns an error if an AIR declares mutually exclusive interactions.
     /// Returns an error if a lookup expression reads a periodic column.
     /// Returns an error if every declared tuple is empty.
+    /// Returns an error if two tuples of one lookup declaration differ in width.
     ///
     /// # Panics
     ///
@@ -149,10 +150,12 @@ impl<F: Field> LookupPlan<F> {
 
         // Evaluate each AIR symbolically once.
         // Its declared weights and its trace height fix the multiplicity soundness bound.
+        // The tuples of one declaration must share a width, which extraction checks.
         let lookups = airs
             .iter()
             .map(|&air| Lookups::from_air::<EF, _>(air))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LookupError::TupleWidth)?;
         Self::from_lookups(lookups, num_variables)
     }
 
@@ -693,6 +696,9 @@ pub enum LookupError {
     /// Every declared tuple is empty, which leaves no challenge power for the bus offset.
     #[error("every lookup tuple is empty")]
     EmptyPayloads,
+    /// Two tuples of one lookup declaration differ in width.
+    #[error(transparent)]
+    TupleWidth(p3_lookup::LookupError),
     /// The fractional reduction failed its own consistency checks.
     #[error("fractional GKR: {0}")]
     FractionGkr(#[from] FractionGkrError),
@@ -716,6 +722,7 @@ pub enum LookupError {
 /// Panics if an AIR declares mutually exclusive interactions.
 /// Panics if a lookup expression reads a periodic column.
 /// Panics if every declared tuple is empty.
+/// Panics if two tuples of one lookup declaration differ in width.
 /// Panics if a lookup-active trace is shorter than the prover's SIMD packing width.
 pub(crate) fn prove_lookup<F, EF, A, Challenger>(
     airs: &[&A],
@@ -886,7 +893,7 @@ mod tests {
         A: Air<InteractionSymbolicBuilder<F, EF>>,
     {
         airs.iter()
-            .map(|&air| Lookups::from_air::<EF, _>(air))
+            .map(|&air| Lookups::from_air::<EF, _>(air).expect("uniform tuple widths"))
             .collect()
     }
 

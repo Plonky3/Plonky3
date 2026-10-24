@@ -11,7 +11,7 @@ use config::{
     Val, make_circle_config, make_config, make_config_allow_tiny_trace, make_config_wide,
     make_config_zk, make_two_adic_compat_config,
 };
-use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, SymbolicExpression, WindowAccess};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::verifier::commitments_with_opening_points;
 use p3_batch_stark::{
@@ -2946,7 +2946,8 @@ fn bus_width_mismatch_across_instances_is_rejected() {
         }],
         &[],
         &[],
-    );
+    )
+    .unwrap();
 
     // Invariant: one bus carries one payload width, or a short tuple aliases a long one.
     // The verifier names the bus and both widths, in instance order.
@@ -3316,6 +3317,76 @@ fn test_batch_stark_rejects_spurious_lookup_terminal() {
         }
         _ => panic!("unexpected error: {err:?}"),
     }
+}
+
+#[test]
+fn test_batch_stark_rejects_mixed_tuple_widths_in_common_data() {
+    let config = make_config(2025);
+
+    // Fixture state: an honest batch whose lookups balance on bus "MulFib".
+    //
+    //     AIR 0  MulAir  sends twice on bus "MulFib"
+    //     AIR 1  FibAir  receives on bus "MulFib"
+    let reps = 2;
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        false,
+        true,
+        vec!["MulFib".to_string(), "MulFib".to_string()],
+    );
+
+    let log_n = 3;
+    let n = 1 << log_n;
+    let fibonacci_air = FibonacciAir {
+        log_height: log_n,
+        tamper_index: None,
+    };
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, None);
+
+    let mul_trace = mul_trace::<Val>(n, 2);
+    let fib_trace = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+
+    let airs = [
+        DemoAirWithLookups::MulLookups(mul_air_lookups),
+        DemoAirWithLookups::FibLookups(fib_air_lookups),
+    ];
+    let mut prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]).unwrap();
+    let traces = [&mul_trace, &fib_trace];
+    let pvs = vec![vec![], fib_pis];
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+
+    // Mutation: AIR 0's first lookup gains a tuple one element wider than its others.
+    //
+    //     before   slot 0   [a, b]              width 2
+    //     after    slot 0   [a, b], [1, 1, 1]   widths 2 and 3
+    //
+    // The lookups go through serialization, which rebuilds them as is.
+    //
+    // The slot count stays 2, so the proof's lookup columns still fit.
+    let mut mixed = prover_data.common.lookups[0].to_vec();
+    let width = mixed[0].elements[0].len();
+    let one = SymbolicExpression::<Val>::from(Val::ONE);
+    mixed[0].elements.push(vec![one.clone(); width + 1]);
+    mixed[0].multiplicities.push(one);
+    let bytes = postcard::to_allocvec(&mixed).unwrap();
+    prover_data.common.lookups[0] = postcard::from_bytes::<Lookups<Val>>(&bytes).unwrap();
+
+    // Invariant: the verifier refuses the layout before it draws the lookup challenges.
+    let result = verify_batch(&config, &airs, &proof, &pvs, &prover_data.common);
+    let Err(BatchVerificationError::Lookup(LookupError::TupleWidthMismatch {
+        column,
+        expected,
+        actual,
+    })) = result
+    else {
+        panic!("expected a tuple width mismatch, got {result:?}");
+    };
+    assert_eq!((column, expected, actual), (0, 2, 3));
 }
 
 #[test]

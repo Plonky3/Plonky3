@@ -618,7 +618,8 @@ fn force_unpacked(prover_data: &mut ProverData<MyConfig>, airs: &[BenchAir]) {
     prover_data.common.lookups = airs
         .iter()
         .map(Lookups::<Val>::from_air::<Challenge, _>)
-        .collect();
+        .collect::<Result<_, _>>()
+        .expect("bench AIRs declare uniform tuple widths");
 }
 
 // ---------------------------------------------------------------------------

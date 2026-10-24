@@ -227,6 +227,8 @@ where
     /// is a hard [`assert!`] rather than a `debug_assert!`: overrides are a rare, explicit,
     /// caller-side choice, so the recomputation costs nothing on the default path, and a
     /// release build must not silently emit a rate-violating proof.
+    ///
+    /// Panics if two tuples of one lookup declaration differ in width.
     pub fn from_airs_and_degrees_with_lookup_budgets<A>(
         config: &SC,
         airs: &[A],
@@ -331,7 +333,9 @@ where
                 // prover and verifier feed the degree model for this instance.
                 let trace_len = 1usize << (ext_db - is_zk);
                 let domain = pcs.natural_domain_for_degree(trace_len);
-                let unpacked = Lookups::<Val<SC>>::from_air::<SC::Challenge, A>(air);
+                // The tuples of one declaration share a column, so their widths must agree.
+                let unpacked = Lookups::<Val<SC>>::from_air::<SC::Challenge, A>(air)
+                    .unwrap_or_else(|error| panic!("instance {i}: {error}"));
 
                 // `log_chunks` fixes the quotient bucket: n_chunks = 2^log_chunks.
                 let log_chunks =

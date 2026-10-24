@@ -206,6 +206,7 @@ where
 /// Returns an error when a lookup expression reads a periodic column.
 /// Returns an error when every declared lookup tuple is empty.
 /// Returns an error when every lookup payload and count of an AIR is constant.
+/// Returns an error when two tuples of one lookup declaration differ in width.
 ///
 /// The lookup statement errors are returned before the transcript is touched.
 ///
@@ -660,6 +661,7 @@ impl<F: Field> Declarations<F> {
     ///
     /// Returns an error when an indexed declaration names a column its AIR does not have.
     /// Returns an error when every lookup payload and count of an AIR is constant.
+    /// Returns an error when two tuples of one lookup declaration differ in width.
     fn from_airs<EF, A, E>(airs: &[&A]) -> Result<Self, VerificationError<E>>
     where
         EF: ExtensionField<F>,
@@ -682,7 +684,11 @@ impl<F: Field> Declarations<F> {
                         ZerocheckError::ConstantInteractions { air: index },
                     ));
                 }
-                Ok((indexed, Lookups::from_builder(&builder)))
+
+                // The tuples of one declaration share a fraction column and its challenge powers.
+                let lookups = Lookups::from_builder(&builder)
+                    .map_err(|error| VerificationError::Lookup(LookupError::TupleWidth(error)))?;
+                Ok((indexed, lookups))
             })
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
