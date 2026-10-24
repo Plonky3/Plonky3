@@ -191,6 +191,14 @@ where
     /// the configured number of out-of-domain grinding bits.
     #[error("invalid proof-of-work witness for the out-of-domain point")]
     InvalidOodPowWitness,
+    /// The out-of-domain grinding difficulty cannot be sampled from the base field.
+    ///
+    /// A grind of b bits needs b below the word size and 2^b below the field order p.
+    #[error("{bits}-bit out-of-domain grinding difficulty does not fit the field order")]
+    UnsupportedOodPowBits {
+        /// The configured difficulty.
+        bits: usize,
+    },
 }
 
 impl<PcsErr> From<StarkTranscriptFailure> for VerificationError<PcsErr>

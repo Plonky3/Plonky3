@@ -38,6 +38,34 @@ pub trait GrindingChallenger: CanObserve<Self::Witness> + CanSampleBits<usize> {
     /// are all `0`.
     fn grind(&mut self, bits: usize) -> Self::Witness;
 
+    /// Whether a grind of b bits can be sampled from the witness field.
+    ///
+    /// A grind of b bits reads the low b bits of one sampled field element.
+    ///
+    /// A positive difficulty therefore needs b below the word size and 2^b below the field order.
+    ///
+    /// A zero difficulty never samples, so every field supports it.
+    ///
+    /// ```text
+    ///     BabyBear, p = 15 * 2^27 + 1
+    ///
+    ///     b =  0:  never samples   -> supported
+    ///     b = 30:  2^30 < p        -> supported
+    ///     b = 31:  2^31 > p        -> the bit sampler would panic
+    /// ```
+    #[must_use]
+    fn supports_pow_bits(bits: usize) -> bool
+    where
+        Self: Sized,
+    {
+        // Both bounds are the ones the bit sampler asserts.
+        bits == 0
+            || (bits < usize::BITS as usize
+                && 1u64
+                    .checked_shl(bits as u32)
+                    .is_some_and(|bound| Self::Witness::order() > bound.into()))
+    }
+
     /// Check whether a given `witness` satisfies the PoW condition.
     ///
     /// After absorbing the witness, the challenger samples `bits` random bits
@@ -433,8 +461,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_baby_bear::{BabyBear, default_babybear_poseidon2_16};
-    use p3_goldilocks::{Goldilocks, default_goldilocks_poseidon2_8};
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear, default_babybear_poseidon2_16};
+    use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks, default_goldilocks_poseidon2_8};
 
     use super::*;
 
@@ -496,6 +524,47 @@ mod tests {
                 &challenger,
                 |c, bits| c.grind(bits),
                 |c, bits, w| c.check_witness(bits, w),
+            );
+        }
+    }
+
+    #[test]
+    fn supported_pow_bits_stop_below_the_field_order() {
+        // Fixture state: the two bounds the bit sampler asserts.
+        //
+        //     BabyBear,   p = 15 * 2^27 + 1  ~ 2^30.9
+        //     Goldilocks, p = 2^64 - 2^32 + 1
+        //
+        //     b      BabyBear   Goldilocks
+        //     0      yes        yes          never samples
+        //     30     yes        yes          2^30 < p
+        //     31     no         yes          2^31 > BabyBear p
+        //     63     no         64-bit only  2^63 < Goldilocks p, but past a 32-bit word
+        //     64     no         no           not below a 64-bit word
+        //     max    no         no           the shift itself would overflow
+        //
+        // Invariant: a difficulty is supported exactly when b = 0, or b is below the word size and 2^b < p.
+        let wide_word = usize::BITS > 63;
+        type BabyBearChallenger = DuplexChallenger<BabyBear, Poseidon2BabyBear<16>, 16, 8>;
+        type GoldilocksChallenger = DuplexChallenger<Goldilocks, Poseidon2Goldilocks<8>, 8, 4>;
+        let cases = [
+            (0, true, true),
+            (30, true, true),
+            (31, false, true),
+            (63, false, wide_word),
+            (64, false, false),
+            (usize::MAX, false, false),
+        ];
+        for (bits, baby_bear, goldilocks) in cases {
+            assert_eq!(
+                BabyBearChallenger::supports_pow_bits(bits),
+                baby_bear,
+                "bits {bits}"
+            );
+            assert_eq!(
+                GoldilocksChallenger::supports_pow_bits(bits),
+                goldilocks,
+                "bits {bits}"
             );
         }
     }

@@ -196,6 +196,30 @@ fn ood_pow_difficulty_mismatch_is_rejected() {
     }
 }
 
+#[test]
+fn ood_pow_difficulty_past_the_field_order_is_rejected() {
+    // Invariant: a grinding difficulty the base field cannot sample is a rejection, not a panic.
+    //
+    // Fixture state: BabyBear, p = 15 * 2^27 + 1 = 2013265921.
+    //
+    //     b = 30:  2^30 = 1073741824 < p    the grind runs
+    //     b = 31:  2^31 = 2147483648 > p    the bit sampler cannot draw b bits
+    //     b = 64:  past the word size
+    //
+    // Mutation: verify an honest proof under each difficulty past the bound.
+    let prover_config = make_config(0, 0);
+    let trace = generate_square_trace::<Val>(1 << 3);
+    let proof = prove(&prover_config, &SquareAir, trace, &[]).unwrap();
+
+    for bits in [31, 64] {
+        let verifier_config = make_config(0, bits);
+        match verify(&verifier_config, &SquareAir, &proof, &[]) {
+            Err(VerificationError::UnsupportedOodPowBits { bits: got }) => assert_eq!(got, bits),
+            other => panic!("expected UnsupportedOodPowBits at {bits} bits, got {other:?}"),
+        }
+    }
+}
+
 /// The same for the batch site, which lives in the PCS: a verifier demanding
 /// more than the prover paid rejects the opening argument.
 #[test]

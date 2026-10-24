@@ -721,6 +721,15 @@ where
         return Err(InvalidProofShapeError::NonCanonicalOodPowWitness.into());
     }
 
+    // A grind of b bits reads the low b bits of one sampled base element.
+    // Past the bound the challenger asserts, its bit sampler would panic.
+    //
+    // Why: the difficulty comes from the configuration, so it is checked before any transcript work.
+    let ood_pow_bits = config.ood_proof_of_work_bits();
+    if !SC::Challenger::supports_pow_bits(ood_pow_bits) {
+        return Err(VerificationError::UnsupportedOodPowBits { bits: ood_pow_bits });
+    }
+
     // The transcript binds the commitment alone.
     // The opening travels with the claims instead.
     let preprocessed_commit = preprocessed.as_ref().map(|(commit, _)| commit.clone());

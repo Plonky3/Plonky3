@@ -965,11 +965,7 @@ where
         // Reject a grinding difficulty the base field cannot sample, before the batching grind.
         //
         // The FRI verifier repeats it, since it can also be called on its own.
-        verifier::check_pow_bits::<Val, _, _>(
-            self.fri.batch_proof_of_work_bits,
-            self.fri.commit_proof_of_work_bits,
-            self.fri.query_proof_of_work_bits,
-        )?;
+        self.fri.check_pow_bits::<Challenger, _, _>()?;
 
         // Describe the transcript from the claims, which are this verifier's own input.
         //
