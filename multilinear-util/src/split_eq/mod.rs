@@ -278,10 +278,10 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     pub fn eval_base(&self, poly: PolyView<'_, F>) -> EF {
         assert_eq!(poly.num_variables(), self.num_variables());
 
-        // Short-circuit: a constant polynomial evaluates to itself
-        // since eq(z, .) sums to 1 over the hypercube.
+        // Short-circuit: a constant polynomial meets the table's total weight.
+        // With no variable, the prefix half is one entry, the scale absorbed at construction.
         if let Some(constant) = poly.as_constant() {
-            return constant.into();
+            return self.eq0.as_slice()[0] * constant;
         }
 
         // Number of scalar elements per eq1 block.
@@ -309,9 +309,9 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     pub fn eval_ext(&self, poly: PolyView<'_, EF>) -> EF {
         assert_eq!(poly.num_variables(), self.num_variables());
 
-        // Short-circuit for constant polynomials.
+        // Short-circuit: a constant polynomial meets the table's total weight, the scale.
         if let Some(constant) = poly.as_constant() {
-            return constant;
+            return self.eq0.as_slice()[0] * constant;
         }
 
         let cs = self.eq1.num_scalar_evals();
@@ -802,16 +802,21 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // The contraction pairs one polynomial row with one equality weight.
         assert_eq!(poly.num_variables(), self.num_variables());
 
-        // A constant table has a single row, and its successor is itself, so the
-        // shift leaves the value unchanged.
+        // A constant table has a single row, and its successor is itself.
+        // The shift leaves the value unchanged, and only the table's total weight remains.
+        //
+        // With no variable, the prefix half is one entry, the scale absorbed at construction.
         if let Some(constant) = poly.as_constant() {
-            return constant.into();
+            return self.eq0.as_slice()[0] * constant;
         }
 
         // With a single variable the successor of row 0 is row 1, and row 1 repeats.
-        // Both successor reads land on row 1, so the value is just that entry.
+        // Both successor reads land on row 1, so the value is that entry times the total weight.
+        //
+        // The split puts the only variable in the suffix half.
+        // So the prefix half is still the scale.
         if poly.num_variables() == 1 {
-            return poly.as_slice()[1].into();
+            return self.eq0.as_slice()[0] * poly.as_slice()[1];
         }
 
         let evals = poly.as_slice();
@@ -1475,6 +1480,52 @@ mod tests {
             let result = SplitEq::<F, EF>::new_packed(&point, EF::ONE).eval_base(poly.as_view());
             assert_eq!(result, EF::TWO);
         }
+    }
+
+    #[test]
+    fn scaled_table_meets_constant_polynomial() {
+        // Invariant: every evaluation of a scaled table equals scale * f~(z).
+        //
+        // Fixture state: no variable, scale 3, constant polynomial 5.
+        //
+        //     table           [3]
+        //     expected        3 * 5 = 15
+        //
+        // Mutation: returning the constant itself gives 5.
+        let scale = EF::from(F::from_u32(3));
+        let constant = F::from_u32(5);
+        let split = SplitEq::<F, EF>::new_packed(&Point::new(vec![]), scale);
+        let expected = split.materialize().as_slice()[0] * constant;
+        assert_eq!(expected, scale * constant);
+
+        let poly = Poly::new(vec![constant]);
+        assert_eq!(split.eval_base(poly.as_view()), expected);
+
+        let poly = Poly::new(vec![EF::from(constant)]);
+        assert_eq!(split.eval_ext(poly.as_view()), expected);
+
+        let poly = Poly::new(vec![constant]);
+        assert_eq!(split.eval_next_base(poly.as_view()), expected);
+    }
+
+    #[test]
+    fn scaled_table_meets_one_variable_successor() {
+        // Invariant: the successor contraction of a scaled table is scale times the unscaled one.
+        //
+        // Fixture state: one variable p_0 = 7, scale 3, polynomial [5, 11].
+        //
+        //     row 0 reads row 1, row 1 repeats    ->  sum of the weights times 11
+        //     weights sum to the scale            ->  3 * 11 = 33
+        //
+        // Mutation: dropping the scale gives 11.
+        let scale = EF::from(F::from_u32(3));
+        let p0 = EF::from(F::from_u32(7));
+        let split = SplitEq::<F, EF>::new_packed(&Point::new(vec![p0]), scale);
+        let poly = Poly::new(vec![F::from_u32(5), F::from_u32(11)]);
+        assert_eq!(
+            split.eval_next_base(poly.as_view()),
+            scale * F::from_u32(11)
+        );
     }
 
     #[test]
