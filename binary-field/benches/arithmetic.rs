@@ -14,8 +14,9 @@ use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
 use p3_binary_field::{
-    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
-    LinearizedPoly8b, PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel, poly_basis,
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, ByteMatrix,
+    Ghash128, LinearizedPoly8b, PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel,
+    poly_basis,
 };
 use p3_field::{Algebra, BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
@@ -999,6 +1000,24 @@ fn bench_aes(c: &mut Criterion) {
             });
         });
         group.finish();
+    }
+
+    // The `F_2`-linear map applied across a slice, which is the sweep the
+    // register kernels accelerate: the element-wise groups above go through the
+    // scalar API and so cannot show a vector kernel at all.
+    {
+        let mut group = c.benchmark_group("aes/map_slice");
+        for bytes in [256usize, 4096, 65536] {
+            let matrix = ByteMatrix::from_images([0x1f, 0x3e, 0x7c, 0xf8, 0xf1, 0xe3, 0xc7, 0x8f]);
+            let mut values: Vec<u8> = (0..bytes).map(|i| i as u8).collect();
+            group.throughput(criterion::Throughput::Bytes(bytes as u64));
+            group.bench_function(format!("affine/{bytes}"), |b| {
+                b.iter(|| {
+                    black_box(matrix).apply_slice(black_box(&mut values));
+                    black_box(values[0])
+                });
+            });
+        }
     }
 
     let mut group = c.benchmark_group("aes/inverse");
