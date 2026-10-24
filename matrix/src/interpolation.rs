@@ -454,6 +454,13 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
             // Zero means x_k duplicates an earlier domain point.
             let b_xk_inv = b_xk.try_inverse()?;
 
+            // With no columns there are no coefficients to update.
+            //
+            // The loop still runs, so that every later point is checked for duplicates.
+            if w == 0 {
+                continue;
+            }
+
             // Horner-evaluate all w result polynomials at x_k.
             // Process whole rows (= ascending degree) for row-major cache locality.
             //
@@ -542,6 +549,7 @@ mod tests {
 
     use super::*;
     use crate::dense::RowMajorMatrix;
+    use crate::horizontally_truncated::HorizontallyTruncated;
 
     type F = BabyBear;
     type EF4 = BinomialExtensionField<BabyBear, 4>;
@@ -1241,6 +1249,20 @@ mod tests {
         let point = EF4::from(F::from_u32(1));
         let result = evals.interpolate_arbitrary_point(&xs, point).unwrap();
         assert_eq!(result, vec![EF4::from(F::from_u32(6))]);
+    }
+
+    #[test]
+    fn test_recover_coefficients_width_zero() {
+        // Fixture state: three points and no columns, through a column range of width 0.
+        let m = RowMajorMatrix::new((1..=6).map(F::from_u32).collect::<Vec<_>>(), 2);
+        let v = HorizontallyTruncated::new(m, 0).unwrap();
+        let xs = [F::ONE, F::TWO, F::from_u32(3)];
+
+        // Invariant: distinct points succeed, and a duplicate point still returns nothing.
+        assert!(v.recover_coefficients(&xs).is_some());
+        assert_eq!(v.recover_coefficients(&[F::ONE, F::TWO, F::ONE]), None);
+
+        // Mutation: updating the rows of an empty coefficient matrix panics on the first row.
     }
 
     #[test]

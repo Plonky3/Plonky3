@@ -566,6 +566,15 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     {
         assert_eq!(vs.len(), self.height());
 
+        // With no weight vectors each column gets an empty array.
+        //
+        // The packed kernel below splits its accumulator into chunks of N, which panics for N = 0.
+        if N == 0 {
+            return (0..self.width())
+                .map(|_| FieldArray::from_fn(|_| EF::ZERO))
+                .collect();
+        }
+
         let packed_width = self.width().div_ceil(T::Packing::WIDTH);
         let height = self.height();
 
@@ -976,6 +985,19 @@ mod tests {
         // Mutation: assuming the item exists is undefined behaviour.
         //
         // A debug build aborts on the unchecked unwrap, and a release build packs a value read past the row.
+    }
+
+    #[test]
+    fn test_columnwise_dot_product_batched_no_vectors() {
+        // Fixture state: 3 rows, 2 columns, and a batch of zero weight vectors.
+        let mat = RowMajorMatrix::new((1..=6).map(BabyBear::from_u32).collect::<Vec<_>>(), 2);
+        let vs = vec![FieldArray::<BabyBear, 0>::from_fn(|_| BabyBear::ZERO); 3];
+
+        // Invariant: one empty array per column.
+        let res = mat.columnwise_dot_product_batched::<BabyBear, 0>(&vs);
+        assert_eq!(res.len(), 2);
+
+        // Why: an empty batch returns before splitting the accumulator into chunks of 0 lanes.
     }
 
     #[test]

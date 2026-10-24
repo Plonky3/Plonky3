@@ -156,7 +156,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
 
     /// Get an iterator over the rows of the matrix.
     pub fn row_slices(&self) -> impl DoubleEndedIterator<Item = &[T]> {
-        self.values.borrow().chunks_exact(self.width)
+        // A chunk length of 0 panics, and width 0 holds no rows.
+        //
+        // Chunks of length 1 stand in, and taking the height drops them all.
+        let height = self.height();
+        self.values
+            .borrow()
+            .chunks_exact(self.width.max(1))
+            .take(height)
     }
 
     /// Get a parallel iterator over the rows of the matrix.
@@ -164,7 +171,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     where
         T: Sync,
     {
-        self.values.borrow().par_chunks_exact(self.width)
+        // A chunk length of 0 panics, and width 0 holds no rows.
+        //
+        // Chunks of length 1 stand in, and taking the height drops them all.
+        let height = self.height();
+        self.values
+            .borrow()
+            .par_chunks_exact(self.width.max(1))
+            .take(height)
     }
 
     /// Returns a slice of the given row.
@@ -184,7 +198,15 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     where
         S: BorrowMut<[T]>,
     {
-        self.values.borrow_mut().chunks_exact_mut(self.width)
+        // A chunk length of 0 panics, and width 0 holds no rows.
+        //
+        // Chunks of length 1 stand in, and taking the height drops them all.
+        let height = self.height();
+        let width = self.width.max(1);
+        self.values
+            .borrow_mut()
+            .chunks_exact_mut(width)
+            .take(height)
     }
 
     /// Get a mutable parallel iterator over the rows of the matrix.
@@ -193,7 +215,15 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         T: 'a + Send,
         S: BorrowMut<[T]>,
     {
-        self.values.borrow_mut().par_chunks_exact_mut(self.width)
+        // A chunk length of 0 panics, and width 0 holds no rows.
+        //
+        // Chunks of length 1 stand in, and taking the height drops them all.
+        let height = self.height();
+        let width = self.width.max(1);
+        self.values
+            .borrow_mut()
+            .par_chunks_exact_mut(width)
+            .take(height)
     }
 
     /// Get a mutable iterator over the rows of the matrix which packs the rows into packed values.
@@ -1052,6 +1082,20 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
+
+    #[test]
+    fn test_row_iterators_width_zero() {
+        // Fixture state: the empty matrix of width 0, which holds no rows.
+        let mut m = RowMajorMatrix::<u32>::new(vec![], 0);
+
+        // Invariant: every row iterator yields nothing.
+        assert_eq!(m.row_slices().count(), 0);
+        assert_eq!(m.par_row_slices().count(), 0);
+        assert_eq!(m.rows_mut().count(), 0);
+        assert_eq!(m.par_rows_mut().count(), 0);
+
+        // Mutation: splitting the buffer into chunks of length 0 panics.
+    }
 
     #[test]
     fn owned_transpose_does_not_initialize_defaults() {
