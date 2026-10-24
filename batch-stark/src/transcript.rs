@@ -501,14 +501,18 @@ where
                                 next_bus += 1;
                                 id
                             });
-                            let expected = *global_width.entry(name).or_insert(ctx_width);
-                            assert_eq!(
-                                expected, ctx_width,
-                                "bus {name:?}: tuple widths {expected} and {ctx_width} \
-                                 differ; every interaction sharing a bus must use the \
-                                 same payload width, or a shorter tuple can alias a \
-                                 longer one",
-                            );
+                            // A lookup without tuples carries no payload, so it pins no width.
+                            // This matches the width check the verifier runs before the transcript.
+                            if !ctx.elements.is_empty() {
+                                let expected = *global_width.entry(name).or_insert(ctx_width);
+                                assert_eq!(
+                                    expected, ctx_width,
+                                    "bus {name:?}: tuple widths {expected} and {ctx_width} \
+                                     differ; every interaction sharing a bus must use the \
+                                     same payload width, or a shorter tuple can alias a \
+                                     longer one",
+                                );
+                            }
                             id
                         }
                         LookupKind::Local => {
@@ -1006,8 +1010,10 @@ where
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use core::slice::from_ref;
     use core::str::from_utf8;
 
+    use p3_air::SymbolicExpression;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::testing::{
         SeedDigest, assert_seeds_pairwise_distinct, pow_difficulties, seed_digest,
@@ -1342,6 +1348,54 @@ mod tests {
         let prover_next: F = prover_challenger.sample();
         assert_eq!(verifier_next, prover_next);
     }
+
+    #[test]
+    fn a_lookup_without_tuples_pins_no_bus_width() {
+        // Fixture state: two instances share the bus "bus".
+        //
+        //     instance 0   exclusive group with no branch   no tuple
+        //     instance 1   one global send                  width 2
+        let bus = || LookupKind::Global("bus".into());
+        let empty_group = Lookup {
+            kind: bus(),
+            elements: vec![],
+            multiplicities: vec![],
+            count_weight: 0,
+            column: 0,
+            flags: Some(vec![]),
+        };
+        let send = Lookup {
+            kind: bus(),
+            elements: vec![vec![
+                SymbolicExpression::from(F::ONE),
+                SymbolicExpression::from(F::TWO),
+            ]],
+            multiplicities: vec![SymbolicExpression::from(F::ONE)],
+            count_weight: 1,
+            column: 0,
+            flags: None,
+        };
+        let all_lookups: [&[Lookup<F>]; 2] = [from_ref(&empty_group), from_ref(&send)];
+
+        // Invariant: only tuples carry a width, as in the verifier's width check.
+        // So the empty group cannot clash with the width-2 send.
+        //
+        // Both lookups name one bus, so they read one offset and the shared combiner.
+        //
+        //     alpha + (0 + 1) beta^2,   beta
+        let (alpha, beta) = (EF::from_u8(3), EF::from_u8(5));
+        let offset = alpha + beta.square();
+        assert_eq!(
+            lay_out_lookup_challenges::<F, EF, _, _>(
+                &all_lookups,
+                &LogUpGadget::new(),
+                alpha,
+                beta
+            ),
+            vec![vec![offset, beta], vec![offset, beta]],
+        );
+    }
+
     /// This protocol's name, as the vocabulary table keys it.
     fn protocol() -> &'static str {
         from_utf8(NAME).expect("the protocol name is ASCII")
