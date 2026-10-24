@@ -49,6 +49,9 @@ pub enum HidingFriProverError {
         num_opening_points: usize,
         extension_degree: usize,
     },
+    /// The number of quotient evaluations differs from the chunk count.
+    #[error("expected {expected} quotient chunks, got {got}")]
+    QuotientChunkCountMismatch { expected: usize, got: usize },
 }
 
 /// A hiding FRI PCS.
@@ -505,6 +508,18 @@ where
             "num_chunks must be > 1 to preserve hiding (got {num_chunks})"
         );
         let (domains, evaluations): (Vec<_>, Vec<_>) = evaluations.into_iter().unzip();
+        // The mask of chunk `num_chunks - 1` balances the masks of the chunks before it.
+        // The random draws end with a zero block for the last evaluation.
+        // Both describe one chunk only when the two counts agree.
+        //
+        // Why: with fewer chunks than evaluations, the masks no longer cancel.
+        // With more, the indexing panics.
+        if domains.len() != num_chunks {
+            return Err(HidingFriProverError::QuotientChunkCountMismatch {
+                expected: num_chunks,
+                got: domains.len(),
+            });
+        }
         for mat in &evaluations {
             self.check_hiding_budget(mat.height(), Challenge::DIMENSION, 1)?;
         }
@@ -1227,6 +1242,55 @@ mod tests {
             result,
             Err(HidingFriProverError::HidingBudgetExceeded { .. })
         ));
+    }
+
+    #[test]
+    fn quotient_ldes_reject_a_chunk_count_other_than_the_evaluation_count() {
+        let (pcs, _, _, _) = make_fixture();
+        // Fixture state: four chunks of two rows, split from a coset of eight points.
+        let chunks = || {
+            Domain::new(Val::GENERATOR, 3)
+                .unwrap()
+                .split_domains(4)
+                .into_iter()
+                .map(|domain| (domain, RowMajorMatrix::new(Val::zero_vec(2), 1)))
+        };
+
+        // Invariant: the masks cancel only when both counts agree.
+        //
+        // Mutation: two chunks declared for four evaluations.
+        // Chunk 1 would balance chunk 0 alone, and chunk 2 would keep its draw.
+        //
+        //     draws:   r_0   r_1                  r_2   0
+        //     masks:   r_0   r_1 - (c_0/c_1) r_0  r_2   0
+        //     sum c_i masks = c_1 r_1 + c_2 r_2, not zero
+        let result = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_quotient_ldes(
+            &pcs,
+            chunks(),
+            2,
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            HidingFriProverError::QuotientChunkCountMismatch {
+                expected: 2,
+                got: 4
+            }
+        );
+
+        // Mutation: eight chunks declared for four evaluations.
+        // Chunk 7 has no evaluation to read.
+        let result = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_quotient_ldes(
+            &pcs,
+            chunks(),
+            8,
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            HidingFriProverError::QuotientChunkCountMismatch {
+                expected: 8,
+                got: 4
+            }
+        );
     }
 
     #[test]
