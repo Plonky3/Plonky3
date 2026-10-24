@@ -1810,9 +1810,9 @@ pub struct ZerocheckReduction<EF> {
 /// # Panics
 ///
 /// Panics if `tau` is zero, since recovering `q(1)` divides by it.
-/// Freshly drawn coordinates are redrawn until nonzero.
-/// A coordinate inherited from the lookup reduction is not, so this can fire with
-/// probability about one over the field size.
+/// Both transcripts redraw every coordinate until nonzero.
+/// That covers the fresh coordinates and those inherited from the lookup reduction.
+/// So an honest run never reaches this panic.
 fn standard_round_from_q_evals<EF>(
     interpolator: &RoundPolyInterpolator<EF>,
     evals: &[EF],
