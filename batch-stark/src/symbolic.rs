@@ -144,15 +144,29 @@ where
 {
     let (base, extension) = get_symbolic_constraints(air, layout, contexts, lookup_gadget);
 
-    // Without periodic columns the trace-size-aware degree coincides with the cached
-    // degree multiple, so reuse it and skip the expression walk entirely.
+    // Without periodic columns, start from the cached degree multiple.
+    //
+    // It weighs the transition selector 0, which is exact for one transition factor.
+    // A product of two or more transition factors outgrows it:
+    //
+    //     T^2 a b:   degree multiple 2,   polynomial degree 2 (n - 1) + 2 = 2n
+    //
+    // So also convert the trace-size-aware degree, and keep the larger of the two.
     if layout.num_periodic_columns == 0 {
-        return base
+        let cached = base
             .iter()
             .map(|c| c.degree_multiple())
             .chain(extension.iter().map(|c| c.degree_multiple()))
             .max()
             .unwrap_or(0);
+        let poly = base
+            .iter()
+            .map(|c| c.poly_degree(trace_len, &[]))
+            .chain(extension.iter().map(|c| c.poly_degree(trace_len, &[])))
+            .max()
+            .unwrap_or(0);
+        // Why: the maximum never lowers the cached degree, so no existing AIR loses chunks.
+        return cached.max(constraint_degree_from_poly_degree(poly, trace_len));
     }
 
     // Period (cycle length) of each periodic column, indexed by periodic column index.

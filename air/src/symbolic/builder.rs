@@ -127,13 +127,26 @@ where
 {
     let (base_constraints, extension_constraints) = get_all_symbolic_constraints(air, layout);
 
-    // Without periodic columns the trace-size-aware degree coincides with the cached
-    // degree multiple: the linear transition selector never changes the constraint
-    // degree, and every other leaf scales with `trace_len - 1`. Reuse the cached
-    // degrees and skip the expression walk entirely.
+    // Without periodic columns, start from the cached degree multiple.
+    //
+    // It weighs the transition selector 0, which is exact for one transition factor.
+    // A product of two or more transition factors outgrows it:
+    //
+    //     T^2 a b:   degree multiple 2,   polynomial degree 2 (n - 1) + 2 = 2n
+    //
+    // So also convert the trace-size-aware degree, and keep the larger of the two.
     if layout.num_periodic_columns == 0 {
-        let degrees = max_constraint_degrees(&base_constraints, &extension_constraints, 0);
-        return degrees.base.max(degrees.extension);
+        let cached = max_constraint_degrees(&base_constraints, &extension_constraints, 0);
+        let poly =
+            max_constraint_poly_degrees(&base_constraints, &extension_constraints, trace_len, &[]);
+        // Why: the maximum never lowers the cached degree, so no existing AIR loses chunks.
+        return cached
+            .base
+            .max(cached.extension)
+            .max(constraint_degree_from_poly_degree(
+                poly.base.max(poly.extension),
+                trace_len,
+            ));
     }
 
     // Period (cycle length) of each periodic column, indexed by periodic column index.
@@ -688,6 +701,42 @@ mod tests {
         let l = layout(3, air.width, air.num_public_values(), 0);
         let max_degree = get_max_constraint_degree(&air, l, 8);
         assert_eq!(max_degree, 1, "Max constraint degree should be 1");
+    }
+
+    #[derive(Debug)]
+    struct NestedTransitionAir;
+
+    impl BaseAir<F> for NestedTransitionAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    impl Air<SymbolicAirBuilder<F>> for NestedTransitionAir {
+        fn eval(&self, builder: &mut SymbolicAirBuilder<F>) {
+            let main = builder.main();
+            let a = main.current(0).unwrap();
+            let b = main.current(1).unwrap();
+            builder
+                .when_transition()
+                .when_transition()
+                .assert_eq(a * a, b);
+        }
+    }
+
+    #[test]
+    fn test_get_max_constraint_degree_counts_nested_transitions() {
+        // Fixture state: one constraint T * T * (a^2 - b), trace length 8.
+        //
+        //     degree multiple   0 + 0 + 2 = 2
+        //     polynomial degree 1 + 1 + 2 * 7 = 16
+        //     least d with 16 <= 7 d + 1:  d = 3
+        //
+        // Invariant: the degree bounds the polynomial degree by d (n - 1) + 1.
+        // Mutation: returning the cached degree multiple alone gives 2, and 16 > 15.
+        let air = NestedTransitionAir;
+        let degree = get_max_constraint_degree(&air, AirLayout::from_air(&air), 8);
+        assert_eq!(degree, 3);
     }
 
     #[test]
