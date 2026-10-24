@@ -485,3 +485,18 @@ fn only_booleanity_rejects_a_non_boolean_input() {
         );
     }
 }
+
+#[test]
+#[should_panic(expected = "the binary Blake-3 AIR requires a field of characteristic 2")]
+fn constraints_reject_odd_characteristic() {
+    // Invariant: the evaluation refuses an odd characteristic before emitting a constraint.
+    //
+    // Fixture state: BabyBear, characteristic 2^31 - 2^27 + 1.
+    //
+    // The trace generator refuses it too, so the constraints are built directly.
+    let layout = AirLayout {
+        main_width: NUM_BLAKE3_BINARY_COLS,
+        ..Default::default()
+    };
+    let _ = get_symbolic_constraints::<BabyBear, _>(&Blake3BinaryAir::default(), layout);
+}

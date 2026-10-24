@@ -11,6 +11,7 @@ use p3_air::{
     AirLayout, BaseAir, BaseEntry, BaseLeaf, ConstraintFailure, SymbolicExpr,
     check_all_constraints, check_constraints, get_max_constraint_degree, get_symbolic_constraints,
 };
+use p3_baby_bear::BabyBear;
 use p3_binary_field::BinaryField128;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
@@ -728,4 +729,19 @@ fn only_booleanity_rejects_a_non_boolean_input() {
             "input cell {cell}"
         );
     }
+}
+
+#[test]
+#[should_panic(expected = "the binary BLAKE2s AIR requires a field of characteristic 2")]
+fn constraints_reject_odd_characteristic() {
+    // Invariant: the evaluation refuses an odd characteristic before emitting a constraint.
+    //
+    // Fixture state: BabyBear, characteristic 2^31 - 2^27 + 1.
+    //
+    // The trace generator refuses it too, so the constraints are built directly.
+    let layout = AirLayout {
+        main_width: NUM_BLAKE2S_BINARY_COLS,
+        ..Default::default()
+    };
+    let _ = get_symbolic_constraints::<BabyBear, _>(&Blake2sBinaryAir::default(), layout);
 }

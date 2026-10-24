@@ -132,7 +132,7 @@ pub fn generate_binary_trace_packed<F: Field>(
 
 /// Number of 32-bit input words: the chaining value, the message block and the two counter halves.
 ///
-/// The two finalization flags follow them as single cells.
+/// The finalization flag follows them as a single cell.
 pub(super) const NUM_INPUT_WORDS: usize = 8 + 16 + 2;
 
 // The packed generator transposes the input words two at a time.

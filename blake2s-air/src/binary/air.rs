@@ -6,7 +6,7 @@ use core::borrow::Borrow;
 use itertools::izip;
 use p3_air::utils::u32_to_bits_le;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
-use p3_field::Field;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -171,6 +171,16 @@ struct State<AB: AirBuilder> {
 impl<AB: AirBuilder> Air<AB> for Blake2sBinaryAir {
     #[inline]
     fn eval(&self, builder: &mut AB) {
+        // Every constraint writes XOR as a field sum, which is XOR only in characteristic 2.
+        //
+        // In odd characteristic each constraint fixes one cell from earlier ones.
+        // Any input row then extends to a satisfying row unrelated to the hash.
+        assert_eq!(
+            <AB::F as PrimeCharacteristicRing>::PrimeSubfield::TWO,
+            <AB::F as PrimeCharacteristicRing>::PrimeSubfield::ZERO,
+            "the binary BLAKE2s AIR requires a field of characteristic 2"
+        );
+
         let main = builder.main();
         let local: &Blake2sBinaryCols<AB::Var> = main.current_slice().borrow();
 

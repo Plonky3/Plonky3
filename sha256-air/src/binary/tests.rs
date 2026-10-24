@@ -543,3 +543,18 @@ fn rejects_message_bit_flip_without_regeneration() {
     let failures = failures_after_edit(2, |row| row.w[5][9] += F::ONE);
     assert!(!failures.is_empty());
 }
+
+#[test]
+#[should_panic(expected = "the binary SHA-256 AIR requires a field of characteristic 2")]
+fn constraints_reject_odd_characteristic() {
+    // Invariant: the evaluation refuses an odd characteristic before emitting a constraint.
+    //
+    // Fixture state: BabyBear, characteristic 2^31 - 2^27 + 1.
+    //
+    // The trace generator refuses it too, so the constraints are built directly.
+    let layout = AirLayout {
+        main_width: NUM_SHA256_BINARY_COLS,
+        ..Default::default()
+    };
+    let _ = get_symbolic_constraints::<BabyBear, _>(&Sha256BinaryAir::default(), layout);
+}
