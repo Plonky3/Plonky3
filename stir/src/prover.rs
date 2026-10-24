@@ -451,16 +451,26 @@ where
         // correction's `(1 - step)` denominator, so they are formed in place.
         let next_oracle_evals = tracing::debug_span!("quotient_sweep").in_scope(|| {
             let mut combined_denoms = vanishing_evals;
-            combined_denoms
+            // `m -> step_start * g^m` is injective on the sub-coset, so at most one lane has
+            // `step = 1`. There the geometric sum is `num_answers + 1` and `1 - step` vanishes,
+            // so that lane keeps its bare vanishing denominator and is finished below.
+            let degenerate = combined_denoms
                 .par_chunks_mut(POWER_CHUNK)
                 .enumerate()
-                .for_each(|(chunk_idx, chunk)| {
+                .filter_map(|(chunk_idx, chunk)| {
                     let mut step = step_start * g_sub.exp_u64((chunk_idx * POWER_CHUNK) as u64);
-                    for denom in chunk.iter_mut() {
-                        *denom *= EF::ONE - step;
+                    let mut hit = None;
+                    for (offset, denom) in chunk.iter_mut().enumerate() {
+                        if step == EF::ONE {
+                            hit = Some(chunk_idx * POWER_CHUNK + offset);
+                        } else {
+                            *denom *= EF::ONE - step;
+                        }
                         step *= g_sub;
                     }
-                });
+                    hit
+                })
+                .min();
             let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
             drop(combined_denoms);
 
@@ -483,6 +493,9 @@ where
                 })
                 .collect();
 
+            // The opened value of the ratio-one lane, kept before the sweep overwrites it.
+            let degenerate_value = degenerate.map(|p| next_oracle_evals[p]);
+
             next_oracle_evals
                 .par_chunks_mut(POWER_CHUNK)
                 .zip(ans_evals.par_chunks(POWER_CHUNK))
@@ -498,6 +511,13 @@ where
                         numerator_step *= g_sub_hi;
                     }
                 });
+
+            // The sweep wrote `(v - ans) / Z * (1 - 1) = 0` on the ratio-one lane.
+            // Its geometric sum is the term count instead.
+            if let (Some(p), Some(value)) = (degenerate, degenerate_value) {
+                next_oracle_evals[p] =
+                    (value - ans_evals[p]) * combined_inverses[p] * EF::from_usize(num_answers + 1);
+            }
             next_oracle_evals
         });
 
@@ -1542,5 +1562,113 @@ fn open_fiber_rows<EF: Field, M: Mmcs<EF>>(
     StirQueryOpenings {
         row_evals,
         opening_proof,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_commit::ExtensionMmcs;
+    use p3_dft::Radix2DitParallel;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+    use crate::utils::{eval_poly, interpolate_poly, vanishing_poly_from_roots};
+    use crate::{SecurityAssumption, StirParameters};
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type Ch = DuplexChallenger<F, Perm, 16, 8>;
+    type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type ValMmcs =
+        MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, Hash, Compress, 2, 8>;
+    type Mmcs = ExtensionMmcs<F, EF, ValMmcs>;
+    type Config = StirConfig<F, EF, Mmcs, Ch>;
+
+    #[test]
+    fn degree_correction_at_the_point_where_r_comb_x_is_one() {
+        // Fixture state: a degree-2^10 witness folded by 4 in round 0.
+        //
+        //     L_1 = next_shift <g>,  first point x_0 = next_shift
+        //     r_comb = 1 / x_0   =>   r_comb * x_0 = 1
+        //
+        // Invariant: the geometric sum at ratio one is its term count.
+        //
+        //     sum_{t <= gap} (r x_0)^t = gap + 1
+        //
+        // So the next witness at x_0 is (g(x_0) - Ans(x_0)) / Z(x_0) * (gap + 1).
+        let mut rng = SmallRng::seed_from_u64(0x5717);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs::new(Hash::new(perm.clone()), Compress::new(perm), 0);
+        let config = Config::new(
+            10,
+            StirParameters {
+                log_blowup: 1,
+                log_folding_factor: 2,
+                log_starting_folding_factor: 2,
+                soundness_type: SecurityAssumption::CapacityBound,
+                security_level: 80,
+                max_pow_bits: 20,
+                mmcs: Mmcs::new(val_mmcs),
+            },
+        );
+        assert!(config.num_rounds() >= 1);
+        let dft = Radix2DitParallel::<F>::default();
+
+        let coeffs: Vec<EF> = (0..1 << 10).map(|_| rng.random()).collect();
+        let mut oracle = Oracle::Coeffs(coeffs);
+        let shift = F::GENERATOR;
+        let log_domain = config.log_starting_domain_size();
+        let mut round = RoundProver::new(&config, 0, &dft, shift, log_domain);
+        round.fold_and_commit(&mut oracle, shift, log_domain, rng.random());
+
+        // An out-of-domain point with a non-zero top coordinate, then three queries.
+        let ood: EF = rng.random();
+        round.ood_answers(vec![ood]);
+        round.record_queries(vec![1, 5, 9]);
+        round.answer_poly();
+
+        let folded = round.truncated_fold_coeffs().to_vec();
+        let ans = round.ans_poly.clone();
+        let x0 = round.next_shift;
+        let points: Vec<EF> = round
+            .ood_points
+            .iter()
+            .copied()
+            .chain(round.query_points.iter().map(|&p| EF::from(p)))
+            .collect();
+        let gap = points.len();
+        assert_eq!(
+            ans,
+            interpolate_poly(
+                &points,
+                &points
+                    .iter()
+                    .map(|&p| eval_poly(&folded, p))
+                    .collect::<Vec<_>>()
+            )
+        );
+
+        // Mutation: drop the ratio-one branch and the sweep divides by 1 - r x_0 = 0.
+        let r_comb = EF::from(x0.inverse());
+        let finish = round.finish(r_comb);
+
+        let Oracle::Coeffs(next) = finish.next_oracle else {
+            panic!("the next witness is carried in coefficients");
+        };
+        let x0 = EF::from(x0);
+        let vanishing = vanishing_poly_from_roots(&points);
+        let expected = (eval_poly(&folded, x0) - eval_poly(&ans, x0))
+            * eval_poly(&vanishing, x0).inverse()
+            * EF::from_usize(gap + 1);
+        assert_eq!(eval_poly(&next, x0), expected);
     }
 }

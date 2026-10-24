@@ -99,7 +99,7 @@ impl<F: TowerLevel> BasisNtt<F> {
     pub fn twiddle(&self, layer: usize, block: usize) -> F {
         // Each block starts at a subset sum of the basis vectors above this stage.
         assert!(layer < self.log_domain_size(), "stage outside domain");
-        assert!(block < (1usize << layer), "block outside domain");
+        assert!(block_in_stage(block, layer), "block outside domain");
         let row = &self.rows[self.log_domain_size() - layer - 1];
         let mut t = *row.last().expect("a subspace row includes its shift");
         let mut selected = block;
@@ -120,7 +120,7 @@ impl<F: TowerLevel> BasisNtt<F> {
             layer + 2 < self.log_domain_size(),
             "three stages must remain"
         );
-        assert!(block < 1usize << layer, "block outside domain");
+        assert!(block_in_stage(block, layer), "block outside domain");
         let dim = self.log_domain_size();
         let (v0, v1, v2) = (
             &self.rows[dim - layer - 1],
@@ -179,8 +179,8 @@ impl<F: TowerLevel> BasisNtt<F> {
         // These equalities make each split cover complete rows and the entire domain.
         assert!(width > 0, "matrix width must be positive");
         assert_eq!(
-            values.len() / width,
-            1usize << self.log_domain_size(),
+            Some(values.len() / width),
+            domain_height(self.log_domain_size()),
             "matrix height differs from domain"
         );
         assert_eq!(values.len() % width, 0, "incomplete matrix row");
@@ -197,6 +197,20 @@ impl<F: TowerLevel> BasisNtt<F> {
             }
         }
     }
+}
+
+/// The number of points of a domain of the given dimension, or none past the word size.
+fn domain_height(dim: usize) -> Option<usize> {
+    // Why: a 64- or 128-bit level admits 64 or more basis vectors, and `1 << dim` would overflow.
+    u32::try_from(dim)
+        .ok()
+        .and_then(|dim| 1usize.checked_shl(dim))
+}
+
+/// Whether a block index lies among the `2^layer` blocks of a stage.
+const fn block_in_stage(block: usize, layer: usize) -> bool {
+    // A stage at or past the word size has more blocks than any index can name.
+    layer >= usize::BITS as usize || block >> layer == 0
 }
 
 impl<F: ButterflyField> BasisNtt<F> {
@@ -227,8 +241,8 @@ impl<F: ButterflyField> BasisNtt<F> {
         assert!(width > 0, "matrix width must be positive");
         let dim = self.log_domain_size();
         assert_eq!(
-            values.len() / width,
-            1usize << dim,
+            Some(values.len() / width),
+            domain_height(dim),
             "matrix height differs from domain"
         );
         assert_eq!(values.len() % width, 0, "incomplete matrix row");
@@ -278,7 +292,7 @@ impl<F: ButterflyField> BasisNtt<F> {
 mod tests {
     use alloc::vec;
 
-    use p3_binary_field::{Poly64, Rijndael8b};
+    use p3_binary_field::{BinaryField128, Poly64, Rijndael8b};
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
 
@@ -404,5 +418,39 @@ mod tests {
                 .map(|i| Rijndael8b::from_byte(0x80 ^ i))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn stages_past_the_word_size_have_their_twiddles() {
+        // Fixture state: 65 Cantor vectors of GF(2^128), so the stages run 0 ..= 64.
+        //
+        //     stage 64 has 2^64 blocks, and block 1 is inside the domain
+        let basis: Vec<_> = (0..65).map(BinaryField128::cantor_basis).collect();
+        let plan = BasisNtt::new(&basis, BinaryField128::ZERO);
+
+        // Invariant: block b of a stage starts at a sum of basis vectors.
+        //
+        // They are the vectors above the stage that b selects.
+        //
+        // Stage 64 sits below every vector, so block 1 adds the last row's entry for vector 64.
+        let row = &plan.rows[0];
+        assert_eq!(plan.twiddle(64, 1), *row.last().unwrap() + row[1]);
+        assert_eq!(plan.twiddle(64, 0), *row.last().unwrap());
+
+        // Three stages from stage 62 down reach stage 64 too.
+        let fused = plan.twiddles_radix8(62, 1);
+        assert_eq!(fused[0], plan.twiddle(62, 1));
+        assert_eq!(fused[6], plan.twiddle(64, 7));
+    }
+
+    #[test]
+    #[should_panic(expected = "matrix height differs from domain")]
+    fn a_domain_of_the_word_size_refuses_any_matrix() {
+        // Fixture state: 64 vectors of GF(2^128), a domain of 2^64 points.
+        //
+        // No buffer holds 2^64 rows, so even a single row is refused.
+        let basis: Vec<_> = (0..64).map(BinaryField128::cantor_basis).collect();
+        let plan = BasisNtt::new(&basis, BinaryField128::ZERO);
+        plan.forward(&mut [BinaryField128::ONE]);
     }
 }
