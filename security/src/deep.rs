@@ -13,11 +13,35 @@
 //! The caller supplies the exact chunk count. For degree `d` and `z = is_zk`, this is
 //! `c = 2^z · next_power_of_two(max(d + z, 2) − 1)`, including both ZK adjustments.
 //!
-//! The list size `L⁺` enters linearly here, following `soundcalc`.
-//! [2024/1553] Theorem 2 (`eps_2`) instead uses `L² ≈ (m/ρ)²`, which is
-//! a few bits more conservative in the list-decoding regime; ALI/DEEP
-//! don't bind at the LDR optimum in practice (see `fri::best_ldr_m`), so
-//! the difference does not currently affect reported bounds.
+//! The list size enters linearly.
+//!
+//! The trace and quotient words are decoded jointly, as one interleaved word.
+//!
+//! So the list size enters once.
+//!
+//! Haböck's FRI summary (eprint 2022/1216) proves this in Theorem 8 and Remark 9.
+//!
+//! soundcalc uses the same charge.
+//!
+//! Eprint 2024/1553, Theorem 2, charges its square, a looser bound.
+//!
+//! The difference matters, because this term can set the reported level.
+//!
+//! Example: a degree-3 AIR over a 124-bit field, in the list-decoding regime.
+//!
+//! ```text
+//!     trace 2^24, blowup 8, 70 queries, arity 2, m = 3
+//!     grinding: 20 bits commit phase, 16 bits query phase, 8 bits batch combination
+//!     2 batched functions
+//!
+//!     air composition      117.37 bits
+//!     batch combination     95.16 bits
+//!     low-degree test      105.43 bits
+//!     DEEP, linear          94.69 bits   <- weakest, sets the level
+//!     DEEP, squared         91.39 bits
+//! ```
+//!
+//! Without batch grinding the batch term drops to 87.16 bits and sets the level instead.
 
 use libm::log2;
 
