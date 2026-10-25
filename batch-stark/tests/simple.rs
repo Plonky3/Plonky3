@@ -21,7 +21,9 @@ use p3_batch_stark::{
 use p3_challenger::testing::pow_difficulties;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, FriShape, PcsShape};
-use p3_lookup::{Count, InteractionBuilder, LookupError, LookupTerminal};
+use p3_lookup::{
+    Count, InteractionBuilder, LookupError, LookupTerminal, Lookups, SymbolicInteraction,
+};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_security::grinding::{GrindingBudget, GrindingSites, RecordedGrind};
@@ -2887,6 +2889,86 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
 
     let pvs = vec![vec![], fib_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
+}
+
+#[test]
+fn bus_width_mismatch_across_instances_is_rejected() {
+    let config = make_config(2025);
+    let log_n = 3;
+    let n = 1 << log_n;
+
+    // Fixture state: two instances share the bus "MulFib".
+    //
+    //     instance 0 (mul)  sends     (a, b)        width 2
+    //     instance 1 (fib)  receives  (left, right) width 2
+    let mul_air_lookups = MulAirLookups::new(
+        MulAir { reps: 2 },
+        false,
+        true,
+        vec!["MulFib".to_string(), "MulFib".to_string()],
+    );
+    let fib_air_lookups = FibAirLookups::new(
+        FibonacciAir {
+            log_height: log_n,
+            tamper_index: None,
+        },
+        true,
+        None,
+    );
+    let airs = [
+        DemoAirWithLookups::MulLookups(mul_air_lookups),
+        DemoAirWithLookups::FibLookups(fib_air_lookups),
+    ];
+    let mut prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]).unwrap();
+
+    let mul_trace = mul_trace::<Val>(n, 2);
+    let fib_trace = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+    let traces = [&mul_trace, &fib_trace];
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+
+    // Mutation: the verifier's receiver reads a third payload field.
+    //
+    //     instance 1 (fib)  receives  (left, right, left)  width 3
+    //
+    // The degree and the column count are unchanged, so every shape check still passes.
+    let receive = &prover_data.common.lookups[1][0];
+    let mut fields = receive.elements[0].clone();
+    fields.push(fields[0].clone());
+    prover_data.common.lookups[1] = Lookups::from_interactions(
+        &[SymbolicInteraction {
+            bus_name: "MulFib".to_string(),
+            fields,
+            count: receive.multiplicities[0].clone(),
+            count_weight: receive.count_weight,
+        }],
+        &[],
+        &[],
+    );
+
+    // Invariant: one bus carries one payload width, or a short tuple aliases a long one.
+    // The verifier names the bus and both widths, in instance order.
+    let err = verify_batch(
+        &config,
+        &airs,
+        &proof,
+        &[vec![], fib_pis],
+        &prover_data.common,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            BatchVerificationError::Lookup(LookupError::BusWidthMismatch {
+                bus,
+                expected: 2,
+                actual: 3,
+            }) if bus == "MulFib"
+        ),
+        "unexpected error: {err:?}"
+    );
 }
 
 /// Test with both local and global lookups using MulAirLookups and FibAirLookups

@@ -481,6 +481,14 @@ impl IndexedPlan {
 /// That includes the main and preprocessed successor columns, and it must assess them.
 ///
 /// AIR definitions and configurations remain trusted inputs, as in verification.
+///
+/// # Errors
+///
+/// Returns an error when the statement dimensions or the AIR metadata are unsupported.
+/// Returns an error when an AIR declares mutually exclusive interactions.
+/// Returns an error when a lookup expression reads a periodic column.
+/// Returns an error when every declared lookup tuple is empty.
+/// Returns an error when the lookup, indexed or bus declarations do not describe a supported plan.
 pub fn security_report<C, A>(
     config: &C,
     instances: &VerifierInstances<'_, C, A>,

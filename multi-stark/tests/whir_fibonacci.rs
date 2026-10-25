@@ -1,22 +1,25 @@
 //! End-to-end multilinear AIR SNARK over WHIR: commit, zerocheck, open, verify.
 
 use core::borrow::Borrow;
+use core::iter;
+use std::borrow::Cow;
 
 use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{CanSample, DuplexChallenger};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_multi_stark::config::MultiStarkConfig;
+use p3_multi_stark::config::{MultiStarkConfig, PcsError};
 use p3_multi_stark::lookup::LookupError;
 use p3_multi_stark::zerocheck::ZerocheckError;
 use p3_multi_stark::{
-    BoundaryIoError, MultiStarkProof, ProverInstance, ProverInstances, SecurityError,
-    VerificationError, VerifierInstance, VerifierInstances, prove, setup, verify,
+    BoundaryIoError, MultiStarkProof, MultiStarkSecurityReport, ProverInstance, ProverInstances,
+    SecurityError, VerificationError, VerifierInstance, VerifierInstances, prove, security_report,
+    setup, verify,
 };
 use p3_sumcheck::OpeningBatch;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
@@ -557,7 +560,6 @@ fn security_rejects_verifier_height_overflow_without_panicking() {
 
 #[test]
 fn security_checked_whir_roundtrip_and_target_rejection() {
-    use p3_challenger::CanSample;
     use p3_multi_stark::{
         SecurityError, prove_with_security, security_report, verify_with_security,
     };
@@ -773,7 +775,6 @@ fn security_small_base_challenges_cannot_claim_a_large_target() {
 
 #[test]
 fn opening_budget_failure_preserves_challenger() {
-    use p3_challenger::CanSample;
     let folding_factor = FoldingFactor::Constant(FOLDING);
     let whir_config = WhirConfig::new(
         17,
@@ -2779,4 +2780,175 @@ fn a_row_naming_an_entry_its_table_does_not_have_is_rejected() {
         &mut challenger(),
     )
     .expect_err("a row naming an entry outside its table must be rejected");
+}
+
+/// One AIR per lookup declaration the multi-STARK layout cannot place.
+enum UnsupportedLookupAir {
+    /// A flag selects one branch of an exclusive interaction.
+    Exclusive,
+    /// The payload is the periodic column `[0, 1]`.
+    Periodic,
+    /// Every tuple has width zero, with a multiplicity read from column 0.
+    EmptyPayload,
+}
+
+impl BaseAir<F> for UnsupportedLookupAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn num_periodic_columns(&self) -> usize {
+        usize::from(matches!(self, Self::Periodic))
+    }
+
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+        match self {
+            Self::Periodic => Cow::Owned(vec![vec![F::ZERO, F::ONE]]),
+            Self::Exclusive | Self::EmptyPayload => Cow::Owned(Vec::new()),
+        }
+    }
+}
+
+impl<AB> Air<AB> for UnsupportedLookupAir
+where
+    AB: AirBuilder<F = F> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        let row = builder.main().current_slice().to_vec();
+        match self {
+            Self::Exclusive => builder.push_exclusive_interaction(
+                "exclusive",
+                [(
+                    row[0].into(),
+                    Count::bounded(AB::Expr::ONE, 1),
+                    vec![row[1].into()],
+                )],
+            ),
+            Self::Periodic => {
+                let periodic = builder.periodic_values()[0];
+                builder.push_interaction("periodic", [periodic], Count::bounded(AB::Expr::ONE, 1));
+            }
+            Self::EmptyPayload => builder.push_interaction(
+                "empty",
+                iter::empty::<AB::Expr>(),
+                Count::bounded(row[0].into(), 1),
+            ),
+        }
+    }
+}
+
+/// Verify an honest lookup proof against an unsupported AIR.
+///
+/// Returns the verdict, and whether the caller's challenger is still in its starting state.
+fn verify_unsupported_lookup(
+    air: &UnsupportedLookupAir,
+) -> (
+    Result<(), VerificationError<PcsError<WhirConfigForTest>>>,
+    bool,
+) {
+    let (config, vk, log_height, proof) = honest_lookup();
+    let mut used = challenger();
+    let verdict = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut used,
+    );
+    let mut fresh = challenger();
+    let untouched =
+        (0..4).all(|_| CanSample::<F>::sample(&mut used) == CanSample::<F>::sample(&mut fresh));
+    (verdict, untouched)
+}
+
+/// Assess an unsupported AIR at the height of the honest lookup proof.
+fn assess_unsupported_lookup(
+    air: &UnsupportedLookupAir,
+) -> Result<MultiStarkSecurityReport, SecurityError> {
+    let (config, vk, log_height, _) = honest_lookup();
+    security_report(
+        &config,
+        &VerifierInstances::new(vec![VerifierInstance::new(air, &vk, log_height, &[])]),
+    )
+}
+
+#[test]
+fn verify_rejects_an_exclusive_interaction_before_the_transcript() {
+    // Fixture state: a 64-row AIR whose column 0 flags one exclusive branch [column 1].
+    //
+    //     AIR 0   flag -> [value]   on "exclusive"
+    //
+    // Invariant: the layout gives each tuple its own block, so an exclusive one has no place.
+    //
+    // Invariant: the AIRs alone decide this, so the challenger is never touched.
+    let (verdict, untouched) = verify_unsupported_lookup(&UnsupportedLookupAir::Exclusive);
+    let Err(VerificationError::Lookup(LookupError::ExclusiveInteraction { air })) = verdict else {
+        panic!("expected an exclusive interaction error, got {verdict:?}");
+    };
+    assert_eq!(air, 0);
+    assert!(untouched);
+}
+
+#[test]
+fn verify_rejects_a_periodic_lookup_expression_before_the_transcript() {
+    // Fixture state: a 64-row AIR whose payload is the periodic column [0, 1].
+    //
+    //     AIR 0   [periodic]   on "periodic"
+    //
+    // Invariant: the lookup tables read committed columns only, never a periodic one.
+    //
+    // Invariant: the AIRs alone decide this, so the challenger is never touched.
+    let (verdict, untouched) = verify_unsupported_lookup(&UnsupportedLookupAir::Periodic);
+    let Err(VerificationError::Lookup(LookupError::PeriodicColumn { air })) = verdict else {
+        panic!("expected a periodic column error, got {verdict:?}");
+    };
+    assert_eq!(air, 0);
+    assert!(untouched);
+}
+
+#[test]
+fn verify_rejects_all_empty_payloads_before_the_transcript() {
+    // Fixture state: a 64-row AIR whose only tuple has width 0.
+    //
+    //     AIR 0   []   on "empty"
+    //
+    //     widest payload 0  ->  no challenge power is left for the bus offset
+    //
+    // Invariant: the AIRs alone decide this, so the challenger is never touched.
+    let (verdict, untouched) = verify_unsupported_lookup(&UnsupportedLookupAir::EmptyPayload);
+    let Err(VerificationError::Lookup(LookupError::EmptyPayloads)) = verdict else {
+        panic!("expected an empty payload error, got {verdict:?}");
+    };
+    assert!(untouched);
+}
+
+#[test]
+fn security_report_rejects_unsupported_lookup_declarations() {
+    // Fixture state: the three unsupported AIRs above, each alone at 64 rows.
+    //
+    //     exclusive branch   ->  invalid shape, refused while scoring the AIR
+    //     periodic payload   ->  lookup error from AIR 0
+    //     width-0 payload    ->  lookup error for the whole batch
+    //
+    // Invariant: the report refuses every statement the verifier refuses, without panicking.
+    let report = assess_unsupported_lookup(&UnsupportedLookupAir::Exclusive);
+    let Err(SecurityError::InvalidShape(reason)) = report else {
+        panic!("expected an invalid shape, got {report:?}");
+    };
+    assert_eq!(reason, "exclusive lookups are unsupported");
+
+    let report = assess_unsupported_lookup(&UnsupportedLookupAir::Periodic);
+    let Err(SecurityError::Lookup(LookupError::PeriodicColumn { air })) = report else {
+        panic!("expected a periodic column error, got {report:?}");
+    };
+    assert_eq!(air, 0);
+
+    let report = assess_unsupported_lookup(&UnsupportedLookupAir::EmptyPayload);
+    let Err(SecurityError::Lookup(LookupError::EmptyPayloads)) = report else {
+        panic!("expected an empty payload error, got {report:?}");
+    };
 }

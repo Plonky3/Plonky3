@@ -13,7 +13,8 @@ use p3_commit::{
 use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField64};
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{
-    InteractionSymbolicBuilder, LookupError, LookupProtocol, check_multiplicity_height_bound,
+    InteractionSymbolicBuilder, LookupError, LookupProtocol, check_bus_widths,
+    check_multiplicity_height_bound,
 };
 use p3_uni_stark::{
     InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
@@ -160,6 +161,7 @@ pub type OpeningArgumentWithQuotientDomains<SC> = (
 ///   consistency check (`commitments.permutation.is_some()` iff some AIR has lookups);
 /// - [`check_multiplicity_height_bound`], the LogUp bound that stops multiplicities wrapping
 ///   modulo `p`;
+/// - the bus width check, one payload width per bus across the batch;
 /// - the shape rule every declared periodic column must satisfy against its trace height.
 ///
 /// A caller needing all of them should either call `verify_batch` directly or replicate the
@@ -579,6 +581,11 @@ where
     // Base degree bits give the same heights the prover used.
     let trace_heights: Vec<usize> = base_degree_bits.iter().map(|&b| 1usize << b).collect();
     check_multiplicity_height_bound(all_lookups, &trace_heights)?;
+
+    // Soundness: every message on one bus must have one payload width.
+    // A shorter payload would alias a longer one left-padded with zeros.
+    // The challenge layout asserts the same, so a mismatch must be rejected before the transcript.
+    check_bus_widths(all_lookups)?;
 
     for (i, air) in airs.iter().enumerate() {
         let air_width = A::width(air);

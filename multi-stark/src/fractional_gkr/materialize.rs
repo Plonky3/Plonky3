@@ -513,6 +513,7 @@ pub(super) mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, PrimeCharacteristicRing, PrimeField};
+    use p3_lookup::LookupError::{BusWidthMismatch, MultiplicityHeightBoundExceeded};
     use p3_lookup::{Count, InteractionBuilder, InteractionSymbolicBuilder};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_util::log2_strict_usize;
@@ -520,6 +521,7 @@ pub(super) mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::lookup::LookupError;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -831,16 +833,25 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "named global lookup bus `shared` uses payload width 2, but its established width is 1"
-    )]
     fn rejects_different_payload_widths_on_one_named_global_bus() {
+        // Fixture state: the bus "shared" carries a width-1 tuple, then a width-2 tuple.
+        //
+        // Invariant: the plan refuses the pair with the two widths, in declaration order.
         let narrow = TestAir(Declaration::GlobalNamed("shared"));
         let wide = TestAir(Declaration::GlobalNamedWide("shared"));
         let num_variables = test_lookup_num_variables();
 
-        LookupPlan::<F>::build::<EF, _>(&[&narrow, &wide], &[num_variables, num_variables])
-            .unwrap();
+        let result =
+            LookupPlan::<F>::build::<EF, _>(&[&narrow, &wide], &[num_variables, num_variables]);
+        let Err(LookupError::BusWidth(BusWidthMismatch {
+            bus,
+            expected,
+            actual,
+        })) = result
+        else {
+            panic!("expected a bus width mismatch");
+        };
+        assert_eq!((bus.as_str(), expected, actual), ("shared", 1, 2));
     }
 
     #[test]
@@ -850,8 +861,8 @@ pub(super) mod tests {
 
         assert!(matches!(
             result,
-            Err(crate::lookup::LookupError::MultiplicityHeightBound(
-                p3_lookup::LookupError::MultiplicityHeightBoundExceeded { .. }
+            Err(LookupError::MultiplicityHeightBound(
+                MultiplicityHeightBoundExceeded { .. }
             ))
         ));
     }
