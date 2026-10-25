@@ -9,7 +9,22 @@ use tracing::instrument;
 
 use crate::columns::{Blake3Cols, NUM_BLAKE3_COLS};
 use crate::constants::{IV, permute};
-use crate::{Blake3CompressionInput, Blake3State, FullRound};
+use crate::{Blake3State, FullRound};
+
+/// The inputs to one Blake-3 compression.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Blake3CompressionInput {
+    /// The chaining value.
+    pub chaining_value: [u32; 8],
+    /// The message words.
+    pub block: [u32; 16],
+    /// The block counter.
+    pub counter: u64,
+    /// Number of message bytes in the block.
+    pub block_len: u32,
+    /// Domain separation flags.
+    pub flags: u32,
+}
 
 /// Generate a prime-field Blake-3 trace using legacy benchmark metadata.
 ///

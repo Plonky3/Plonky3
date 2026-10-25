@@ -5,12 +5,9 @@ use core::cmp::Ordering;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_binary_field::{Ghash128, TowerLevel};
-use p3_blake3_air::Blake3BinaryAir;
 use p3_field::{Field, HasSubfield, PrimeCharacteristicRing};
-use p3_lookup::InteractionSymbolicBuilder;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
-use p3_sha256_air::Sha256BinaryAir;
 use proptest::prelude::{any, prop_assert_eq, prop_oneof, proptest};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -2535,63 +2532,6 @@ fn infinity_tensor_rounds_match_the_interpolation_tensor() {
         with_state(&instances, no_lookups(), |state, _| {
             assert_infinity_rounds_match(&state);
         });
-    }
-}
-
-/// [`assert_infinity_rounds_match`] on a hash AIR's packed trace, and on the same trace with one
-/// bit flipped so that some row breaks a constraint.
-fn assert_hash_air_rounds_match<A>(air: &A, honest: RowMajorMatrix<u64>, log_height: usize)
-where
-    A: BaseAir<Tower>
-        + Air<InteractionSymbolicBuilder<Tower, Tower>>
-        + for<'b> Air<SlicedFolder<'b, Tower, Gf4, Ghash128>>
-        + for<'b> Air<SlicedQuadraticFolder<'b, Tower, Ghash128>>,
-{
-    let no_publics: &[Tower] = &[];
-    let kernel = cfg!(all(
-        target_arch = "x86_64",
-        target_feature = "gfni",
-        target_feature = "avx512f",
-        target_feature = "avx512bw"
-    ));
-    let mut invalid = honest.clone();
-    invalid.values[3] ^= 1 << 17;
-    for trace in [honest, invalid] {
-        let main = Table::from_packed_bits(trace, log_height);
-        with_stage_state(
-            &[air],
-            &[no_publics],
-            &[None],
-            &[&main],
-            no_lookups(),
-            |state, _| {
-                assert_eq!(
-                    PreparedPowers::per_air_bits(&state.alpha_powers)[0].is_some(),
-                    kernel,
-                    "the hash AIR should take the bit kernel exactly where the target has one"
-                );
-                assert_infinity_rounds_match(&state);
-            },
-        );
-    }
-}
-
-#[test]
-fn infinity_tensor_rounds_match_the_interpolation_tensor_on_the_hash_airs() {
-    let log_height = 10;
-    for air in [
-        Blake3BinaryAir::default(),
-        Blake3BinaryAir::assuming_boolean_trace(),
-    ] {
-        let trace = air.generate_random_trace_packed::<Tower>(1 << log_height);
-        assert_hash_air_rounds_match(&air, trace, log_height);
-    }
-    for air in [
-        Sha256BinaryAir::default(),
-        Sha256BinaryAir::assuming_boolean_trace(),
-    ] {
-        let trace = air.generate_random_trace_packed::<Tower>(1 << log_height);
-        assert_hash_air_rounds_match(&air, trace, log_height);
     }
 }
 

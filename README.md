@@ -121,43 +121,24 @@ Currently the options for the command line arguments are:
 - `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.
 
 `prove_hash_binary` proves a batch of Keccak-f permutations, BLAKE3, BLAKE2s or SHA-256
-compressions. By default (`--prover flock`) each hash is one instance of its Flock circuit
-(ePrint 2026/1329), proved inside one multi-STARK circuit table at `GF(2^64)` values and
-`GF(2^192)` challenges, committed through WHIR on Flock's own schedule:
+compressions. Each hash is one instance of its Flock circuit (ePrint 2026/1329), proved inside one
+multi-STARK circuit table at `GF(2^64)` values and `GF(2^192)` challenges, committed through WHIR
+on Flock's own schedule:
 ```bash
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-trace-length 16 --security-bits 127
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective keccak-f-permutations --log-trace-length 18 --security-bits 127
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-hashes 16 --security-bits 127
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective keccak-f-permutations --log-hashes 12 --security-bits 127
 ```
 - `--objective` (`-o`): `keccak-f-permutations`, `blake-3-compressions`, `sha-256-compressions` or
   `blake-2s-compressions`.
-- `--log-trace-length` (`-l`): required. The batch holds as many hashes as the Boolean AIR trace of
-  that length would: `2^log-trace-length / 25` Keccak-f permutations, or `2^log-trace-length`
-  compressions.
+- `--log-hashes` (`-l`): required, the base-two logarithm of the number of hashes.
 - `--format`: `human` (default) or `json`. With `json`, standard output is one JSON object per
   run carrying the same measurements, and progress lines and tracing spans go to standard error.
 - `--security-bits` (default 100) is the composed target; the 32-byte hash caps it at 128.
 - `--whir-regime`, `--whir-term-security-bits`, `--whir-query-grinding-bits`,
   `--whir-first-folding`, `--whir-first-reduction`, `--folding` and `--log-inv-rate` tune WHIR;
-  unset, they take Flock's schedule (Johnson regime, a first round folding 6 variables and
+  their defaults are Flock's schedule (Johnson regime, a first round folding 6 variables and
   dropping 4 domain bits, inverse rate 1/2), with 12 query grinding bits instead of its 16.
-
-`--prover air` proves the same hashes as a Boolean AIR over `BinaryField128`, committed through the
-`BooleanTracePcs`, which opens the current and the next row of every column:
-- `--representation` (`-r`): the field representation the zerocheck prover runs its later
-  rounds in: `auto` (default; `poly-basis-late` with a hardware carryless multiply,
-  subfield-tower basis otherwise), `subfield`, `poly-basis`, or `poly-basis-late` (polynomial
-  basis, with an eligible stage's first dense residual built one round later at half the size).
-  Every choice proves and verifies the same statement and emits a byte-identical proof; this is
-  a performance tradeoff only.
-- `--log-inv-rate`, `--pcs-pow-bits`, `--security-bits` (default 100), `--folding`, and
-  `--merkle-arity` (`2` or `4`, default `4`) tune the PCS. The defaults are inverse rate 1,
-  folding 4, and Merkle arity 4.
-
-The Boolean commitment packs each trace's bits into `BinaryField128` elements and reduces column
-claims through a bit-ring switch, which caps the proven security at roughly
-`125 - (log-trace-length + ceil(log2(width)) - 7 + log-inv-rate)` bits, with width 1625 for Keccak-f
-and 11536 for BLAKE3; PCS grinding does not raise that cap. Lower `--security-bits` for larger
-traces.
+- `--preflight` assesses the batch's security and WHIR schedule, then exits without proving.
 
 Extra speedups may be possible with some configuration changes:
 - `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` will cause jemalloc to hang on to virtual memory. This may not affect the very first proof much, but can help significantly with subsequent proofs as fewer pages (if any) will need to be newly assigned by the OS. These settings might not be suitable for all production environments, e.g. if the process' virtual memory is limited by `ulimit` or `max_map_count`.
