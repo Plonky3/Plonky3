@@ -60,15 +60,6 @@ pub enum BinaryHashOptions {
     Sha256Compressions,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum RepresentationOptions {
-    Auto,
-    Subfield,
-    PolyBasis,
-    PolyBasisLate,
-    Generic,
-}
-
 /// The byte hash a binary-field proof builds its Merkle trees and transcript from.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BinaryCommitmentHashOptions {
@@ -275,70 +266,5 @@ impl ValueEnum for BinaryCommitmentHashOptions {
             Self::Keccak256 => get_aliases("keccak-256", 1, Some(vec![("keccak256", 7)])),
             Self::Blake3 => get_aliases("blake-3", 1, Some(vec![("blake3", 6), ("b3", 2)])),
         })
-    }
-}
-
-impl ValueEnum for RepresentationOptions {
-    fn value_variants<'a>() -> &'a [Self] {
-        &[
-            Self::Auto,
-            Self::Subfield,
-            Self::PolyBasis,
-            Self::PolyBasisLate,
-            Self::Generic,
-        ]
-    }
-
-    fn to_possible_value(&self) -> Option<PossibleValue> {
-        Some(match self {
-            Self::Auto => get_aliases("auto", 1, None),
-            Self::Subfield => get_aliases("subfield", 1, None),
-            Self::PolyBasis => {
-                get_aliases("poly-basis", 1, Some(vec![("polybasis", 4), ("pb", 2)]))
-            }
-            Self::PolyBasisLate => get_aliases(
-                "poly-basis-late",
-                11,
-                Some(vec![("polybasislate", 10), ("pbl", 3)]),
-            ),
-            Self::Generic => get_aliases("generic", 1, None),
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn poly_basis_late_has_an_explicit_cli_spelling() {
-        assert_eq!(
-            RepresentationOptions::from_str("poly-basis-late", true),
-            Ok(RepresentationOptions::PolyBasisLate)
-        );
-        assert_eq!(
-            RepresentationOptions::from_str("poly-basis", true),
-            Ok(RepresentationOptions::PolyBasis)
-        );
-        assert_eq!(
-            RepresentationOptions::from_str("poly", true),
-            Ok(RepresentationOptions::PolyBasis)
-        );
-        assert_eq!(
-            RepresentationOptions::from_str("polybasis", true),
-            Ok(RepresentationOptions::PolyBasis)
-        );
-        assert_eq!(
-            RepresentationOptions::from_str("p", true),
-            Ok(RepresentationOptions::PolyBasis)
-        );
-        assert_eq!(
-            RepresentationOptions::from_str("pbl", true),
-            Ok(RepresentationOptions::PolyBasisLate)
-        );
-        assert_eq!(
-            RepresentationOptions::from_str("polybasislate", true),
-            Ok(RepresentationOptions::PolyBasisLate)
-        );
     }
 }

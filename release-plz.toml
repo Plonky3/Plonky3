@@ -33,10 +33,6 @@ name = "p3-blake2s"
 version_group = "plonky3"
 
 [[package]]
-name = "p3-blake2s-air"
-version_group = "plonky3"
-
-[[package]]
 name = "p3-blake3"
 version_group = "plonky3"
 

@@ -1,22 +1,18 @@
 //! AIRs for the Keccak-f permutation.
 //!
-//! The limb-based AIR needs a field of characteristic at least 2^16.
-//!
-//! The bit-based AIR needs a field of characteristic 2.
+//! [`KeccakAir`] needs a field of characteristic at least 2^16.
 
 #![no_std]
 
 extern crate alloc;
 
 mod air;
-mod binary;
 mod columns;
 mod constants;
 mod generation;
 mod round_flags;
 
 pub use air::*;
-pub use binary::*;
 pub use columns::*;
 pub use constants::*;
 pub use generation::*;
