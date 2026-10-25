@@ -20,6 +20,13 @@ const WIDTH: usize = 8;
 #[cfg(target_feature = "avx512f")]
 pub const VECTOR_LEN: usize = WIDTH;
 
+/// Truth table of `a ^ b ^ c` for the ternary-logic instruction.
+const XOR3: i32 = 0x96;
+
+/// Truth table of `a ^ (!b & c)`, the chi step, for the ternary-logic instruction.
+const CHI: i32 = 0xD2;
+
+/// Round constants of iota.
 const RC: [u64; 24] = [
     1u64,
     0x8082u64,
@@ -47,317 +54,95 @@ const RC: [u64; 24] = [
     0x8000000080008008u64,
 ];
 
-// SAFETY (every intrinsic below): the permutation runs only on a CPU with AVX-512F.
+/// Theta's column correction, then rho's rotation by `N`, on one lane.
 #[inline(always)]
-fn form_matrix(buf: [__m512i; 25]) -> [[__m512i; 5]; 5] {
-    unsafe { transmute(buf) }
+fn theta_rho<const N: i32>(lane: __m512i, d: __m512i) -> __m512i {
+    let lane = unsafe { _mm512_xor_epi64(lane, d) };
+    if N == 0 {
+        lane
+    } else {
+        unsafe { _mm512_rol_epi64::<N>(lane) }
+    }
 }
 
+/// Chi on one plane: `b[j] ^ (!b[j + 1] & b[j + 2])`.
 #[inline(always)]
-fn flatten(mat: [[__m512i; 5]; 5]) -> [__m512i; 25] {
-    unsafe { transmute(mat) }
+fn chi(b: [__m512i; 5]) -> [__m512i; 5] {
+    let mut out = b;
+    for j in 0..5 {
+        out[j] = unsafe { _mm512_ternarylogic_epi64::<CHI>(b[j], b[(j + 1) % 5], b[(j + 2) % 5]) };
+    }
+    out
 }
 
+/// One round of Keccak-f on a state held as `[y][x]`.
+///
+/// Theta folds both column parities into one value `D[x]` per column, applied with a plain XOR.
+///
+/// That keeps the ternary-logic units free for chi, and the live registers within the 32 available.
+///
+/// Each output plane then runs rho, pi and chi back to back.
+///
+/// So the next round's column parities can start while later planes are still in flight.
 #[inline(always)]
-fn get_theta_parities(state: [[__m512i; 5]; 5]) -> [(__m512i, __m512i); 5] {
+fn round(rc: u64, a: [[__m512i; 5]; 5]) -> [[__m512i; 5]; 5] {
+    // SAFETY (whole body): the permutation runs only on a CPU with AVX-512F.
     unsafe {
-        let mut par0 =
-            _mm512_ternarylogic_epi64::<0b10010110>(state[0][0], state[1][0], state[2][0]);
-        let mut par1 =
-            _mm512_ternarylogic_epi64::<0b10010110>(state[0][1], state[1][1], state[2][1]);
-        let mut par2 =
-            _mm512_ternarylogic_epi64::<0b10010110>(state[0][2], state[1][2], state[2][2]);
-        let mut par3 =
-            _mm512_ternarylogic_epi64::<0b10010110>(state[0][3], state[1][3], state[2][3]);
-        let mut par4 =
-            _mm512_ternarylogic_epi64::<0b10010110>(state[0][4], state[1][4], state[2][4]);
+        // Theta: C[x] = XOR of column x, then D[x] = C[x - 1] ^ rol(C[x + 1], 1).
+        let mut c = [_mm512_setzero_si512(); 5];
+        for x in 0..5 {
+            let rows_012 = _mm512_ternarylogic_epi64::<XOR3>(a[0][x], a[1][x], a[2][x]);
+            c[x] = _mm512_ternarylogic_epi64::<XOR3>(rows_012, a[3][x], a[4][x]);
+        }
+        let mut d = [_mm512_setzero_si512(); 5];
+        for x in 0..5 {
+            d[x] = _mm512_xor_epi64(c[(x + 4) % 5], _mm512_rol_epi64::<1>(c[(x + 1) % 5]));
+        }
 
-        par0 = _mm512_ternarylogic_epi64::<0b10010110>(par0, state[3][0], state[4][0]);
-        par1 = _mm512_ternarylogic_epi64::<0b10010110>(par1, state[3][1], state[4][1]);
-        par2 = _mm512_ternarylogic_epi64::<0b10010110>(par2, state[3][2], state[4][2]);
-        par3 = _mm512_ternarylogic_epi64::<0b10010110>(par3, state[3][3], state[4][3]);
-        par4 = _mm512_ternarylogic_epi64::<0b10010110>(par4, state[3][4], state[4][4]);
+        // Pi: plane y takes lane (j, j + 3y mod 5) at position j.
+        let mut plane_0 = chi([
+            theta_rho::<0>(a[0][0], d[0]),
+            theta_rho::<44>(a[1][1], d[1]),
+            theta_rho::<43>(a[2][2], d[2]),
+            theta_rho::<21>(a[3][3], d[3]),
+            theta_rho::<14>(a[4][4], d[4]),
+        ]);
+
+        // Iota right after plane 0: the next round waits on this lane, and the CPU issues oldest first.
+        plane_0[0] = _mm512_xor_epi64(plane_0[0], _mm512_set1_epi64(rc as i64));
 
         [
-            (par4, _mm512_rol_epi64::<1>(par1)),
-            (par0, _mm512_rol_epi64::<1>(par2)),
-            (par1, _mm512_rol_epi64::<1>(par3)),
-            (par2, _mm512_rol_epi64::<1>(par4)),
-            (par3, _mm512_rol_epi64::<1>(par0)),
+            plane_0,
+            chi([
+                theta_rho::<28>(a[0][3], d[3]),
+                theta_rho::<20>(a[1][4], d[4]),
+                theta_rho::<3>(a[2][0], d[0]),
+                theta_rho::<45>(a[3][1], d[1]),
+                theta_rho::<61>(a[4][2], d[2]),
+            ]),
+            chi([
+                theta_rho::<1>(a[0][1], d[1]),
+                theta_rho::<6>(a[1][2], d[2]),
+                theta_rho::<25>(a[2][3], d[3]),
+                theta_rho::<8>(a[3][4], d[4]),
+                theta_rho::<18>(a[4][0], d[0]),
+            ]),
+            chi([
+                theta_rho::<27>(a[0][4], d[4]),
+                theta_rho::<36>(a[1][0], d[0]),
+                theta_rho::<10>(a[2][1], d[1]),
+                theta_rho::<15>(a[3][2], d[2]),
+                theta_rho::<56>(a[4][3], d[3]),
+            ]),
+            chi([
+                theta_rho::<62>(a[0][2], d[2]),
+                theta_rho::<55>(a[1][3], d[3]),
+                theta_rho::<39>(a[2][4], d[4]),
+                theta_rho::<41>(a[3][0], d[0]),
+                theta_rho::<2>(a[4][1], d[1]),
+            ]),
         ]
     }
-}
-
-#[inline(always)]
-fn theta(state: [[__m512i; 5]; 5]) -> [[__m512i; 5]; 5] {
-    let theta_parities = get_theta_parities(state);
-
-    unsafe {
-        [
-            [
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[0][0],
-                    theta_parities[0].0,
-                    theta_parities[0].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[0][1],
-                    theta_parities[1].0,
-                    theta_parities[1].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[0][2],
-                    theta_parities[2].0,
-                    theta_parities[2].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[0][3],
-                    theta_parities[3].0,
-                    theta_parities[3].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[0][4],
-                    theta_parities[4].0,
-                    theta_parities[4].1,
-                ),
-            ],
-            [
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[1][0],
-                    theta_parities[0].0,
-                    theta_parities[0].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[1][1],
-                    theta_parities[1].0,
-                    theta_parities[1].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[1][2],
-                    theta_parities[2].0,
-                    theta_parities[2].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[1][3],
-                    theta_parities[3].0,
-                    theta_parities[3].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[1][4],
-                    theta_parities[4].0,
-                    theta_parities[4].1,
-                ),
-            ],
-            [
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[2][0],
-                    theta_parities[0].0,
-                    theta_parities[0].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[2][1],
-                    theta_parities[1].0,
-                    theta_parities[1].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[2][2],
-                    theta_parities[2].0,
-                    theta_parities[2].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[2][3],
-                    theta_parities[3].0,
-                    theta_parities[3].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[2][4],
-                    theta_parities[4].0,
-                    theta_parities[4].1,
-                ),
-            ],
-            [
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[3][0],
-                    theta_parities[0].0,
-                    theta_parities[0].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[3][1],
-                    theta_parities[1].0,
-                    theta_parities[1].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[3][2],
-                    theta_parities[2].0,
-                    theta_parities[2].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[3][3],
-                    theta_parities[3].0,
-                    theta_parities[3].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[3][4],
-                    theta_parities[4].0,
-                    theta_parities[4].1,
-                ),
-            ],
-            [
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[4][0],
-                    theta_parities[0].0,
-                    theta_parities[0].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[4][1],
-                    theta_parities[1].0,
-                    theta_parities[1].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[4][2],
-                    theta_parities[2].0,
-                    theta_parities[2].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[4][3],
-                    theta_parities[3].0,
-                    theta_parities[3].1,
-                ),
-                _mm512_ternarylogic_epi64::<0b10010110>(
-                    state[4][4],
-                    theta_parities[4].0,
-                    theta_parities[4].1,
-                ),
-            ],
-        ]
-    }
-}
-
-#[inline(always)]
-fn rho(state: [[__m512i; 5]; 5]) -> [[__m512i; 5]; 5] {
-    unsafe {
-        [
-            [
-                state[0][0],
-                _mm512_rol_epi64::<1>(state[0][1]),
-                _mm512_rol_epi64::<62>(state[0][2]),
-                _mm512_rol_epi64::<28>(state[0][3]),
-                _mm512_rol_epi64::<27>(state[0][4]),
-            ],
-            [
-                _mm512_rol_epi64::<36>(state[1][0]),
-                _mm512_rol_epi64::<44>(state[1][1]),
-                _mm512_rol_epi64::<6>(state[1][2]),
-                _mm512_rol_epi64::<55>(state[1][3]),
-                _mm512_rol_epi64::<20>(state[1][4]),
-            ],
-            [
-                _mm512_rol_epi64::<3>(state[2][0]),
-                _mm512_rol_epi64::<10>(state[2][1]),
-                _mm512_rol_epi64::<43>(state[2][2]),
-                _mm512_rol_epi64::<25>(state[2][3]),
-                _mm512_rol_epi64::<39>(state[2][4]),
-            ],
-            [
-                _mm512_rol_epi64::<41>(state[3][0]),
-                _mm512_rol_epi64::<45>(state[3][1]),
-                _mm512_rol_epi64::<15>(state[3][2]),
-                _mm512_rol_epi64::<21>(state[3][3]),
-                _mm512_rol_epi64::<8>(state[3][4]),
-            ],
-            [
-                _mm512_rol_epi64::<18>(state[4][0]),
-                _mm512_rol_epi64::<2>(state[4][1]),
-                _mm512_rol_epi64::<61>(state[4][2]),
-                _mm512_rol_epi64::<56>(state[4][3]),
-                _mm512_rol_epi64::<14>(state[4][4]),
-            ],
-        ]
-    }
-}
-
-#[inline(always)]
-const fn pi(state: [[__m512i; 5]; 5]) -> [[__m512i; 5]; 5] {
-    [
-        [
-            state[0][0],
-            state[1][1],
-            state[2][2],
-            state[3][3],
-            state[4][4],
-        ],
-        [
-            state[0][3],
-            state[1][4],
-            state[2][0],
-            state[3][1],
-            state[4][2],
-        ],
-        [
-            state[0][1],
-            state[1][2],
-            state[2][3],
-            state[3][4],
-            state[4][0],
-        ],
-        [
-            state[0][4],
-            state[1][0],
-            state[2][1],
-            state[3][2],
-            state[4][3],
-        ],
-        [
-            state[0][2],
-            state[1][3],
-            state[2][4],
-            state[3][0],
-            state[4][1],
-        ],
-    ]
-}
-
-#[inline(always)]
-fn chi_row(row: [__m512i; 5]) -> [__m512i; 5] {
-    unsafe {
-        [
-            _mm512_ternarylogic_epi64::<0b11010010>(row[0], row[1], row[2]),
-            _mm512_ternarylogic_epi64::<0b11010010>(row[1], row[2], row[3]),
-            _mm512_ternarylogic_epi64::<0b11010010>(row[2], row[3], row[4]),
-            _mm512_ternarylogic_epi64::<0b11010010>(row[3], row[4], row[0]),
-            _mm512_ternarylogic_epi64::<0b11010010>(row[4], row[0], row[1]),
-        ]
-    }
-}
-
-#[inline(always)]
-fn chi(state: [[__m512i; 5]; 5]) -> [[__m512i; 5]; 5] {
-    [
-        chi_row(state[0]),
-        chi_row(state[1]),
-        chi_row(state[2]),
-        chi_row(state[3]),
-        chi_row(state[4]),
-    ]
-}
-
-#[inline(always)]
-fn iota(i: usize, state: [[__m512i; 5]; 5]) -> [[__m512i; 5]; 5] {
-    let mut res = state;
-    unsafe {
-        res[0][0] = _mm512_xor_epi64(state[0][0], _mm512_set1_epi64(RC[i] as i64));
-    }
-    res
-}
-#[inline(always)]
-fn round(i: usize, state: [__m512i; 25]) -> [__m512i; 25] {
-    let mut state = form_matrix(state);
-    state = theta(state);
-    state = rho(state);
-    state = pi(state);
-    state = chi(state);
-    state = iota(i, state);
-    flatten(state)
 }
 
 /// Permute eight interleaved Keccak states.
@@ -367,11 +152,11 @@ fn round(i: usize, state: [__m512i; 25]) -> [__m512i; 25] {
 /// The running CPU has AVX-512F.
 #[inline(always)]
 unsafe fn keccak_perm(buf: &mut [[u64; WIDTH]; 25]) {
-    let mut state: [__m512i; 25] = unsafe { transmute(*buf) };
-    for i in 0..24 {
-        state = round(i, state);
+    let mut state: [[__m512i; 5]; 5] = unsafe { transmute(*buf) };
+    for rc in RC {
+        state = round(rc, state);
     }
-    *buf = unsafe { transmute::<[__m512i; 25], [[u64; WIDTH]; 25]>(state) };
+    *buf = unsafe { transmute::<[[__m512i; 5]; 5], [[u64; WIDTH]; 25]>(state) };
 }
 
 /// Whether the running CPU has AVX-512F.
