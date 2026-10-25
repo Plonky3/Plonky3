@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use p3_sumcheck::generic_degree::GenericDegreeProof;
 use serde::{Deserialize, Serialize};
 
+use crate::circuit::CircuitProof;
 use crate::config::{Commitment, MultiStarkConfig, PcsProof};
 use crate::fractional_gkr::FractionGkrProof;
 use crate::logup_star::LogupStarProof;
@@ -46,6 +47,7 @@ pub struct IndexedLookupProof<F, EF> {
 /// - the optional lookup proof reduces the materialized fractions with GKR.
 /// - one sumcheck reduces AIR constraints, lookup links, and bus shares to one bound-point claim.
 /// - the optional indexed round reduces every indexed read against that point.
+/// - one argument per circuit table proves its rows and answers its port columns.
 /// - the main opening proves all main trace tables at every point a claim was left at.
 /// - the preprocessed opening, when present, proves all preprocessed tables the same way.
 #[derive(Clone, Serialize, Deserialize)]
@@ -63,6 +65,8 @@ pub struct MultiStarkProof<C: MultiStarkConfig> {
     pub bus: Option<p3_bus::BusProof<C::Challenge>>,
     /// Shared sumcheck for the AIR constraints, lookup links, and bus shares.
     pub sumcheck: GenericDegreeProof<C::Val, C::Challenge>,
+    /// One argument per circuit table, in batch order.
+    pub circuits: Vec<CircuitProof<C::Challenge>>,
     /// Main-trace opening for every committed main table.
     pub opening: PcsProof<C>,
     /// Batched preprocessed-trace opening.
@@ -84,6 +88,7 @@ where
             .field("lookup", &self.lookup)
             .field("bus", &self.bus)
             .field("sumcheck", &self.sumcheck)
+            .field("circuits", &self.circuits)
             .field("opening", &self.opening)
             .finish()
     }

@@ -322,13 +322,9 @@ where
         !has_interactions || interaction_degree > 0,
         "zerocheck requires every nonempty interaction family to have positive symbolic degree"
     );
-    // A bus declaration is reduced outside the zerocheck and leaves no round polynomial here.
-    // An AIR carried by one alone therefore still owes this batch a constraint of its own.
-    assert!(
-        has_constraints || has_interactions,
-        "zerocheck requires every AIR to contribute constraints or lookup interactions; \
-         binary-bus declarations are reduced separately and do not count"
-    );
+    // An AIR may declare neither family: a circuit table's constraints are its circuit's.
+    //
+    // Such an AIR joins no stage, and the prover reads its columns at the bound point directly.
     AirProfile {
         degrees: AirDegrees {
             constraints: constraint_degree,
@@ -368,6 +364,19 @@ fn visit_leaves<A>(
         }
         SymbolicExpr::Neg { x, .. } => visit_leaves(x, seen, visit),
     }
+}
+
+/// The batch's internal round degree: its largest AIR degree, never below one.
+///
+/// A batch of AIRs declaring neither constraints nor lookups still plays well-formed rounds.
+fn air_round_degree(degrees: &[AirDegrees]) -> usize {
+    degrees
+        .iter()
+        .copied()
+        .map(AirDegrees::max)
+        .max()
+        .unwrap_or(0)
+        .max(1)
 }
 
 /// Undeclared successor values would otherwise be replaced by zero in the verifier's folder.
@@ -741,27 +750,45 @@ impl<'a, A> AirZerocheck<'a, A> {
             );
         }
 
-        // Bucket AIR indices by trace height.
+        // An AIR declaring neither constraints nor lookups adds nothing to any round.
+        //
+        // It joins no stage, and its columns are read at the bound point once the rounds end.
+        let silent = degrees
+            .iter()
+            .map(|degrees| degrees.max() == 0)
+            .collect::<Vec<_>>();
+
+        // Bucket the staged AIR indices by trace height.
         // The map gives deterministic height order; stages are built largest-first below.
         let mut indices_by_height = BTreeMap::<usize, Vec<usize>>::new();
-        tables.iter().enumerate().for_each(|(index, table)| {
-            indices_by_height
-                .entry(table.num_variables())
-                .or_default()
-                .push(index);
-        });
+        tables
+            .iter()
+            .enumerate()
+            .filter(|&(index, _)| !silent[index])
+            .for_each(|(index, table)| {
+                indices_by_height
+                    .entry(table.num_variables())
+                    .or_default()
+                    .push(index);
+            });
 
         // All stages contribute to one transmitted round polynomial.
         // Its evaluation buffer therefore carries the largest AIR degree in the batch.
         // A lower-degree group is extrapolated only when it joins the shared accumulator.
-        let max_degree = degrees.iter().copied().map(AirDegrees::max).max().unwrap();
+        //
+        // A batch of silent AIRs alone still plays rounds of degree one, all of them zero.
+        let max_degree = air_round_degree(&degrees);
 
         // The global cube must contain the tallest AIR trace and the whole reduction point.
         // Block selectors can make that point longer than any trace.
         //
         //     rounds : | block selectors | tallest trace | ... | shortest trace |
         //                | no AIR stage is active yet
-        let air_log_height = indices_by_height.keys().copied().max().unwrap();
+        let air_log_height = tables
+            .iter()
+            .map(|table| table.num_variables())
+            .max()
+            .unwrap();
         let log_height = air_log_height.max(lookup_point.num_variables());
 
         // Every bus share lives in one of the tables above, so the cube already covers it.
@@ -1102,6 +1129,47 @@ impl<'a, A> AirZerocheck<'a, A> {
             }
         }
 
+        // A silent AIR's columns are read at the suffix naming its own rows.
+        //
+        //     current view    every column at the point
+        //     successor view  the repeat-last successor at the point, for the columns it names
+        let point = Point::new(challenges);
+        for (air, _) in silent.iter().enumerate().filter(|&(_, &silent)| silent) {
+            let rows = point
+                .split_at(point.num_variables() - tables[air].num_variables())
+                .1;
+            let read = |table: &Table<F>, next_columns: Vec<usize>| {
+                let columns = table
+                    .columns()
+                    .map(|column| {
+                        let mut values = F::zero_vec(column.len());
+                        column.copy_into(&mut values);
+                        Poly::new(values)
+                    })
+                    .collect::<Vec<_>>();
+                let local = columns
+                    .iter()
+                    .map(|column| column.eval_base(&rows))
+                    .collect();
+                let next = next_columns
+                    .into_iter()
+                    .map(|column| columns[column].eval_next_base(&rows))
+                    .collect();
+                (local, next)
+            };
+            let (local, next) = read(tables[air], self.airs[air].main_next_row_columns());
+            let (preprocessed_local, preprocessed_next) = preprocessed[air].map_or_else(
+                || (Vec::new(), Vec::new()),
+                |table| read(table, self.airs[air].preprocessed_next_row_columns()),
+            );
+            openings[air] = Some(AirOpenings {
+                local,
+                next,
+                preprocessed_local,
+                preprocessed_next,
+            });
+        }
+
         // Split the per-AIR openings into the four proof vectors, in caller order.
         let mut local = Vec::with_capacity(self.airs.len());
         let mut next = Vec::with_capacity(self.airs.len());
@@ -1123,7 +1191,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                 preprocessed_local,
                 preprocessed_next,
             },
-            Point::new(challenges),
+            point,
         )
     }
 
@@ -1418,7 +1486,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         // One extra degree for the eq weight the sumcheck carries.
         // A bus family of higher degree widens the shared message instead.
         let bus_degree = bus.map(|family| family.context.composition_degree());
-        let air_degree = degrees.iter().copied().map(AirDegrees::max).max().unwrap() + 1;
+        let air_degree = air_round_degree(&degrees) + 1;
         let degree = bus_degree.map_or(air_degree, |bus_degree| air_degree.max(bus_degree));
 
         if lookup.is_none() && bus.is_none() && sumcheck.claimed_sum != EF::ZERO {

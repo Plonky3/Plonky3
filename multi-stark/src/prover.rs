@@ -64,6 +64,9 @@ pub enum ProvingError<E> {
     /// The bus composition statement could not be derived.
     #[error("binary-bus commitment binding failed: {0}")]
     BusBinding(#[from] BusBindingError),
+    /// The main commitment opens no weighted claim, which a circuit table's witness needs.
+    #[error("the main commitment cannot open a circuit table's witness")]
+    UnsupportedCircuits,
 }
 
 /// Prove only when the complete statement's security assessment meets `target_bits`.
@@ -258,6 +261,7 @@ where
         proving_key,
         tables,
         instances,
+        circuits,
     } = instances.into_parts();
 
     // Every committed table must meet the scheme's padding floor.
@@ -291,6 +295,23 @@ where
         .unwrap_or_else(|error| panic!("instance {instance} boundary IO: {error}"));
     }
 
+    // A circuit table's AIR reads its port words on the current row, and nothing commits them.
+    //
+    // A port claim one row ahead, or a port assumed to be a bit, would bind nothing.
+    for (instance, air) in airs.iter().enumerate() {
+        if circuits[instance].is_some() {
+            // Flock and the word claim read the witness as bits, so the scheme must commit it as bits.
+            assert!(
+                config.pcs().bit_region(instance, 1) == 1,
+                "instance {instance} is a circuit table, whose witness the commitment must hold as bits"
+            );
+            assert!(
+                air.main_next_row_columns().is_empty() && air.boolean_columns() == 0,
+                "instance {instance} is a circuit table, whose ports are read on the current row only"
+            );
+        }
+    }
+
     // A column an AIR assumes holds a bit must be one the scheme commits as a bit.
     // The verifier refuses the proof otherwise, so refuse it before anything is committed.
     for (instance, air) in airs.iter().enumerate() {
@@ -316,6 +337,13 @@ where
     } else {
         None
     };
+    // An indexed read opens its table's columns where a circuit table commits none.
+    if let Some(plan) = &indexed_plan {
+        assert!(
+            plan.airs().all(|air| circuits[air].is_none()),
+            "an indexed lookup cannot read a circuit table"
+        );
+    }
     // A batch declaring no binary-bus interaction has no bus statement either.
     let bus = if proving_key.declares_bus {
         BusContext::<C::Val, C::Challenge>::build(&airs, &instances.num_variables())?
@@ -365,7 +393,8 @@ where
             pow_bits,
             indexed_plan.is_some(),
             bus.is_some(),
-        ),
+        )
+        .with_circuits(instances.circuit_statements()),
     );
 
     // 1. Bind the reusable batched preprocessed commitment before any challenge depends on it.
@@ -388,8 +417,15 @@ where
         })?;
 
     // Keep commitment-bound table views for zerocheck, one per instance.
+    //
+    // A circuit table's AIR reads its port words, which its committed witness answers for.
     let tables = (0..num_instances)
-        .map(|table_index| config.committed_table(&prover_data, table_index))
+        .map(|table_index| {
+            circuits[table_index].as_ref().map_or_else(
+                || config.committed_table(&prover_data, table_index),
+                |circuit| &circuit.ports,
+            )
+        })
         .collect::<Vec<_>>();
 
     // One entry per instance, in instance order.
@@ -597,12 +633,42 @@ where
         None => (None, None),
     };
 
+    // 8. Prove every circuit table's rows, after binding its port values at the bound point.
+    //
+    // Each leaves one claim on its witness column, which the opening below covers.
+    let num_variables = instances.num_variables();
+    let (circuit_proofs, circuit_claims): (Vec<_>, Vec<_>) = transcript
+        .circuit_argument(|challenger| {
+            circuits
+                .iter()
+                .enumerate()
+                .filter_map(|(table, circuit)| circuit.as_ref().map(|circuit| (table, circuit)))
+                .map(|(table, circuit)| {
+                    let bits = &config
+                        .committed_table(&prover_data, table)
+                        .packed_bits()
+                        .expect("a circuit's witness is committed as packed bits")
+                        .values;
+                    circuit.argument.prove(
+                        zerocheck_proof.local[table].clone(),
+                        &trace_suffix(&point, num_variables[table]),
+                        &circuit.witness,
+                        bits,
+                        table,
+                        pow_bits,
+                        challenger,
+                    )
+                })
+                .unzip()
+        })
+        .unwrap_or_default();
+
     let sumcheck = zerocheck_proof.sumcheck;
 
     drop(tables);
     drop(preprocessed_tables);
 
-    // 8. Open each main trace table at every point a claim was left at.
+    // 9. Open each main trace table at every point a claim was left at.
     //
     // A table's first batch reads its AIR's columns at the suffix of the bound point.
     // The zerocheck folded each of those columns down to exactly that value, so the scheme is
@@ -619,30 +685,38 @@ where
             (first_batches.len(), first_batches.len()),
             "the zerocheck opens every committed table once"
         );
+        // A circuit table owns no batch: its port values become weighted claims below.
         for ((batch, local), next) in first_batches
             .into_iter()
             .zip(zerocheck_proof.local)
             .zip(zerocheck_proof.next)
         {
-            known[batch] = Some(OpeningEvals::new(local, next));
+            if let Some(batch) = batch {
+                known[batch] = Some(OpeningEvals::new(local, next));
+            }
         }
-        config.pcs().open_at_known(
+        // Each circuit table leaves two claims on its witness column.
+        let weighted = circuit_claims.into_iter().flatten().collect::<Vec<_>>();
+        config.pcs().open_at_known_weighted(
             prover_data,
             schedule.protocol(),
             &schedule.against(),
             &known,
+            &weighted,
             challenger,
         )
     });
 
     let opening = opening
+        .ok_or(ProvingError::UnsupportedCircuits)
+        .inspect_err(|_| transcript.abort())?
         .inspect_err(|_| transcript.abort())
         .map_err(|source| ProvingError::Pcs {
             phase: "main opening",
             source,
         })?;
 
-    // 9. Open each non-empty preprocessed table at every point a claim was left at.
+    // 10. Open each non-empty preprocessed table at every point a claim was left at.
     // The setup commitment data is reused rather than rebuilt.
     let preprocessed_opening = transcript.preprocessed_opening(|challenger| {
         let preprocessed = proving_key
@@ -678,6 +752,7 @@ where
         indexed: indexed_round,
         bus: bus_proof,
         sumcheck,
+        circuits: circuit_proofs,
         opening,
         preprocessed_opening,
     })

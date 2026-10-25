@@ -1,5 +1,6 @@
 //! Verify multilinear AIR SNARKs against trace commitments.
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 
@@ -16,6 +17,7 @@ use thiserror::Error;
 
 use crate::VerifierInstances;
 use crate::bus::{BusBindingError, BusContext};
+use crate::circuit::{CircuitError, fits};
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::VerifierAir;
 use crate::indexed::IndexedPlan;
@@ -88,6 +90,31 @@ where
     /// The proof and AIRs disagree on whether a binary-native bus exists.
     #[error("binary-bus proof present but not expected, or absent but described")]
     UnexpectedBus,
+    /// A circuit table's AIR reads a successor row or assumes a bit, or an indexed read names it.
+    #[error("instance {instance} is a circuit table its AIR or an indexed read misuses")]
+    CircuitShape {
+        /// Position of the circuit table in batch order.
+        instance: usize,
+    },
+    /// The proof carries a different number of circuit arguments than the batch has circuit tables.
+    #[error("{actual} circuit arguments for {expected} circuit tables")]
+    CircuitCount {
+        /// Circuit tables in the batch.
+        expected: usize,
+        /// Arguments the proof carries.
+        actual: usize,
+    },
+    /// A circuit table's argument was rejected.
+    #[error("circuit table {instance}: {error}")]
+    Circuit {
+        /// Position of the circuit table in batch order.
+        instance: usize,
+        /// Why its argument was rejected, boxed so the common error stays small.
+        error: Box<CircuitError>,
+    },
+    /// The main commitment opens no weighted claim, which a circuit table's witness needs.
+    #[error("the main commitment cannot open a circuit table's witness")]
+    UnsupportedCircuits,
     /// An AIR names a public boundary cell or public value it does not have.
     #[error("instance {instance} boundary IO: {error}")]
     BoundaryIo {
@@ -289,6 +316,24 @@ where
         .map_err(|error| VerificationError::BoundaryIo { instance, error })?;
     }
 
+    // A circuit table's AIR reads its port words on the current row, and nothing commits them.
+    //
+    // A port claim one row ahead, or a port assumed to be a bit, would bind nothing.
+    //
+    // Its AIR reads one column per port word, and its rows must make a batch Flock proves.
+    //
+    // Flock and the word claim read the witness as bits, so the scheme must commit it as bits.
+    for (instance, (air, circuit)) in airs.iter().zip(instances.circuits()).enumerate() {
+        if circuit.is_some_and(|argument| {
+            !air.main_next_row_columns().is_empty()
+                || air.boolean_columns() != 0
+                || !fits(argument.circuit(), log_heights[instance], air.width())
+                || config.pcs().bit_region(instance, 1) == 0
+        }) {
+            return Err(VerificationError::CircuitShape { instance });
+        }
+    }
+
     // An AIR may drop the booleanity of its leading columns and leave it to the commitment.
     //
     // A scheme that commits field elements there accepts any value, and no constraint refuses it.
@@ -318,6 +363,25 @@ where
     // Indexed lookups change the described sequence, so the plan is settled first.
     let indexed_plan = IndexedPlan::from_declared::<C::Val>(&indexed, &log_heights)
         .map_err(VerificationError::IndexedLookup)?;
+    // An indexed read opens its table's columns where a circuit table commits none.
+    let circuits = instances.circuits().collect::<Vec<_>>();
+    if let Some(instance) = indexed_plan
+        .as_ref()
+        .and_then(|plan| plan.airs().find(|&air| circuits[air].is_some()))
+    {
+        return Err(VerificationError::CircuitShape { instance });
+    }
+    let circuit_tables = circuits
+        .iter()
+        .enumerate()
+        .filter_map(|(table, circuit)| circuit.map(|circuit| (table, circuit)))
+        .collect::<Vec<_>>();
+    if proof.circuits.len() != circuit_tables.len() {
+        return Err(VerificationError::CircuitCount {
+            expected: circuit_tables.len(),
+            actual: proof.circuits.len(),
+        });
+    }
     let bus = BusContext::<C::Val, C::Challenge>::build(&airs, &log_heights)?;
 
     // The lookup layout comes from the AIRs and the trace heights alone.
@@ -333,7 +397,8 @@ where
             pow_bits,
             indexed_plan.is_some(),
             bus.is_some(),
-        ),
+        )
+        .with_circuits(instances.circuit_statements()),
     );
 
     // 1. Replay the reusable batched preprocessed commitment before any challenge
@@ -466,6 +531,44 @@ where
         }
     };
 
+    // 8. Replay every circuit table's argument, binding its port values at the bound point first.
+    //
+    // Each leaves one claim on its witness column, which the opening below covers.
+    let circuit_claims = transcript
+        .circuit_argument(|challenger| {
+            circuit_tables
+                .iter()
+                .zip(&proof.circuits)
+                .map(|(&(table, circuit), circuit_proof)| {
+                    circuit
+                        .verify(
+                            circuit_proof,
+                            &trace_suffix(&reduction.point, log_heights[table]),
+                            table,
+                            pow_bits,
+                            challenger,
+                        )
+                        .map_err(|error| VerificationError::Circuit {
+                            instance: table,
+                            error: Box::new(error),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose();
+    // Each circuit table leaves two claims on its witness column.
+    let weighted = match circuit_claims {
+        Ok(claims) => claims
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            transcript.abort();
+            return Err(error);
+        }
+    };
+
     // Invariant: a return between here and the driver's `finish` must release the driver first.
     //
     //     main opening            -> Begin, the scheme's own run, End, on any outcome
@@ -476,7 +579,7 @@ where
     //
     // A rejected batch with preprocessed columns therefore costs one opening, not two.
 
-    // 8. Open the committed main trace tables at every point a claim was left at.
+    // 9. Open the committed main trace tables at every point a claim was left at.
     // The returned values are bound to the main commitment.
     let indexed_output = indexed.as_ref().map(|(_, output)| output);
     let points = RunPoints::new(&reduction.point, indexed_output);
@@ -484,23 +587,28 @@ where
         trace_suffix(points.at(role), rows)
     });
     let main_evals = match transcript.main_opening(|challenger| {
-        config.pcs().verify_at(
+        config.pcs().verify_at_weighted(
             &proof.commitment,
             &proof.opening,
             main_schedule.protocol(),
             &main_schedule.against(),
+            &weighted,
             challenger,
         )
     }) {
-        Ok(evals) => evals,
+        Some(Ok(evals)) => evals,
         // Nothing below can change this verdict, so the preprocessed opening never runs.
-        Err(error) => {
+        Some(Err(error)) => {
             transcript.abort();
             return Err(VerificationError::Opening(error));
         }
+        None => {
+            transcript.abort();
+            return Err(VerificationError::UnsupportedCircuits);
+        }
     };
 
-    // 9. Open the preprocessed tables at every point a claim was left at.
+    // 10. Open the preprocessed tables at every point a claim was left at.
     // The owned batches are kept local so the closing check can borrow them.
     let preprocessed_schedule = instances
         .preprocessed_schedule(indexed_plan.as_ref(), |role, rows| {
@@ -533,13 +641,27 @@ where
     let next_columns = instances.next_columns();
     // An AIR reads its own columns out of the first batch its table is opened in.
     //
-    // Walking the results in order agrees with the AIR order only while each table owns one.
+    // A circuit table's AIR reads its port values instead, which the weighted claims bound.
+    //
+    // A missing batch yields an empty view, which the closing check rejects instead of panicking.
+    let mut circuit_ports = proof.circuits.iter();
     let main_openings = main_schedule
         .first_batch_per_table()
         .into_iter()
-        .filter_map(|batch| main_evals.get(batch))
+        .zip(&circuits)
         .zip(next_columns.iter())
-        .map(|(batch, next_columns)| TableOpening::new(batch.current(), next_columns, batch.next()))
+        .map(|((batch, circuit), next_columns)| match circuit {
+            Some(_) => circuit_ports
+                .next()
+                .map_or_else(TableOpening::empty, |circuit_proof| {
+                    TableOpening::new(&circuit_proof.ports, next_columns, &[])
+                }),
+            None => batch
+                .and_then(|batch| main_evals.get(batch))
+                .map_or_else(TableOpening::empty, |batch| {
+                    TableOpening::new(batch.current(), next_columns, batch.next())
+                }),
+        })
         .collect::<Vec<_>>();
 
     // The reduction is a statement about claims, and two sets of them arrive unauthenticated.
@@ -610,6 +732,7 @@ where
     let opened = preprocessed_evals.iter().flatten().collect::<Vec<_>>();
     let mut preprocessed_batches = preprocessed_own_batches
         .iter()
+        .flatten()
         .filter_map(|&batch| opened.get(batch).copied())
         .zip(preprocessed_next_columns.iter());
     let preprocessed_openings = instances
@@ -628,7 +751,7 @@ where
         })
         .collect::<Vec<_>>();
 
-    // 10. Close the shared sumcheck.
+    // 11. Close the shared sumcheck.
     // Recompute the AIR and bus families from commitment-bound values and match the reduced sum.
     // ProductGKR terminal values are authenticated only by this check.
     zerocheck

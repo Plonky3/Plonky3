@@ -54,6 +54,7 @@ use thiserror::Error;
 
 use crate::VerifierInstances;
 use crate::bus::BusContext;
+use crate::circuit::{fits, security_terms, witness_variables};
 use crate::config::{Commitment, MultiStarkConfig};
 use crate::folder::{VerifierAir, boundary_io_pins};
 use crate::indexed::IndexedPlan;
@@ -531,20 +532,53 @@ where
     let mut lookup_interactions = Vec::with_capacity(instances.len());
     let mut declared = Vec::with_capacity(instances.len());
 
-    for (instance, &height) in instances.iter().zip(&heights) {
+    let mut weighted_claims = 0usize;
+    for (index, (instance, &height)) in instances.iter().zip(&heights).enumerate() {
         if height == 0 || height >= usize::BITS as usize || height < config.min_num_variables() {
             return Err(invalid("trace arity is outside the supported range"));
         }
         let air = instance.air;
         let rows = 1usize << height;
+        // A circuit table commits its witness bits, and its AIR reads uncommitted port words.
+        //
+        // The folded words and the circuit's own argument each leave one weighted claim.
+        if let Some(argument) = instance.circuit {
+            let circuit = argument.circuit();
+            if !air.main_next_row_columns().is_empty()
+                || air.boolean_columns() != 0
+                || !fits(circuit, height, air.width())
+                || config.pcs().bit_region(index, 1) == 0
+            {
+                return Err(invalid(
+                    "a circuit table reads its ports on the current row, one column per port word",
+                ));
+            }
+            let bits = witness_variables(circuit, height);
+            main_cells = u32::try_from(bits)
+                .ok()
+                .and_then(|bits| 1usize.checked_shl(bits))
+                .and_then(|cells| main_cells.checked_add(cells))
+                .ok_or_else(|| invalid("stacked trace dimensions overflow"))?;
+            weighted_claims += 2;
+        }
         if air.width() == 0 || instance.public_values.len() != air.num_public_values() {
             return Err(invalid(
                 "trace width or public-value count disagrees with the AIR",
             ));
         }
         periodic_num_variables(air.num_periodic_columns(), &air.periodic_periods(), height)?;
+        // A circuit table's AIR columns are never committed, so they count no cell.
+        let committed_width = if instance.circuit.is_some() {
+            0
+        } else {
+            air.width()
+        };
         for (width, next, total) in [
-            (air.width(), air.main_next_row_columns(), &mut main_cells),
+            (
+                committed_width,
+                air.main_next_row_columns(),
+                &mut main_cells,
+            ),
             (
                 air.preprocessed_width(),
                 air.preprocessed_next_row_columns(),
@@ -631,9 +665,8 @@ where
             .and_then(|count| num_fractions.checked_add(count))
             .ok_or_else(|| invalid("lookup dimensions overflow"))?;
         // Binary-bus declarations raise the shared round degree below, not the constraint count.
-        if constraints == 0 && tuples == 0 {
-            return Err(invalid("AIR declares no constraints or lookup tuples"));
-        }
+        //
+        // An AIR declaring neither constraints nor tuples joins no zerocheck stage and costs no draw.
         max_degree = max_degree.max(get_air_profile_from_builder(air, &builder).degrees.max());
         // Retain only lookup declarations, dropping this AIR's constraint DAGs before the next.
         lookup_interactions.push((
@@ -698,7 +731,8 @@ where
             num_instances: instances.len(),
             max_num_constraints,
             num_variables,
-            constraint_degree: max_degree,
+            // The zerocheck plays rounds of degree one at least, even for AIRs declaring nothing.
+            constraint_degree: max_degree.max(1),
             lookup,
             // This prover spends one round per variable.
             //
@@ -719,6 +753,12 @@ where
             bus_batching_term(field_bits),
         ]);
     }
+    // Each circuit table's zerocheck and lincheck draw after the commitment, as the AIR's do.
+    for (instance, &height) in instances.iter().zip(&heights) {
+        if let Some(argument) = instance.circuit {
+            builder.add_outer_draws(security_terms(argument.circuit(), height, field_bits));
+        }
+    }
     // The scheme is assessed against the opening protocol verification actually runs.
     //
     // The indexed-lookup reduction closes on two further points per table it touches.
@@ -730,10 +770,11 @@ where
     // It also understates the candidate count charged to every outer draw above.
     builder.add_opening_evidence(
         CommittedTrace::Main,
-        config.pcs().prescribed_security(
+        config.pcs().weighted_security(
             &instances
                 .main_schedule(indexed.as_ref(), |_, _| ())
                 .into_protocol(),
+            weighted_claims,
         ),
     );
     if preprocessed_cells > 0 {

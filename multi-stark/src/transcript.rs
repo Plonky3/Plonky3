@@ -18,6 +18,8 @@
 //!     End    lookup argument
 //!     Begin  zerocheck
 //!     End    zerocheck
+//!     Begin  circuit argument      only when some table is a circuit's
+//!     End    circuit argument
 //!     Begin  main opening
 //!     End    main opening
 //!     Begin  preprocessed opening  only when some AIR declares preprocessed columns
@@ -30,6 +32,7 @@
 //! - Instance label: every trace arity, every main width, every preprocessed width.
 //! - Instance label: the grinding difficulty the delegated sumcheck rounds run at.
 //! - Instance label: the periodic values of every AIR that declares periodic columns.
+//! - Instance label: the bits per instance and the digest of every circuit table's circuit.
 //! - Nothing here: the challenges, which belong entirely to the delegated sub-protocols.
 //!
 //! This transcript draws nothing.
@@ -99,6 +102,12 @@ const INDEXED_LOOKUP: &str = "indexed_lookup";
 /// Step label of the bracket around the delegated AIR zerocheck.
 const ZEROCHECK: &str = "zerocheck";
 
+/// Instance-label tag in front of a circuit table's fields.
+const CIRCUIT_TAG: &[u8] = b"circuit";
+
+/// Step label of the bracket around the circuit tables' arguments.
+const CIRCUIT_ARGUMENT: &str = "circuit_argument";
+
 /// Step label of the bracket around the delegated main-trace opening.
 const MAIN_OPENING: &str = "main_opening";
 
@@ -125,6 +134,9 @@ struct IndexedLookup;
 
 /// Type-level name of the sub-protocol the statement delegates its constraints to.
 struct Zerocheck;
+
+/// Type-level name of the sub-protocol the statement delegates its circuit tables to.
+struct CircuitArgument;
 
 /// Type-level name of the sub-protocol the statement delegates its main openings to.
 struct MainOpening;
@@ -165,6 +177,17 @@ pub struct MultiStarkInstanceShape {
     pub preprocessed_next_row_columns: Vec<usize>,
     /// Bytes fixing this instance's periodic values, empty when its AIR declares none.
     pub periodic_statement: Vec<u8>,
+    /// The circuit every row runs, when the table is a circuit's.
+    pub circuit: Option<CircuitStatement>,
+}
+
+/// What fixes the circuit of one circuit table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CircuitStatement {
+    /// Bits of one instance's witness, as a power of two.
+    pub k_log: usize,
+    /// Digest of the circuit's encoding.
+    pub digest: [u8; 32],
 }
 
 /// Numbers that fix the transcript of one batched multi-STARK statement.
@@ -241,12 +264,42 @@ impl MultiStarkShape {
                     main_next_row_columns: air.main_next_row_columns(),
                     preprocessed_next_row_columns: air.preprocessed_next_row_columns(),
                     periodic_statement: air.periodic_statement(),
+                    circuit: None,
                 })
                 .collect(),
             pow_bits,
             has_indexed,
             has_bus,
         }
+    }
+
+    /// The same shape with each instance's circuit, in batch order.
+    ///
+    /// # Panics
+    ///
+    /// When the batch supplies a different instance count than the shape describes.
+    #[must_use]
+    pub fn with_circuits(
+        mut self,
+        circuits: impl ExactSizeIterator<Item = Option<CircuitStatement>>,
+    ) -> Self {
+        assert_eq!(
+            circuits.len(),
+            self.instances.len(),
+            "every instance in the batch must state whether it is a circuit"
+        );
+        for (instance, circuit) in self.instances.iter_mut().zip(circuits) {
+            instance.circuit = circuit;
+        }
+        self
+    }
+
+    /// Whether some table of the batch is a circuit's.
+    #[must_use]
+    pub fn has_circuits(&self) -> bool {
+        self.instances
+            .iter()
+            .any(|instance| instance.circuit.is_some())
     }
 
     /// Number of preprocessed tables the batch stacks under one commitment.
@@ -332,6 +385,11 @@ impl MultiStarkShape {
         if self.has_indexed {
             steps.extend(delegation::<IndexedLookup>(INDEXED_LOOKUP));
         }
+
+        // The circuit tables close on claims the opening below has to cover, so they sit before it.
+        if self.has_circuits() {
+            steps.extend(delegation::<CircuitArgument>(CIRCUIT_ARGUMENT));
+        }
         steps.extend(delegation::<MainOpening>(MAIN_OPENING));
 
         // Nothing is opened against a commitment the batch never made.
@@ -387,6 +445,16 @@ impl MultiStarkShape {
             // An AIR that declares none adds nothing, and its transcript stays as it was.
             if !instance.periodic_statement.is_empty() {
                 separator.instance(&instance.periodic_statement);
+            }
+
+            // A circuit's rows are not the AIR's, so its size and gates are part of the statement.
+            //
+            // A tag marks the circuit's fields, so no other optional field can stand in for them.
+            if let Some(circuit) = &instance.circuit {
+                separator
+                    .instance(CIRCUIT_TAG)
+                    .instance(&(circuit.k_log as u64).to_be_bytes())
+                    .instance(&circuit.digest);
             }
         }
 
@@ -542,6 +610,21 @@ where
         let output = run(self.state.challenger_mut());
         self.state.end_protocol::<Zerocheck>(ZEROCHECK);
         output
+    }
+
+    /// Lend the sponge to the circuit tables' arguments, when the batch has a circuit table.
+    ///
+    /// # Returns
+    ///
+    /// Whatever the delegated run produced, or nothing when no table is a circuit's.
+    pub fn circuit_argument<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> Option<R> {
+        self.shape.has_circuits().then(|| {
+            self.state
+                .begin_protocol::<CircuitArgument>(CIRCUIT_ARGUMENT);
+            let output = run(self.state.challenger_mut());
+            self.state.end_protocol::<CircuitArgument>(CIRCUIT_ARGUMENT);
+            output
+        })
     }
 
     /// Lend the sponge to the main-trace opening, bracketed as a sub-protocol.
@@ -758,6 +841,21 @@ where
         output
     }
 
+    /// Lend the sponge to the circuit tables' arguments, when the batch has a circuit table.
+    ///
+    /// # Returns
+    ///
+    /// Whatever the delegated run produced, or nothing when no table is a circuit's.
+    pub fn circuit_argument<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> Option<R> {
+        self.shape.has_circuits().then(|| {
+            self.state
+                .begin_protocol::<CircuitArgument>(CIRCUIT_ARGUMENT);
+            let output = run(self.state.challenger_mut());
+            self.state.end_protocol::<CircuitArgument>(CIRCUIT_ARGUMENT);
+            output
+        })
+    }
+
     /// Lend the sponge to the main-trace opening, bracketed as a sub-protocol.
     ///
     /// # Returns
@@ -883,6 +981,7 @@ mod tests {
                     main_next_row_columns: vec![0, 1],
                     preprocessed_next_row_columns: vec![0],
                     periodic_statement: vec![1, 2, 3],
+                    circuit: None,
                 },
                 MultiStarkInstanceShape {
                     num_variables: 6,
@@ -892,6 +991,7 @@ mod tests {
                     main_next_row_columns: vec![0],
                     preprocessed_next_row_columns: vec![],
                     periodic_statement: vec![],
+                    circuit: None,
                 },
             ],
             pow_bits: 4,
@@ -979,6 +1079,7 @@ mod tests {
             main_next_row_columns,
             preprocessed_next_row_columns,
             periodic_statement,
+            circuit,
         } = instances
             .into_iter()
             .next()
@@ -1035,6 +1136,20 @@ mod tests {
             periodic_statement.iter().map(|byte| byte ^ 1).collect();
         mutations.push(("instance.periodic_statement", shape));
 
+        // A table turned into a circuit's describes one more bracket and binds the circuit.
+        let mut shape = base_shape();
+        shape.instances[0].circuit = Some(circuit.map_or(
+            CircuitStatement {
+                k_log: 10,
+                digest: [7; 32],
+            },
+            |circuit| CircuitStatement {
+                k_log: circuit.k_log + 1,
+                ..circuit
+            },
+        ));
+        mutations.push(("instance.circuit", shape));
+
         mutations
     }
 
@@ -1076,6 +1191,7 @@ mod tests {
         transcript.bus_argument(|_| ());
         transcript.lookup_argument(|_| ());
         transcript.zerocheck(|_| ());
+        transcript.circuit_argument(|_| ());
         transcript.main_opening(|_| ());
         transcript.preprocessed_opening(|_| ());
         transcript.finish();
@@ -1104,6 +1220,7 @@ mod tests {
         transcript.bus_argument(|_| ());
         transcript.lookup_argument(|_| ());
         transcript.zerocheck(|_| ());
+        transcript.circuit_argument(|_| ());
         transcript.main_opening(|_| ());
         transcript.preprocessed_opening(|_| ());
         transcript.finish();
@@ -1217,6 +1334,7 @@ mod tests {
                         main_next_row_columns: (0..7).collect(),
                         preprocessed_next_row_columns: (0..3).collect(),
                         periodic_statement,
+                        circuit: None,
                     },
                     MultiStarkInstanceShape {
                         num_variables: 4,
@@ -1226,6 +1344,7 @@ mod tests {
                         main_next_row_columns: (0..2).collect(),
                         preprocessed_next_row_columns: vec![],
                         periodic_statement: vec![],
+                        circuit: None,
                     },
                 ],
                 pow_bits: 6,
@@ -1274,6 +1393,34 @@ mod tests {
 
         assert_eq!(with.pattern::<F>().len(), without.pattern::<F>().len() + 2);
         assert!(!seeds_agree(&without, &with));
+    }
+
+    #[test]
+    fn a_circuit_table_describes_one_more_delegation_and_binds_its_circuit() {
+        // The circuit bracket is described only by a batch holding a circuit table.
+        //
+        //     no circuit  : the baseline sequence
+        //     one circuit : two more steps, between zerocheck and opening
+        let without = base_shape();
+        let statement = CircuitStatement {
+            k_log: 10,
+            digest: [7; 32],
+        };
+        let mut with = base_shape();
+        with.instances[1].circuit = Some(statement);
+        assert_eq!(with.pattern::<F>().len(), without.pattern::<F>().len() + 2);
+
+        // Two circuits of one size but other gates leave the sequence alone and move the label.
+        let mut other_gates = with.clone();
+        other_gates.instances[1].circuit = Some(CircuitStatement {
+            digest: [8; 32],
+            ..statement
+        });
+        assert_eq!(
+            with.pattern::<F>().pattern_hash(),
+            other_gates.pattern::<F>().pattern_hash()
+        );
+        assert!(!seeds_agree(&with, &other_gates));
     }
 
     #[test]
@@ -1527,6 +1674,7 @@ mod tests {
                     main_next_row_columns: (0..main_width).collect(),
                     preprocessed_next_row_columns: (0..preprocessed_width).collect(),
                     periodic_statement: vec![],
+                    circuit: None,
                 }
             },
         );

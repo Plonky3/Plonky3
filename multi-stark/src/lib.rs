@@ -18,6 +18,7 @@ extern crate alloc;
 
 pub mod backend;
 mod bus;
+mod circuit;
 pub mod config;
 pub mod contract;
 pub mod folder;
@@ -44,6 +45,7 @@ pub use backend::{
     BooleanTensorBackend, GenericBackend, ReprBackend, SubfieldBackend, ZerocheckBackend,
 };
 pub use bus::BusBindingError;
+pub use circuit::{CircuitError, CircuitProof};
 pub use contract::{MachineDeclaration, SealedProof, TableDeclaration};
 pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};
 pub use keys::{ProvingKey, VerifyingKey, setup};
