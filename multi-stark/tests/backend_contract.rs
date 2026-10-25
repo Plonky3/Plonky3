@@ -67,27 +67,27 @@ const SECURITY_TARGET: usize = 20;
 /// Collision resistance the primitives of this configuration supply.
 const COLLISION_BITS: usize = 100;
 
-const FIXTURE: &str = "tests/fixtures/backend_contract_v3.envelope";
+const FIXTURE: &str = "tests/fixtures/backend_contract_v4.envelope";
 
 /// Body revision the fixture on disk was written under.
-const FIXTURE_REVISION: u16 = 3;
+const FIXTURE_REVISION: u16 = 4;
 
 /// The fixture the revision before this one, kept so its refusal stays covered.
-const RETIRED_FIXTURE: &str = "tests/fixtures/backend_contract_v2.envelope";
+const RETIRED_FIXTURE: &str = "tests/fixtures/backend_contract_v3.envelope";
 
 /// Body revision that retired fixture was written under.
-const RETIRED_REVISION: u16 = 2;
+const RETIRED_REVISION: u16 = 3;
 
 /// Digest of the retired fixture, pinned for the same reason as the current one.
 const RETIRED_DIGEST: [u8; 32] = [
-    67, 120, 119, 33, 178, 5, 117, 117, 239, 112, 28, 25, 240, 230, 83, 11, 241, 141, 72, 44, 47,
-    112, 118, 245, 54, 155, 7, 227, 20, 32, 152, 65,
+    77, 4, 98, 68, 118, 71, 150, 193, 232, 200, 192, 161, 174, 32, 180, 24, 24, 34, 68, 193, 158,
+    101, 63, 74, 160, 43, 143, 13, 68, 37, 74, 165,
 ];
 
 /// Digest of the fixture bytes, pinned so a silent regeneration cannot pass.
 const FIXTURE_DIGEST: [u8; 32] = [
-    77, 4, 98, 68, 118, 71, 150, 193, 232, 200, 192, 161, 174, 32, 180, 24, 24, 34, 68, 193, 158,
-    101, 63, 74, 160, 43, 143, 13, 68, 37, 74, 165,
+    19, 78, 49, 21, 106, 253, 75, 32, 249, 4, 232, 138, 153, 197, 183, 11, 58, 188, 186, 133, 214,
+    159, 229, 57, 249, 143, 251, 115, 8, 164, 106, 119,
 ];
 
 /// A commitment scheme that binds the trace without hiding it.
