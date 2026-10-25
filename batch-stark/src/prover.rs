@@ -105,12 +105,13 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
 /// # Returns
 ///
 /// A self-contained batch proof that can be verified with `verify_batch`.
-/// Configuration or disclosure-budget failures return the PCS error with its proving phase,
-/// without emitting a partial proof.
 ///
-/// # Panics
+/// # Errors
 ///
-/// When the batch has no instance.
+/// No partial proof is ever emitted.
+///
+/// - An empty list of instances is rejected up front as an empty batch.
+/// - Configuration or disclosure-budget failures return the PCS error with its proving phase.
 #[instrument(skip_all)]
 pub fn prove_batch<
     SC,
@@ -137,11 +138,11 @@ where
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::ProverData: Sync,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Commitment: Sync,
 {
-    // An empty batch commits no matrix, which the commitment scheme cannot do.
-    assert!(
-        !instances.is_empty(),
-        "prove_batch needs at least one instance"
-    );
+    // A batch commitment needs at least one matrix.
+    // Reject an empty batch here, before the commitment scheme fails on it.
+    if instances.is_empty() {
+        return Err(ProvingError::EmptyBatch);
+    }
 
     // Public inputs reach this proof only through AIR constraints.
     // A cell listed for backend binding would go completely unbound.

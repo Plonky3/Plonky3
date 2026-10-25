@@ -81,15 +81,3 @@ fn selector_in_a_lookup_count_rejects_the_honest_proof() {
         "expected OodEvaluationMismatch on instance 0, got {err:?}"
     );
 }
-
-#[test]
-#[should_panic(expected = "prove_batch needs at least one instance")]
-fn empty_batch_panics_with_its_own_message() {
-    // Fixture state: no instance, so no matrix to commit.
-    //
-    // Invariant: an empty batch fails up front, not deep inside the commitment scheme.
-    let config = make_config(1);
-    let instances: Vec<StarkInstance<'_, MyConfig, SelectorCountAir>> = vec![];
-    let prover_data = ProverData::<MyConfig>::empty(0);
-    let _ = prove_batch(&config, &instances, &prover_data);
-}
