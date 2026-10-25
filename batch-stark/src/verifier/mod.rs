@@ -691,6 +691,25 @@ where
         return Err(LookupError::CommitmentMismatch.into());
     }
 
+    // A grind of b bits reads the low b bits of one sampled base element.
+    // Past the bound the challenger asserts, its bit sampler would panic.
+    //
+    // Why: both difficulties come from the configuration, so they are checked before any transcript work.
+    //
+    // The lookup grind runs only when some instance declares a lookup.
+    let lookup_pow_bits = config.lookup_proof_of_work_bits();
+    if num_lookup_instances > 0 && !SC::Challenger::supports_pow_bits(lookup_pow_bits) {
+        return Err(BatchVerificationError::UnsupportedLookupPowBits {
+            bits: lookup_pow_bits,
+        });
+    }
+
+    // The out-of-domain grind runs on every batch.
+    let ood_pow_bits = config.ood_proof_of_work_bits();
+    if !SC::Challenger::supports_pow_bits(ood_pow_bits) {
+        return Err(VerificationError::UnsupportedOodPowBits { bits: ood_pow_bits }.into());
+    }
+
     // Transcript: describe the run, then seed a driver from that description.
     //
     // Every number here comes from the AIRs, the common data, or the config.
@@ -701,9 +720,9 @@ where
         preprocessed_widths: preprocessed_widths.clone(),
         has_preprocessed_commitment: common.preprocessed.is_some(),
         num_lookup_instances,
-        lookup_pow_bits: config.lookup_proof_of_work_bits(),
+        lookup_pow_bits,
         has_randomization_commitment: SC::Pcs::ZK,
-        ood_pow_bits: config.ood_proof_of_work_bits(),
+        ood_pow_bits,
     };
 
     let mut challenger = config.initialise_challenger();

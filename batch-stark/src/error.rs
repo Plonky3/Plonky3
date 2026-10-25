@@ -38,6 +38,16 @@ where
     /// It also means the two sides may have been configured with different difficulties.
     #[error(transparent)]
     Transcript(#[from] BatchTranscriptFailure),
+    /// The lookup grinding difficulty cannot be sampled from the base field.
+    ///
+    /// A grind of b bits needs b below the word size and 2^b below the field order p.
+    ///
+    /// It is checked only when the batch declares a lookup, since only then does the grind run.
+    #[error("{bits}-bit lookup grinding difficulty does not fit the field order")]
+    UnsupportedLookupPowBits {
+        /// The configured difficulty.
+        bits: usize,
+    },
 }
 
 impl<PcsErr: Debug> From<InvalidProofShapeError> for BatchVerificationError<PcsErr> {

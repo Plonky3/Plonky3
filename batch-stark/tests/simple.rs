@@ -2760,6 +2760,133 @@ fn a_noncanonical_ood_pow_witness_at_zero_difficulty_is_rejected() {
     );
 }
 
+#[test]
+fn ood_pow_difficulty_past_the_field_order_is_rejected() {
+    // Invariant: an out-of-domain difficulty the base field cannot sample is a rejection, not a panic.
+    //
+    // Fixture state: BabyBear, p = 15 * 2^27 + 1 = 2013265921.
+    //
+    //     b = 30:  2^30 = 1073741824 < p    the grind runs
+    //     b = 31:  2^31 = 2147483648 > p    the bit sampler cannot draw b bits
+    //     b = 64:  past the word size
+    //
+    // Mutation: verify an honest proof under each difficulty past the bound.
+    let prover_config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    for bits in [31, 64] {
+        let verifier_config = make_config(2024).with_ood_proof_of_work_bits(bits);
+        match lookup_grinding_case(&prover_config, &verifier_config, &airs, |_| {}) {
+            Err(BatchVerificationError::Verification(
+                VerificationError::UnsupportedOodPowBits { bits: got },
+            )) => assert_eq!(got, bits),
+            other => panic!("expected UnsupportedOodPowBits at {bits} bits, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn lookup_pow_difficulty_past_the_field_order_is_rejected() {
+    // Invariant: a lookup difficulty the base field cannot sample is a rejection, not a panic.
+    //
+    // Fixture state: BabyBear, p = 15 * 2^27 + 1 = 2013265921, one instance declaring lookups.
+    //
+    //     b = 31:  2^31 = 2147483648 > p    the bit sampler cannot draw b bits
+    //     b = 64:  past the word size
+    //
+    // Mutation: verify an honest proof under each difficulty past the bound.
+    let prover_config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    for bits in [31, 64] {
+        let verifier_config = make_config(2024).with_lookup_proof_of_work_bits(bits);
+        match lookup_grinding_case(&prover_config, &verifier_config, &airs, |_| {}) {
+            Err(BatchVerificationError::UnsupportedLookupPowBits { bits: got }) => {
+                assert_eq!(got, bits);
+            }
+            other => panic!("expected UnsupportedLookupPowBits at {bits} bits, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn lookup_pow_difficulty_is_unchecked_without_lookups() {
+    // Invariant: a batch with no lookups never runs the lookup grind, so its difficulty is inert.
+    //
+    // Fixture state: two instances, neither declaring a lookup, lookup grinding at 31 bits.
+    //
+    //     lookups declared -> 31 bits rejected before the transcript
+    //     none declared    -> no grind, the proof verifies
+    //
+    // Mutation: none, the honest proof verifies under the out-of-range lookup difficulty.
+    let prover_config = make_config(2024);
+    let verifier_config = make_config(2024).with_lookup_proof_of_work_bits(31);
+    let airs = no_lookup_airs();
+
+    lookup_grinding_case(&prover_config, &verifier_config, &airs, |_| {})
+        .expect("a batch without lookups ignores the lookup difficulty");
+}
+
+#[test]
+fn grinding_difficulty_bound_sits_at_thirty_bits() {
+    // Invariant: the largest difficulty BabyBear samples is 30 bits, at both grinding sites.
+    //
+    // Fixture state: an honest proof produced with no grinding at all.
+    //
+    //     b = 0:   nothing to replay           -> the proof verifies
+    //     b = 30:  2^30 < p, the grind replays  -> the zero witness misses it
+    //     b = 31:  2^31 > p                     -> rejected before the transcript
+    //
+    // Mutation: raise one site's verifier difficulty at a time.
+    let prover_config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    lookup_grinding_case(&prover_config, &prover_config, &airs, |_| {})
+        .expect("0 bits at both sites verifies");
+
+    let ood_30 = make_config(2024).with_ood_proof_of_work_bits(30);
+    assert!(
+        matches!(
+            lookup_grinding_case(&prover_config, &ood_30, &airs, |_| {}),
+            Err(BatchVerificationError::Transcript(
+                BatchTranscriptFailure::OodPowWitness { bits: 30 }
+            ))
+        ),
+        "30 out-of-domain bits must reach the grind"
+    );
+
+    let ood_31 = make_config(2024).with_ood_proof_of_work_bits(31);
+    assert!(
+        matches!(
+            lookup_grinding_case(&prover_config, &ood_31, &airs, |_| {}),
+            Err(BatchVerificationError::Verification(
+                VerificationError::UnsupportedOodPowBits { bits: 31 }
+            ))
+        ),
+        "31 out-of-domain bits must be rejected up front"
+    );
+
+    let lookup_30 = make_config(2024).with_lookup_proof_of_work_bits(30);
+    assert!(
+        matches!(
+            lookup_grinding_case(&prover_config, &lookup_30, &airs, |_| {}),
+            Err(BatchVerificationError::Transcript(
+                BatchTranscriptFailure::LookupPowWitness { bits: 30 }
+            ))
+        ),
+        "30 lookup bits must reach the grind"
+    );
+
+    let lookup_31 = make_config(2024).with_lookup_proof_of_work_bits(31);
+    assert!(
+        matches!(
+            lookup_grinding_case(&prover_config, &lookup_31, &airs, |_| {}),
+            Err(BatchVerificationError::UnsupportedLookupPowBits { bits: 31 })
+        ),
+        "31 lookup bits must be rejected up front"
+    );
+}
+
 /// Substituting one commitment for another leaves both absorbs bound to the wrong value.
 #[test]
 fn a_substituted_main_commitment_is_rejected() {
