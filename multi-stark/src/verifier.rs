@@ -104,6 +104,14 @@ where
         /// Leading main columns the commitment holds one bit per cell.
         committed: usize,
     },
+    /// The per-round sumcheck grinding difficulty cannot be sampled from the base field.
+    ///
+    /// A grind of b bits needs b below the word size and 2^b below the field order.
+    #[error("{bits}-bit sumcheck grinding difficulty does not fit the field order")]
+    UnsupportedPowBits {
+        /// The requested difficulty.
+        bits: usize,
+    },
 }
 
 /// Verify only when the verifier's statement meets the requested security target.
@@ -207,6 +215,7 @@ where
 /// Returns an error when every declared lookup tuple is empty.
 /// Returns an error when every lookup payload and count of an AIR is constant.
 /// Returns an error when two tuples of one lookup declaration differ in width.
+/// Returns an error when the grinding difficulty cannot be sampled from the base field.
 ///
 /// The lookup statement errors are returned before the transcript is touched.
 ///
@@ -243,6 +252,14 @@ where
         (Some(_), None) => return Err(VerificationError::MissingPreprocessedOpening),
         (None, Some(_)) => return Err(VerificationError::UnexpectedPreprocessedOpening),
         _ => {}
+    }
+
+    // A grind of b bits reads the low b bits of one sampled base element, in every sumcheck round.
+    // Past the bound the challenger asserts, its bit sampler would panic.
+    //
+    // Why: the difficulty is the caller's, so it is checked before any transcript work.
+    if !C::Challenger::supports_pow_bits(pow_bits) {
+        return Err(VerificationError::UnsupportedPowBits { bits: pow_bits });
     }
 
     // Describe the statement before replaying it.
