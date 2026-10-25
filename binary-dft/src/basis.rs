@@ -73,6 +73,38 @@ impl<F: TowerLevel> BasisNtt<F> {
         self.basis.len()
     }
 
+    /// The number of evaluation points, or none when it exceeds the word size.
+    fn domain_size(&self) -> Option<usize> {
+        // Why: a 64- or 128-bit level admits 64 or more basis vectors, and `1 << dim` would overflow.
+        u32::try_from(self.log_domain_size())
+            .ok()
+            .and_then(|dim| 1usize.checked_shl(dim))
+    }
+
+    /// Whether a stage exists in this plan and a block index lies among its blocks.
+    const fn stage_has_block(&self, layer: usize, block: usize) -> bool {
+        // The stage must lie inside the domain.
+        //
+        // A stage at or past the word size has more blocks than any index can name.
+        layer < self.log_domain_size() && (layer >= usize::BITS as usize || block >> layer == 0)
+    }
+
+    /// Check that a row-major buffer of the given length and width covers the domain.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the width is positive and the buffer has exactly one row per domain point.
+    fn assert_matrix_shape(&self, len: usize, width: usize) {
+        // These equalities make each split cover complete rows and the entire domain.
+        assert!(width > 0, "matrix width must be positive");
+        assert_eq!(
+            Some(len / width),
+            self.domain_size(),
+            "matrix height differs from domain"
+        );
+        assert_eq!(len % width, 0, "incomplete matrix row");
+    }
+
     /// The affine offset of the evaluation domain.
     pub const fn shift(&self) -> F {
         self.shift
@@ -99,7 +131,7 @@ impl<F: TowerLevel> BasisNtt<F> {
     pub fn twiddle(&self, layer: usize, block: usize) -> F {
         // Each block starts at a subset sum of the basis vectors above this stage.
         assert!(layer < self.log_domain_size(), "stage outside domain");
-        assert!(block_in_stage(block, layer), "block outside domain");
+        assert!(self.stage_has_block(layer, block), "block outside domain");
         let row = &self.rows[self.log_domain_size() - layer - 1];
         let mut t = *row.last().expect("a subspace row includes its shift");
         let mut selected = block;
@@ -120,7 +152,7 @@ impl<F: TowerLevel> BasisNtt<F> {
             layer + 2 < self.log_domain_size(),
             "three stages must remain"
         );
-        assert!(block_in_stage(block, layer), "block outside domain");
+        assert!(self.stage_has_block(layer, block), "block outside domain");
         let dim = self.log_domain_size();
         let (v0, v1, v2) = (
             &self.rows[dim - layer - 1],
@@ -150,6 +182,7 @@ impl<F: TowerLevel> BasisNtt<F> {
     /// The inverse flag selects interpolation instead of evaluation.
     ///
     /// # Panics
+    ///
     /// Panics unless the width is positive and the buffer has exactly one row per domain point.
     pub fn transform_algebra<A: Algebra<F> + Copy, const INVERSE: bool>(
         &self,
@@ -176,14 +209,7 @@ impl<F: TowerLevel> BasisNtt<F> {
         width: usize,
         butterfly: impl Fn(&mut [A], &mut [A], F),
     ) {
-        // These equalities make each split cover complete rows and the entire domain.
-        assert!(width > 0, "matrix width must be positive");
-        assert_eq!(
-            Some(values.len() / width),
-            domain_height(self.log_domain_size()),
-            "matrix height differs from domain"
-        );
-        assert_eq!(values.len() % width, 0, "incomplete matrix row");
+        self.assert_matrix_shape(values.len(), width);
         for step in 0..self.log_domain_size() {
             let layer = if INVERSE {
                 self.log_domain_size() - 1 - step
@@ -197,20 +223,6 @@ impl<F: TowerLevel> BasisNtt<F> {
             }
         }
     }
-}
-
-/// The number of points of a domain of the given dimension, or none past the word size.
-fn domain_height(dim: usize) -> Option<usize> {
-    // Why: a 64- or 128-bit level admits 64 or more basis vectors, and `1 << dim` would overflow.
-    u32::try_from(dim)
-        .ok()
-        .and_then(|dim| 1usize.checked_shl(dim))
-}
-
-/// Whether a block index lies among the `2^layer` blocks of a stage.
-const fn block_in_stage(block: usize, layer: usize) -> bool {
-    // A stage at or past the word size has more blocks than any index can name.
-    layer >= usize::BITS as usize || block >> layer == 0
 }
 
 impl<F: ButterflyField> BasisNtt<F> {
@@ -238,14 +250,8 @@ impl<F: ButterflyField> BasisNtt<F> {
 
     /// Group three adjacent stages so the field can keep their rows in registers.
     fn transform_field<const INVERSE: bool>(&self, values: &mut [F], width: usize) {
-        assert!(width > 0, "matrix width must be positive");
+        self.assert_matrix_shape(values.len(), width);
         let dim = self.log_domain_size();
-        assert_eq!(
-            Some(values.len() / width),
-            domain_height(dim),
-            "matrix height differs from domain"
-        );
-        assert_eq!(values.len() % width, 0, "incomplete matrix row");
         if !F::FUSE_RADIX8 {
             for done in 0..dim {
                 let layer = if INVERSE { dim - done - 1 } else { done };
