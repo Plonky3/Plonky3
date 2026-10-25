@@ -18,6 +18,17 @@ impl ErrorBits {
         Self(-log2(p))
     }
 
+    /// The error `numerator / 2^field_bits`, an exact count of bad challenges over the field order.
+    pub fn from_numerator(field_bits: usize, numerator: u128) -> Self {
+        // Round upward before taking the logarithm.
+        // This keeps the reported error at least as large up to f64 rounding.
+        let mut rounded = numerator as f64;
+        if (rounded as u128) < numerator {
+            rounded = rounded.next_up();
+        }
+        Self::from_log2((field_bits as f64 - log2(rounded)).max(0.0))
+    }
+
     /// `-log2(sum of error probabilities)`. Tight composition; use this
     /// when terms are independent or the union bound is the operative
     /// bound.

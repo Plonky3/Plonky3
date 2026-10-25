@@ -10,7 +10,6 @@
 
 use alloc::vec::Vec;
 
-use crate::gkr::error_from_numerator;
 pub use crate::gkr::{
     PRODUCT_GKR_BATCHING_LABEL, PRODUCT_GKR_COLLAPSE_LABEL, PRODUCT_GKR_SUMCHECK_LABEL,
     ProductGkrSecurityProfile,
@@ -84,7 +83,7 @@ impl BusSecurityModel {
         let fingerprint_numerator = self.tuple_variables.max(1) as u128 * factors as u128;
         let mut terms = alloc::vec![SecurityTerm::new(
             BUS_FINGERPRINT_LABEL,
-            error_from_numerator(self.field_bits, fingerprint_numerator),
+            ErrorBits::from_numerator(self.field_bits, fingerprint_numerator),
         )];
 
         // The protocol adapter supplies counts from the concrete product schedule.

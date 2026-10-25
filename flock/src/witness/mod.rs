@@ -192,7 +192,7 @@ impl Witness {
     }
 
     /// Move the bits out, leaving only `A z` and `B z` to read.
-    pub(crate) fn take_z(&mut self) -> Vec<u64> {
+    pub fn take_z(&mut self) -> Vec<u64> {
         core::mem::take(&mut self.z)
     }
 
