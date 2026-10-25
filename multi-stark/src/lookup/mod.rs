@@ -137,6 +137,8 @@ impl<F: Field> LookupPlan<F> {
     /// Returns an error if a lookup expression reads a periodic column.
     /// Returns an error if every declared tuple is empty.
     /// Returns an error if two tuples of one lookup declaration differ in width.
+    /// Returns an error if a trace height has no value in a machine word.
+    /// Returns an error if the lookup leaves of the batch overflow a machine word.
     ///
     /// # Panics
     ///
@@ -204,6 +206,16 @@ impl<F: Field> LookupPlan<F> {
                 }
             }
         }
+        // A trace of 2^64 rows has no height in a 64-bit word, so the shift below would overflow.
+        //
+        // The heights come from the statement alone, so such a height is an error, not a panic.
+        if let Some((air, &num_variables)) = num_variables
+            .iter()
+            .enumerate()
+            .find(|&(_, &num_variables)| num_variables >= usize::BITS as usize)
+        {
+            return Err(LookupError::HeightOverflow { air, num_variables });
+        }
         let trace_heights = num_variables
             .iter()
             .map(|&num_variables| 1usize << num_variables)
@@ -265,8 +277,17 @@ impl<F: Field> LookupPlan<F> {
                 .iter()
                 .map(|lookup| lookup.elements.len())
                 .sum::<usize>();
-            let instance_height = contribution_count * trace_height;
-            active_height += instance_height;
+            // The leaves in use must fit a word, or the padded table size would wrap.
+            //
+            //     2 tuples on 2^63 rows  ->  2^64 leaves, one past the largest word
+            active_height = contribution_count
+                .checked_mul(trace_height)
+                .and_then(|instance_height| active_height.checked_add(instance_height))
+                .ok_or(LookupError::LeafCountOverflow {
+                    air: instance.air_index,
+                    num_variables: instance.num_variables,
+                    tuples: contribution_count,
+                })?;
 
             // Record one bus identifier per declaration.
             // A local bus is scoped to its declaring AIR.
@@ -702,6 +723,24 @@ pub enum LookupError {
     /// The fractional reduction failed its own consistency checks.
     #[error("fractional GKR: {0}")]
     FractionGkr(#[from] FractionGkrError),
+    /// A trace height has no value in a machine word.
+    #[error("AIR {air} declares 2^{num_variables} rows, which overflows a machine word")]
+    HeightOverflow {
+        /// Position of the AIR, in caller order.
+        air: usize,
+        /// Base-two logarithm of the claimed trace height.
+        num_variables: usize,
+    },
+    /// The lookup leaves of the batch overflow a machine word.
+    #[error("AIR {air} adds {tuples} blocks of 2^{num_variables} leaves past a machine word")]
+    LeafCountOverflow {
+        /// Position of the AIR whose blocks overflow, in caller order.
+        air: usize,
+        /// Base-two logarithm of that AIR's trace height.
+        num_variables: usize,
+        /// Number of tuples that AIR declares.
+        tuples: usize,
+    },
 }
 
 /// Materialize the lookup fractions and prove that they sum to zero.
@@ -998,6 +1037,63 @@ mod tests {
                     .push_local_interaction([(vec![value.into()], Count::provided(AB::Expr::ONE))]);
             }
         }
+    }
+
+    #[test]
+    fn lookup_plan_rejects_a_height_without_a_word() {
+        // Fixture state: one AIR whose statement claims 2^64 rows.
+        //
+        //     1 << 64   has no value in a 64-bit word
+        //
+        // Invariant: the plan reports the height instead of overflowing the shift.
+        let bits = usize::BITS as usize;
+        let result = LookupPlan::from_lookups(declared(&[&BalancedLookupAir]), &[bits]);
+        let Err(LookupError::HeightOverflow { air, num_variables }) = result else {
+            panic!("expected a height overflow");
+        };
+        assert_eq!((air, num_variables), (0, bits));
+    }
+
+    struct ProvidedPairAir;
+
+    impl BaseAir<F> for ProvidedPairAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB> Air<AB> for ProvidedPairAir
+    where
+        AB: AirBuilder<F = F> + InteractionBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let value = builder.main().current_slice()[0];
+            for _ in 0..2 {
+                builder.push_interaction("pair", [value.into()], Count::provided(AB::Expr::ONE));
+            }
+        }
+    }
+
+    #[test]
+    fn lookup_plan_rejects_leaves_past_a_word() {
+        // Fixture state: one AIR provides two tuples on 2^(w - 1) rows, for a word of w bits.
+        //
+        //     2 * 2^(w - 1) = 2^w leaves, one past the largest word
+        //
+        // Provided tuples carry no query weight, so the multiplicity bound passes.
+        //
+        // Invariant: the plan reports the overflow instead of wrapping the leaf count.
+        let height = usize::BITS as usize - 1;
+        let result = LookupPlan::from_lookups(declared(&[&ProvidedPairAir]), &[height]);
+        let Err(LookupError::LeafCountOverflow {
+            air,
+            num_variables,
+            tuples,
+        }) = result
+        else {
+            panic!("expected a leaf count overflow");
+        };
+        assert_eq!((air, num_variables, tuples), (0, height, 2));
     }
 
     #[test]
