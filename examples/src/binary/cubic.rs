@@ -13,7 +13,7 @@
 
 use std::time::Instant;
 
-use p3_air::{Air, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_binary_field::{BinaryChallenger, Poly64, Poly192};
 use p3_binary_pcs::BooleanTraceCommitmentData;
 use p3_binary_pcs::whir::{
@@ -24,6 +24,7 @@ use p3_blake3::Blake3;
 use p3_bus::BusSymbolicBuilder;
 use p3_challenger::HashChallenger;
 use p3_commit::MultilinearPcs;
+use p3_flock::{Circuit, Witness};
 use p3_keccak::Keccak256Hash;
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_maybe_rayon::prelude::current_num_threads;
@@ -66,7 +67,7 @@ use p3_sumcheck::TableShape;
 use p3_sumcheck::layout::{Table, plan_stacked_layout};
 use p3_sumcheck::ring_switch::bits::BitRingSwitch;
 
-use super::whir::{claim_shape, validate_options};
+use super::whir::{claim_shape, validate_options, validate_pcs_options};
 use super::{
     BinaryAir, BinaryFields, BinaryProofError, BinaryProofOptions, BinaryProofReport,
     BooleanPcsChoice, Compress, HarnessHash, Hash, HashFamily, PcsIdentity, WhirIncompatibility,
@@ -351,6 +352,21 @@ pub fn cubic_whir_config<A: BinaryAir, H: HarnessHash>(
     whir: WhirOptions,
 ) -> Result<CubicWhirStarkConfig<H>, BinaryProofError> {
     validate_options(air, shape, options)?;
+    let absorbed = BitRingSwitch::<Val, Challenge>::ABSORBED;
+    whir_config_for(shape, claim_shape(air, shape, absorbed), options, whir)
+}
+
+/// Build the Boolean WHIR configuration for one committed shape and the claims its opening batches.
+///
+/// # Errors
+///
+/// The profile cannot derive a schedule, or the schedule exceeds the budget.
+fn whir_config_for<H: HarnessHash>(
+    shape: TableShape,
+    (num_claims, successor_tensors): (usize, bool),
+    options: BinaryProofOptions,
+    whir: WhirOptions,
+) -> Result<CubicWhirStarkConfig<H>, BinaryProofError> {
     let (arity, _) = plan_stacked_layout(&[shape]);
     let absorbed = BitRingSwitch::<Val, Challenge>::ABSORBED;
     let packed_variables =
@@ -383,6 +399,13 @@ pub fn cubic_whir_config<A: BinaryAir, H: HarnessHash>(
             options.log_inv_rate,
             options.folding,
         ),
+    }
+    .with_query_grinding(whir.query_grinding.into());
+    let profile = match whir.first_round {
+        Some((folding, reduction)) => {
+            profile.with_first_round(usize::from(folding).min(packed_variables), reduction.into())
+        }
+        None => profile,
     };
     let whir_config = profile
         .config::<Challenge, Val, ValChallenger<H>, _>(packed_variables, &domain)
@@ -399,7 +422,6 @@ pub fn cubic_whir_config<A: BinaryAir, H: HarnessHash>(
             BinaryProofError::WhirConfig(p3_binary_pcs::BooleanTraceCommitmentError::Boolean(error))
         })?;
 
-    let (num_claims, successor_tensors) = claim_shape(air, shape, absorbed);
     let proof_shape = pcs
         .proof_shape(num_claims, successor_tensors)
         .map_err(|error| BinaryProofError::WhirBudget(error.into()))?;
@@ -460,15 +482,133 @@ where
         ));
     };
     match options.hash {
-        HashFamily::Keccak256 => prove_with::<A, Keccak256Hash>(air, trace, options, whir),
-        HashFamily::Blake3 => prove_with::<A, Blake3>(air, trace, options, whir),
+        HashFamily::Keccak256 => {
+            prove_with::<A, Keccak256Hash>(air, Committed::Trace(trace), options, whir)
+        }
+        HashFamily::Blake3 => prove_with::<A, Blake3>(air, Committed::Trace(trace), options, whir),
     }
 }
 
-/// [`prove_boolean_air_cubic`] over one hash.
+/// Prove and verify a batch of circuit instances as one circuit table, reporting size and timing.
+///
+/// Flock proves every instance inside the multi-STARK, through the WHIR commitment `options.pcs` selects.
+///
+/// # Errors
+///
+/// - `options.pcs` is not WHIR, which is the only commitment built at this field pair.
+/// - Any failure of the configuration, the security target, proving, or verification.
+pub fn prove_circuit_cubic(
+    circuit: &Circuit,
+    witness: Witness,
+    options: BinaryProofOptions,
+) -> Result<BinaryProofReport, BinaryProofError> {
+    let BooleanPcsChoice::Whir(whir) = options.pcs else {
+        return Err(BinaryProofError::WhirIncompatible(
+            WhirIncompatibility::DenseField,
+        ));
+    };
+    // The table's AIR reads the port words, and nothing else reads them in a lone batch.
+    let ports = CircuitPorts(circuit.const_pos() / 64);
+    let committed = Committed::Circuit(circuit, witness);
+    match options.hash {
+        HashFamily::Keccak256 => prove_with::<_, Keccak256Hash>(&ports, committed, options, whir),
+        HashFamily::Blake3 => prove_with::<_, Blake3>(&ports, committed, options, whir),
+    }
+}
+
+/// Assess `2^log_instances` instances of a circuit without proving: the composed security bits and the WHIR schedule.
+pub fn preflight_circuit_cubic(
+    circuit: &Circuit,
+    log_instances: usize,
+    options: BinaryProofOptions,
+) -> Result<(f64, WhirSummary), BinaryProofError> {
+    let BooleanPcsChoice::Whir(whir) = options.pcs else {
+        return Err(BinaryProofError::WhirIncompatible(
+            WhirIncompatibility::DenseField,
+        ));
+    };
+    let ports = CircuitPorts(circuit.const_pos() / 64);
+    match options.hash {
+        HashFamily::Keccak256 => {
+            preflight_with::<Keccak256Hash>(circuit, &ports, log_instances, options, whir)
+        }
+        HashFamily::Blake3 => {
+            preflight_with::<Blake3>(circuit, &ports, log_instances, options, whir)
+        }
+    }
+}
+
+/// The preflight at one hash: configure, set up, and assess the circuit table alone.
+fn preflight_with<H: CubicErrorProjection>(
+    circuit: &Circuit,
+    ports: &CircuitPorts,
+    log_instances: usize,
+    options: BinaryProofOptions,
+    whir: WhirOptions,
+) -> Result<(f64, WhirSummary), BinaryProofError> {
+    let (_, config) = circuit_config::<H>(circuit, ports, log_instances, options, whir)?;
+    let (_, vk) = setup(&config, &[ports], &mut challenger::<H>()).map_err(H::prove_error)?;
+    let instances = VerifierInstances::new(vec![VerifierInstance::circuit(
+        ports,
+        circuit,
+        &vk,
+        log_instances,
+        &[],
+    )]);
+    let report = security_report(&config, &instances).map_err(BinaryProofError::Security)?;
+    report
+        .require_security(options.security_bits)
+        .map_err(BinaryProofError::Security)?;
+    let security_bits = report
+        .security_bits()
+        .expect("require_security succeeded, so every component is assessed");
+    Ok((security_bits, config.summary))
+}
+
+/// The committed shape of a circuit's witness column, and the configuration that commits it.
+fn circuit_config<H: HarnessHash>(
+    circuit: &Circuit,
+    ports: &impl BaseAir<Val>,
+    log_instances: usize,
+    options: BinaryProofOptions,
+    whir: WhirOptions,
+) -> Result<(TableShape, CubicWhirStarkConfig<H>), BinaryProofError> {
+    validate_pcs_options(options)?;
+    let shape = TableShape::new(circuit.k_log() + log_instances, 1);
+    // Every port word and Flock's own claim open as weighted claims, and nothing else.
+    let claims = (ports.width() + 1, false);
+    Ok((shape, whir_config_for::<H>(shape, claims, options, whir)?))
+}
+
+/// What one run commits.
+enum Committed<'a> {
+    /// The AIR's own trace, one bit per cell.
+    Trace(Table<Val>),
+    /// A circuit's witness, its rows the circuit's instances.
+    Circuit(&'a Circuit, Witness),
+}
+
+/// The AIR of a lone circuit table: one column per port word, and no constraint of its own.
+struct CircuitPorts(usize);
+
+impl<F> BaseAir<F> for CircuitPorts {
+    fn width(&self) -> usize {
+        self.0
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for CircuitPorts {
+    fn eval(&self, _builder: &mut AB) {}
+}
+
+/// One run at this field pair over one hash: configure, assess, prove, serialize, verify, report.
 fn prove_with<A, H>(
     air: &A,
-    trace: Table<Val>,
+    committed: Committed<'_>,
     options: BinaryProofOptions,
     whir: WhirOptions,
 ) -> Result<BinaryProofReport, BinaryProofError>
@@ -476,18 +616,31 @@ where
     A: BinaryAir + CubicAir,
     H: CubicErrorProjection,
 {
-    let shape = trace.shape();
     let setup_start = Instant::now();
-    let config = cubic_whir_config::<A, H>(air, shape, options, whir)?;
+    // The AIR's rows, the committed shape, and the configuration that commits it.
+    let (log_height, shape, config) = match &committed {
+        Committed::Trace(trace) => {
+            let shape = trace.shape();
+            let config = cubic_whir_config::<A, H>(air, shape, options, whir)?;
+            (shape.num_variables(), shape, config)
+        }
+        Committed::Circuit(circuit, witness) => {
+            let log_instances = witness.log_instances();
+            let (shape, config) = circuit_config::<H>(circuit, air, log_instances, options, whir)?;
+            (log_instances, shape, config)
+        }
+    };
 
     // The statement is assessed once, before the timed phases.
     let (pk, vk) = setup(&config, &[air], &mut challenger::<H>()).map_err(H::prove_error)?;
+    let circuit = match &committed {
+        Committed::Trace(_) => None,
+        Committed::Circuit(circuit, _) => Some(*circuit),
+    };
     let instances = || {
-        VerifierInstances::new(vec![VerifierInstance::new(
-            air,
-            &vk,
-            shape.num_variables(),
-            &[],
+        VerifierInstances::new(vec![circuit.map_or_else(
+            || VerifierInstance::new(air, &vk, log_height, &[]),
+            |circuit| VerifierInstance::circuit(air, circuit, &vk, log_height, &[]),
         )])
     };
     let report = security_report(&config, &instances()).map_err(BinaryProofError::Security)?;
@@ -500,9 +653,15 @@ where
     let setup_seconds = setup_start.elapsed().as_secs_f64();
 
     let prove_start = Instant::now();
+    let instance = match committed {
+        Committed::Trace(trace) => ProverInstance::new(air, trace, &pk, &[]),
+        Committed::Circuit(circuit, witness) => {
+            ProverInstance::circuit(air, circuit, witness, &pk, &[])
+        }
+    };
     let proof = prove_with_backend::<_, _, BooleanTensorBackend>(
         &config,
-        ProverInstances::new(vec![ProverInstance::new(air, trace, &pk, &[])]),
+        ProverInstances::new(vec![instance]),
         options.sumcheck_pow_bits,
         &mut challenger::<H>(),
     )
@@ -534,8 +693,9 @@ where
     let verify_seconds = verify_start.elapsed().as_secs_f64();
 
     Ok(BinaryProofReport {
-        rows: 1 << shape.num_variables(),
-        width: shape.width(),
+        rows: 1 << log_height,
+        // Committed cells per row: the trace's width, or one circuit instance's bits.
+        width: ((1 << shape.num_variables()) * shape.width()) >> log_height,
         stacked_variables: config.pcs().num_vars(),
         fields: BinaryFields::Gf64Gf192,
         hash: options.hash,
@@ -567,6 +727,8 @@ mod tests {
     fn options(hash: HashFamily) -> BinaryProofOptions {
         BinaryProofOptions {
             pcs: BooleanPcsChoice::Whir(WhirOptions {
+                query_grinding: 0,
+                first_round: None,
                 regime: WhirRegime::UniqueDecoding,
                 term_security_bits: 140,
                 budget: BinaryWhirBudget {

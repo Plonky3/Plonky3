@@ -8,22 +8,38 @@ use p3_blake3_air::Blake3BinaryAir;
 use p3_examples::binary::{
     Backend, BinaryAir, BinaryFields, BinaryProofOptions, BinaryProofReport, BinaryWhirBudget,
     BooleanPcsChoice, CubicAir, HashFamily, WhirOptions, WhirRegime, WhirSummary,
-    preflight_boolean_air_with_summary, prove_boolean_air_cubic, prove_boolean_air_with_backend,
+    preflight_boolean_air_with_summary, preflight_circuit_cubic, prove_boolean_air_cubic,
+    prove_boolean_air_with_backend, prove_circuit_cubic,
 };
 use p3_examples::parsers::{
     BinaryCommitmentHashOptions, BinaryHashOptions, OutputFormat, RepresentationOptions,
 };
+use p3_flock::Gadget;
+use p3_flock::gadgets::blake2s::Blake2sCompress;
+use p3_flock::gadgets::blake3::Blake3Compress;
+use p3_flock::gadgets::keccak::KeccakF1600;
+use p3_flock::gadgets::sha256::Sha256Compress;
 use p3_keccak_air::{KECCAK_BINARY_ROWS_PER_PERM, KeccakBinaryAir, NUM_KECCAK_BINARY_COLS};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_sha256_air::{NUM_SHA256_BINARY_COLS, Sha256BinaryAir};
 use p3_sumcheck::TableShape;
 use p3_sumcheck::layout::Table;
+use rand::rngs::SmallRng;
+use rand::{Rng, RngExt, SeedableRng};
 use tracing_forest::util::LevelFilter;
 use tracing_forest::{ForestLayer, PrettyPrinter};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum ProverOptions {
+    /// Each hash is one instance of a Flock circuit, proved as one circuit table.
+    Flock,
+    /// Each hash is rows of a Boolean AIR.
+    Air,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum PcsOptions {
@@ -61,8 +77,18 @@ struct Args {
     objective: BinaryHashOptions,
 
     /// The log base 2 of the desired trace length.
+    ///
+    /// The Flock prover proves as many hashes as this AIR trace holds.
     #[arg(short, long)]
     log_trace_length: u8,
+
+    /// Which prover runs the hashes.
+    ///
+    /// `flock` commits through WHIR at `GF(2^64)` values and `GF(2^192)` challenges.
+    ///
+    /// `--pcs`, `--field`, `--representation` and `--merkle-arity` apply to `air` only.
+    #[arg(long, ignore_case = true, value_enum, default_value_t = ProverOptions::Flock)]
+    prover: ProverOptions,
 
     /// How to print the measurements.
     ///
@@ -155,6 +181,18 @@ struct Args {
     #[arg(long = "whir-max-grinding-bits", visible_alias = "max-grinding-bits")]
     whir_max_grinding_bits: Option<usize>,
 
+    /// Grinding bits before each WHIR query phase: zero for `air`, twelve for `flock` unless set.
+    #[arg(long = "whir-query-grinding-bits")]
+    whir_query_grinding_bits: Option<u8>,
+
+    /// Variables the first WHIR round folds: `--folding` for `air`, six for `flock` unless set.
+    #[arg(long = "whir-first-folding")]
+    whir_first_folding: Option<u8>,
+
+    /// Domain bits the first WHIR round drops: one for `air`, four for `flock` unless set.
+    #[arg(long = "whir-first-reduction")]
+    whir_first_reduction: Option<u8>,
+
     /// Run configuration/security preflight and exit without generating a witness.
     #[arg(long)]
     preflight: bool,
@@ -179,7 +217,10 @@ impl Args {
             || self.whir_term_security_bits.is_some()
             || self.whir_max_stir_queries.is_some()
             || self.whir_max_proof_bytes.is_some()
-            || self.whir_max_grinding_bits.is_some();
+            || self.whir_max_grinding_bits.is_some()
+            || self.whir_query_grinding_bits.is_some()
+            || self.whir_first_folding.is_some()
+            || self.whir_first_reduction.is_some();
 
         match self.pcs {
             PcsOptions::Folding if has_whir_fields => {
@@ -213,6 +254,10 @@ impl Args {
                 Ok(BinaryProofOptions {
                     merkle_arity: self.merkle_arity,
                     pcs: BooleanPcsChoice::Whir(WhirOptions {
+                        query_grinding: self.whir_query_grinding_bits.unwrap_or(0),
+                        first_round: self
+                            .whir_first_folding
+                            .map(|folding| (folding, self.whir_first_reduction.unwrap_or(1))),
                         regime,
                         term_security_bits,
                         budget,
@@ -222,6 +267,73 @@ impl Args {
             }
         }
     }
+
+    /// The options of the Flock route: WHIR over binary Merkle trees.
+    ///
+    /// Unset choices take Flock's own commitment schedule: the Johnson regime, and a first round folding six variables and dropping four domain bits.
+    ///
+    /// Query grinding takes twelve bits, not Flock's sixteen.
+    ///
+    /// Past twelve, each bit doubles the grinding for a few queries less.
+    ///
+    /// The per-term target defaults to twelve bits above the composed one.
+    ///
+    /// A ceiling the caller does not set is left open, so the report shows what the schedule costs.
+    fn flock_options(&self) -> BinaryProofOptions {
+        let production = BinaryWhirBudget::PRODUCTION;
+        let regime = match self.whir_regime {
+            Some(WhirRegimeOptions::UniqueDecoding) => WhirRegime::UniqueDecoding,
+            Some(WhirRegimeOptions::Johnson) | None => WhirRegime::Johnson,
+        };
+        BinaryProofOptions {
+            log_inv_rate: self.log_inv_rate,
+            security_bits: self.security_bits,
+            folding: self.folding,
+            merkle_arity: 2,
+            hash: match self.hash {
+                BinaryCommitmentHashOptions::Keccak256 => HashFamily::Keccak256,
+                BinaryCommitmentHashOptions::Blake3 => HashFamily::Blake3,
+            },
+            pcs: BooleanPcsChoice::Whir(WhirOptions {
+                query_grinding: self.whir_query_grinding_bits.unwrap_or(12),
+                first_round: Some((
+                    self.whir_first_folding.unwrap_or(6),
+                    self.whir_first_reduction.unwrap_or(4),
+                )),
+                regime,
+                term_security_bits: self
+                    .whir_term_security_bits
+                    .unwrap_or(self.security_bits + 12),
+                budget: BinaryWhirBudget {
+                    max_stir_queries: self.whir_max_stir_queries.unwrap_or(usize::MAX),
+                    max_proof_bytes: self.whir_max_proof_bytes.unwrap_or(usize::MAX),
+                    max_grinding_bits: self
+                        .whir_max_grinding_bits
+                        .unwrap_or(production.max_grinding_bits),
+                },
+            }),
+            ..BinaryProofOptions::default()
+        }
+    }
+}
+
+/// Prove `hashes` random instances of a gadget as one circuit table, the witness timed apart.
+fn prove_flock<G: Gadget + Sync>(
+    hashes: usize,
+    options: BinaryProofOptions,
+    random: impl Fn(&mut SmallRng) -> G,
+) -> Result<Option<BinaryProofReport>, String> {
+    let mut rng = SmallRng::seed_from_u64(0xF10C);
+    let rows = (0..hashes).map(|_| random(&mut rng)).collect::<Vec<_>>();
+    let circuit = G::circuit();
+    // Instances past the rows repeat the first one, so the count is a power of two.
+    let log_instances = hashes.next_power_of_two().ilog2() as usize;
+    let witness_start = Instant::now();
+    let witness = G::witness(&circuit, log_instances, &rows, &rows[0]);
+    let witness_seconds = witness_start.elapsed().as_secs_f64();
+    prove_circuit_cubic(&circuit, witness, options)
+        .map(|report| Some(report.with_witness_seconds(witness_seconds)))
+        .map_err(|error| format!("proof failed: {error}"))
 }
 
 /// Parses a `--merkle-arity` value, rejecting anything but 2 or 4.
@@ -373,8 +485,11 @@ fn run(args: &Args) -> Result<(), String> {
         .with(json.then(|| ForestLayer::from(PrettyPrinter::new().writer(io::stderr))))
         .init();
 
-    let options = args.proof_options()?;
     let (trace_height, shape) = requested_shape(args.objective, args.log_trace_length)?;
+    if args.prover == ProverOptions::Flock {
+        return report(args.format, run_flock(args, trace_height));
+    }
+    let options = args.proof_options()?;
 
     let fields = match args.field {
         FieldOptions::Gf128 => BinaryFields::Gf128,
@@ -472,8 +587,72 @@ fn run(args: &Args) -> Result<(), String> {
         }
     };
 
-    match result {
-        Ok(Some(report)) => match args.format {
+    report(args.format, result)
+}
+
+/// Prove the hashes an AIR trace of `trace_height` rows would hold, through Flock.
+///
+/// A preflight assesses the batch and stops before the witness.
+fn run_flock(args: &Args, trace_height: usize) -> Result<Option<BinaryProofReport>, String> {
+    let options = args.flock_options();
+    let hashes = match args.objective {
+        BinaryHashOptions::KeccakFPermutations => trace_height / KECCAK_BINARY_ROWS_PER_PERM,
+        _ => trace_height,
+    };
+    if args.preflight {
+        let circuit = match args.objective {
+            BinaryHashOptions::Blake3Compressions => Blake3Compress::circuit(),
+            BinaryHashOptions::Blake2sCompressions => Blake2sCompress::circuit(),
+            BinaryHashOptions::Sha256Compressions => Sha256Compress::circuit(),
+            BinaryHashOptions::KeccakFPermutations => KeccakF1600::circuit(),
+        };
+        let log_instances = hashes.next_power_of_two().ilog2() as usize;
+        let (security_bits, summary) = preflight_circuit_cubic(&circuit, log_instances, options)
+            .map_err(|error| format!("Flock preflight failed: {error}"))?;
+        print_preflight_result(options, security_bits, Some(summary), args.format);
+        return Ok(None);
+    }
+    status(
+        args.format,
+        &format!("Proving {hashes} hashes through Flock"),
+    );
+    match args.objective {
+        BinaryHashOptions::Blake3Compressions => {
+            prove_flock(hashes, options, |rng| Blake3Compress {
+                cv: rng.random(),
+                block: rng.random(),
+                counter: rng.next_u64(),
+                block_len: 64,
+                flags: 11,
+            })
+        }
+        BinaryHashOptions::Blake2sCompressions => {
+            prove_flock(hashes, options, |rng| Blake2sCompress {
+                h: rng.random(),
+                m: rng.random(),
+                t: rng.next_u64(),
+                f0: u32::MAX,
+            })
+        }
+        BinaryHashOptions::Sha256Compressions => {
+            prove_flock(hashes, options, |rng| Sha256Compress {
+                state: rng.random(),
+                block: rng.random(),
+            })
+        }
+        BinaryHashOptions::KeccakFPermutations => prove_flock(hashes, options, |rng| {
+            KeccakF1600(core::array::from_fn(|_| rng.next_u64()))
+        }),
+    }
+}
+
+/// Print a run's report, or hand back why it failed.
+fn report(
+    format: OutputFormat,
+    result: Result<Option<BinaryProofReport>, String>,
+) -> Result<(), String> {
+    if let Some(report) = result? {
+        match format {
             OutputFormat::Human => {
                 println!("{report}");
                 println!("Proof Verified Successfully");
@@ -482,9 +661,7 @@ fn run(args: &Args) -> Result<(), String> {
                 "{}",
                 serde_json::to_string(&report).expect("the report serializes")
             ),
-        },
-        Ok(None) => {}
-        Err(error) => return Err(error),
+        }
     }
     Ok(())
 }
@@ -501,6 +678,32 @@ mod tests {
     use clap::CommandFactory;
 
     use super::*;
+
+    #[test]
+    fn a_flock_preflight_assesses_the_batch_and_stops_before_the_witness() {
+        let preflight = |security_bits: &str| {
+            let args = Args::try_parse_from([
+                "prove_hash_binary",
+                "--objective",
+                "blake-3-compressions",
+                "--log-trace-length",
+                "4",
+                "--security-bits",
+                security_bits,
+                "--format",
+                "json",
+                "--preflight",
+            ])
+            .expect("preflight arguments parse");
+            run_flock(&args, 1 << 4)
+        };
+
+        // An attainable target: the batch is assessed, and no proof is made.
+        assert!(matches!(preflight("100"), Ok(None)));
+
+        // Past the 32-byte hash's 128-bit cap, the assessment refuses the target.
+        assert!(preflight("129").is_err());
+    }
 
     #[test]
     fn cli_defaults_select_the_fast_binary_pcs_parameters() {

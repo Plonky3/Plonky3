@@ -120,24 +120,29 @@ Currently the options for the command line arguments are:
 - `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel, recursive-dft` or `small-batch-dft`. This option should be omitted if the field choice is `mersenne-31` as the circle stark currently only supports a single discrete fourier transform.
 - `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.
 
-`prove_hash_binary` proves Keccak-f permutations, BLAKE3 compressions or SHA-256 compressions
-over `BinaryField128` with the multilinear STARK prover. They commit their bit-valued traces
-through the `BooleanTracePcs`, which opens the current and the next row of every column. Every
-objective generates its trace already packed into bits:
+`prove_hash_binary` proves a batch of Keccak-f permutations, BLAKE3, BLAKE2s or SHA-256
+compressions. By default (`--prover flock`) each hash is one instance of its Flock circuit
+(ePrint 2026/1329), proved inside one multi-STARK circuit table at `GF(2^64)` values and
+`GF(2^192)` challenges, committed through WHIR on Flock's own schedule:
 ```bash
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective keccak-f-permutations --log-trace-length 14 --security-bits 96
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-trace-length 10 --security-bits 96
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective sha-256-compressions --log-trace-length 10 --security-bits 96
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-2s-compressions --log-trace-length 10 --security-bits 96
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-trace-length 16 --security-bits 127
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective keccak-f-permutations --log-trace-length 18 --security-bits 127
 ```
 - `--objective` (`-o`): `keccak-f-permutations`, `blake-3-compressions`, `sha-256-compressions` or
   `blake-2s-compressions`.
-- `--log-trace-length` (`-l`): required. The binary Keccak-f AIR uses 25 rows per permutation
-  (one per round, plus the output row), so `keccak-f-permutations` proves
-  `2^log-trace-length / 25` permutations; the three compression objectives each prove
-  `2^log-trace-length` compressions, one row per compression.
+- `--log-trace-length` (`-l`): required. The batch holds as many hashes as the Boolean AIR trace of
+  that length would: `2^log-trace-length / 25` Keccak-f permutations, or `2^log-trace-length`
+  compressions.
 - `--format`: `human` (default) or `json`. With `json`, standard output is one JSON object per
   run carrying the same measurements, and progress lines and tracing spans go to standard error.
+- `--security-bits` (default 100) is the composed target; the 32-byte hash caps it at 128.
+- `--whir-regime`, `--whir-term-security-bits`, `--whir-query-grinding-bits`,
+  `--whir-first-folding`, `--whir-first-reduction`, `--folding` and `--log-inv-rate` tune WHIR;
+  unset, they take Flock's schedule (Johnson regime, a first round folding 6 variables and
+  dropping 4 domain bits, inverse rate 1/2), with 12 query grinding bits instead of its 16.
+
+`--prover air` proves the same hashes as a Boolean AIR over `BinaryField128`, committed through the
+`BooleanTracePcs`, which opens the current and the next row of every column:
 - `--representation` (`-r`): the field representation the zerocheck prover runs its later
   rounds in: `auto` (default; `poly-basis-late` with a hardware carryless multiply,
   subfield-tower basis otherwise), `subfield`, `poly-basis`, or `poly-basis-late` (polynomial
