@@ -11,7 +11,9 @@ use config::{
     Val, make_circle_config, make_config, make_config_allow_tiny_trace, make_config_wide,
     make_config_zk, make_two_adic_compat_config,
 };
-use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, SymbolicExpression, WindowAccess};
+use p3_air::{
+    Air, AirBuilder, BaseAir, NextRowTrace, PermutationAirBuilder, SymbolicExpression, WindowAccess,
+};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::verifier::commitments_with_opening_points;
 use p3_batch_stark::{
@@ -4642,4 +4644,140 @@ fn empty_batch_is_rejected_by_prover() {
     //     instances = []  ->  Err(EmptyBatch), before any commitment
     let result = prove_batch(&config, &instances, &prover_data);
     assert!(matches!(result, Err(ProvingError::EmptyBatch)));
+}
+
+/// A counter: the first row is zero and each row adds one to the previous.
+///
+/// The transition reads column 1 of the next row.
+/// Column 0 is a copy of column 1, so the declaration can omit exactly one read column.
+#[derive(Clone, Debug)]
+struct CounterAir {
+    /// The main columns the AIR declares it reads on the next row.
+    declared_next: Vec<usize>,
+}
+
+impl<F> BaseAir<F> for CounterAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        self.declared_next.clone()
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for CounterAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let copy = main.current(0).unwrap();
+        let local = main.current(1).unwrap();
+        let next = main.next(1).unwrap();
+        builder.assert_eq(copy, local);
+        builder.when_first_row().assert_zero(local);
+        builder
+            .when_transition()
+            .assert_eq(next, local + AB::Expr::ONE);
+    }
+}
+
+/// Eight rows counting from zero, each value written to both columns.
+fn counter_trace() -> RowMajorMatrix<Val> {
+    let values = (0..8u64).flat_map(|i| [Val::from_u64(i); 2]).collect();
+    RowMajorMatrix::new(values, 2)
+}
+
+#[test]
+fn prover_rejects_an_undeclared_next_row_read() {
+    let config = make_config(0);
+    let trace = counter_trace();
+
+    // Fixture state: two counters, both satisfied on their real rows.
+    //
+    // Mutation: instance 1 declares no next-row column, yet its transition reads column 1.
+    //
+    //     instance 0: declared {1}, read {1}
+    //     instance 1: declared {},  read {1}   <- undeclared
+    let honest = CounterAir {
+        declared_next: vec![1],
+    };
+    let misdeclared = CounterAir {
+        declared_next: vec![],
+    };
+    let instances = [
+        StarkInstance {
+            air: &honest,
+            trace: &trace,
+            public_values: vec![],
+        },
+        StarkInstance {
+            air: &misdeclared,
+            trace: &trace,
+            public_values: vec![],
+        },
+    ];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+
+    // Invariant: the prover names the instance and the read before committing to anything.
+    let result = prove_batch(&config, &instances, &prover_data);
+    assert!(matches!(
+        result,
+        Err(ProvingError::UndeclaredNextRowRead {
+            air: Some(1),
+            trace: NextRowTrace::Main,
+            column: 1,
+        })
+    ));
+}
+
+#[test]
+fn verifier_rejects_an_undeclared_next_row_read() {
+    let config = make_config(0);
+    let trace = counter_trace();
+
+    // Fixture state: an honest batch of two counters, each declaring its next-row read.
+    let honest = CounterAir {
+        declared_next: vec![1],
+    };
+    let instances = [
+        StarkInstance {
+            air: &honest,
+            trace: &trace,
+            public_values: vec![],
+        },
+        StarkInstance {
+            air: &honest,
+            trace: &trace,
+            public_values: vec![],
+        },
+    ];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    let public_values = [vec![], vec![]];
+    let airs = [honest.clone(), honest.clone()];
+    assert!(matches!(
+        verify_batch(&config, &airs, &proof, &public_values, &prover_data.common),
+        Ok(())
+    ));
+
+    // Mutation: the verifier's second AIR declares only column 0, which no transition reads.
+    //
+    //     declared next row:  {0}
+    //     read next row:      {1}   <- undeclared
+    let misdeclared = CounterAir {
+        declared_next: vec![0],
+    };
+    let airs = [honest, misdeclared];
+
+    // Invariant: the verifier names the instance and the read.
+    let result = verify_batch(&config, &airs, &proof, &public_values, &prover_data.common);
+    assert!(matches!(
+        result,
+        Err(BatchVerificationError::Verification(
+            VerificationError::UndeclaredNextRowRead {
+                air: Some(1),
+                trace: NextRowTrace::Main,
+                column: 1,
+            }
+        ))
+    ));
 }

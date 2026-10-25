@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 pub use data::VerifierData;
-use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
+use p3_air::symbolic::{AirLayout, SymbolicExpressionExt, UndeclaredNextRowRead};
 use p3_air::{Air, BaseAir};
 use p3_challenger::GrindingChallenger;
 use p3_commit::{
@@ -17,7 +17,8 @@ use p3_lookup::{
     check_multiplicity_height_bound,
 };
 use p3_uni_stark::{
-    InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
+    AirConstraints, InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks,
+    validate_degree_bits,
 };
 use p3_util::checked_log_size_sum;
 use p3_util::zip_eq::zip_eq;
@@ -28,7 +29,7 @@ use crate::config::{Challenge, Commitment, Domain, PcsError, StarkGenericConfig 
 use crate::error::BatchVerificationError;
 use crate::folder::VerifierConstraintFolderWithLookups;
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof};
-use crate::symbolic::get_log_num_quotient_chunks_for_domain;
+use crate::symbolic::evaluate_constraints;
 use crate::transcript::{BatchShape, BatchVerifierTranscript};
 
 // Keep these checks shared without moving them across the entry points' other shape checks.
@@ -559,17 +560,32 @@ where
             num_periodic_columns: air.num_periodic_columns(),
             ..Default::default()
         };
-        let log_num_chunks =
+        // The same symbolic evaluation checks the next-row declaration.
+        // Why: with an empty declaration the next row is never opened, and the constraints fold zeros for it.
+        // An AIR reading such a row would otherwise fail as an opaque evaluation mismatch.
+        let constraints =
             info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
-                get_log_num_quotient_chunks_for_domain::<_, SC::Challenge, A, _>(
+                let evaluated = evaluate_constraints::<_, SC::Challenge, A, _>(
                     air,
                     layout,
-                    pcs.natural_domain_for_degree(1usize << base_db),
                     &all_lookups[i],
-                    config.is_zk(),
                     &lookup_gadget,
-                )
+                );
+                AirConstraints::new(air, evaluated)
             });
+        constraints
+            .check_next_row_reads()
+            .map_err(|UndeclaredNextRowRead { trace, column }| {
+                VerificationError::UndeclaredNextRowRead {
+                    air: Some(i),
+                    trace,
+                    column,
+                }
+            })?;
+        let log_num_chunks = constraints.log_num_quotient_chunks(
+            pcs.natural_domain_for_degree(1usize << base_db),
+            config.is_zk(),
+        );
         log_num_quotient_chunks.push(log_num_chunks);
 
         let (_, n_chunks) =

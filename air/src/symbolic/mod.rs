@@ -8,6 +8,7 @@ pub(crate) mod expression_ext;
 mod flatten;
 mod fold;
 mod layout;
+mod next_row;
 mod variable;
 
 use alloc::collections::BTreeMap;
@@ -22,6 +23,7 @@ pub use expression::{BaseLeaf, SymbolicExpression};
 pub use expression_ext::{ExtLeaf, SymbolicExpressionExt};
 pub use fold::*;
 pub use layout::*;
+pub use next_row::{NextRowColumns, NextRowTrace, UndeclaredNextRowRead};
 use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};
 pub use variable::{BaseEntry, ExtEntry, SymbolicVariable, SymbolicVariableExt};
 

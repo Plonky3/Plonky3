@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 #[cfg(debug_assertions)]
 use p3_air::DebugConstraintBuilder;
-use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
+use p3_air::symbolic::{AirLayout, SymbolicExpressionExt, UndeclaredNextRowRead};
 use p3_air::{Air, RowWindow};
 use p3_challenger::GrindingChallenger;
 use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
@@ -23,7 +23,8 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_uni_stark::{
-    OpenedValues, PackedChallenge, PackedVal, PreprocessedOpenedValues, ProverConstraintFolder,
+    AirConstraints, OpenedValues, PackedChallenge, PackedVal, PreprocessedOpenedValues,
+    ProverConstraintFolder,
 };
 use p3_util::{DisjointMutPtr, log2_strict_usize};
 use tracing::{debug_span, info_span, instrument};
@@ -35,9 +36,7 @@ use crate::config::{
 };
 use crate::folder::ProverConstraintFolderWithLookups;
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
-use crate::symbolic::{
-    get_constraint_layout, get_log_num_quotient_chunks_for_domain, get_symbolic_constraints,
-};
+use crate::symbolic::{evaluate_constraints, get_constraint_layout, get_symbolic_constraints};
 use crate::transcript::{BatchProverTranscript, BatchShape};
 
 /// Per-instance quotient output: the chunk domains and their committed LDE matrices.
@@ -196,7 +195,7 @@ where
 
     // Determine preprocessed widths and quotient chunk counts per instance.
     let mut preprocessed_widths = Vec::with_capacity(airs.len());
-    let (log_num_quotient_chunks, num_quotient_chunks): (Vec<usize>, Vec<usize>) = airs
+    let chunk_counts = airs
         .iter()
         .zip(pub_vals.iter())
         .enumerate()
@@ -218,22 +217,36 @@ where
             };
 
             // Infer the log of the quotient polynomial degree from symbolic analysis.
-            let lq_chunks =
+            //
+            // The same evaluation checks the next-row declaration.
+            // Why: with an empty declaration the next row is never opened, and the verifier folds zeros for it.
+            // A proof of an AIR reading such a row would always be rejected.
+            let constraints =
                 info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
-                    get_log_num_quotient_chunks_for_domain::<_, SC::Challenge, A, _>(
+                    let evaluated = evaluate_constraints::<_, SC::Challenge, A, _>(
                         air,
                         layout,
-                        pcs.natural_domain_for_degree(degrees[i]),
                         all_lookups[i],
-                        config.is_zk(),
                         &lookup_gadget,
-                    )
+                    );
+                    AirConstraints::new(*air, evaluated)
                 });
+            constraints.check_next_row_reads().map_err(
+                |UndeclaredNextRowRead { trace, column }| ProvingError::UndeclaredNextRowRead {
+                    air: Some(i),
+                    trace,
+                    column,
+                },
+            )?;
+            let lq_chunks = constraints
+                .log_num_quotient_chunks(pcs.natural_domain_for_degree(degrees[i]), config.is_zk());
             // Actual number of quotient chunks (doubled when ZK is enabled).
             let n_chunks = 1 << (lq_chunks + config.is_zk());
-            (lq_chunks, n_chunks)
+            Ok((lq_chunks, n_chunks))
         })
-        .unzip();
+        .collect::<Result<Vec<_>, _>>()?;
+    let (log_num_quotient_chunks, num_quotient_chunks): (Vec<usize>, Vec<usize>) =
+        chunk_counts.into_iter().unzip();
 
     let n_instances = airs.len();
     let widths: Vec<usize> = airs.iter().map(|a| A::width(a)).collect();
