@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use crate::gkr::{ProductGkrSecurityProfile, error_from_numerator};
+use crate::gkr::ProductGkrSecurityProfile;
 use crate::{ErrorBits, SecurityTerm};
 
 /// Label for the quadratic sumcheck reducing the leaf claim to the committed bits.
@@ -47,7 +47,8 @@ impl BitzSecurityModel {
         let mut terms = self.product.components(self.field_bits);
         if self.inner_rounds > 0 {
             // Each round is a degree-two check; grinding multiplies the cost of every retry.
-            let bits = error_from_numerator(self.field_bits, 2 * self.inner_rounds as u128).bits()
+            let bits = ErrorBits::from_numerator(self.field_bits, 2 * self.inner_rounds as u128)
+                .bits()
                 + self.inner_pow_bits as f64;
             terms.push(SecurityTerm::new(
                 BITZ_INNER_PRODUCT_LABEL,

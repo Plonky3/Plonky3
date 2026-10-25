@@ -1,9 +1,19 @@
 //! A batch: one circuit repeated on a power of two of instances, the statement every phase proves.
 
+use p3_field::Field;
+use p3_security::{ErrorBits, SecurityTerm};
 use thiserror::Error;
 
+use crate::Challenge;
 use crate::circuit::Circuit;
-use crate::zerocheck::MIN_LOG_N;
+use crate::skip::{K_SKIP, SKIP_SIZE};
+use crate::zerocheck::{MIN_LOG_N, N_FIXED};
+
+/// Label of the zerocheck's soundness term.
+pub const ZEROCHECK_LABEL: &str = "flock-zerocheck";
+
+/// Label of the lincheck's soundness term.
+pub const LINCHECK_LABEL: &str = "flock-lincheck";
 
 /// One circuit on `2^log_instances` instances, with at least `MIN_LOG_N` witness variables.
 #[derive(Clone, Copy, Debug)]
@@ -57,6 +67,35 @@ impl<'a> Batch<'a> {
     #[must_use]
     pub const fn log_n(&self) -> usize {
         self.circuit.k_log() + self.log_instances
+    }
+
+    /// The zerocheck's and the lincheck's soundness terms, for a batch with no public words.
+    ///
+    /// Each counts the bad challenges of ePrint 2026/1329, Appendix A, before any opening.
+    ///
+    /// The caller charges them over the candidates its commitment leaves open.
+    ///
+    /// No grinding credit is taken.
+    #[must_use]
+    pub fn security_terms(&self) -> [SecurityTerm; 2] {
+        let field_bits = Challenge::bits();
+        // Zerocheck: drawn eq coordinates, then round 1 of degree `2 * 64 - 1`, then quadratic rounds.
+        //
+        //     n = variables past the skip
+        //     (n - 7) + 127 + 2 n
+        let rounds = self.log_n() - K_SKIP;
+        let zerocheck = (rounds - N_FIXED) + (2 * SKIP_SIZE - 1) + 2 * rounds;
+        // Lincheck: the batch in alpha of degree 3, quadratic inner rounds, the skip fold, then the constant pin.
+        //
+        //     3 + 2 (k_log - 6) + 63 + log_instances
+        let lincheck =
+            3 + 2 * (self.circuit.k_log() - K_SKIP) + (SKIP_SIZE - 1) + self.log_instances;
+        [(ZEROCHECK_LABEL, zerocheck), (LINCHECK_LABEL, lincheck)].map(|(label, numerator)| {
+            SecurityTerm::new(
+                label,
+                ErrorBits::from_numerator(field_bits, numerator as u128),
+            )
+        })
     }
 }
 
