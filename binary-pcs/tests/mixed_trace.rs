@@ -220,9 +220,9 @@ fn a_dense_width_whose_coordinates_wrap_is_refused() {
     //
     //     committed width = 1 + 2 * 64 = 129
     //
-    // A forged table of 2^58 + 3 columns has 2^58 + 2 dense columns.
+    // On a word of w bits, a forged table of 2^(w - 6) + 3 columns has 2^(w - 6) + 2 dense columns.
     //
-    //     1 + (2^58 + 2) * 64 = 2^64 + 129, which wraps to 129
+    //     1 + (2^(w - 6) + 2) * 64 = 2^w + 129, which wraps to 129
     //
     // Wrapped, it commits the same shape, and its last column aliases dense column 2.
     let shapes = [TableShape::new(6, 3)];
@@ -238,7 +238,7 @@ fn a_dense_width_whose_coordinates_wrap_is_refused() {
     let proof = pcs.open_at(data, &protocol, &points, &mut prover).unwrap();
 
     // Mutation: the same proof, against the forged table.
-    let wide = (1usize << 58) + 3;
+    let wide = (1usize << (usize::BITS - 6)) + 3;
     let forged = OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(6, wide),
         vec![OpeningBatch::new(vec![0, 1, wide - 1], vec![])],
