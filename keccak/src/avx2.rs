@@ -1,8 +1,8 @@
 use core::arch::x86_64::{
-    __m256i, _mm256_add_epi64, _mm256_andnot_si256, _mm256_loadu_si256, _mm256_or_si256,
-    _mm256_permute2x128_si256, _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_slli_epi64,
-    _mm256_srli_epi64, _mm256_storeu_si256, _mm256_unpackhi_epi64, _mm256_unpacklo_epi64,
-    _mm256_xor_si256,
+    __m256i, _mm_cvtsi64_si128, _mm256_add_epi64, _mm256_andnot_si256, _mm256_loadu_si256,
+    _mm256_or_si256, _mm256_permute2x128_si256, _mm256_setzero_si256, _mm256_shuffle_epi8,
+    _mm256_sll_epi64, _mm256_srl_epi64, _mm256_srli_epi64, _mm256_storeu_si256,
+    _mm256_unpackhi_epi64, _mm256_unpacklo_epi64, _mm256_xor_si256,
 };
 use core::mem::transmute;
 
@@ -51,16 +51,6 @@ const RC: [__m256i; 24] = unsafe {
 
 // SAFETY (every intrinsic below): the permutation runs only on a CPU with AVX2.
 #[inline(always)]
-fn form_matrix(buf: [__m256i; 25]) -> [[__m256i; 5]; 5] {
-    unsafe { transmute(buf) }
-}
-
-#[inline(always)]
-fn flatten(mat: [[__m256i; 5]; 5]) -> [__m256i; 25] {
-    unsafe { transmute(mat) }
-}
-
-#[inline(always)]
 fn rol_1(a: __m256i) -> __m256i {
     unsafe {
         let shl = _mm256_add_epi64(a, a);
@@ -95,221 +85,106 @@ fn rol_56(a: __m256i) -> __m256i {
     unsafe { _mm256_shuffle_epi8(a, ROL_56_CTRL) }
 }
 
+/// Rotate every 64-bit lane left by `N`.
+///
+/// Byte-sized rotations take one shuffle, the others two shifts and an OR.
 #[inline(always)]
-fn rol<const SHL_AMT: i32, const SHR_AMT: i32>(a: __m256i) -> __m256i {
-    unsafe {
-        let shl = _mm256_slli_epi64::<SHL_AMT>(a);
-        let shr = _mm256_srli_epi64::<SHR_AMT>(a);
-        _mm256_or_si256(shl, shr)
+fn rol<const N: i32>(a: __m256i) -> __m256i {
+    match N {
+        0 => a,
+        1 => rol_1(a),
+        8 => rol_8(a),
+        56 => rol_56(a),
+        _ => unsafe {
+            let shl = _mm256_sll_epi64(a, _mm_cvtsi64_si128(N as i64));
+            let shr = _mm256_srl_epi64(a, _mm_cvtsi64_si128(64 - N as i64));
+            _mm256_or_si256(shl, shr)
+        },
     }
 }
 
+/// Theta's column correction, then rho's rotation by `N`, on one lane.
 #[inline(always)]
-fn get_theta_parities(state: [[__m256i; 5]; 5]) -> [__m256i; 5] {
+fn theta_rho<const N: i32>(lane: __m256i, d: __m256i) -> __m256i {
+    rol::<N>(unsafe { _mm256_xor_si256(lane, d) })
+}
+
+/// Chi on one plane: `b[j] ^ (!b[j + 1] & b[j + 2])`.
+#[inline(always)]
+fn chi(b: [__m256i; 5]) -> [__m256i; 5] {
+    let mut out = b;
+    for j in 0..5 {
+        out[j] =
+            unsafe { _mm256_xor_si256(b[j], _mm256_andnot_si256(b[(j + 1) % 5], b[(j + 2) % 5])) };
+    }
+    out
+}
+
+/// One round of Keccak-f on a state held as `[y][x]`.
+///
+/// Each output plane runs theta, rho, pi and chi back to back.
+///
+/// So only one plane of intermediate values is live at a time, against the 16 registers available.
+#[inline(always)]
+fn round(rc: __m256i, a: [[__m256i; 5]; 5]) -> [[__m256i; 5]; 5] {
+    // SAFETY (whole body): the permutation runs only on a CPU with AVX2.
     unsafe {
-        let mut par0 = _mm256_xor_si256(state[0][0], state[1][0]);
-        let mut par1 = _mm256_xor_si256(state[0][1], state[1][1]);
-        let mut par2 = _mm256_xor_si256(state[0][2], state[1][2]);
-        let mut par3 = _mm256_xor_si256(state[0][3], state[1][3]);
-        let mut par4 = _mm256_xor_si256(state[0][4], state[1][4]);
+        // Theta: C[x] = XOR of column x, then D[x] = C[x - 1] ^ rol(C[x + 1], 1).
+        let mut c = [_mm256_setzero_si256(); 5];
+        for x in 0..5 {
+            let rows_01 = _mm256_xor_si256(a[0][x], a[1][x]);
+            let rows_23 = _mm256_xor_si256(a[2][x], a[3][x]);
+            c[x] = _mm256_xor_si256(_mm256_xor_si256(rows_01, rows_23), a[4][x]);
+        }
+        let mut d = [_mm256_setzero_si256(); 5];
+        for x in 0..5 {
+            d[x] = _mm256_xor_si256(c[(x + 4) % 5], rol_1(c[(x + 1) % 5]));
+        }
 
-        par0 = _mm256_xor_si256(par0, state[2][0]);
-        par1 = _mm256_xor_si256(par1, state[2][1]);
-        par2 = _mm256_xor_si256(par2, state[2][2]);
-        par3 = _mm256_xor_si256(par3, state[2][3]);
-        par4 = _mm256_xor_si256(par4, state[2][4]);
+        // Pi: plane y takes lane (j, j + 3y mod 5) at position j.
+        let mut plane_0 = chi([
+            theta_rho::<0>(a[0][0], d[0]),
+            theta_rho::<44>(a[1][1], d[1]),
+            theta_rho::<43>(a[2][2], d[2]),
+            theta_rho::<21>(a[3][3], d[3]),
+            theta_rho::<14>(a[4][4], d[4]),
+        ]);
 
-        par0 = _mm256_xor_si256(par0, state[3][0]);
-        par1 = _mm256_xor_si256(par1, state[3][1]);
-        par2 = _mm256_xor_si256(par2, state[3][2]);
-        par3 = _mm256_xor_si256(par3, state[3][3]);
-        par4 = _mm256_xor_si256(par4, state[3][4]);
-
-        par0 = _mm256_xor_si256(par0, state[4][0]);
-        par1 = _mm256_xor_si256(par1, state[4][1]);
-        par2 = _mm256_xor_si256(par2, state[4][2]);
-        par3 = _mm256_xor_si256(par3, state[4][3]);
-        par4 = _mm256_xor_si256(par4, state[4][4]);
+        // Iota right after plane 0: the next round waits on this lane, and the CPU issues oldest first.
+        plane_0[0] = _mm256_xor_si256(plane_0[0], rc);
 
         [
-            _mm256_xor_si256(par4, rol_1(par1)),
-            _mm256_xor_si256(par0, rol_1(par2)),
-            _mm256_xor_si256(par1, rol_1(par3)),
-            _mm256_xor_si256(par2, rol_1(par4)),
-            _mm256_xor_si256(par3, rol_1(par0)),
+            plane_0,
+            chi([
+                theta_rho::<28>(a[0][3], d[3]),
+                theta_rho::<20>(a[1][4], d[4]),
+                theta_rho::<3>(a[2][0], d[0]),
+                theta_rho::<45>(a[3][1], d[1]),
+                theta_rho::<61>(a[4][2], d[2]),
+            ]),
+            chi([
+                theta_rho::<1>(a[0][1], d[1]),
+                theta_rho::<6>(a[1][2], d[2]),
+                theta_rho::<25>(a[2][3], d[3]),
+                theta_rho::<8>(a[3][4], d[4]),
+                theta_rho::<18>(a[4][0], d[0]),
+            ]),
+            chi([
+                theta_rho::<27>(a[0][4], d[4]),
+                theta_rho::<36>(a[1][0], d[0]),
+                theta_rho::<10>(a[2][1], d[1]),
+                theta_rho::<15>(a[3][2], d[2]),
+                theta_rho::<56>(a[4][3], d[3]),
+            ]),
+            chi([
+                theta_rho::<62>(a[0][2], d[2]),
+                theta_rho::<55>(a[1][3], d[3]),
+                theta_rho::<39>(a[2][4], d[4]),
+                theta_rho::<41>(a[3][0], d[0]),
+                theta_rho::<2>(a[4][1], d[1]),
+            ]),
         ]
     }
-}
-
-#[inline(always)]
-fn theta(state: [[__m256i; 5]; 5]) -> [[__m256i; 5]; 5] {
-    let theta_parities = get_theta_parities(state);
-
-    unsafe {
-        [
-            [
-                _mm256_xor_si256(state[0][0], theta_parities[0]),
-                _mm256_xor_si256(state[0][1], theta_parities[1]),
-                _mm256_xor_si256(state[0][2], theta_parities[2]),
-                _mm256_xor_si256(state[0][3], theta_parities[3]),
-                _mm256_xor_si256(state[0][4], theta_parities[4]),
-            ],
-            [
-                _mm256_xor_si256(state[1][0], theta_parities[0]),
-                _mm256_xor_si256(state[1][1], theta_parities[1]),
-                _mm256_xor_si256(state[1][2], theta_parities[2]),
-                _mm256_xor_si256(state[1][3], theta_parities[3]),
-                _mm256_xor_si256(state[1][4], theta_parities[4]),
-            ],
-            [
-                _mm256_xor_si256(state[2][0], theta_parities[0]),
-                _mm256_xor_si256(state[2][1], theta_parities[1]),
-                _mm256_xor_si256(state[2][2], theta_parities[2]),
-                _mm256_xor_si256(state[2][3], theta_parities[3]),
-                _mm256_xor_si256(state[2][4], theta_parities[4]),
-            ],
-            [
-                _mm256_xor_si256(state[3][0], theta_parities[0]),
-                _mm256_xor_si256(state[3][1], theta_parities[1]),
-                _mm256_xor_si256(state[3][2], theta_parities[2]),
-                _mm256_xor_si256(state[3][3], theta_parities[3]),
-                _mm256_xor_si256(state[3][4], theta_parities[4]),
-            ],
-            [
-                _mm256_xor_si256(state[4][0], theta_parities[0]),
-                _mm256_xor_si256(state[4][1], theta_parities[1]),
-                _mm256_xor_si256(state[4][2], theta_parities[2]),
-                _mm256_xor_si256(state[4][3], theta_parities[3]),
-                _mm256_xor_si256(state[4][4], theta_parities[4]),
-            ],
-        ]
-    }
-}
-
-#[inline(always)]
-fn rho(state: [[__m256i; 5]; 5]) -> [[__m256i; 5]; 5] {
-    [
-        [
-            state[0][0],
-            rol_1(state[0][1]),
-            rol::<62, { 64 - 62 }>(state[0][2]),
-            rol::<28, { 64 - 28 }>(state[0][3]),
-            rol::<27, { 64 - 27 }>(state[0][4]),
-        ],
-        [
-            rol::<36, { 64 - 36 }>(state[1][0]),
-            rol::<44, { 64 - 44 }>(state[1][1]),
-            rol::<6, { 64 - 6 }>(state[1][2]),
-            rol::<55, { 64 - 55 }>(state[1][3]),
-            rol::<20, { 64 - 20 }>(state[1][4]),
-        ],
-        [
-            rol::<3, { 64 - 3 }>(state[2][0]),
-            rol::<10, { 64 - 10 }>(state[2][1]),
-            rol::<43, { 64 - 43 }>(state[2][2]),
-            rol::<25, { 64 - 25 }>(state[2][3]),
-            rol::<39, { 64 - 39 }>(state[2][4]),
-        ],
-        [
-            rol::<41, { 64 - 41 }>(state[3][0]),
-            rol::<45, { 64 - 45 }>(state[3][1]),
-            rol::<15, { 64 - 15 }>(state[3][2]),
-            rol::<21, { 64 - 21 }>(state[3][3]),
-            rol_8(state[3][4]),
-        ],
-        [
-            rol::<18, { 64 - 18 }>(state[4][0]),
-            rol::<2, { 64 - 2 }>(state[4][1]),
-            rol::<61, { 64 - 61 }>(state[4][2]),
-            rol_56(state[4][3]),
-            rol::<14, { 64 - 14 }>(state[4][4]),
-        ],
-    ]
-}
-
-#[inline(always)]
-const fn pi(state: [[__m256i; 5]; 5]) -> [[__m256i; 5]; 5] {
-    [
-        [
-            state[0][0],
-            state[1][1],
-            state[2][2],
-            state[3][3],
-            state[4][4],
-        ],
-        [
-            state[0][3],
-            state[1][4],
-            state[2][0],
-            state[3][1],
-            state[4][2],
-        ],
-        [
-            state[0][1],
-            state[1][2],
-            state[2][3],
-            state[3][4],
-            state[4][0],
-        ],
-        [
-            state[0][4],
-            state[1][0],
-            state[2][1],
-            state[3][2],
-            state[4][3],
-        ],
-        [
-            state[0][2],
-            state[1][3],
-            state[2][4],
-            state[3][0],
-            state[4][1],
-        ],
-    ]
-}
-
-#[inline(always)]
-fn chi_row(row: [__m256i; 5]) -> [__m256i; 5] {
-    unsafe {
-        [
-            _mm256_xor_si256(row[0], _mm256_andnot_si256(row[1], row[2])),
-            _mm256_xor_si256(row[1], _mm256_andnot_si256(row[2], row[3])),
-            _mm256_xor_si256(row[2], _mm256_andnot_si256(row[3], row[4])),
-            _mm256_xor_si256(row[3], _mm256_andnot_si256(row[4], row[0])),
-            _mm256_xor_si256(row[4], _mm256_andnot_si256(row[0], row[1])),
-        ]
-    }
-}
-
-#[inline(always)]
-fn chi(state: [[__m256i; 5]; 5]) -> [[__m256i; 5]; 5] {
-    [
-        chi_row(state[0]),
-        chi_row(state[1]),
-        chi_row(state[2]),
-        chi_row(state[3]),
-        chi_row(state[4]),
-    ]
-}
-
-#[inline(always)]
-fn iota(i: usize, state: [[__m256i; 5]; 5]) -> [[__m256i; 5]; 5] {
-    let mut res = state;
-    unsafe {
-        res[0][0] = _mm256_xor_si256(state[0][0], RC[i]);
-    }
-    res
-}
-
-#[inline(always)]
-fn round(i: usize, state: [__m256i; 25]) -> [__m256i; 25] {
-    let mut state = form_matrix(state);
-    state = theta(state);
-    state = rho(state);
-    state = pi(state);
-    state = chi(state);
-    state = iota(i, state);
-    flatten(state)
 }
 
 /// Permute four interleaved Keccak states.
@@ -319,11 +194,11 @@ fn round(i: usize, state: [__m256i; 25]) -> [__m256i; 25] {
 /// The running CPU has AVX2.
 #[inline(always)]
 unsafe fn keccak_perm(buf: &mut [[u64; WIDTH]; 25]) {
-    let mut state: [__m256i; 25] = unsafe { transmute(*buf) };
-    for i in 0..24 {
-        state = round(i, state);
+    let mut state: [[__m256i; 5]; 5] = unsafe { transmute(*buf) };
+    for rc in RC {
+        state = round(rc, state);
     }
-    *buf = unsafe { transmute::<[__m256i; 25], [[u64; WIDTH]; 25]>(state) };
+    *buf = unsafe { transmute::<[[__m256i; 5]; 5], [[u64; WIDTH]; 25]>(state) };
 }
 
 /// Whether the running CPU has AVX2.
@@ -567,5 +442,79 @@ mod tests {
         let expected = tiny_keccak_res();
         let computed = our_res();
         assert_eq!(expected, computed);
+    }
+}
+
+#[cfg(test)]
+mod lane_tests {
+    use alloc::vec::Vec;
+
+    use proptest::prelude::*;
+    use tiny_keccak::keccakf;
+
+    use super::*;
+
+    fn check(states: &[[u64; 25]]) {
+        // Pack state l into lane l of every word.
+        let mut packed: [[u64; WIDTH]; 25] =
+            core::array::from_fn(|word| core::array::from_fn(|lane| states[lane][word]));
+        // SAFETY: the test returns early on a CPU without the feature.
+        unsafe { keccak_perm(&mut packed) };
+
+        // Invariant: lane l of the packed permutation is the scalar permutation of state l.
+        for (lane, state) in states.iter().enumerate() {
+            let mut expected = *state;
+            keccakf(&mut expected);
+            let computed: [u64; 25] = core::array::from_fn(|word| packed[word][lane]);
+            assert_eq!(computed, expected, "lane {lane}");
+        }
+    }
+
+    #[test]
+    fn every_lane_permutes_like_the_scalar_code_on_edge_states() {
+        if !supported() {
+            return;
+        }
+
+        // Fixture state: every lane holds its own state, so a swap of any two lanes shows.
+        //
+        //     lane 0: all zeros
+        //     lane 1: all ones
+        //     lane l >= 2: a single 1 at word 7l mod 25, bit l
+        //
+        //     lane 2 -> word 14, bit 2      lane 3 -> word 21, bit 3      lane 4 -> word 3, bit 4
+        let states: Vec<[u64; 25]> = (0..WIDTH)
+            .map(|lane| match lane {
+                0 => [0; 25],
+                1 => [u64::MAX; 25],
+                _ => {
+                    let mut state = [0; 25];
+                    state[(7 * lane) % 25] = 1 << lane;
+                    state
+                }
+            })
+            .collect();
+
+        // Invariant: no two lanes share a state, so lane routing is observable.
+        for (i, a) in states.iter().enumerate() {
+            for b in &states[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+
+        check(&states);
+    }
+
+    proptest! {
+        #[test]
+        fn every_lane_permutes_like_the_scalar_code(words in prop::collection::vec(any::<u64>(), 25 * WIDTH)) {
+            if !supported() {
+                return Ok(());
+            }
+
+            // Fixture state: independent random states, one per lane.
+            let states: Vec<[u64; 25]> = words.chunks(25).map(|c| c.try_into().unwrap()).collect();
+            check(&states);
+        }
     }
 }
