@@ -489,6 +489,8 @@ impl IndexedPlan {
 /// Returns an error when a lookup expression reads a periodic column.
 /// Returns an error when every declared lookup tuple is empty.
 /// Returns an error when the lookup, indexed or bus declarations do not describe a supported plan.
+/// Returns an error when every lookup payload and count of an AIR is constant.
+/// Returns an error when two tuples of one lookup declaration differ in width.
 pub fn security_report<C, A>(
     config: &C,
     instances: &VerifierInstances<'_, C, A>,
@@ -634,6 +636,12 @@ where
         if constraints == 0 && tuples == 0 {
             return Err(invalid("AIR declares no constraints or lookup tuples"));
         }
+        // A constant lookup family has no round polynomial of its own either.
+        //
+        // No pin lifts it, so the scorer below would refuse it.
+        if builder.interaction_degree() == Some(0) {
+            return Err(invalid("constant lookup families are unsupported"));
+        }
         max_degree = max_degree.max(get_air_profile_from_builder(air, &builder).degrees.max());
         // Retain only lookup declarations, dropping this AIR's constraint DAGs before the next.
         lookup_interactions.push((
@@ -656,7 +664,8 @@ where
     let lookups = lookup_interactions
         .into_iter()
         .map(|(global, local)| Lookups::from_interactions(&global, &local, &[]))
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(LookupError::TupleWidth)?;
     let plan = LookupPlan::from_lookups(lookups, &heights)?;
     let lookup = plan.map(|plan| MultilinearLookupParams {
         num_variables: plan.num_variables,

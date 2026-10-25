@@ -2,6 +2,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::iter;
 
 use p3_air::symbolic::{
     AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
@@ -95,6 +96,57 @@ impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
     /// Indexed tables recorded so far, in the order they were pushed.
     pub fn indexed_tables(&self) -> &[IndexedTable] {
         &self.indexed_tables
+    }
+
+    /// The largest degree among the lookup payloads and counts recorded so far.
+    ///
+    /// Each trace column counts as a variable of degree one.
+    ///
+    /// Returns nothing when no lookup tuple was emitted.
+    ///
+    /// A local interaction with no tuple is inert, so it does not count.
+    ///
+    /// Exclusive interactions are not counted.
+    ///
+    /// A returned degree of zero means every tuple is constant:
+    ///
+    /// ```text
+    ///     payload [1], count 1   ->   Some(0)
+    ///     payload [x], count 1   ->   Some(1)
+    ///     no tuple at all        ->   None
+    /// ```
+    pub fn interaction_degree(&self) -> Option<usize> {
+        // A two-row trace gives each column degree one, so the degree is the total degree.
+        let degree = |expression: &SymbolicExpression<F>| expression.poly_degree(2, &[]);
+
+        // A global interaction is one tuple: its payload and its count.
+        let global = self.global_interactions.iter().map(|interaction| {
+            interaction
+                .fields
+                .iter()
+                .chain(iter::once(&interaction.count))
+                .map(degree)
+                .max()
+                .unwrap_or(0)
+        });
+
+        // A local interaction holds several tuples, each with its own count.
+        let local = self
+            .local_interactions
+            .iter()
+            .flat_map(|interaction| &interaction.tuples)
+            .map(|(fields, count)| {
+                let (count, _) = count.clone().into_parts();
+                fields
+                    .iter()
+                    .map(degree)
+                    .max()
+                    .unwrap_or(0)
+                    .max(degree(&count))
+            });
+
+        // One entry per tuple, so an empty iterator means no tuple was emitted.
+        global.chain(local).max()
     }
 
     /// Symbolic base-field constraints captured by the inner builder.

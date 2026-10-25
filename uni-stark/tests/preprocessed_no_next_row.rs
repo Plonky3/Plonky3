@@ -10,8 +10,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{
-    InvalidProofShapeError, StarkConfig, VerificationError, prove_with_preprocessed,
-    setup_preprocessed, verify_with_preprocessed,
+    InvalidProofShapeError, PreprocessedVerifierKey, StarkConfig, VerificationError,
+    prove_with_preprocessed, setup_preprocessed, verify_with_preprocessed,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -143,6 +143,69 @@ fn test_preprocessed_no_next_row_rejects_present_preprocessed_next() {
             err,
             VerificationError::InvalidProofShape(
                 InvalidProofShapeError::UnexpectedPreprocessedNext { air: None }
+            )
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn test_verifier_key_narrower_than_the_air_is_rejected() {
+    let (config, air, proof, vk) = prove_copy_air();
+
+    // Invariant: a verifier key must declare the preprocessed width the AIR reads.
+    //
+    // Fixture state: the AIR reads preprocessed column 0, so its width is 1.
+    //
+    // Mutation: a key of width 0, and a proof that drops the preprocessed opening to match it.
+    //
+    //     AIR:   width 1, reads column 0
+    //     key:   width 0
+    //     proof: no preprocessed opening
+    //
+    // Under the key's width the AIR's read of column 0 has nothing to index.
+    let narrow = PreprocessedVerifierKey { width: 0, ..vk };
+    let mut tampered = proof;
+    tampered.opened_values.preprocessed = None;
+
+    let err = verify_with_preprocessed(&config, &air, &tampered, &[], Some(&narrow))
+        .expect_err("verifier should reject a key narrower than the AIR");
+    // The error reports both widths, so a caller can tell which side is wrong.
+    assert!(
+        matches!(
+            err,
+            VerificationError::InvalidProofShape(
+                InvalidProofShapeError::PreprocessedVerifierKeyInconsistency {
+                    air_width: 1,
+                    key_width: Some(0),
+                }
+            )
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn test_missing_verifier_key_reports_the_air_width() {
+    let (config, air, proof, _) = prove_copy_air();
+
+    // Invariant: an AIR with preprocessed columns needs a verifier key.
+    //
+    // Fixture state: the AIR declares 1 preprocessed column.
+    //
+    // Mutation: verify with no key at all.
+    //
+    //     AIR width 1, key absent   -> rejected, key width reported as none
+    let err = verify_with_preprocessed(&config, &air, &proof, &[], None)
+        .expect_err("verifier should reject a preprocessed AIR without a verifier key");
+    assert!(
+        matches!(
+            err,
+            VerificationError::InvalidProofShape(
+                InvalidProofShapeError::PreprocessedVerifierKeyInconsistency {
+                    air_width: 1,
+                    key_width: None,
+                }
             )
         ),
         "unexpected error: {err:?}"

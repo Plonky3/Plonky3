@@ -282,7 +282,7 @@ where
 #[test]
 fn from_air_extracts_one_local_lookup_per_declaration() {
     let air = RangeCheckAir::with_lookups(3);
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
     assert_eq!(lookups.len(), 3);
     for (i, lookup) in lookups.iter().enumerate() {
         assert_eq!(lookup.column, i);
@@ -330,7 +330,7 @@ where
 fn from_air_extracts_exclusive_lookup_from_bus_api() {
     // The bus convenience records a single exclusive group spanning both branches.
     let air = ExclusiveQueryAir;
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
 
     // One column carries the whole group.
     assert_eq!(lookups.len(), 1);
@@ -511,7 +511,7 @@ fn generate_permutation_balances_to_zero_terminal() {
     let mut rng = SmallRng::seed_from_u64(0x1234_5678);
     let main = balanced_range_check_main(8, &mut rng);
     let air = RangeCheckAir::new();
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
 
     let gadget = LogUpGadget::new();
     let challenges = vec![EF::from_u32(7), EF::from_u32(11)];
@@ -559,7 +559,7 @@ fn generate_permutation_flag_zero_skip_matches_real_denominators() {
     let main = RowMajorMatrix::new(flat, 3);
 
     let air = RangeCheckAir::new();
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
     let gadget = LogUpGadget::new();
 
     // alpha carries a nonzero extension coefficient: `alpha - base` is never zero.
@@ -659,7 +659,7 @@ fn eval_all_passes_on_balanced_trace() {
     let mut rng = SmallRng::seed_from_u64(0xc0ffee);
     let main = balanced_range_check_main(16, &mut rng);
     let air = RangeCheckAir::new();
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
 
     let gadget = LogUpGadget::new();
     let challenges = vec![EF::from_u32(0x12345678), EF::from_u32(0x87654321)];
@@ -695,7 +695,7 @@ fn eval_all_passes_on_multi_lookup_balanced_trace() {
     let main = RowMajorMatrix::new(flat, 6);
 
     let air = RangeCheckAir::with_lookups(2);
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
     assert_eq!(lookups.len(), 2);
 
     let gadget = LogUpGadget::new();
@@ -728,7 +728,7 @@ fn eval_all_rejects_unbalanced_trace() {
     // Balanced main trace.
     let main = balanced_range_check_main(8, &mut rng);
     let air = RangeCheckAir::new();
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
     let gadget = LogUpGadget::new();
     let challenges = vec![EF::from_u32(13), EF::from_u32(17)];
 
@@ -1037,7 +1037,7 @@ fn test_nontrivial_permutation() {
     let main_trace = RowMajorMatrix::new(main_flat, 3);
 
     let air = RangeCheckAir::new();
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
     let gadget = LogUpGadget::new();
     let challenges = vec![EF::from_u32(0x1234_5678), EF::from_u32(0x9abc_def0)];
 
@@ -1076,7 +1076,7 @@ fn test_zero_multiplicity_is_not_counted() {
     let main_trace = RowMajorMatrix::new(main_flat, 3);
 
     let air = RangeCheckAir::new();
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
     let gadget = LogUpGadget::new();
     let challenges = vec![EF::from_u8(123), EF::from_u8(111)];
 
@@ -1119,7 +1119,7 @@ fn test_inconsistent_witness_fails_transition() {
     let main_trace = RowMajorMatrix::new(main_flat, 3);
 
     let air = RangeCheckAir::new();
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
     let gadget = LogUpGadget::new();
     let challenges = vec![EF::from_u32(31), EF::from_u32(41)];
 
@@ -1235,7 +1235,7 @@ fn test_tuple_lookup() {
     let main_trace = RowMajorMatrix::new(main_flat, 7);
 
     let air = AddAir::new();
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
     let gadget = LogUpGadget::new();
     let challenges = vec![EF::from_u32(31), EF::from_u32(41)];
 
@@ -1647,5 +1647,5 @@ fn local_lookup_weight_overflow_is_rejected() {
     // The height check sum_i w_i * h_i < p would then accept heights it must reject.
     //
     // Goldilocks at height 2^31 + 1: clamped sum ~2^63 passes, true sum ~2^64 exceeds p.
-    let _ = Lookups::<F>::from_air::<EF, _>(&OverweightLocalAir);
+    let _ = Lookups::<F>::from_air::<EF, _>(&OverweightLocalAir).unwrap();
 }

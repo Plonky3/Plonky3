@@ -448,43 +448,36 @@ where
     Ok(())
 }
 
-/// Checks that every positive grinding difficulty can be sampled from the base field.
-///
-/// A difficulty of b bits passes when b is zero, or when b is below the word size and 2^b < p.
-///
-/// The three phases are checked independently, because their difficulties are independent.
-//
-// Why: the challenger draws the b low bits of one field element, and asserts both bounds.
-//
-//     BabyBear, p = 15 * 2^27 + 1
-//
-//     b = 30:  2^30 < p     -> the grind runs
-//     b = 31:  2^31 > p     -> the bit sampler panics
-//
-// Rejecting here turns a configuration the field cannot run into an error.
-pub(crate) fn check_pow_bits<Val, CommitMmcsErr, InputErr>(
-    batch_bits: usize,
-    commit_bits: usize,
-    query_bits: usize,
-) -> Result<(), FriError<CommitMmcsErr, InputErr>>
-where
-    Val: PrimeField64,
-    CommitMmcsErr: core::fmt::Debug,
-    InputErr: core::fmt::Debug,
-{
-    for (phase, bits) in [
-        (PowPhase::Batch, batch_bits),
-        (PowPhase::CommitPhase, commit_bits),
-        (PowPhase::Query, query_bits),
-    ] {
-        // Zero difficulty never samples, so any field supports it.
-        // A positive one must pass the same two bounds the bit sampler asserts.
-        let fits = bits < usize::BITS as usize && (1u64 << bits) < Val::ORDER_U64;
-        if bits != 0 && !fits {
-            return Err(FriError::UnsupportedPowBits { phase, bits });
+impl<M> FriParameters<M> {
+    /// Checks that every positive grinding difficulty can be sampled from the base field.
+    ///
+    /// The three phases are checked independently, because their difficulties are independent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the first phase whose difficulty the challenger cannot grind.
+    //
+    // Why: rejecting here turns a configuration the field cannot run into an error.
+    pub(crate) fn check_pow_bits<Challenger, CommitMmcsErr, InputErr>(
+        &self,
+    ) -> Result<(), FriError<CommitMmcsErr, InputErr>>
+    where
+        Challenger: GrindingChallenger,
+        CommitMmcsErr: core::fmt::Debug,
+        InputErr: core::fmt::Debug,
+    {
+        for (phase, bits) in [
+            (PowPhase::Batch, self.batch_proof_of_work_bits),
+            (PowPhase::CommitPhase, self.commit_proof_of_work_bits),
+            (PowPhase::Query, self.query_proof_of_work_bits),
+        ] {
+            // The challenger owns the bound its bit sampler asserts.
+            if !Challenger::supports_pow_bits(bits) {
+                return Err(FriError::UnsupportedPowBits { phase, bits });
+            }
         }
+        Ok(())
     }
-    Ok(())
 }
 
 /// Verifies a FRI proof.
@@ -580,11 +573,7 @@ where
     // Reject a grinding difficulty the base field cannot sample.
     //
     // The commit and query phases grind inside this run, so an unsupported one would panic below.
-    check_pow_bits::<Val, _, _>(
-        params.batch_proof_of_work_bits,
-        params.commit_proof_of_work_bits,
-        params.query_proof_of_work_bits,
-    )?;
+    params.check_pow_bits::<Challenger, _, _>()?;
 
     // Reject an instance with nothing committed.
     //
@@ -3226,7 +3215,12 @@ mod tests {
         //     b =  0 : never samples        -> accepted
         //     b = 30 : 2^30 = 1073741824 < p -> accepted
         //     b = 31 : 2^31 = 2147483648 > p -> rejected
-        let check = |bits| check_pow_bits::<Val, (), ()>(0, 0, bits);
+        let base = make_test_fixture().fri_params;
+        let check = |bits| {
+            let mut params = base.clone();
+            params.query_proof_of_work_bits = bits;
+            params.check_pow_bits::<Challenger, (), ()>()
+        };
         assert!(check(0).is_ok());
         assert!(check(30).is_ok());
         assert!(matches!(

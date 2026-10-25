@@ -75,9 +75,18 @@ pub enum InvalidProofShapeError {
         got_local: usize,
         got_next: usize,
     },
-    /// Preprocessed verifier key is inconsistent with width.
-    #[error("preprocessed verifier key inconsistency")]
-    PreprocessedVerifierKeyInconsistency,
+    /// The preprocessed verifier key does not match the preprocessed width the AIR declares.
+    ///
+    /// This covers a missing key, an unexpected key and a key of another width.
+    #[error(
+        "preprocessed verifier key inconsistency: air width {air_width}, key width {key_width:?}"
+    )]
+    PreprocessedVerifierKeyInconsistency {
+        /// Preprocessed column count the AIR declares.
+        air_width: usize,
+        /// Width of the supplied verifier key, when the check knows it.
+        key_width: Option<usize>,
+    },
     /// Preprocessed and main trace have different heights.
     #[error(
         "preprocessed degree mismatch: vk degree_bits={vk_degree_bits}, proof degree_bits={proof_degree_bits}"
@@ -191,6 +200,14 @@ where
     /// the configured number of out-of-domain grinding bits.
     #[error("invalid proof-of-work witness for the out-of-domain point")]
     InvalidOodPowWitness,
+    /// The out-of-domain grinding difficulty cannot be sampled from the base field.
+    ///
+    /// A grind of b bits needs b below the word size and 2^b below the field order p.
+    #[error("{bits}-bit out-of-domain grinding difficulty does not fit the field order")]
+    UnsupportedOodPowBits {
+        /// The configured difficulty.
+        bits: usize,
+    },
 }
 
 impl<PcsErr> From<StarkTranscriptFailure> for VerificationError<PcsErr>
@@ -200,9 +217,21 @@ where
     fn from(failure: StarkTranscriptFailure) -> Self {
         match failure {
             // A preprocessed commitment that disagrees with the width in force.
-            StarkTranscriptFailure::MissingPreprocessedCommitment { .. }
-            | StarkTranscriptFailure::UnexpectedPreprocessedCommitment => {
-                InvalidProofShapeError::PreprocessedVerifierKeyInconsistency.into()
+            //
+            // The transcript knows the described width, but not the key's.
+            StarkTranscriptFailure::MissingPreprocessedCommitment { width } => {
+                InvalidProofShapeError::PreprocessedVerifierKeyInconsistency {
+                    air_width: width,
+                    key_width: None,
+                }
+                .into()
+            }
+            StarkTranscriptFailure::UnexpectedPreprocessedCommitment => {
+                InvalidProofShapeError::PreprocessedVerifierKeyInconsistency {
+                    air_width: 0,
+                    key_width: None,
+                }
+                .into()
             }
             // A randomization commitment that disagrees with the PCS's zero-knowledge setting.
             StarkTranscriptFailure::MissingRandomCommitment

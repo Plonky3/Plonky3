@@ -10,6 +10,7 @@ use p3_challenger::{CanSample, DuplexChallenger};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
+use p3_lookup::LookupError::TupleWidthMismatch;
 use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
@@ -22,6 +23,7 @@ use p3_multi_stark::{
     setup, verify,
 };
 use p3_sumcheck::OpeningBatch;
+use p3_sumcheck::generic_degree::GenericDegreeError;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{MerkleCap, PaddingFreeSponge, TruncatedPermutation};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -861,6 +863,93 @@ fn prove_verify_fibonacci_roundtrips() {
         &mut challenger(),
     )
     .expect("honest Fibonacci proof must verify");
+}
+
+/// Prove a 256-row Fibonacci trace at one grinding difficulty, then verify it at another.
+fn fibonacci_ground_at(
+    prove_bits: usize,
+    verify_bits: usize,
+) -> Result<(), VerificationError<PcsError<WhirConfigForTest>>> {
+    let n = 256;
+    let trace = fib_trace(n);
+    let pis = fib_public_values(n);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let (pk, vk) = setup(&config, &[&FibAir], &mut challenger()).unwrap();
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
+        prove_bits,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, log_height, &pis)]),
+        &proof,
+        verify_bits,
+        &mut challenger(),
+    )
+}
+
+#[test]
+fn verify_rejects_a_grinding_difficulty_past_the_field_order() {
+    // Invariant: a sumcheck difficulty the base field cannot sample is a rejection, not a panic.
+    //
+    // Fixture state: BabyBear, p = 15 * 2^27 + 1 = 2013265921, 8 rounds ground at 1 bit.
+    //
+    //     b = 30:  2^30 = 1073741824 < p    the grind runs
+    //     b = 31:  2^31 = 2147483648 > p    the bit sampler cannot draw b bits
+    //     b = 64:  past the word size
+    //
+    // The proof carries one witness per round, so the witness count matches any positive difficulty.
+    //
+    // Mutation: verify the honest proof under each difficulty past the bound.
+    for bits in [31, 64] {
+        match fibonacci_ground_at(1, bits) {
+            Err(VerificationError::UnsupportedPowBits { bits: got }) => assert_eq!(got, bits),
+            other => panic!("expected UnsupportedPowBits at {bits} bits, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn grinding_difficulty_bound_sits_at_thirty_bits() {
+    // Invariant: the largest difficulty BabyBear samples is 30 bits.
+    //
+    // Fixture state: honest proofs, 8 sumcheck rounds.
+    //
+    //     b = 0:   proved and verified at 0 bits    -> the proof verifies
+    //     b = 30:  proved at 1 bit, 2^30 < p        -> the grind replays and misses round 0
+    //     b = 31:  proved at 1 bit, 2^31 > p        -> rejected before the transcript
+    //
+    // Mutation: raise the verifier's difficulty above the prover's.
+    fibonacci_ground_at(0, 0).expect("0 bits verifies");
+
+    assert!(
+        matches!(
+            fibonacci_ground_at(1, 30),
+            Err(VerificationError::Zerocheck(ZerocheckError::Sumcheck(
+                GenericDegreeError::InvalidPowWitness { round: 0 }
+            )))
+        ),
+        "30 bits must reach the grind"
+    );
+
+    assert!(
+        matches!(
+            fibonacci_ground_at(1, 31),
+            Err(VerificationError::UnsupportedPowBits { bits: 31 })
+        ),
+        "31 bits must be rejected up front"
+    );
 }
 
 #[test]
@@ -2951,4 +3040,210 @@ fn security_report_rejects_unsupported_lookup_declarations() {
     let Err(SecurityError::Lookup(LookupError::EmptyPayloads)) = report else {
         panic!("expected an empty payload error, got {report:?}");
     };
+}
+
+/// An AIR whose only lookup tuple is constant.
+enum ConstantLookupAir {
+    /// A local tuple [1] with count 1.
+    ConstantPayload,
+    /// A global tuple [] on the bus "empty", with count 1.
+    EmptyPayload,
+}
+
+impl BaseAir<F> for ConstantLookupAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB> Air<AB> for ConstantLookupAir
+where
+    AB: AirBuilder<F = F> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        match self {
+            Self::ConstantPayload => builder
+                .push_local_interaction([(vec![AB::Expr::ONE], Count::bounded(AB::Expr::ONE, 1))]),
+            Self::EmptyPayload => builder.push_interaction(
+                "empty",
+                iter::empty::<AB::Expr>(),
+                Count::bounded(AB::Expr::ONE, 1),
+            ),
+        }
+    }
+}
+
+#[test]
+fn verify_rejects_constant_lookup_tuples_before_the_transcript() {
+    // Fixture state: an honest 64-row lookup proof, checked against an AIR of width 2.
+    //
+    //     constant payload   [1]  count 1   degree 0
+    //     empty payload      []   count 1   degree 0
+    //
+    // Invariant: a degree-0 lookup family has no round polynomial to send.
+    //
+    // Invariant: the empty payload is refused as constant, before the empty-payload check runs.
+    //
+    // Invariant: the AIR alone decides this, so the challenger is never touched.
+    let (config, vk, log_height, proof) = honest_lookup();
+    for air in [
+        ConstantLookupAir::ConstantPayload,
+        ConstantLookupAir::EmptyPayload,
+    ] {
+        let mut used = challenger();
+        let verdict = verify(
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+            &proof,
+            0,
+            &mut used,
+        );
+        let Err(VerificationError::Zerocheck(ZerocheckError::ConstantInteractions { air: index })) =
+            verdict
+        else {
+            panic!("expected a constant lookup error, got {verdict:?}");
+        };
+        assert_eq!(index, 0);
+
+        // The next draws match a fresh challenger's, so nothing was observed.
+        let mut fresh = challenger();
+        for _ in 0..4 {
+            assert_eq!(
+                CanSample::<F>::sample(&mut used),
+                CanSample::<F>::sample(&mut fresh)
+            );
+        }
+    }
+}
+
+#[test]
+fn security_report_rejects_constant_lookup_tuples() {
+    // Fixture state: one AIR of width 2 at the 64-row height of the honest lookup proof.
+    //
+    //     constant payload   [1]  count 1   degree 0
+    //     empty payload      []   count 1   degree 0
+    //
+    // Invariant: the report refuses the statement the verifier refuses.
+    //
+    // Invariant: the empty payload is refused as constant, before the empty-payload check runs.
+    let (config, vk, log_height, _) = honest_lookup();
+    for air in [
+        ConstantLookupAir::ConstantPayload,
+        ConstantLookupAir::EmptyPayload,
+    ] {
+        let report = security_report(
+            &config,
+            &VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        );
+        let Err(SecurityError::InvalidShape(reason)) = report else {
+            panic!("expected an invalid shape error");
+        };
+        assert_eq!(reason, "constant lookup families are unsupported");
+    }
+}
+
+/// An AIR whose one local lookup sends [a] and receives [a, b].
+struct MixedWidthLookupAir;
+
+impl BaseAir<F> for MixedWidthLookupAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB> Air<AB> for MixedWidthLookupAir
+where
+    AB: AirBuilder<F = F> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        let row = builder.main().current_slice().to_vec();
+        builder.push_local_interaction([
+            (vec![row[0].into()], Count::bounded(AB::Expr::ONE, 1)),
+            (
+                vec![row[0].into(), row[1].into()],
+                Count::provided(-AB::Expr::ONE),
+            ),
+        ]);
+    }
+}
+
+#[test]
+fn verify_rejects_mixed_tuple_widths_before_the_transcript() {
+    // Fixture state: an honest 64-row lookup proof, checked against an AIR of width 2.
+    //
+    //     slot 0, local   sends [a]        width 1
+    //                     receives [a, b]  width 2
+    //
+    // Invariant: [a] would fingerprint like [0, a], so one lookup's tuples share a width.
+    //
+    // Invariant: the AIR alone decides this, so the challenger is never touched.
+    let (config, vk, log_height, proof) = honest_lookup();
+    let mut used = challenger();
+    let verdict = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &MixedWidthLookupAir,
+            &vk,
+            log_height,
+            &[],
+        )]),
+        &proof,
+        0,
+        &mut used,
+    );
+    let Err(VerificationError::Lookup(LookupError::TupleWidth(TupleWidthMismatch {
+        column,
+        expected,
+        actual,
+    }))) = verdict
+    else {
+        panic!("expected a tuple width mismatch, got {verdict:?}");
+    };
+    assert_eq!((column, expected, actual), (0, 1, 2));
+
+    // The next draws match a fresh challenger's, so nothing was observed.
+    let mut fresh = challenger();
+    for _ in 0..4 {
+        assert_eq!(
+            CanSample::<F>::sample(&mut used),
+            CanSample::<F>::sample(&mut fresh)
+        );
+    }
+}
+
+#[test]
+fn security_report_rejects_mixed_tuple_widths() {
+    // Fixture state: one AIR of width 2 at the 64-row height of the honest lookup proof.
+    //
+    //     slot 0, local   sends [a]        width 1
+    //                     receives [a, b]  width 2
+    //
+    // Invariant: the report refuses the statement the verifier refuses.
+    let (config, vk, log_height, _) = honest_lookup();
+    let report = security_report(
+        &config,
+        &VerifierInstances::new(vec![VerifierInstance::new(
+            &MixedWidthLookupAir,
+            &vk,
+            log_height,
+            &[],
+        )]),
+    );
+    let Err(SecurityError::Lookup(LookupError::TupleWidth(TupleWidthMismatch {
+        column,
+        expected,
+        actual,
+    }))) = report
+    else {
+        panic!("expected a tuple width mismatch");
+    };
+    assert_eq!((column, expected, actual), (0, 1, 2));
 }

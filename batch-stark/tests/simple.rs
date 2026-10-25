@@ -11,7 +11,7 @@ use config::{
     Val, make_circle_config, make_config, make_config_allow_tiny_trace, make_config_wide,
     make_config_zk, make_two_adic_compat_config,
 };
-use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, SymbolicExpression, WindowAccess};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::verifier::commitments_with_opening_points;
 use p3_batch_stark::{
@@ -2760,6 +2760,133 @@ fn a_noncanonical_ood_pow_witness_at_zero_difficulty_is_rejected() {
     );
 }
 
+#[test]
+fn ood_pow_difficulty_past_the_field_order_is_rejected() {
+    // Invariant: an out-of-domain difficulty the base field cannot sample is a rejection, not a panic.
+    //
+    // Fixture state: BabyBear, p = 15 * 2^27 + 1 = 2013265921.
+    //
+    //     b = 30:  2^30 = 1073741824 < p    the grind runs
+    //     b = 31:  2^31 = 2147483648 > p    the bit sampler cannot draw b bits
+    //     b = 64:  past the word size
+    //
+    // Mutation: verify an honest proof under each difficulty past the bound.
+    let prover_config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    for bits in [31, 64] {
+        let verifier_config = make_config(2024).with_ood_proof_of_work_bits(bits);
+        match lookup_grinding_case(&prover_config, &verifier_config, &airs, |_| {}) {
+            Err(BatchVerificationError::Verification(
+                VerificationError::UnsupportedOodPowBits { bits: got },
+            )) => assert_eq!(got, bits),
+            other => panic!("expected UnsupportedOodPowBits at {bits} bits, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn lookup_pow_difficulty_past_the_field_order_is_rejected() {
+    // Invariant: a lookup difficulty the base field cannot sample is a rejection, not a panic.
+    //
+    // Fixture state: BabyBear, p = 15 * 2^27 + 1 = 2013265921, one instance declaring lookups.
+    //
+    //     b = 31:  2^31 = 2147483648 > p    the bit sampler cannot draw b bits
+    //     b = 64:  past the word size
+    //
+    // Mutation: verify an honest proof under each difficulty past the bound.
+    let prover_config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    for bits in [31, 64] {
+        let verifier_config = make_config(2024).with_lookup_proof_of_work_bits(bits);
+        match lookup_grinding_case(&prover_config, &verifier_config, &airs, |_| {}) {
+            Err(BatchVerificationError::UnsupportedLookupPowBits { bits: got }) => {
+                assert_eq!(got, bits);
+            }
+            other => panic!("expected UnsupportedLookupPowBits at {bits} bits, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn lookup_pow_difficulty_is_unchecked_without_lookups() {
+    // Invariant: a batch with no lookups never runs the lookup grind, so its difficulty is inert.
+    //
+    // Fixture state: two instances, neither declaring a lookup, lookup grinding at 31 bits.
+    //
+    //     lookups declared -> 31 bits rejected before the transcript
+    //     none declared    -> no grind, the proof verifies
+    //
+    // Mutation: none, the honest proof verifies under the out-of-range lookup difficulty.
+    let prover_config = make_config(2024);
+    let verifier_config = make_config(2024).with_lookup_proof_of_work_bits(31);
+    let airs = no_lookup_airs();
+
+    lookup_grinding_case(&prover_config, &verifier_config, &airs, |_| {})
+        .expect("a batch without lookups ignores the lookup difficulty");
+}
+
+#[test]
+fn grinding_difficulty_bound_sits_at_thirty_bits() {
+    // Invariant: the largest difficulty BabyBear samples is 30 bits, at both grinding sites.
+    //
+    // Fixture state: an honest proof produced with no grinding at all.
+    //
+    //     b = 0:   nothing to replay           -> the proof verifies
+    //     b = 30:  2^30 < p, the grind replays  -> the zero witness misses it
+    //     b = 31:  2^31 > p                     -> rejected before the transcript
+    //
+    // Mutation: raise one site's verifier difficulty at a time.
+    let prover_config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    lookup_grinding_case(&prover_config, &prover_config, &airs, |_| {})
+        .expect("0 bits at both sites verifies");
+
+    let ood_30 = make_config(2024).with_ood_proof_of_work_bits(30);
+    assert!(
+        matches!(
+            lookup_grinding_case(&prover_config, &ood_30, &airs, |_| {}),
+            Err(BatchVerificationError::Transcript(
+                BatchTranscriptFailure::OodPowWitness { bits: 30 }
+            ))
+        ),
+        "30 out-of-domain bits must reach the grind"
+    );
+
+    let ood_31 = make_config(2024).with_ood_proof_of_work_bits(31);
+    assert!(
+        matches!(
+            lookup_grinding_case(&prover_config, &ood_31, &airs, |_| {}),
+            Err(BatchVerificationError::Verification(
+                VerificationError::UnsupportedOodPowBits { bits: 31 }
+            ))
+        ),
+        "31 out-of-domain bits must be rejected up front"
+    );
+
+    let lookup_30 = make_config(2024).with_lookup_proof_of_work_bits(30);
+    assert!(
+        matches!(
+            lookup_grinding_case(&prover_config, &lookup_30, &airs, |_| {}),
+            Err(BatchVerificationError::Transcript(
+                BatchTranscriptFailure::LookupPowWitness { bits: 30 }
+            ))
+        ),
+        "30 lookup bits must reach the grind"
+    );
+
+    let lookup_31 = make_config(2024).with_lookup_proof_of_work_bits(31);
+    assert!(
+        matches!(
+            lookup_grinding_case(&prover_config, &lookup_31, &airs, |_| {}),
+            Err(BatchVerificationError::UnsupportedLookupPowBits { bits: 31 })
+        ),
+        "31 lookup bits must be rejected up front"
+    );
+}
+
 /// Substituting one commitment for another leaves both absorbs bound to the wrong value.
 #[test]
 fn a_substituted_main_commitment_is_rejected() {
@@ -2946,7 +3073,8 @@ fn bus_width_mismatch_across_instances_is_rejected() {
         }],
         &[],
         &[],
-    );
+    )
+    .unwrap();
 
     // Invariant: one bus carries one payload width, or a short tuple aliases a long one.
     // The verifier names the bus and both widths, in instance order.
@@ -3316,6 +3444,76 @@ fn test_batch_stark_rejects_spurious_lookup_terminal() {
         }
         _ => panic!("unexpected error: {err:?}"),
     }
+}
+
+#[test]
+fn test_batch_stark_rejects_mixed_tuple_widths_in_common_data() {
+    let config = make_config(2025);
+
+    // Fixture state: an honest batch whose lookups balance on bus "MulFib".
+    //
+    //     AIR 0  MulAir  sends twice on bus "MulFib"
+    //     AIR 1  FibAir  receives on bus "MulFib"
+    let reps = 2;
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        false,
+        true,
+        vec!["MulFib".to_string(), "MulFib".to_string()],
+    );
+
+    let log_n = 3;
+    let n = 1 << log_n;
+    let fibonacci_air = FibonacciAir {
+        log_height: log_n,
+        tamper_index: None,
+    };
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, None);
+
+    let mul_trace = mul_trace::<Val>(n, 2);
+    let fib_trace = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+
+    let airs = [
+        DemoAirWithLookups::MulLookups(mul_air_lookups),
+        DemoAirWithLookups::FibLookups(fib_air_lookups),
+    ];
+    let mut prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]).unwrap();
+    let traces = [&mul_trace, &fib_trace];
+    let pvs = vec![vec![], fib_pis];
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+
+    // Mutation: AIR 0's first lookup gains a tuple one element wider than its others.
+    //
+    //     before   slot 0   [a, b]              width 2
+    //     after    slot 0   [a, b], [1, 1, 1]   widths 2 and 3
+    //
+    // The lookups go through serialization, which rebuilds them as is.
+    //
+    // The slot count stays 2, so the proof's lookup columns still fit.
+    let mut mixed = prover_data.common.lookups[0].to_vec();
+    let width = mixed[0].elements[0].len();
+    let one = SymbolicExpression::<Val>::from(Val::ONE);
+    mixed[0].elements.push(vec![one.clone(); width + 1]);
+    mixed[0].multiplicities.push(one);
+    let bytes = postcard::to_allocvec(&mixed).unwrap();
+    prover_data.common.lookups[0] = postcard::from_bytes::<Lookups<Val>>(&bytes).unwrap();
+
+    // Invariant: the verifier refuses the layout before it draws the lookup challenges.
+    let result = verify_batch(&config, &airs, &proof, &pvs, &prover_data.common);
+    let Err(BatchVerificationError::Lookup(LookupError::TupleWidthMismatch {
+        column,
+        expected,
+        actual,
+    })) = result
+    else {
+        panic!("expected a tuple width mismatch, got {result:?}");
+    };
+    assert_eq!((column, expected, actual), (0, 2, 3));
 }
 
 #[test]

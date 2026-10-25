@@ -307,7 +307,7 @@ where
 ///
 /// # Returns
 ///
-/// - The preprocessed width in force, taken from the verifier key when one is supplied.
+/// - The preprocessed width the AIR declares, which a supplied verifier key must match.
 /// - The commitment and the opening it binds, present together exactly when that width is positive.
 #[allow(clippy::type_complexity)]
 fn process_preprocessed_trace<'a, SC, A>(
@@ -328,12 +328,23 @@ where
     SC: StarkGenericConfig,
     A: for<'b> Air<VerifierConstraintFolder<'b, SC>>,
 {
-    // Determine expected preprocessed width.
-    // - If a verifier key is provided, trust its width.
-    // - Otherwise, derive width from the AIR's preprocessed trace (if any).
-    let preprocessed_width = preprocessed_vk
-        .map(|vk| vk.width)
-        .unwrap_or_else(|| air.preprocessed_width());
+    // The AIR fixes the preprocessed width, and a verifier key must agree with it.
+    //
+    //     AIR width 2, key width 2   -> accepted
+    //     AIR width 2, key width 1   -> rejected below, as an inconsistent key
+    //
+    // Why: the AIR reads its preprocessed columns by index, in the quotient sizing and at zeta.
+    // A key narrower than the AIR would make those reads fail mid-verification.
+    let preprocessed_width = air.preprocessed_width();
+    if let Some(vk) = preprocessed_vk.filter(|vk| vk.width != preprocessed_width) {
+        return Err(
+            InvalidProofShapeError::PreprocessedVerifierKeyInconsistency {
+                air_width: preprocessed_width,
+                key_width: Some(vk.width),
+            }
+            .into(),
+        );
+    }
 
     // The proof carries a preprocessed opening exactly when the AIR has preprocessed columns,
     // and it reads the next row exactly when the AIR does.
@@ -409,7 +420,13 @@ where
         // - Width is 0 but VK is provided.
         // - Width > 0 but VK is missing.
         // - Width > 0 but VK width mismatches the expected width.
-        _ => Err(InvalidProofShapeError::PreprocessedVerifierKeyInconsistency.into()),
+        (w, vk) => Err(
+            InvalidProofShapeError::PreprocessedVerifierKeyInconsistency {
+                air_width: w,
+                key_width: vk.map(|vk| vk.width),
+            }
+            .into(),
+        ),
     }
 }
 
@@ -719,6 +736,15 @@ where
     //     bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
     if config.ood_proof_of_work_bits() == 0 && *ood_pow_witness != Val::<SC>::ZERO {
         return Err(InvalidProofShapeError::NonCanonicalOodPowWitness.into());
+    }
+
+    // A grind of b bits reads the low b bits of one sampled base element.
+    // Past the bound the challenger asserts, its bit sampler would panic.
+    //
+    // Why: the difficulty comes from the configuration, so it is checked before any transcript work.
+    let ood_pow_bits = config.ood_proof_of_work_bits();
+    if !SC::Challenger::supports_pow_bits(ood_pow_bits) {
+        return Err(VerificationError::UnsupportedOodPowBits { bits: ood_pow_bits });
     }
 
     // The transcript binds the commitment alone.

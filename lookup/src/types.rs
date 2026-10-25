@@ -138,7 +138,15 @@ pub struct Lookups<F: Field>(Vec<Lookup<F>>);
 
 impl<F: Field> Lookups<F> {
     /// Extract lookups from an AIR by running symbolic evaluation.
-    pub fn from_air<EF, A>(air: &A) -> Self
+    ///
+    /// # Errors
+    ///
+    /// The same as building from raw interactions.
+    ///
+    /// # Panics
+    ///
+    /// The same as building from raw interactions.
+    pub fn from_air<EF, A>(air: &A) -> Result<Self, LookupError>
     where
         EF: ExtensionField<F>,
         A: Air<InteractionSymbolicBuilder<F, EF>>,
@@ -150,7 +158,17 @@ impl<F: Field> Lookups<F> {
     }
 
     /// Extract lookups from a builder that already evaluated one AIR.
-    pub fn from_builder<EF>(builder: &InteractionSymbolicBuilder<F, EF>) -> Self
+    ///
+    /// # Errors
+    ///
+    /// The same as building from raw interactions.
+    ///
+    /// # Panics
+    ///
+    /// The same as building from raw interactions.
+    pub fn from_builder<EF>(
+        builder: &InteractionSymbolicBuilder<F, EF>,
+    ) -> Result<Self, LookupError>
     where
         EF: ExtensionField<F>,
         F: Clone + Send + Sync,
@@ -166,14 +184,18 @@ impl<F: Field> Lookups<F> {
     ///
     /// Local interactions first, then global, then exclusive — matching the LogUp column order.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if two tuples of one local or exclusive interaction differ in width.
+    ///
     /// # Panics
     ///
-    /// Panics if a local interaction's tuples disagree on payload width or their total count weight exceeds `u32::MAX`.
+    /// Panics if a local interaction's total count weight exceeds `u32::MAX`.
     pub fn from_interactions(
         global: &[SymbolicInteraction<F>],
         local: &[SymbolicLocalInteraction<F>],
         exclusive: &[SymbolicExclusiveInteraction<F>],
-    ) -> Self {
+    ) -> Result<Self, LookupError> {
         let mut lookups = Vec::with_capacity(local.len() + global.len() + exclusive.len());
         let mut col = 0;
 
@@ -192,7 +214,6 @@ impl<F: Field> Lookups<F> {
                 acc.checked_add(weight)
                     .expect("count_weight overflow: local lookup weight exceeds u32::MAX")
             });
-            assert_uniform_tuple_width(&elements, "local lookup");
             lookups.push(Lookup {
                 kind: Kind::Local,
                 elements,
@@ -238,7 +259,44 @@ impl<F: Field> Lookups<F> {
             col += 1;
         }
 
-        Self(lookups)
+        // The tuples of one interaction share a fraction column and its challenge powers.
+        // Their widths come from the AIR alone, so a mismatch is a statement error.
+        let lookups = Self(lookups);
+        lookups.check_tuple_widths()?;
+        Ok(lookups)
+    }
+
+    /// Check that the tuples of each lookup share one payload width.
+    ///
+    /// The tuples of one lookup are folded under the same challenge powers.
+    ///
+    /// A shorter tuple is therefore a longer one left-padded with zeros:
+    ///
+    /// ```text
+    ///     [x]  and  [0, x]   ->   the same fingerprint
+    /// ```
+    ///
+    /// A global lookup carries one tuple, so only local and exclusive lookups can fail.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the first lookup whose tuples differ in width.
+    pub fn check_tuple_widths(&self) -> Result<(), LookupError> {
+        for lookup in &self.0 {
+            // The first tuple sets the width every later tuple must match.
+            let mut widths = lookup.elements.iter().map(Vec::len);
+            let Some(expected) = widths.next() else {
+                continue;
+            };
+            if let Some(actual) = widths.find(|&width| width != expected) {
+                return Err(LookupError::TupleWidthMismatch {
+                    column: lookup.column,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Fold global lookups on the same bus into shared fraction columns.
@@ -567,6 +625,20 @@ pub enum LookupError {
         /// Width that disagrees with it.
         actual: usize,
     },
+    /// Two tuples of one lookup declaration have different payload widths.
+    ///
+    /// - The tuples of one lookup are folded under the same challenge powers.
+    /// - A shorter tuple is then a longer one left-padded with zeros.
+    /// - So `[x]` and `[0, x]` share a fingerprint.
+    #[error("lookup in slot {column}: tuple widths {expected} and {actual} differ")]
+    TupleWidthMismatch {
+        /// Slot of the lookup within its AIR.
+        column: usize,
+        /// Width of the lookup's first tuple.
+        expected: usize,
+        /// Width of the first tuple that disagrees with it.
+        actual: usize,
+    },
     /// Cross-AIR sum of committed lookup terminals is non-zero.
     ///
     /// - Any imbalance makes the sum non-zero with overwhelming probability.
@@ -640,7 +712,7 @@ mod tests {
                 count_weight,
             })
             .collect();
-        Lookups::from_interactions(&global, &[], &[])
+        Lookups::from_interactions(&global, &[], &[]).unwrap()
     }
 
     /// One global interaction carrying a single degree-1 main-column payload.
@@ -661,7 +733,7 @@ mod tests {
         // Each interaction is identical; only their count drives the packing tests.
         let global: Vec<SymbolicInteraction<F>> =
             (0..count).map(|_| global_payload(bus, 1)).collect();
-        Lookups::from_interactions(&global, &[], &[])
+        Lookups::from_interactions(&global, &[], &[]).unwrap()
     }
 
     /// Column indices must stay `0..len` for the fraction-column mapping to hold.
@@ -703,10 +775,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic = "tuple widths"]
     fn from_interactions_rejects_local_tuple_width_mismatch() {
-        // A width-1 query tuple folded with a width-2 table tuple on the same
-        // local lookup would let `[x]` alias `[0, x]` in the LogUp combiner.
+        // Fixture state: one local interaction in slot 0 with two tuples.
+        //
+        //     query   [1]      width 1
+        //     table   [0, 1]   width 2
+        //
+        // Invariant: [x] would alias [0, x] in the combiner, so the widths must agree.
         let local: Vec<SymbolicLocalInteraction<F>> = vec![SymbolicLocalInteraction {
             tuples: vec![
                 (
@@ -722,7 +797,53 @@ mod tests {
                 ),
             ],
         }];
-        Lookups::from_interactions(&[], &local, &[]);
+        let result = Lookups::from_interactions(&[], &local, &[]);
+        let Err(LookupError::TupleWidthMismatch {
+            column,
+            expected,
+            actual,
+        }) = result
+        else {
+            panic!("expected a tuple width mismatch, got {result:?}");
+        };
+        assert_eq!((column, expected, actual), (0, 1, 2));
+    }
+
+    #[test]
+    fn from_interactions_names_the_slot_of_the_mismatched_lookup() {
+        // Fixture state: slot 0 is a uniform local lookup, slot 1 a global one.
+        // Slot 2 is an exclusive group whose branches have widths 3 and 1.
+        //
+        //     slot 0   local       [1], [1]
+        //     slot 1   global      [x]
+        //     slot 2   exclusive   [x, x, x], [x]
+        //
+        // Invariant: the error names slot 2 and the widths in branch order.
+        let uniform = vec![SymbolicLocalInteraction {
+            tuples: vec![
+                (
+                    vec![SymbolicExpression::from(F::ONE)],
+                    Count::bounded(SymbolicExpression::from(F::ONE), 1),
+                ),
+                (
+                    vec![SymbolicExpression::from(F::ONE)],
+                    Count::provided(SymbolicExpression::from(F::ONE)),
+                ),
+            ],
+        }];
+        let global = vec![global_of_width("a", 1)];
+        let exclusive = vec![exclusive_group("a", &[3, 1])];
+
+        let result = Lookups::from_interactions(&global, &uniform, &exclusive);
+        let Err(LookupError::TupleWidthMismatch {
+            column,
+            expected,
+            actual,
+        }) = result
+        else {
+            panic!("expected a tuple width mismatch, got {result:?}");
+        };
+        assert_eq!((column, expected, actual), (2, 3, 1));
     }
 
     #[test]
@@ -751,7 +872,7 @@ mod tests {
             ],
         }];
 
-        let lookups = Lookups::from_interactions(&global, &local, &[]);
+        let lookups = Lookups::from_interactions(&global, &local, &[]).unwrap();
 
         //     index 0: local        → weight 1 (query side only, table side is provided)
         //     index 1: global query → weight 1
@@ -893,18 +1014,27 @@ mod tests {
         // Fixture state: bus `a` carries a width-1 global and a width-2 exclusive branch.
         let global = vec![global_of_width("a", 1)];
         let exclusive = vec![exclusive_group("a", &[2])];
-        let _ =
-            Lookups::from_interactions(&global, &[], &exclusive).pack_same_bus(&LogUpGadget, 16);
+        let _ = Lookups::from_interactions(&global, &[], &exclusive)
+            .unwrap()
+            .pack_same_bus(&LogUpGadget, 16);
     }
 
     #[test]
-    #[should_panic = "tuple widths"]
-    fn pack_refuses_two_widths_inside_one_exclusive_group() {
+    fn from_interactions_rejects_two_widths_inside_one_exclusive_group() {
         // Invariant: branches of one group are tuples on the same bus, so they share a width.
         //
-        // Fixture state: one group whose branches are width 1 and width 2.
+        // Fixture state: one group in slot 0 whose branches are width 1 and width 2.
         let exclusive = vec![exclusive_group("a", &[1, 2])];
-        let _ = Lookups::from_interactions(&[], &[], &exclusive).pack_same_bus(&LogUpGadget, 16);
+        let result = Lookups::from_interactions(&[], &[], &exclusive);
+        let Err(LookupError::TupleWidthMismatch {
+            column,
+            expected,
+            actual,
+        }) = result
+        else {
+            panic!("expected a tuple width mismatch, got {result:?}");
+        };
+        assert_eq!((column, expected, actual), (0, 1, 2));
     }
 
     #[test]
@@ -915,8 +1045,10 @@ mod tests {
         //
         // Fixture state: AIR 0 sends width 1 on bus `a`, AIR 1 sends width 2 on bus `a`.
         let air0 = Lookups::from_interactions(&[global_of_width("a", 1)], &[], &[])
+            .unwrap()
             .pack_same_bus(&LogUpGadget, 16);
         let air1 = Lookups::from_interactions(&[global_of_width("a", 2)], &[], &[])
+            .unwrap()
             .pack_same_bus(&LogUpGadget, 16);
 
         assert!(matches!(
@@ -930,8 +1062,10 @@ mod tests {
 
         // Two buses at different widths are fine, since a bus only balances against itself.
         let air0 = Lookups::from_interactions(&[global_of_width("a", 1)], &[], &[])
+            .unwrap()
             .pack_same_bus(&LogUpGadget, 16);
         let air1 = Lookups::from_interactions(&[global_of_width("b", 3)], &[], &[])
+            .unwrap()
             .pack_same_bus(&LogUpGadget, 16);
 
         // The widest payload is what a challenge table is built from.
@@ -943,8 +1077,8 @@ mod tests {
         // Invariant: the check reads the lookups as they are, packed or not.
         //
         // Fixture state: one AIR never packed, one exclusive branch of another width.
-        let loose = Lookups::from_interactions(&[global_of_width("a", 1)], &[], &[]);
-        let wide = Lookups::from_interactions(&[], &[], &[exclusive_group("a", &[2])]);
+        let loose = Lookups::from_interactions(&[global_of_width("a", 1)], &[], &[]).unwrap();
+        let wide = Lookups::from_interactions(&[], &[], &[exclusive_group("a", &[2])]).unwrap();
 
         assert!(matches!(
             check_bus_widths(&[loose, wide]),
@@ -978,7 +1112,9 @@ mod tests {
             count_weight: 1,
         };
         let global = vec![global_payload("a", 1), wide];
-        let _ = Lookups::from_interactions(&global, &[], &[]).pack_same_bus(&LogUpGadget, 16);
+        let _ = Lookups::from_interactions(&global, &[], &[])
+            .unwrap()
+            .pack_same_bus(&LogUpGadget, 16);
     }
 
     #[test]
@@ -991,7 +1127,9 @@ mod tests {
             global_payload("a", 1),
             global_payload("b", 1),
         ];
-        let packed = Lookups::from_interactions(&global, &[], &[]).pack_same_bus(&LogUpGadget, 16);
+        let packed = Lookups::from_interactions(&global, &[], &[])
+            .unwrap()
+            .pack_same_bus(&LogUpGadget, 16);
 
         // Each bus collapses to one column.
         // The two buses never share a column.
@@ -1015,8 +1153,9 @@ mod tests {
             global_payload("a", 1),
             global_payload("a", 1),
         ];
-        let packed =
-            Lookups::from_interactions(&global, &local, &[]).pack_same_bus(&LogUpGadget, 3);
+        let packed = Lookups::from_interactions(&global, &local, &[])
+            .unwrap()
+            .pack_same_bus(&LogUpGadget, 3);
 
         assert_eq!(packed.len(), 3);
         assert_eq!(packed[0].kind, Kind::Local);
@@ -1034,7 +1173,7 @@ mod tests {
             .iter()
             .map(|&w| global_payload("a", w))
             .collect();
-        let unpacked = Lookups::from_interactions(&global, &[], &[]);
+        let unpacked = Lookups::from_interactions(&global, &[], &[]).unwrap();
         let before = unpacked.total_count_weight();
 
         let packed = unpacked.pack_same_bus(&LogUpGadget, 5);
@@ -1089,7 +1228,7 @@ mod tests {
             )],
         }];
         let global = vec![global_payload("bus", 1), global_payload("bus", 0)];
-        let lookups = Lookups::from_interactions(&global, &local, &[]);
+        let lookups = Lookups::from_interactions(&global, &local, &[]).unwrap();
 
         let json = serde_json::to_string(&lookups).unwrap();
         let decoded: Lookups<F> = serde_json::from_str(&json).unwrap();

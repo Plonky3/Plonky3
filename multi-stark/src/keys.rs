@@ -158,6 +158,7 @@ pub struct VerifyingKey<C: MultiStarkConfig> {
 /// # Panics
 ///
 /// Panics if an AIR declares preprocessed columns but does not return a preprocessed trace.
+/// Panics if every lookup payload and count of an AIR is constant.
 #[allow(clippy::type_complexity)]
 pub fn setup<C, A>(
     config: &C,
