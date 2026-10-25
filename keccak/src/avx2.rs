@@ -601,11 +601,15 @@ mod lane_tests {
             return;
         }
 
-        // Fixture state: lanes cycle through all zeros, all ones, and one set bit.
+        // Fixture state: every lane holds its own state, so a swap of any two lanes shows.
         //
-        //     lane 0: 0 ... 0      lane 1: 1 ... 1      lane 2: a single 1 at word 14, bit 2
+        //     lane 0: all zeros
+        //     lane 1: all ones
+        //     lane l >= 2: a single 1 at word 7l mod 25, bit l
+        //
+        //     lane 2 -> word 14, bit 2      lane 3 -> word 21, bit 3      lane 4 -> word 3, bit 4
         let states: Vec<[u64; 25]> = (0..WIDTH)
-            .map(|lane| match lane % 3 {
+            .map(|lane| match lane {
                 0 => [0; 25],
                 1 => [u64::MAX; 25],
                 _ => {
@@ -615,6 +619,14 @@ mod lane_tests {
                 }
             })
             .collect();
+
+        // Invariant: no two lanes share a state, so lane routing is observable.
+        for (i, a) in states.iter().enumerate() {
+            for b in &states[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+
         check(&states);
     }
 
