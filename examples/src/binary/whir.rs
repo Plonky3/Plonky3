@@ -49,6 +49,10 @@ pub struct WhirOptions {
     pub term_security_bits: usize,
     /// Query, payload, and grinding ceilings.
     pub budget: BinaryWhirBudget,
+    /// Grinding bits before each query phase, each one standing in for part of a query.
+    pub query_grinding: u8,
+    /// Variables the first round folds and domain bits it drops, or the profile's own folding.
+    pub first_round: Option<(u8, u8)>,
 }
 
 /// Boolean PCS selected by the binary harness.
@@ -402,6 +406,11 @@ pub(crate) fn boolean_whir_config_with_schedule<A: BinaryAir, H: HarnessHash>(
             options.log_inv_rate,
             options.folding,
         ),
+    }
+    .with_query_grinding(whir.query_grinding.into());
+    let profile = match whir.first_round {
+        Some((folding, reduction)) => profile.with_first_round(folding.into(), reduction.into()),
+        None => profile,
     };
     let whir_config = profile
         .config::<F, F, Challenger<H>, _>(packed_variables, &domain)
@@ -506,6 +515,14 @@ pub(super) fn validate_options<A: BinaryAir>(
     shape: TableShape,
     options: BinaryProofOptions,
 ) -> Result<(), BinaryProofError> {
+    validate_pcs_options(options)?;
+    validate_air(air, shape)
+}
+
+/// Refuse the commitment options a WHIR opening cannot run with.
+pub(super) const fn validate_pcs_options(
+    options: BinaryProofOptions,
+) -> Result<(), BinaryProofError> {
     if options.merkle_arity != 2 {
         return Err(BinaryProofError::WhirIncompatible(
             WhirIncompatibility::MerkleArity {
@@ -534,6 +551,11 @@ pub(super) fn validate_options<A: BinaryAir>(
             },
         ));
     }
+    Ok(())
+}
+
+/// Refuse the AIR declarations this one-opening adapter cannot prove.
+fn validate_air<A: BinaryAir>(air: &A, shape: TableShape) -> Result<(), BinaryProofError> {
     if BaseAir::<F>::num_public_values(air) != 0 {
         return Err(BinaryProofError::WhirIncompatible(
             WhirIncompatibility::PublicValues {

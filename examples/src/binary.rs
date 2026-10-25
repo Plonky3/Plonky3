@@ -50,7 +50,7 @@ mod cubic;
 mod whir;
 pub use cubic::{
     CubicAir, CubicProveError, CubicVerifyError, CubicWhirStarkConfig, cubic_whir_config,
-    prove_boolean_air_cubic,
+    preflight_circuit_cubic, prove_boolean_air_cubic, prove_circuit_cubic,
 };
 use p3_binary_pcs::BooleanTraceCommitmentError;
 pub use p3_binary_pcs::whir::{BinaryWhirBudget, BudgetError};
@@ -1354,6 +1354,7 @@ mod tests {
     use p3_air::symbolic::AirLayout;
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_binary_field::{Gf2, TowerLevel};
+    use p3_binary_pcs::whir::BooleanWhirOpening;
     use p3_blake2s_air::Blake2sBinaryAir;
     use p3_blake3_air::{Blake3BinaryAir, NUM_BLAKE3_BINARY_COLS};
     use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName, BusSymbolicBuilder};
@@ -1371,6 +1372,8 @@ mod tests {
     fn whir_l20_unique_schedule_configures_without_a_witness() {
         let options = BinaryProofOptions {
             pcs: BooleanPcsChoice::Whir(WhirOptions {
+                query_grinding: 0,
+                first_round: None,
                 regime: WhirRegime::UniqueDecoding,
                 term_security_bits: 98,
                 budget: BinaryWhirBudget {
@@ -1500,6 +1503,8 @@ mod tests {
         let actual_queries = generous.summary.total_opened_positions;
         assert!(actual_queries > 0);
         let query_whir = WhirOptions {
+            query_grinding: 0,
+            first_round: None,
             budget: BinaryWhirBudget {
                 max_stir_queries: actual_queries - 1,
                 ..query_whir.budget
@@ -1520,6 +1525,8 @@ mod tests {
             unreachable!()
         };
         let grind_whir = WhirOptions {
+            query_grinding: 0,
+            first_round: None,
             regime: WhirRegime::Johnson,
             budget: BinaryWhirBudget {
                 max_stir_queries: usize::MAX,
@@ -1540,6 +1547,8 @@ mod tests {
         let actual_grinding = uncapped.summary.max_grinding_bits;
         assert!(actual_grinding > 0);
         let grind_whir = WhirOptions {
+            query_grinding: 0,
+            first_round: None,
             budget: BinaryWhirBudget {
                 max_grinding_bits: actual_grinding - 1,
                 ..grind_whir.budget
@@ -1578,6 +1587,8 @@ mod tests {
             unreachable!()
         };
         let under_whir = WhirOptions {
+            query_grinding: 0,
+            first_round: None,
             budget: BinaryWhirBudget {
                 max_proof_bytes: proof_len - 1,
                 ..under_whir.budget
@@ -1597,6 +1608,8 @@ mod tests {
             unreachable!()
         };
         let exact_whir = WhirOptions {
+            query_grinding: 0,
+            first_round: None,
             budget: BinaryWhirBudget {
                 max_proof_bytes: proof_len,
                 ..exact_whir.budget
@@ -1676,11 +1689,12 @@ mod tests {
 
         let mut final_tampered: MultiStarkProof<BooleanWhirStarkConfig<Blake3>> =
             postcard::from_bytes(&bytes).expect("proof replay deserialization succeeds");
-        let final_poly = final_tampered
-            .opening
-            .opening
-            .opening
-            .whir
+        // Whichever route the ring switch took, the same proximity argument closes it.
+        let whir = match &mut final_tampered.opening.opening {
+            BooleanWhirOpening::Batched(proof) => &mut proof.opening.whir,
+            BooleanWhirOpening::Deferred(proof) => &mut proof.opening,
+        };
+        let final_poly = whir
             .final_poly
             .as_mut()
             .expect("small WHIR proof has a final polynomial");
@@ -1714,13 +1728,13 @@ mod tests {
             "folding parent baseline: proof_bytes={}, digest={digest:02x?}, next={next_challenge:?}",
             bytes.len()
         );
-        assert_eq!(bytes.len(), 232_202);
+        assert_eq!(bytes.len(), 232_203);
         assert_eq!(
             digest,
             [
-                0x93, 0x96, 0x4d, 0x10, 0x64, 0xe8, 0x35, 0x9a, 0x83, 0x26, 0xa0, 0xc8, 0xad, 0x4a,
-                0xcd, 0x55, 0xb4, 0x33, 0x72, 0x72, 0xb6, 0x05, 0x66, 0x2b, 0xf6, 0x35, 0x99, 0x4c,
-                0x2e, 0x16, 0x0f, 0xe5,
+                0x84, 0x7d, 0xc1, 0xa9, 0xf7, 0xb8, 0x96, 0x7f, 0x2e, 0xff, 0x51, 0x92, 0x10, 0x7d,
+                0x74, 0x7f, 0xbb, 0x2f, 0x44, 0x5c, 0x87, 0xbc, 0xe1, 0xaa, 0xd6, 0x3b, 0x2e, 0xe4,
+                0x95, 0x68, 0xdc, 0x75,
             ]
         );
         assert_eq!(
@@ -1737,6 +1751,8 @@ mod tests {
         };
         let options = BinaryProofOptions {
             pcs: BooleanPcsChoice::Whir(WhirOptions {
+                query_grinding: 0,
+                first_round: None,
                 regime: WhirRegime::Johnson,
                 ..whir
             }),
@@ -1827,6 +1843,8 @@ mod tests {
     fn whir_johnson_grinding_budget_is_checked_before_witness_generation() {
         let base = BinaryProofOptions {
             pcs: BooleanPcsChoice::Whir(WhirOptions {
+                query_grinding: 0,
+                first_round: None,
                 regime: WhirRegime::Johnson,
                 term_security_bits: 102,
                 budget: BinaryWhirBudget {
@@ -1852,6 +1870,8 @@ mod tests {
         assert!(actual > 0);
         let options = BinaryProofOptions {
             pcs: BooleanPcsChoice::Whir(WhirOptions {
+                query_grinding: 0,
+                first_round: None,
                 budget: BinaryWhirBudget {
                     max_grinding_bits: actual - 1,
                     ..whir.budget
@@ -1953,6 +1973,8 @@ mod tests {
             recurrence_trace(4),
             BinaryProofOptions {
                 pcs: BooleanPcsChoice::Whir(WhirOptions {
+                    query_grinding: 0,
+                    first_round: None,
                     regime: WhirRegime::UniqueDecoding,
                     term_security_bits: 98,
                     budget: BinaryWhirBudget::PRODUCTION,
@@ -2130,6 +2152,8 @@ mod tests {
             unreachable!()
         };
         let explicit = WhirOptions {
+            query_grinding: 0,
+            first_round: None,
             term_security_bits: embedded.term_security_bits + 1,
             ..embedded
         };
@@ -2694,6 +2718,8 @@ mod tests {
     fn whir_test_options() -> BinaryProofOptions {
         BinaryProofOptions {
             pcs: BooleanPcsChoice::Whir(WhirOptions {
+                query_grinding: 0,
+                first_round: None,
                 regime: WhirRegime::UniqueDecoding,
                 term_security_bits: 98,
                 budget: BinaryWhirBudget {
@@ -2713,6 +2739,8 @@ mod tests {
     fn whir_preflight_options(hash: HashFamily, term_security_bits: usize) -> BinaryProofOptions {
         BinaryProofOptions {
             pcs: BooleanPcsChoice::Whir(WhirOptions {
+                query_grinding: 0,
+                first_round: None,
                 regime: WhirRegime::UniqueDecoding,
                 term_security_bits,
                 budget: BinaryWhirBudget {
@@ -2733,6 +2761,8 @@ mod tests {
     fn whir_small_options(hash: HashFamily) -> BinaryProofOptions {
         BinaryProofOptions {
             pcs: BooleanPcsChoice::Whir(WhirOptions {
+                query_grinding: 0,
+                first_round: None,
                 regime: WhirRegime::UniqueDecoding,
                 term_security_bits: 102,
                 budget: BinaryWhirBudget {
