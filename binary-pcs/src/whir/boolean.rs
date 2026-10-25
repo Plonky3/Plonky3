@@ -42,72 +42,27 @@ use p3_multilinear_util::poly::Poly;
 use p3_security::multilinear::{bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term};
 use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::ring_switch::bits::{
-    BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims, SuffixTensors,
+    BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims, BitTensor, ClaimElements,
+    SuffixTensors,
 };
 use p3_sumcheck::{
-    OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
-    TableSpec,
+    FoldedColumn, OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs,
+    TableShape, TableSpec,
 };
 use p3_whir::{InitialWeightCheck, WhirDomain, WhirProver, WhirProverData};
 
-use crate::boolean::{BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs};
+use crate::boolean::{
+    BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs, WeightedClaim, WeightedOpening,
+};
 use crate::boolean_trace::BooleanTraceCommitment;
 use crate::fold::BitChallengeField;
 use crate::packing::{Coordinates, PackedStack, PackedWords, hypercube_variables};
 use crate::whir::error::BooleanWhirError;
-use crate::whir::proof::{BooleanWhirDeferredProof, BooleanWhirProof};
+use crate::whir::proof::{BooleanWhirDeferredProof, BooleanWhirOpening, BooleanWhirProof};
 use crate::whir::shape::{ProofShape, ProofShapeError};
-
-/// One claim weighing the absorbed bit patterns itself: `sum_v low_weights[v] * t(high, v)`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WeightedOpening<EF> {
-    /// The kept coordinates: the witness's variables less the ones one element absorbs.
-    pub high: Point<EF>,
-    /// Weight `v` weighs bit `v` of every packed element.
-    pub low_weights: Vec<EF>,
-}
-
-impl<EF: Field> WeightedOpening<EF> {
-    /// The multilinear claim at `point`: its last `absorbed` coordinates weigh the bits by their equality table.
-    ///
-    /// # Panics
-    ///
-    /// The point has fewer than `absorbed` coordinates.
-    #[must_use]
-    pub fn at_point(point: &Point<EF>, absorbed: usize) -> Self {
-        let (high, low) = point.split_at(point.num_variables() - absorbed);
-        Self {
-            high,
-            low_weights: Poly::new_from_point(low.as_slice(), EF::ONE).into_evals(),
-        }
-    }
-
-    /// The same claim on the region a Boolean prefix selects, most significant bit first.
-    #[must_use]
-    pub fn within(self, selector: &[bool]) -> Self {
-        let mut high = selector
-            .iter()
-            .map(|&bit| if bit { EF::ONE } else { EF::ZERO })
-            .collect::<Vec<_>>();
-        high.extend_from_slice(self.high.as_slice());
-        Self {
-            high: Point::new(high),
-            low_weights: self.low_weights,
-        }
-    }
-}
 
 /// The value of every weighted opening, in order, and the one proof that opens them all.
 type WeightedOpened<F, EF, MT> = (Vec<EF>, BooleanWhirProof<F, EF, MT>);
-
-/// A weighted opening and the value the verifier holds for it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WeightedClaim<EF> {
-    /// Where and how the claim weighs the witness.
-    pub opening: WeightedOpening<EF>,
-    /// The claimed value.
-    pub value: EF,
-}
 
 /// The binding mode the committed layout uses.
 ///
@@ -211,12 +166,36 @@ where
         )])
     }
 
-    /// Every opening's reduction, gathered into the one batch that reduces them all.
-    fn claims(openings: &[BitOpening<EF>]) -> Result<BitRingSwitchClaims<F, EF>, BooleanWhirError> {
-        let reductions = openings
+    /// Every opening's reduction, then every weighted claim's, gathered into the one batch that reduces them all.
+    fn claims<'a>(
+        &self,
+        openings: &[BitOpening<EF>],
+        weighted: impl Iterator<Item = &'a WeightedOpening<EF>>,
+    ) -> Result<BitRingSwitchClaims<F, EF>, BooleanWhirError>
+    where
+        EF: 'a,
+    {
+        let kept = self.inner.num_variables();
+        let mut reductions = openings
             .iter()
             .map(Self::reduction)
             .collect::<Result<Vec<_>, _>>()?;
+        for opening in weighted {
+            // The kept coordinates are the witness's less the absorbed ones.
+            if opening.high.num_variables() != kept {
+                return Err(BooleanWhirError::PointArity {
+                    expected: kept,
+                    actual: opening.high.num_variables(),
+                });
+            }
+            reductions.push(
+                BitRingSwitch::with_low_weights(&opening.high, &opening.low_weights)
+                    .map_err(BooleanWhirError::Reduction)?,
+            );
+        }
+        if reductions.is_empty() {
+            return Err(BooleanWhirError::NoPoints);
+        }
         BitRingSwitchClaims::new(reductions).map_err(BooleanWhirError::Reduction)
     }
 
@@ -245,9 +224,6 @@ where
 
     /// Check that every opening names the witness's variables and asks for a reading it has.
     fn check_openings(&self, openings: &[BitOpening<EF>]) -> Result<(), BooleanWhirError> {
-        if openings.is_empty() {
-            return Err(BooleanWhirError::NoPoints);
-        }
         for (index, opening) in openings.iter().enumerate() {
             if opening.point.num_variables() != self.num_variables {
                 return Err(BooleanWhirError::PointArity {
@@ -398,7 +374,53 @@ where
             .map_err(BooleanWhirError::Commit)
     }
 
-    /// Open the bit witness with the readings every opening asks for, in one proof.
+    /// A claim's element split over the trailing coordinates the first fold binds, for the deferred switch.
+    ///
+    /// `folded` holds one value per bit of the inner coordinates, the leading `log_outer` of `high` folded away.
+    ///
+    /// # Returns
+    ///
+    /// Nothing when the inner coordinates are fewer than the first fold binds, or `folded` has another length.
+    #[must_use]
+    pub fn suffix_tensors(
+        &self,
+        folded: &[EF],
+        high: &[EF],
+        log_outer: usize,
+    ) -> Option<SuffixTensors<EF, F>> {
+        let width = 1 << BitRingSwitch::<F, EF>::ABSORBED;
+        let depth = self.inner.round_folding_factor(0);
+        let inner = high.get(log_outer..)?;
+        let head = inner.len().checked_sub(depth)?;
+        // The fold holds one row of slices per point of the inner coordinates.
+        //
+        //     expected length = width * 2^(inner coordinates)
+        //
+        // A length past a word is refused rather than wrapped.
+        let expected = u32::try_from(inner.len())
+            .ok()
+            .and_then(|log_rows| 1usize.checked_shl(log_rows))
+            .and_then(|rows| rows.checked_mul(width))?;
+        if folded.len() != expected {
+            return None;
+        }
+        let weights = Poly::new_from_point(&inner[..head], EF::ONE);
+        let banks = (0..1usize << depth)
+            .map(|bank| {
+                let mut slices = vec![EF::ZERO; width];
+                for (high, &weight) in weights.as_slice().iter().enumerate() {
+                    let row = &folded[((high << depth) | bank) * width..][..width];
+                    for (slice, &value) in slices.iter_mut().zip(row) {
+                        *slice += weight * value;
+                    }
+                }
+                BitTensor::from_columns(&slices)
+            })
+            .collect();
+        SuffixTensors::new(banks)
+    }
+
+    /// Open the bit witness with the readings every opening asks for and every weighted claim, in one proof.
     ///
     /// No point needs prior transcript binding: each reduction binds its own.
     ///
@@ -406,29 +428,74 @@ where
     ///
     /// One set of readings per opening, in the order the openings were supplied.
     ///
+    /// Then one value per weighted claim, `sum_v low_weights[v] * t(high, v)`, in the order supplied.
+    ///
     /// # Errors
     ///
-    /// Before the transcript moves, an opening that names the wrong variables.
+    /// Before the transcript moves, no claim at all, or a claim that names the wrong variables.
     ///
     /// An opening asking for no reading, or stepping within more rows than the witness has.
+    ///
+    /// A batch reading no successor row defers its ring switch to WHIR's first fold.
+    ///
+    /// Entry `i` of `folded`, when present, gives weighted claim `i`'s split without a sweep.
     #[allow(clippy::type_complexity)]
-    pub fn open_readings(
+    pub fn open_weighted_readings(
         &self,
         prover_data: BooleanWhirData<F, EF, MT>,
         openings: &[BitOpening<EF>],
+        weighted: &[WeightedOpening<EF>],
+        folded: &[Option<&FoldedColumn<EF>>],
         challenger: &mut Challenger,
-    ) -> Result<(Vec<BitReadings<EF>>, BooleanWhirProof<F, EF, MT>), BooleanWhirError> {
+    ) -> Result<(Vec<BitReadings<EF>>, Vec<EF>, BooleanWhirOpening<F, EF, MT>), BooleanWhirError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
         self.check_openings(openings)?;
         // Every reduction is set up before any runs, so a refused one leaves the transcript alone.
-        let claims = Self::claims(openings)?;
-        let proof = self.open_claims(prover_data, &claims, challenger)?;
-        let reduction = &proof.reduction;
+        let claims = self.claims(openings, weighted.iter())?;
+        let proof = if defers(openings) {
+            // A folded column splits its claim directly.
+            // Every other claim sweeps the packing for its split.
+            let splits = openings
+                .iter()
+                .map(|_| None)
+                .chain(weighted.iter().enumerate().map(|(index, opening)| {
+                    folded.get(index).copied().flatten().and_then(|folded| {
+                        self.suffix_tensors(
+                            &folded.values,
+                            opening.high.as_slice(),
+                            folded.log_outer,
+                        )
+                    })
+                }))
+                .collect::<Vec<_>>();
+            let splits = splits.iter().map(Option::as_ref).collect::<Vec<_>>();
+            BooleanWhirOpening::Deferred(self.open_claims_deferred(
+                prover_data,
+                &claims,
+                &splits,
+                challenger,
+            )?)
+        } else {
+            BooleanWhirOpening::Batched(self.open_claims(prover_data, &claims, challenger)?)
+        };
+        let (readings, values) = Self::readings(openings, &claims, proof.elements())?;
+        Ok((readings, values, proof))
+    }
 
+    /// The readings each opening asked for, then each weighted claim's value, off the elements sent.
+    #[allow(clippy::type_complexity)]
+    fn readings(
+        openings: &[BitOpening<EF>],
+        claims: &BitRingSwitchClaims<F, EF>,
+        elements: &[ClaimElements<F, EF>],
+    ) -> Result<(Vec<BitReadings<EF>>, Vec<EF>), BooleanWhirError> {
         // The elements each claim sends already hold its readings.
         let readings = openings
             .iter()
             .zip(claims.reductions())
-            .zip(&reduction.claims)
+            .zip(elements)
             .map(|((opening, switch), elements)| {
                 let current = opening
                     .current
@@ -441,7 +508,13 @@ where
                 Ok(BitReadings { current, next })
             })
             .collect::<Result<Vec<_>, BooleanWhirError>>()?;
-        Ok((readings, proof))
+        // A weighted claim's value is its incoming claim, read off the same elements.
+        let values = claims.reductions()[openings.len()..]
+            .iter()
+            .zip(&elements[openings.len()..])
+            .map(|(switch, elements)| switch.incoming_claim(&elements.tensor))
+            .collect();
+        Ok((readings, values))
     }
 
     /// Reduce a batch of claims to one about the packing, then open WHIR at its point.
@@ -489,14 +562,9 @@ where
         openings: &[WeightedOpening<EF>],
         challenger: &mut Challenger,
     ) -> Result<WeightedOpened<F, EF, MT>, BooleanWhirError> {
-        let claims = self.weighted_claims(openings.iter())?;
+        let claims = self.claims(&[], openings.iter())?;
         let proof = self.open_claims(prover_data, &claims, challenger)?;
-        let values = claims
-            .reductions()
-            .iter()
-            .zip(&proof.reduction.claims)
-            .map(|(switch, elements)| switch.incoming_claim(&elements.tensor))
-            .collect();
+        let (_, values) = Self::readings(&[], &claims, &proof.reduction.claims)?;
         Ok((values, proof))
     }
 
@@ -525,7 +593,27 @@ where
     where
         Challenger: CanObserve<MT::Commitment>,
     {
-        let claims = self.weighted_claims(openings.iter())?;
+        let claims = self.claims(&[], openings.iter())?;
+        let proof = self.open_claims_deferred(prover_data, &claims, suffix_tensors, challenger)?;
+        let (_, values) = Self::readings(&[], &claims, &proof.reduction.claims)?;
+        Ok((values, proof))
+    }
+
+    /// Bind a batch of claims and prove its sum through WHIR's first fold.
+    ///
+    /// Entry `i` of `suffix_tensors`, when present, is claim `i`'s split.
+    ///
+    /// A missing one costs one sweep of the packing.
+    fn open_claims_deferred(
+        &self,
+        prover_data: BooleanWhirData<F, EF, MT>,
+        claims: &BitRingSwitchClaims<F, EF>,
+        suffix_tensors: &[Option<&SuffixTensors<EF, F>>],
+        challenger: &mut Challenger,
+    ) -> Result<BooleanWhirDeferredProof<F, EF, MT>, BooleanWhirError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
         let depth = self.inner.round_folding_factor(0);
         let (reduction, weight) = tracing::info_span!("bit ring switch")
             .in_scope(|| {
@@ -537,17 +625,11 @@ where
                 )
             })
             .map_err(BooleanWhirError::Reduction)?;
-        let values = claims
-            .reductions()
-            .iter()
-            .zip(&reduction.claims)
-            .map(|(switch, elements)| switch.incoming_claim(&elements.tensor))
-            .collect();
         let opening = self
             .inner
             .open_with_initial_weight(prover_data, weight, challenger)
             .map_err(BooleanWhirError::Commit)?;
-        Ok((values, BooleanWhirDeferredProof { reduction, opening }))
+        Ok(BooleanWhirDeferredProof { reduction, opening })
     }
 
     /// Check a deferred proof against every weighted claim.
@@ -567,10 +649,25 @@ where
     where
         Challenger: CanObserve<MT::Commitment>,
     {
-        let batch = self.weighted_claims(claims.iter().map(|claim| &claim.opening))?;
+        let batch = self.claims(&[], claims.iter().map(|claim| &claim.opening))?;
         let values = claims.iter().map(|claim| claim.value).collect::<Vec<_>>();
+        self.verify_claims_deferred(commitment, &batch, &values, proof, challenger)
+    }
+
+    /// Replay a deferred batch of claims, then the WHIR opening whose first fold closes it.
+    fn verify_claims_deferred(
+        &self,
+        commitment: &MT::Commitment,
+        batch: &BitRingSwitchClaims<F, EF>,
+        values: &[EF],
+        proof: &BooleanWhirDeferredProof<F, EF, MT>,
+        challenger: &mut Challenger,
+    ) -> Result<(), BooleanWhirError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
         let closing = batch
-            .verify_deferred(&proof.reduction, &values, challenger)
+            .verify_deferred(&proof.reduction, values, challenger)
             .map_err(BooleanWhirError::ReductionProof)?;
         let shapes = [TableShape::new(self.inner.num_variables(), 1)];
         // The point always names the packing's variables, so a refusal only fails the check.
@@ -603,7 +700,7 @@ where
         proof: &BooleanWhirProof<F, EF, MT>,
         challenger: &mut Challenger,
     ) -> Result<(), BooleanWhirError> {
-        let batch = self.weighted_claims(claims.iter().map(|claim| &claim.opening))?;
+        let batch = self.claims(&[], claims.iter().map(|claim| &claim.opening))?;
         if proof.reduction.claims.len() != claims.len() {
             return Err(BooleanWhirError::ClaimCount {
                 expected: claims.len(),
@@ -618,57 +715,36 @@ where
         self.verify_claims(commitment, &batch, &readings, proof, challenger)
     }
 
-    /// Every weighted claim's reduction, gathered into one batch.
-    fn weighted_claims<'a>(
-        &self,
-        openings: impl ExactSizeIterator<Item = &'a WeightedOpening<EF>>,
-    ) -> Result<BitRingSwitchClaims<F, EF>, BooleanWhirError>
-    where
-        EF: 'a,
-    {
-        if openings.len() == 0 {
-            return Err(BooleanWhirError::NoPoints);
-        }
-        let kept = self.inner.num_variables();
-        let reductions = openings
-            .map(|opening| {
-                // The kept coordinates are the witness's less the absorbed ones.
-                if opening.high.num_variables() != kept {
-                    return Err(BooleanWhirError::PointArity {
-                        expected: kept,
-                        actual: opening.high.num_variables(),
-                    });
-                }
-                BitRingSwitch::with_low_weights(&opening.high, &opening.low_weights)
-                    .map_err(BooleanWhirError::Reduction)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        BitRingSwitchClaims::new(reductions).map_err(BooleanWhirError::Reduction)
-    }
-
-    /// Check one proof against the readings it claims at every opening.
+    /// Check one proof against the readings it claims at every opening and the value of every weighted claim.
     ///
     /// The commitment's binding is the caller's, replayed before this is reached.
     ///
     /// # Errors
     ///
-    /// Before the transcript moves, a refused opening or a reading count that disagrees.
+    /// Before the transcript moves, a refused claim or a reading count that disagrees.
     ///
-    /// After it, a false reading, a failed reduction, the commitment, or an unclosed claim.
-    pub fn verify_readings(
+    /// After it, a false reading or value, a failed reduction, the commitment, or an unclosed claim.
+    ///
+    /// A batch reading no successor row must come deferred, and any other batched.
+    pub fn verify_weighted_readings(
         &self,
         commitment: &MT::Commitment,
         openings: &[BitOpening<EF>],
         readings: &[BitReadings<EF>],
-        proof: &BooleanWhirProof<F, EF, MT>,
+        weighted: &[WeightedClaim<EF>],
+        proof: &BooleanWhirOpening<F, EF, MT>,
         challenger: &mut Challenger,
-    ) -> Result<(), BooleanWhirError> {
+    ) -> Result<(), BooleanWhirError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
         self.check_openings(openings)?;
-        if readings.len() != openings.len() || proof.reduction.claims.len() != openings.len() {
+        let expected = openings.len() + weighted.len();
+        if readings.len() != openings.len() || proof.elements().len() != expected {
             return Err(BooleanWhirError::ClaimCount {
-                expected: openings.len(),
-                values: readings.len(),
-                reductions: proof.reduction.claims.len(),
+                expected,
+                values: readings.len() + weighted.len(),
+                reductions: proof.elements().len(),
             });
         }
         // The openings fix which readings are checked, so a missing one is never skipped.
@@ -682,12 +758,27 @@ where
         {
             return Err(BooleanWhirError::ReadingShape { index });
         }
-        let claims = Self::claims(openings)?;
+        let claims = self.claims(openings, weighted.iter().map(|claim| &claim.opening))?;
         let readings = readings
             .iter()
             .map(|reading| (reading.current, reading.next))
+            .chain(weighted.iter().map(|claim| (Some(claim.value), None)))
             .collect::<Vec<_>>();
-        self.verify_claims(commitment, &claims, &readings, proof, challenger)
+        // The route is a function of the openings, so a proof taking the other one is refused.
+        match (defers(openings), proof) {
+            (true, BooleanWhirOpening::Deferred(proof)) => {
+                // A deferred batch reads every opening at its current row only.
+                let values = readings
+                    .iter()
+                    .map(|&(current, _)| current.expect("a deferred opening asks the current row"))
+                    .collect::<Vec<_>>();
+                self.verify_claims_deferred(commitment, &claims, &values, proof, challenger)
+            }
+            (false, BooleanWhirOpening::Batched(proof)) => {
+                self.verify_claims(commitment, &claims, &readings, proof, challenger)
+            }
+            _ => Err(BooleanWhirError::OpeningRoute),
+        }
     }
 
     /// Replay a batch of claims, then the WHIR opening at the point it leaves.
@@ -722,6 +813,11 @@ where
             _ => Err(BooleanWhirError::SurvivingClaim),
         }
     }
+}
+
+/// Whether a batch defers its ring switch: none of its openings reads a successor row.
+fn defers<EF>(openings: &[BitOpening<EF>]) -> bool {
+    openings.iter().all(|opening| !opening.next)
 }
 
 impl<F, EF, Dft, MT, Challenger> BooleanMultilinearPcs<EF, Challenger>
@@ -767,24 +863,29 @@ where
         PackedWords::zeroed(words)
     }
 
-    fn open_readings(
+    fn open_weighted_readings(
         &self,
         prover_data: Self::ProverData,
         openings: &[BitOpening<EF>],
+        weighted: &[WeightedOpening<EF>],
+        folded: &[Option<&FoldedColumn<EF>>],
         challenger: &mut Challenger,
-    ) -> Result<(Vec<BitReadings<EF>>, Self::Proof), Self::Error> {
-        Self::open_readings(self, prover_data, openings, challenger)
+    ) -> Result<(Vec<BitReadings<EF>>, Vec<EF>, Self::Proof), Self::Error> {
+        Self::open_weighted_readings(self, prover_data, openings, weighted, folded, challenger)
     }
 
-    fn verify_readings(
+    fn verify_weighted_readings(
         &self,
         commitment: &Self::Commitment,
         openings: &[BitOpening<EF>],
         readings: &[BitReadings<EF>],
+        weighted: &[WeightedClaim<EF>],
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        Self::verify_readings(self, commitment, openings, readings, proof, challenger)
+        Self::verify_weighted_readings(
+            self, commitment, openings, readings, weighted, proof, challenger,
+        )
     }
 
     fn readings_security(
@@ -849,7 +950,7 @@ where
     type Val = F;
     type Commitment = MT::Commitment;
     type ProverData = BooleanWhirData<F, EF, MT>;
-    type Proof = BooleanWhirProof<F, EF, MT>;
+    type Proof = BooleanWhirOpening<F, EF, MT>;
     type Error = BooleanWhirError;
 
     fn num_variables(&self) -> usize {

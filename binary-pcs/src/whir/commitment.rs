@@ -1,6 +1,5 @@
 //! A bit commitment: packed words under WHIR, opened at weighted claims through the deferred ring switch.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_binary_field::TowerLevel;
@@ -8,8 +7,7 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
-use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::ring_switch::bits::{BitRingSwitch, BitTensor, SuffixTensors};
+use p3_sumcheck::ring_switch::bits::{BitRingSwitch, SuffixTensors};
 use p3_whir::WhirDomain;
 use tracing::instrument;
 
@@ -242,36 +240,7 @@ where
         high: &[EF],
         log_outer: usize,
     ) -> Option<SuffixTensors<EF, F>> {
-        let width = 1 << BitRingSwitch::<F, EF>::ABSORBED;
-        let depth = self.first_folding();
-        let inner = high.get(log_outer..)?;
-        let head = inner.len().checked_sub(depth)?;
-        // The fold holds one row of slices per point of the inner coordinates.
-        //
-        //     expected length = width * 2^(inner coordinates)
-        //
-        // A length past a word is refused rather than wrapped.
-        let expected = u32::try_from(inner.len())
-            .ok()
-            .and_then(|log_rows| 1usize.checked_shl(log_rows))
-            .and_then(|rows| rows.checked_mul(width))?;
-        if folded.len() != expected {
-            return None;
-        }
-        let weights = Poly::new_from_point(&inner[..head], EF::ONE);
-        let banks = (0..1usize << depth)
-            .map(|bank| {
-                let mut slices = vec![EF::ZERO; width];
-                for (high, &weight) in weights.as_slice().iter().enumerate() {
-                    let row = &folded[((high << depth) | bank) * width..][..width];
-                    for (slice, &value) in slices.iter_mut().zip(row) {
-                        *slice += weight * value;
-                    }
-                }
-                BitTensor::from_columns(&slices)
-            })
-            .collect();
-        SuffixTensors::new(banks)
+        self.inner.suffix_tensors(folded, high, log_outer)
     }
 
     /// Open the committed bits at every claim, in one proof.
@@ -349,12 +318,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_binary_field::{Poly64, Poly192, fold_rows};
     use p3_field::PrimeCharacteristicRing;
     use p3_keccak::Keccak256Hash;
     use p3_multilinear_util::point::Point;
+    use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::ring_switch::bits::BitPacking;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;

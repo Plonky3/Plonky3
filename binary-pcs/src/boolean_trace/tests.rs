@@ -9,7 +9,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::plan_stacked_layout;
 use p3_sumcheck::ring_switch::bits::BitRingSwitchProofError;
-use p3_sumcheck::{OpeningBatch, PrescribedPointPcs, TableSpec};
+use p3_sumcheck::{FoldedColumn, OpeningBatch, PrescribedPointPcs, TableSpec, WeightedColumnClaim};
 use p3_symmetric::CryptographicHasher;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -18,6 +18,7 @@ use super::evaluate::{BLOCKS_PER_TASK, packed_column_sums};
 use super::gather::GATHER_GROUP;
 use super::plan::{ClaimPlan, ColumnClaim, column_claims};
 use super::*;
+use crate::boolean::WeightedOpening;
 use crate::packing::PackedWords;
 use crate::params::BinaryPcsParams;
 use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
@@ -194,25 +195,35 @@ impl BooleanMultilinearPcs<EF, MyChallenger> for BitsOnly {
         BooleanMultilinearPcs::commit_bits(&self.0, bits, challenger)
     }
 
-    fn open_readings(
+    fn open_weighted_readings(
         &self,
         prover_data: Self::ProverData,
         openings: &[BitOpening<EF>],
+        weighted: &[WeightedOpening<EF>],
+        folded: &[Option<&FoldedColumn<EF>>],
         challenger: &mut MyChallenger,
-    ) -> Result<(Vec<BitReadings<EF>>, Self::Proof), Self::Error> {
-        self.0.open_readings(prover_data, openings, challenger)
+    ) -> Result<(Vec<BitReadings<EF>>, Vec<EF>, Self::Proof), Self::Error> {
+        BooleanMultilinearPcs::open_weighted_readings(
+            &self.0,
+            prover_data,
+            openings,
+            weighted,
+            folded,
+            challenger,
+        )
     }
 
-    fn verify_readings(
+    fn verify_weighted_readings(
         &self,
         commitment: &Self::Commitment,
         openings: &[BitOpening<EF>],
         readings: &[BitReadings<EF>],
+        weighted: &[WeightedClaim<EF>],
         proof: &Self::Proof,
         challenger: &mut MyChallenger,
     ) -> Result<(), Self::Error> {
         self.0
-            .verify_readings(commitment, openings, readings, proof, challenger)
+            .verify_weighted_readings(commitment, openings, readings, weighted, proof, challenger)
     }
 
     fn readings_security(
@@ -2830,4 +2841,104 @@ fn requested_packed_views_preserve_dense_subset_and_reordered_column_order() {
             );
         }
     }
+}
+
+#[test]
+fn a_weighted_column_claim_opens_beside_the_batches_and_a_wrong_value_is_refused() {
+    // Invariant: a weighted claim on one column reads that column, under the caller's weights.
+    //
+    // Fixture state: two tables, the second opened by a weighted claim and no batch at all.
+    //
+    //     table 0   2^10 rows, 2 columns   one batch at a point
+    //     table 1   2^9  rows, 1 column    one weighted claim
+    //
+    // The claim weighs the 7 absorbed row bits freely and the 2 kept ones by an equality table.
+    let shapes = [TableShape::new(10, 2), TableShape::new(9, 1)];
+    // The commitment holds packed tables, and their dense copies serve as the reference.
+    let dense = [table(0xB900, 10), table_with_width(0xB901, 9, 1)];
+    let tables = dense.iter().map(packed_table).collect::<Vec<_>>();
+    let scheme = pcs(&shapes);
+    let protocol = OpeningProtocol::new(vec![
+        TableSpec::new(shapes[0], vec![OpeningBatch::new(vec![0, 1], Vec::new())]),
+        TableSpec::new(shapes[1], Vec::new()),
+    ]);
+    let mut rng = SmallRng::seed_from_u64(0xB902);
+    let points = vec![Point::<EF>::rand(&mut rng, 10)];
+    let high = Point::<EF>::rand(&mut rng, 2);
+    let low_weights = (0..1 << 7).map(|_| rng.random()).collect::<Vec<EF>>();
+
+    // The reference sums every row straight from the column, sharing nothing with the reduction.
+    //
+    //     value = sum_r eq(high, r >> 7) * low_weights[r & 127] * column(r)
+    let eq = Poly::new_from_point(high.as_slice(), EF::ONE);
+    let column = dense[1].column(0);
+    let value = (0..1 << 9)
+        .map(|row| eq.as_slice()[row >> 7] * low_weights[row & 127] * column.value(row))
+        .sum();
+    let claim = WeightedColumnClaim {
+        table: 1,
+        column: 0,
+        high,
+        low_weights,
+        value,
+        folded: None,
+    };
+
+    // Honest: the claim opens in the batches' proof, and the batches read what they did before.
+    let open = |claim: &WeightedColumnClaim<EF>| {
+        let mut chal = challenger();
+        let (commitment, data) = scheme.commit(tables.clone(), &mut chal).unwrap();
+        let proof = scheme
+            .open_at_known_weighted(
+                data,
+                &protocol,
+                &points,
+                &[None],
+                core::slice::from_ref(claim),
+                &mut chal,
+            )
+            .expect("the trace commitment opens weighted claims");
+        (commitment, proof)
+    };
+    let (commitment, proof) = open(&claim);
+    let proof = proof.unwrap();
+    let verify = |claim: &WeightedColumnClaim<EF>| {
+        let mut chal = challenger();
+        scheme.observe_commitment(&commitment, &mut chal);
+        scheme
+            .verify_at_weighted(
+                &commitment,
+                &proof,
+                &protocol,
+                &points,
+                core::slice::from_ref(claim),
+                &mut chal,
+            )
+            .expect("the trace commitment verifies weighted claims")
+    };
+    let evals = verify(&claim).unwrap();
+    for (column, &value) in evals[0].current().iter().enumerate() {
+        let reference = Poly::new(dense[0].poly(column).as_slice().to_vec());
+        assert_eq!(value, reference.eval_base(&points[0]));
+    }
+
+    // Mutation: the claimed value moves by one.
+    //
+    //     prover    the committed column disagrees, so it refuses to send the proof
+    //     verifier  the batch of reductions no longer closes against the commitment
+    let mut wrong = claim.clone();
+    wrong.value += EF::ONE;
+    assert!(matches!(
+        open(&wrong).1,
+        Err(BooleanTraceCommitmentError::WeightedValueMismatch { claim: 0 })
+    ));
+    assert!(verify(&wrong).is_err());
+
+    // Mutation: the claim names a column the table does not have.
+    let mut misplaced = claim;
+    misplaced.column = 1;
+    assert!(matches!(
+        open(&misplaced).1,
+        Err(BooleanTraceCommitmentError::WeightedClaimShape { claim: 0 })
+    ));
 }
