@@ -11,6 +11,10 @@ use crate::whir::shape::ProofShapeError;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum BooleanWhirError {
+    /// The proof takes the ring-switch route its openings do not call for.
+    #[error("the opening's ring switch takes the route its openings do not call for")]
+    OpeningRoute,
+
     /// The witness is narrower than the coordinates one element absorbs.
     #[error("a bit witness of {actual} variables cannot absorb {needed} into one element")]
     WitnessTooNarrow {
