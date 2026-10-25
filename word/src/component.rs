@@ -148,6 +148,16 @@ pub enum CompositionError {
         /// The rejected instance count.
         instances: usize,
     },
+    /// A segment handed to a lookup does not have the composed length.
+    #[error("expected {expected} {segment:?} words, received {actual}")]
+    SegmentLength {
+        /// The segment with the wrong length.
+        segment: Segment,
+        /// The composed length.
+        expected: usize,
+        /// The supplied length.
+        actual: usize,
+    },
 }
 
 impl CompositionError {
@@ -492,6 +502,8 @@ impl<W: Word> Composition<W> {
     /// # Errors
     ///
     /// Returns an error when the call or the instance does not exist.
+    ///
+    /// Returns an error when the segment does not have its composed length.
     pub fn interface<'a>(
         &self,
         public: &'a [W],
@@ -499,6 +511,8 @@ impl<W: Word> Composition<W> {
         instance: usize,
     ) -> Result<&'a [W], CompositionError> {
         let range = self.interface_range(call, instance)?;
+        // Refuse a segment of another length before slicing it.
+        self.check_segment(Segment::Public, public.len())?;
         Ok(&public[range.0..range.1])
     }
 
@@ -507,6 +521,8 @@ impl<W: Word> Composition<W> {
     /// # Errors
     ///
     /// Returns an error when the call or the instance does not exist.
+    ///
+    /// Returns an error when the segment does not have its composed length.
     pub fn inputs<'a>(
         &self,
         public: &'a [W],
@@ -526,6 +542,8 @@ impl<W: Word> Composition<W> {
     /// # Errors
     ///
     /// Returns an error when the call or the instance does not exist.
+    ///
+    /// Returns an error when the segment does not have its composed length.
     pub fn outputs<'a>(
         &self,
         public: &'a [W],
@@ -545,6 +563,8 @@ impl<W: Word> Composition<W> {
     /// # Errors
     ///
     /// Returns an error when the call or the instance does not exist.
+    ///
+    /// Returns an error when the segment does not have its composed length.
     pub fn locals<'a>(
         &self,
         witness: &'a [W],
@@ -552,6 +572,8 @@ impl<W: Word> Composition<W> {
         instance: usize,
     ) -> Result<&'a [W], CompositionError> {
         let (start, end) = self.local_range(call, instance)?;
+        // Refuse a segment of another length before slicing it.
+        self.check_segment(Segment::Witness, witness.len())?;
         Ok(&witness[start..end])
     }
 
@@ -564,6 +586,8 @@ impl<W: Word> Composition<W> {
     /// # Errors
     ///
     /// Returns an error when the call or the instance does not exist.
+    ///
+    /// Returns an error when the segment does not have its composed length.
     pub fn interface_mut<'a>(
         &self,
         public: &'a mut [W],
@@ -571,6 +595,8 @@ impl<W: Word> Composition<W> {
         instance: usize,
     ) -> Result<&'a mut [W], CompositionError> {
         let (start, end) = self.interface_range(call, instance)?;
+        // Refuse a segment of another length before slicing it.
+        self.check_segment(Segment::Public, public.len())?;
         Ok(&mut public[start..end])
     }
 
@@ -583,6 +609,8 @@ impl<W: Word> Composition<W> {
     /// # Errors
     ///
     /// Returns an error when the call or the instance does not exist.
+    ///
+    /// Returns an error when the segment does not have its composed length.
     pub fn locals_mut<'a>(
         &self,
         witness: &'a mut [W],
@@ -590,6 +618,8 @@ impl<W: Word> Composition<W> {
         instance: usize,
     ) -> Result<&'a mut [W], CompositionError> {
         let (start, end) = self.local_range(call, instance)?;
+        // Refuse a segment of another length before slicing it.
+        self.check_segment(Segment::Witness, witness.len())?;
         Ok(&mut witness[start..end])
     }
 
@@ -730,6 +760,22 @@ impl<W: Word> Composition<W> {
             });
         }
         Ok(entry)
+    }
+
+    const fn check_segment(&self, segment: Segment, actual: usize) -> Result<(), CompositionError> {
+        // Every instance block ends inside the composed segment, so its exact length suffices.
+        let expected = match segment {
+            Segment::Public => self.public_len(),
+            Segment::Witness => self.witness_len(),
+        };
+        if actual != expected {
+            return Err(CompositionError::SegmentLength {
+                segment,
+                expected,
+                actual,
+            });
+        }
+        Ok(())
     }
 
     fn interface_range(
@@ -904,6 +950,69 @@ mod tests {
         );
         assert_eq!(
             composition.resolve(0, 2, index),
+            Err(CompositionError::UnknownInstance {
+                call: 0,
+                instance: 2,
+                instances: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn lookups_refuse_a_segment_of_the_wrong_length() {
+        // Fixture state: two instances of the masker, so 4 public words and 2 private words.
+        let composition = Composition::new(vec![ComponentCall::new(masker(), 2)]).unwrap();
+        let mut public = [Word64::new(0); 3];
+        let mut witness = [Word64::new(0); 1];
+
+        // Invariant: a short segment is an error, not a slice-index panic.
+        let short_public = Err(CompositionError::SegmentLength {
+            segment: Segment::Public,
+            expected: 4,
+            actual: 3,
+        });
+        let short_witness = Err(CompositionError::SegmentLength {
+            segment: Segment::Witness,
+            expected: 2,
+            actual: 1,
+        });
+        assert_eq!(composition.interface(&public, 0, 1), short_public);
+        assert_eq!(composition.inputs(&public, 0, 1), short_public);
+        assert_eq!(composition.outputs(&public, 0, 1), short_public);
+        assert_eq!(composition.locals(&witness, 0, 1), short_witness);
+        assert_eq!(
+            composition
+                .interface_mut(&mut public, 0, 1)
+                .map(|s| s.len()),
+            Err(CompositionError::SegmentLength {
+                segment: Segment::Public,
+                expected: 4,
+                actual: 3,
+            })
+        );
+        assert_eq!(
+            composition.locals_mut(&mut witness, 0, 1).map(|s| s.len()),
+            Err(CompositionError::SegmentLength {
+                segment: Segment::Witness,
+                expected: 2,
+                actual: 1,
+            })
+        );
+
+        // Invariant: a long segment is refused too, as the scalar verifier refuses it.
+        let long = [Word64::new(0); 5];
+        assert_eq!(
+            composition.interface(&long, 0, 0),
+            Err(CompositionError::SegmentLength {
+                segment: Segment::Public,
+                expected: 4,
+                actual: 5,
+            })
+        );
+
+        // Invariant: an unknown instance is reported before the length.
+        assert_eq!(
+            composition.locals(&witness, 0, 2),
             Err(CompositionError::UnknownInstance {
                 call: 0,
                 instance: 2,

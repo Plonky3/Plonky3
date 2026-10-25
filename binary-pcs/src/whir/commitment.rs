@@ -233,6 +233,8 @@ where
     /// # Returns
     ///
     /// Nothing when the inner coordinates are fewer than the first fold binds, or `folded` has another length.
+    ///
+    /// Nothing too when the fold's length would not fit in a word.
     #[must_use]
     pub fn suffix_tensors(
         &self,
@@ -244,7 +246,16 @@ where
         let depth = self.first_folding();
         let inner = high.get(log_outer..)?;
         let head = inner.len().checked_sub(depth)?;
-        if folded.len() != width << inner.len() {
+        // The fold holds one row of slices per point of the inner coordinates.
+        //
+        //     expected length = width * 2^(inner coordinates)
+        //
+        // A length past a word is refused rather than wrapped.
+        let expected = u32::try_from(inner.len())
+            .ok()
+            .and_then(|log_rows| 1usize.checked_shl(log_rows))
+            .and_then(|rows| rows.checked_mul(width))?;
+        if folded.len() != expected {
             return None;
         }
         let weights = Poly::new_from_point(&inner[..head], EF::ONE);
@@ -638,6 +649,26 @@ mod tests {
             keccak64::witness_commitment(5, &CommitmentParams::default(), 1),
             Err(CommitmentError::TooFewVariables { num_variables: 5 })
         ));
+    }
+
+    #[test]
+    fn a_split_whose_fold_length_overflows_a_word_is_refused() {
+        // Invariant: a fold length past a word has no split, and never panics.
+        //
+        // Fixture state: slice width 2^7, and an empty fold.
+        let commitment = keccak64::witness_commitment(N, &CommitmentParams::default(), 1).unwrap();
+
+        // 58 inner coordinates: the row count fits, the length does not.
+        //
+        //     2^7 * 2^58 = 2^65 > 2^64
+        let high = vec![Poly192::ZERO; 58];
+        assert!(commitment.suffix_tensors(&[], &high, 0).is_none());
+
+        // 70 inner coordinates: the row count alone is past a word.
+        //
+        //     2^70 > 2^64
+        let high = vec![Poly192::ZERO; 70];
+        assert!(commitment.suffix_tensors(&[], &high, 0).is_none());
     }
 
     #[test]

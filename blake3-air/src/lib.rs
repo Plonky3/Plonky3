@@ -1,6 +1,6 @@
 //! AIRs for the Blake-3 permutation.
 //!
-//! [`Blake3Air`] assumes the field size is between 2^20 and 2^32.
+//! [`Blake3Air`] assumes the field characteristic is greater than `3 * 2^16`.
 //! [`Blake3BinaryAir`] works over fields of characteristic 2.
 
 #![no_std]

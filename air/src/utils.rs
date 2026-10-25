@@ -106,7 +106,9 @@ pub fn u64_to_16_bit_limbs<R: PrimeCharacteristicRing>(val: u64) -> [R; 4] {
 ///
 /// # Panics
 ///
-/// The function will panic if the characteristic of the field is less than or equal to 2^16.
+/// Panics if the characteristic is at most 3 * 2^16.
+///
+/// Below that bound the low-limb check can wrap and accept a wrong sum.
 #[inline]
 pub fn add3<AB: AirBuilder>(
     builder: &mut AB,
@@ -141,11 +143,10 @@ pub fn add3<AB: AirBuilder>(
     // No overflow can occur mod 2^16 P as 2^16 P > 3*2^32 and a, b, c, d < 2^32. Hence we conclude that
     // over the integers a - b - c - d = 0, -2^32 or -2*2^32 which implies a = b + c + d mod 2^32.
 
-    // By assumption P > 3*2^16 so 1 << 16 will be less than P. We use the checked version just to be safe.
-    // The compiler should optimize it away.
-    let two_16 =
-        <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(1 << 16)
-            .unwrap();
+    // The low-limb argument above needs P > 3 * 2^16.
+    <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(3u32 << 16)
+        .expect("characteristic must exceed 3 * 2^16");
+    let two_16 = <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_u32(1 << 16);
     let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].dup() - d[0].dup();
@@ -171,7 +172,9 @@ pub fn add3<AB: AirBuilder>(
 ///
 /// # Panics
 ///
-/// The function will panic if the characteristic of the field is less than or equal to 2^16.
+/// Panics if the characteristic is at most 2^17.
+///
+/// Below that bound the low-limb check can wrap and accept a wrong sum.
 #[inline]
 pub fn add2<AB: AirBuilder>(
     builder: &mut AB,
@@ -205,11 +208,10 @@ pub fn add2<AB: AirBuilder>(
     // No overflow can occur mod 2^16 P as 2^16 P > 2^33 and a, b, c < 2^32. Hence we conclude that
     // over the integers a - b - c = 0 or a - b - c = -2^32 which is equivalent to a = b + c mod 2^32.
 
-    // By assumption P > 2^17 so 1 << 16 will be less than P. We use the checked version just to be safe.
-    // The compiler should optimize it away.
-    let two_16 =
-        <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(1 << 16)
-            .unwrap();
+    // The low-limb argument above needs P > 2^17.
+    <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(2u32 << 16)
+        .expect("characteristic must exceed 2^17");
+    let two_16 = <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_u32(1 << 16);
     let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].dup();
@@ -261,10 +263,131 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
+    use p3_monty_31::{FieldParameters, MontyField31, MontyParameters, PackedMontyParameters};
 
     use super::*;
+    use crate::{AirLayout, SymbolicAirBuilder};
 
     type F = BabyBear;
+
+    /// Define a Montgomery prime field for tests, with the packing parameters of every target.
+    macro_rules! test_prime_field {
+        ($params:ident, $field:ident, $prime:expr, $mu:expr, $generator:expr) => {
+            #[derive(Copy, Clone, Default, Debug, Eq, Hash, PartialEq)]
+            struct $params;
+
+            impl MontyParameters for $params {
+                const PRIME: u32 = $prime;
+                const MONTY_BITS: u32 = 32;
+                const MONTY_MU: u32 = $mu;
+            }
+
+            impl PackedMontyParameters for $params {}
+
+            impl FieldParameters for $params {
+                const MONTY_GEN: MontyField31<Self> = MontyField31::new($generator);
+            }
+
+            #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+            impl p3_monty_31::MontyParametersNeon for $params {
+                const PACKED_P: core::arch::aarch64::uint32x4_t =
+                    unsafe { core::mem::transmute([$prime; 4]) };
+                const PACKED_MU: core::arch::aarch64::int32x4_t =
+                    unsafe { core::mem::transmute([$mu; 4]) };
+            }
+
+            #[cfg(all(
+                target_arch = "x86_64",
+                target_feature = "avx2",
+                not(target_feature = "avx512f")
+            ))]
+            impl p3_monty_31::MontyParametersAVX2 for $params {
+                const PACKED_P: core::arch::x86_64::__m256i =
+                    unsafe { core::mem::transmute([$prime; 8]) };
+                const PACKED_MU: core::arch::x86_64::__m256i =
+                    unsafe { core::mem::transmute([$mu; 8]) };
+            }
+
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+            impl p3_monty_31::MontyParametersAVX512 for $params {
+                const PACKED_P: core::arch::x86_64::__m512i =
+                    unsafe { core::mem::transmute([$prime; 16]) };
+                const PACKED_MU: core::arch::x86_64::__m512i =
+                    unsafe { core::mem::transmute([$mu; 16]) };
+            }
+
+            type $field = MontyField31<$params>;
+        };
+    }
+
+    // The prime 2^17 - 1, inside (2^16, 2^17].
+    test_prime_field!(
+        Below2Pow17Parameters,
+        Below2Pow17,
+        131071u32,
+        0xfffdffffu32,
+        3
+    );
+
+    // The prime 196613, the first above 3 * 2^16.
+    test_prime_field!(
+        Above3Pow16Parameters,
+        Above3Pow16,
+        196613u32,
+        0xb851cccdu32,
+        2
+    );
+
+    /// Run a limb addition check on a symbolic builder with eight main columns.
+    fn eval_addition<G: Field>(three_terms: bool) -> usize {
+        let mut builder = SymbolicAirBuilder::<G>::new(AirLayout {
+            main_width: 8,
+            ..AirLayout::default()
+        });
+        // The first row of the window holds the current row's eight variables.
+        let main = builder.main();
+        let row = &main.values[..8];
+        let a = [row[0], row[1]];
+        let b = [row[2], row[3]];
+        let c = [row[4].into(), row[5].into()];
+        let d = [row[6].into(), row[7].into()];
+        if three_terms {
+            add3(&mut builder, &a, &b, &c, &d);
+        } else {
+            add2(&mut builder, &a, &b, &c);
+        }
+        builder.base_constraints().len()
+    }
+
+    #[test]
+    #[should_panic(expected = "characteristic must exceed 2^17")]
+    fn add2_rejects_a_characteristic_at_most_2_pow_17() {
+        // Invariant: the low-limb difference spans (-2^17, 2^16), so it must not wrap mod P.
+        //
+        // Fixture state: 2^16 < 131071 < 2^17.
+        //
+        // Over such a prime the check accepts a wrong sum, so the helper refuses the field.
+        eval_addition::<Below2Pow17>(false);
+    }
+
+    #[test]
+    #[should_panic(expected = "characteristic must exceed 3 * 2^16")]
+    fn add3_rejects_a_characteristic_at_most_3_pow_16() {
+        // Invariant: the low-limb difference spans (-3 * 2^16, 2^16), so it must not wrap mod P.
+        //
+        // Fixture state: 2^16 < 131071 <= 3 * 2^16 = 196608.
+        eval_addition::<Below2Pow17>(true);
+    }
+
+    #[test]
+    fn additions_run_above_their_bounds() {
+        // Fixture state: 196613 > 3 * 2^16 > 2^17, so both helpers accept the field.
+        //
+        //     two-term addition    2 constraints
+        //     three-term addition  2 constraints
+        assert_eq!(eval_addition::<Above3Pow16>(false), 2);
+        assert_eq!(eval_addition::<Above3Pow16>(true), 2);
+    }
 
     #[test]
     fn test_pack_bits_le_various_patterns() {

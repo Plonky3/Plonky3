@@ -99,10 +99,10 @@ where
         "batch {batch}, matrix {matrix}: opened at no points; its width cannot be authenticated"
     )]
     MatrixWithoutOpeningPoints { batch: usize, matrix: usize },
-    /// The tallest claimed domain leaves no room for the first-layer fold.
+    /// A claimed domain is smaller than any domain this scheme commits to.
     ///
-    /// The bivariate layer takes one bit before FRI folds anything.
-    #[error("tallest claimed domain is 2^{log_n} rows; the first-layer fold needs at least 2")]
+    /// The bivariate layer and circle FRI each take one bit, so a domain needs 4 rows.
+    #[error("a claimed domain is 2^{log_n} rows; this scheme commits to at least 4")]
     DomainTooSmall { log_n: usize },
 }
 
@@ -701,14 +701,27 @@ where
             .max()
             .ok_or(FriError::NoCommittedMatrices)?;
 
+        // Every claimed domain must be one the prover can commit to.
+        //
+        //     log_n >= 2   the bivariate layer and circle FRI each take one bit
+        //     log_n = 0    the lambda correction would read the undefined v_0
+        //
+        // Checking the smallest claimed domain covers every other one.
+        if let Some(log_n) = rounds
+            .iter()
+            .flat_map(|CommitmentOpening { matrices: mats, .. }| {
+                mats.iter().map(|MatrixOpening { domain, .. }| domain.log_n)
+            })
+            .min()
+            .filter(|&log_n| log_n < LOG_MIN_TRACE_HEIGHT)
+        {
+            return Err(FriError::InputError(InputError::DomainTooSmall { log_n }));
+        }
+
         // The bivariate layer folds one bit before FRI folds anything.
-        let Some(num_commit_rounds) =
-            log_global_max_height.checked_sub(self.fri_params.log_blowup + 1)
-        else {
-            return Err(FriError::InputError(InputError::DomainTooSmall {
-                log_n: log_global_max_height - self.fri_params.log_blowup,
-            }));
-        };
+        //
+        // The tallest domain has at least 4 rows, so this never goes below zero.
+        let num_commit_rounds = log_global_max_height - self.fri_params.log_blowup - 1;
 
         // Invariant: the query-index width fits the circle group of order 2^CIRCLE_TWO_ADICITY.
         //
@@ -1618,6 +1631,87 @@ mod tests {
                 FriError::InputError(InputError::OpeningPointMatchesQueryPoint)
             ),
             "{err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_claimed_domain_of_one_row() {
+        // Fixture state: an honest proof for one matrix on a domain of 2^10 rows.
+        //
+        // Record its query indices, so a second run can replay them.
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof_at(0, 0, 0);
+        let honest: CommitmentWithClaims<Val, Challenge, _> =
+            (comm, vec![(d, vec![(zeta, values[0][0][0].clone())])]).into();
+        let mut challenger = QueryReplayChallenger {
+            inner: Challenger::from_hasher(vec![], byte_hash),
+            indices: Vec::new(),
+            replay: false,
+            next: 0,
+        };
+        pcs.verify(vec![honest.clone()], &proof, &mut challenger)
+            .unwrap();
+        let indices = challenger.indices;
+
+        // A second batch claims a domain of 2^0 = 1 row.
+        //
+        //     claimed rows   committed rows (blowup 4)
+        //     2^10           2^12
+        //     2^0            2^2
+        //
+        // Its matrix is committed straight through the input scheme.
+        // Its openings are genuine, so the input check passes.
+        let log_blowup = pcs.fri_params.log_blowup;
+        let tiny = RowMajorMatrix::rand(&mut SmallRng::seed_from_u64(7), 1 << log_blowup, 1);
+        let (tiny_comm, tiny_data) = pcs.mmcs.commit(vec![tiny]);
+        let bits_reduced = d.log_n;
+        let reduced: Vec<usize> = indices.iter().map(|&i| i >> bits_reduced).collect();
+        let (opened_values, opening_proof) = pcs.mmcs.open_multi_batch(&reduced, &tiny_data);
+
+        // Mutation: the proof carries the second batch's openings.
+        // Each query gains one first-layer sibling, and the proof one lambda, for the new height.
+        let mut proof = proof;
+        proof
+            .fri_proof
+            .input_openings
+            .input_openings
+            .push(BatchMultiOpening {
+                opened_values,
+                opening_proof,
+            });
+        for siblings in &mut proof.fri_proof.input_openings.first_layer_siblings {
+            siblings.push(Challenge::ZERO);
+        }
+        proof.lambdas.push(Challenge::ZERO);
+        let tiny_claim: CommitmentWithClaims<Val, Challenge, _> = (
+            tiny_comm,
+            vec![(
+                CircleDomain::<Val>::standard(0),
+                vec![(zeta, vec![Challenge::ZERO])],
+            )],
+        )
+            .into();
+
+        let result = pcs.verify(
+            vec![honest, tiny_claim],
+            &proof,
+            &mut QueryReplayChallenger {
+                inner: Challenger::from_hasher(vec![], byte_hash),
+                indices,
+                replay: true,
+                next: 0,
+            },
+        );
+        // Invariant: the claim is rejected before any query is read.
+        //
+        // The lambda correction would otherwise evaluate v_0, which has no meaning.
+        assert!(
+            matches!(
+                result,
+                Err(FriError::InputError(InputError::DomainTooSmall {
+                    log_n: 0
+                }))
+            ),
+            "{result:?}"
         );
     }
 
