@@ -2,7 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_symbolic_constraints};
+use p3_air::symbolic::{
+    AirLayout, SymbolicAirBuilder, UndeclaredNextRowRead, get_symbolic_constraints,
+};
 use p3_air::{Air, RowWindow};
 use p3_challenger::GrindingChallenger;
 use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
@@ -16,10 +18,10 @@ use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    Com, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PcsProverError,
-    PreprocessedOpenedValues, PreprocessedProverData, Proof, ProverConstraintFolder, ProvingError,
-    StarkGenericConfig, StarkProverTranscript, StarkShape, Val, get_constraint_layout,
-    get_log_num_quotient_chunks_for_domain,
+    AirConstraints, Com, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal,
+    PcsProverError, PreprocessedOpenedValues, PreprocessedProverData, Proof,
+    ProverConstraintFolder, ProvingError, StarkGenericConfig, StarkProverTranscript, StarkShape,
+    Val, get_constraint_layout,
 };
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use crate::{VectorizedChallenge, VectorizedConstraintFolder, VectorizedVal};
@@ -199,12 +201,21 @@ where
     // From the degree of the constraint polynomial, compute the number
     // of quotient polynomials we will split Q(x) into. This is chosen to
     // always be a power of 2.
-    let log_num_quotient_chunks = get_log_num_quotient_chunks_for_domain::<Val<SC>, A>(
-        air,
-        layout,
-        trace_domain,
-        config.is_zk(),
-    );
+    //
+    // The same symbolic evaluation checks the next-row declaration.
+    // Why: with an empty declaration the next row is never opened, and the verifier folds zeros for it.
+    // A proof of an AIR reading such a row would always be rejected.
+    let constraints = AirConstraints::<Val<SC>>::evaluate(air, layout);
+    constraints
+        .check_next_row_reads()
+        .map_err(
+            |UndeclaredNextRowRead { trace, column }| ProvingError::UndeclaredNextRowRead {
+                air: None,
+                trace,
+                column,
+            },
+        )?;
+    let log_num_quotient_chunks = constraints.log_num_quotient_chunks(trace_domain, config.is_zk());
 
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
 

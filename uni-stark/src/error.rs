@@ -3,6 +3,7 @@
 use alloc::format;
 use alloc::string::String;
 
+use p3_air::symbolic::NextRowTrace;
 pub use p3_commit::PeriodicColumnShapeError;
 use thiserror::Error;
 
@@ -22,6 +23,22 @@ pub enum ProvingError<E> {
     /// A batch commitment needs at least one matrix, so there is nothing to prove.
     #[error("cannot prove an empty batch: no instances were given")]
     EmptyBatch,
+    /// A constraint reads a next-row column that the AIR does not declare.
+    ///
+    /// Provers and verifiers open the next row only when the declared set is nonempty.
+    /// A read outside that set breaks the contract they rely on.
+    #[error(
+        "{}a constraint reads column {column} of the next {trace} row, which the AIR does not declare",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    UndeclaredNextRowRead {
+        /// The instance index, for a batch of AIRs.
+        air: Option<usize>,
+        /// The trace the read comes from.
+        trace: NextRowTrace,
+        /// The column index within that trace.
+        column: usize,
+    },
 }
 
 /// Specific reasons why a proof's shape is invalid.
@@ -214,6 +231,22 @@ where
     UnsupportedOodPowBits {
         /// The configured difficulty.
         bits: usize,
+    },
+    /// A constraint reads a next-row column that the AIR does not declare.
+    ///
+    /// Provers and verifiers open the next row only when the declared set is nonempty.
+    /// A read outside that set breaks the contract they rely on.
+    #[error(
+        "{}a constraint reads column {column} of the next {trace} row, which the AIR does not declare",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    UndeclaredNextRowRead {
+        /// The instance index, for a batch of AIRs.
+        air: Option<usize>,
+        /// The trace the read comes from.
+        trace: NextRowTrace,
+        /// The column index within that trace.
+        column: usize,
     },
 }
 

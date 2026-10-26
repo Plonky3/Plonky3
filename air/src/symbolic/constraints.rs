@@ -4,6 +4,7 @@ use p3_field::{ExtensionField, Field};
 
 use super::{
     AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
+    constraint_degree_from_poly_degree,
 };
 
 /// Owned symbolic constraints with a mapping back to global assertion order.
@@ -152,6 +153,36 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicConstraints<F, EF> {
             trace_len,
             periodic_periods,
         )
+    }
+
+    /// Maximum constraint degree, in multiples of the degree-`(trace_len - 1)` trace polynomials.
+    ///
+    /// This is the degree a two-adic quotient is sized from.
+    ///
+    /// # Arguments
+    ///
+    /// - `trace_len`: the trace height the degrees are measured against.
+    /// - `periodic_periods`: the period of each periodic column, empty when the AIR has none.
+    pub fn max_constraint_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize {
+        // Without periodic columns, start from the cached degree multiple.
+        //
+        // It weighs the transition selector 0, which is exact for one transition factor.
+        // A product of two or more transition factors outgrows it:
+        //
+        //     T^2 a b:   degree multiple 2,   polynomial degree 2 (n - 1) + 2 = 2n
+        //
+        // So also convert the trace-size-aware degree, and keep the larger of the two.
+        let poly = self.max_constraint_poly_degrees(trace_len, periodic_periods);
+        let poly = constraint_degree_from_poly_degree(poly.base.max(poly.extension), trace_len);
+        if periodic_periods.is_empty() {
+            let cached = self.max_constraint_degrees();
+            // Why: the maximum never lowers the cached degree, so no existing AIR loses chunks.
+            return cached.base.max(cached.extension).max(poly);
+        }
+
+        // Periodic columns can have degree below `trace_len - 1`.
+        // The cached multiple would overstate them, so the trace-size-aware degree alone decides.
+        poly
     }
 }
 

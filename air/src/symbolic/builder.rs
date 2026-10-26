@@ -8,13 +8,12 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::symbolic::SymbolicExpr;
-use crate::symbolic::constraints::{max_constraint_degrees, max_constraint_poly_degrees};
 use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
     Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder, SymbolicConstraints,
-    SymbolicExpression, SymbolicVariable, WindowAccess,
+    SymbolicExpression, SymbolicVariable, WindowAccess, capture_symbolic_constraints,
 };
 
 /// Describes the shape of an AIR for symbolic constraint evaluation.
@@ -125,40 +124,16 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
-    let (base_constraints, extension_constraints) = get_all_symbolic_constraints(air, layout);
+    layout.validate_against_air(air);
+    let constraints = capture_symbolic_constraints(layout, |builder| air.eval(builder));
 
-    // Without periodic columns, start from the cached degree multiple.
-    //
-    // It weighs the transition selector 0, which is exact for one transition factor.
-    // A product of two or more transition factors outgrows it:
-    //
-    //     T^2 a b:   degree multiple 2,   polynomial degree 2 (n - 1) + 2 = 2n
-    //
-    // So also convert the trace-size-aware degree, and keep the larger of the two.
-    if layout.num_periodic_columns == 0 {
-        let cached = max_constraint_degrees(&base_constraints, &extension_constraints, 0);
-        let poly =
-            max_constraint_poly_degrees(&base_constraints, &extension_constraints, trace_len, &[]);
-        // Why: the maximum never lowers the cached degree, so no existing AIR loses chunks.
-        return cached
-            .base
-            .max(cached.extension)
-            .max(constraint_degree_from_poly_degree(
-                poly.base.max(poly.extension),
-                trace_len,
-            ));
-    }
-
-    // Period (cycle length) of each periodic column, indexed by periodic column index.
-    let periodic_periods = air.periodic_periods();
-
-    let degrees = max_constraint_poly_degrees(
-        &base_constraints,
-        &extension_constraints,
-        trace_len,
-        &periodic_periods,
-    );
-    constraint_degree_from_poly_degree(degrees.base.max(degrees.extension), trace_len)
+    // Materialize the periods only when the AIR has periodic columns.
+    let periodic_periods = if layout.num_periodic_columns == 0 {
+        Vec::new()
+    } else {
+        air.periodic_periods()
+    };
+    constraints.max_constraint_degree(trace_len, &periodic_periods)
 }
 
 #[instrument(

@@ -2,12 +2,12 @@ use alloc::vec::Vec;
 
 use p3_air::Air;
 use p3_air::symbolic::{
-    AirLayout, ConstraintLayout, SymbolicExpression, SymbolicExpressionExt,
-    constraint_degree_from_poly_degree,
+    AirLayout, ConstraintLayout, SymbolicConstraints, SymbolicExpression, SymbolicExpressionExt,
 };
 use p3_commit::PolynomialSpace;
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_lookup::{InteractionSymbolicBuilder, Lookup, LookupProtocol};
+use p3_uni_stark::AirConstraints;
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
@@ -70,32 +70,8 @@ where
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
-    let transition_degree = domain.transition_degree_multiple();
-    if transition_degree == 0 {
-        return get_log_num_quotient_chunks(
-            air,
-            layout,
-            domain.size(),
-            contexts,
-            is_zk,
-            lookup_gadget,
-        );
-    }
-    assert!(is_zk <= 1, "is_zk must be either 0 or 1");
-
-    let (base, extension) = get_symbolic_constraints(air, layout, contexts, lookup_gadget);
-    let degree = base
-        .iter()
-        .map(|c| c.degree_multiple_with_transition(transition_degree))
-        .chain(
-            extension
-                .iter()
-                .map(|c| c.degree_multiple_with_transition(transition_degree)),
-        )
-        .max()
-        .unwrap_or(0)
-        .max(air.max_constraint_degree().unwrap_or(0));
-    log2_ceil_usize((degree + is_zk).max(2) - 1)
+    let constraints = evaluate_constraints(air, layout, contexts, lookup_gadget);
+    AirConstraints::new(air, constraints).log_num_quotient_chunks(domain, is_zk)
 }
 
 /// Two-adic quotient sizing; use [`get_log_num_quotient_chunks_for_domain`] for other domains.
@@ -142,50 +118,10 @@ where
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
-    let (base, extension) = get_symbolic_constraints(air, layout, contexts, lookup_gadget);
-
-    // Without periodic columns, start from the cached degree multiple.
-    //
-    // It weighs the transition selector 0, which is exact for one transition factor.
-    // A product of two or more transition factors outgrows it:
-    //
-    //     T^2 a b:   degree multiple 2,   polynomial degree 2 (n - 1) + 2 = 2n
-    //
-    // So also convert the trace-size-aware degree, and keep the larger of the two.
-    if layout.num_periodic_columns == 0 {
-        let cached = base
-            .iter()
-            .map(|c| c.degree_multiple())
-            .chain(extension.iter().map(|c| c.degree_multiple()))
-            .max()
-            .unwrap_or(0);
-        let poly = base
-            .iter()
-            .map(|c| c.poly_degree(trace_len, &[]))
-            .chain(extension.iter().map(|c| c.poly_degree(trace_len, &[])))
-            .max()
-            .unwrap_or(0);
-        // Why: the maximum never lowers the cached degree, so no existing AIR loses chunks.
-        return cached.max(constraint_degree_from_poly_degree(poly, trace_len));
-    }
-
-    // Period (cycle length) of each periodic column, indexed by periodic column index.
-    let periodic_periods: Vec<usize> = air.periodic_columns().iter().map(Vec::len).collect();
-
-    let base_degree = base
-        .iter()
-        .map(|c| c.poly_degree(trace_len, &periodic_periods))
-        .max()
-        .unwrap_or(0);
-    let extension_degree = extension
-        .iter()
-        .map(|c| c.poly_degree(trace_len, &periodic_periods))
-        .max()
-        .unwrap_or(0);
-    constraint_degree_from_poly_degree(base_degree.max(extension_degree), trace_len)
+    let constraints = evaluate_constraints(air, layout, contexts, lookup_gadget);
+    AirConstraints::new(air, constraints).max_constraint_degree(trace_len)
 }
 
-#[instrument(name = "evaluate constraints symbolically", skip_all, level = "debug")]
 pub fn get_symbolic_constraints<F, EF, A, LG>(
     air: &A,
     layout: AirLayout,
@@ -195,6 +131,30 @@ pub fn get_symbolic_constraints<F, EF, A, LG>(
     Vec<SymbolicExpression<F>>,
     Vec<SymbolicExpressionExt<F, EF>>,
 )
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
+    SymbolicExpressionExt<F, EF>: Algebra<EF>,
+    LG: LookupProtocol,
+{
+    let (base, extension, _) =
+        evaluate_constraints(air, layout, contexts, lookup_gadget).into_parts();
+    (base, extension)
+}
+
+/// Evaluate an AIR and its lookups symbolically, keeping both constraint streams.
+///
+/// # Panics
+///
+/// Panics if a layout width that the AIR itself determines disagrees with the AIR.
+#[instrument(name = "evaluate constraints symbolically", skip_all, level = "debug")]
+pub(crate) fn evaluate_constraints<F, EF, A, LG>(
+    air: &A,
+    layout: AirLayout,
+    contexts: &[Lookup<F>],
+    lookup_gadget: &LG,
+) -> SymbolicConstraints<F, EF>
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -224,9 +184,7 @@ where
 
     // Evaluate AIR and lookup constraints.
     lookup_gadget.eval_air_and_lookups(air, &mut builder, contexts);
-    let base_constraints = builder.base_constraints();
-    let extension_constraints = builder.extension_constraints();
-    (base_constraints, extension_constraints)
+    builder.finish()
 }
 
 #[cfg(test)]
