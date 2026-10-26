@@ -685,10 +685,19 @@ where
             );
             let matrices = self.inner.mmcs.get_matrices(&round.prover_data.inner);
             assert_eq!(matrices.len(), round.points.len());
-            for (matrix, points) in matrices.iter().zip(&round.points) {
+            for (matrix_idx, (matrix, points)) in matrices.iter().zip(&round.points).enumerate() {
                 self.inner
                     .fri
                     .validate_input_height(log2_strict_usize(matrix.height()))?;
+                // A matrix with no claim has no proof that verifies.
+                // Rejecting it here leaves every single-use mask unclaimed.
+                if points.is_empty() {
+                    return Err(FriProverError::MatrixWithoutOpeningPoints {
+                        batch: round_idx,
+                        matrix: matrix_idx,
+                    }
+                    .into());
+                }
                 self.check_hiding_budget(
                     self.lde_mask_height(matrix.height()),
                     Challenge::DIMENSION,
@@ -1398,6 +1407,47 @@ mod tests {
         ));
         assert_eq!(challenger.sample_algebra_element::<Challenge>(), before);
         // Rejection did not claim the single-use mask: a smaller opening can still succeed.
+        pcs.open(
+            vec![OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![Challenge::from_u8(7)]],
+            }],
+            &mut challenger,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn open_rejects_a_matrix_without_opening_points() {
+        let (pcs, _, _, mut challenger) = make_fixture();
+        let data = commit_opening_fixture(&pcs);
+        let before: Challenge = challenger.clone().sample_algebra_element();
+
+        // Fixture state: one private round, one matrix, no opening point.
+        //
+        //     round 0, matrix 0:  points = []  ->  nothing pins its width
+        let result = pcs.open(
+            vec![OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![]],
+            }],
+            &mut challenger,
+        );
+        assert!(matches!(
+            result,
+            Err(HidingFriProverError::Fri(
+                FriProverError::MatrixWithoutOpeningPoints {
+                    batch: 0,
+                    matrix: 0
+                }
+            ))
+        ));
+
+        // The rejection observed nothing and left the single-use mask unclaimed.
+        assert_eq!(challenger.sample_algebra_element::<Challenge>(), before);
+        assert!(!data.opened.load(Ordering::Relaxed));
+
+        // So a real opening of the same commitment still succeeds.
         pcs.open(
             vec![OpeningRequest {
                 prover_data: &data,

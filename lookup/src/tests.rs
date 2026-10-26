@@ -517,7 +517,7 @@ fn generate_permutation_balances_to_zero_terminal() {
     let challenges = vec![EF::from_u32(7), EF::from_u32(11)];
 
     let (aux, terminal) =
-        gadget.generate_permutation::<F, EF>(&main, &None, &[], &lookups, &challenges);
+        gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
 
     // The aux trace carries one accumulator column plus one fraction column.
     assert_eq!(aux.width(), 2);
@@ -568,7 +568,7 @@ fn generate_permutation_flag_zero_skip_matches_real_denominators() {
     let challenges = vec![alpha, beta];
 
     let (aux, terminal) =
-        gadget.generate_permutation::<F, EF>(&main, &None, &[], &lookups, &challenges);
+        gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
 
     // Reference fraction per row, built from the real denominators:
     //   f[r] = 1 / (alpha - query[r])  +  (-mult[r]) / (alpha - table[r])
@@ -643,7 +643,8 @@ fn generate_permutation_multi_element_combine_matches_reference() {
     let beta = EF::from_u32(11);
     let challenges = vec![alpha, beta];
 
-    let (aux, _) = gadget.generate_permutation::<F, EF>(&main, &None, &[], &lookups, &challenges);
+    let (aux, _) =
+        gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
 
     // Reference: f[r] = mult[r] / (alpha - (e_0[r] * beta + e_1[r])).
     for r in 0..height {
@@ -665,7 +666,7 @@ fn eval_all_passes_on_balanced_trace() {
     let challenges = vec![EF::from_u32(0x12345678), EF::from_u32(0x87654321)];
 
     let (aux, terminal) =
-        gadget.generate_permutation::<F, EF>(&main, &None, &[], &lookups, &challenges);
+        gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
     let terminal = terminal.unwrap();
 
     // Walk every row and check the lookup constraints fire without panic.
@@ -708,7 +709,7 @@ fn eval_all_passes_on_multi_lookup_balanced_trace() {
     ];
 
     let (aux, terminal) =
-        gadget.generate_permutation::<F, EF>(&main, &None, &[], &lookups, &challenges);
+        gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
     // 1 accumulator + 2 fraction columns.
     assert_eq!(aux.width(), 3);
     let terminal = terminal.unwrap();
@@ -733,7 +734,7 @@ fn eval_all_rejects_unbalanced_trace() {
     let challenges = vec![EF::from_u32(13), EF::from_u32(17)];
 
     let (mut aux, terminal) =
-        gadget.generate_permutation::<F, EF>(&main, &None, &[], &lookups, &challenges);
+        gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
 
     // Tamper with the fraction column on row 2: violates U * frac - V = 0.
     let aux_width = aux.width();
@@ -777,6 +778,7 @@ fn debug_util_detects_unbalanced_multiset() {
         main_trace: &main_trace,
         preprocessed_trace: &None,
         public_values: &[],
+        periodic_columns: &[],
         lookups: &[lookup],
         permutation_challenges: &[],
     };
@@ -847,12 +849,14 @@ fn eval_all_global_lookup_carries_terminal_through_permutation_values() {
         &sender_main,
         &None,
         &[],
+        &[],
         core::slice::from_ref(&sender_lookup),
         &challenges,
     );
     let (receiver_aux, receiver_terminal) = gadget.generate_permutation::<F, EF>(
         &receiver_main,
         &None,
+        &[],
         &[],
         core::slice::from_ref(&receiver_lookup),
         &challenges,
@@ -899,7 +903,7 @@ fn eval_all_global_lookup_carries_terminal_through_permutation_values() {
 fn empty_lookups_produce_no_permutation_trace() {
     let gadget = LogUpGadget::new();
     let main = RowMajorMatrix::new(F::zero_vec(4), 1);
-    let (aux, terminal) = gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &[]);
+    let (aux, terminal) = gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &[], &[]);
     assert_eq!(aux.width(), 0);
     assert_eq!(aux.values.len(), 0);
     assert!(terminal.is_none());
@@ -1042,7 +1046,7 @@ fn test_nontrivial_permutation() {
     let challenges = vec![EF::from_u32(0x1234_5678), EF::from_u32(0x9abc_def0)];
 
     let (aux, terminal) =
-        gadget.generate_permutation::<F, EF>(&main_trace, &None, &[], &lookups, &challenges);
+        gadget.generate_permutation::<F, EF>(&main_trace, &None, &[], &[], &lookups, &challenges);
     let terminal = terminal.unwrap();
 
     // Balanced multiset → terminal is zero with overwhelming probability.
@@ -1081,7 +1085,7 @@ fn test_zero_multiplicity_is_not_counted() {
     let challenges = vec![EF::from_u8(123), EF::from_u8(111)];
 
     let (_aux, terminal) =
-        gadget.generate_permutation::<F, EF>(&main_trace, &None, &[], &lookups, &challenges);
+        gadget.generate_permutation::<F, EF>(&main_trace, &None, &[], &[], &lookups, &challenges);
     let terminal = terminal.unwrap();
 
     // The unread `10` survives into the terminal.
@@ -1124,7 +1128,7 @@ fn test_inconsistent_witness_fails_transition() {
     let challenges = vec![EF::from_u32(31), EF::from_u32(41)];
 
     let (mut aux, terminal) =
-        gadget.generate_permutation::<F, EF>(&main_trace, &None, &[], &lookups, &challenges);
+        gadget.generate_permutation::<F, EF>(&main_trace, &None, &[], &[], &lookups, &challenges);
 
     // Corrupt acc[2] (accumulator column, row 2) by injecting a non-zero delta.
     //
@@ -1240,7 +1244,7 @@ fn test_tuple_lookup() {
     let challenges = vec![EF::from_u32(31), EF::from_u32(41)];
 
     let (aux, terminal) =
-        gadget.generate_permutation::<F, EF>(&main_trace, &None, &[], &lookups, &challenges);
+        gadget.generate_permutation::<F, EF>(&main_trace, &None, &[], &[], &lookups, &challenges);
     let terminal = terminal.unwrap();
 
     // Balanced multiset → terminal zero.
@@ -1409,7 +1413,7 @@ fn generate_permutation_exclusive_selects_active_branch() {
     let challenges = vec![alpha, beta];
 
     let (aux, terminal) =
-        gadget.generate_permutation::<F, EF>(&main, &None, &[], &lookups, &challenges);
+        gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
 
     // The fraction column equals the selected branch's value, or 0 when inactive.
     for (r, &which) in active.iter().enumerate() {
@@ -1489,7 +1493,7 @@ fn generate_permutation_exclusive_rejects_non_boolean_flag() {
 
     let gadget = LogUpGadget::new();
     let challenges = vec![EF::from_u32(17), EF::from_u32(11)];
-    let _ = gadget.generate_permutation::<F, EF>(&main, &None, &[], &lookups, &challenges);
+    let _ = gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
 }
 
 #[test]
@@ -1521,7 +1525,7 @@ fn generate_permutation_exclusive_rejects_two_active_flags() {
 
     let gadget = LogUpGadget::new();
     let challenges = vec![EF::from_u32(17), EF::from_u32(11)];
-    let _ = gadget.generate_permutation::<F, EF>(&main, &None, &[], &lookups, &challenges);
+    let _ = gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
 }
 
 #[test]
@@ -1594,6 +1598,7 @@ fn exclusive_query_balances_against_provider() {
         main_trace: &query_main,
         preprocessed_trace: &None,
         public_values: &[],
+        periodic_columns: &[],
         lookups: core::slice::from_ref(&query_lookup),
         permutation_challenges: &[],
     };
@@ -1601,6 +1606,7 @@ fn exclusive_query_balances_against_provider() {
         main_trace: &provider_main,
         preprocessed_trace: &None,
         public_values: &[],
+        periodic_columns: &[],
         lookups: core::slice::from_ref(&provider_lookup),
         permutation_challenges: &[],
     };
@@ -1648,4 +1654,63 @@ fn local_lookup_weight_overflow_is_rejected() {
     //
     // Goldilocks at height 2^31 + 1: clamped sum ~2^63 passes, true sum ~2^64 exceeds p.
     let _ = Lookups::<F>::from_air::<EF, _>(&OverweightLocalAir).unwrap();
+}
+
+/// One main column, sent and received on a local lookup whose count is a periodic selector.
+struct PeriodicCountAir;
+
+impl<F: Field> BaseAir<F> for PeriodicCountAir {
+    fn width(&self) -> usize {
+        1
+    }
+
+    fn num_periodic_columns(&self) -> usize {
+        1
+    }
+
+    fn periodic_columns(&self) -> alloc::borrow::Cow<'_, [Vec<F>]> {
+        alloc::borrow::Cow::Owned(vec![vec![F::ONE, F::ZERO]])
+    }
+}
+
+impl<AB> Air<AB> for PeriodicCountAir
+where
+    AB: AirBuilder<F: Field> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        let value: AB::Expr = builder.main().current_slice()[0].into();
+        let flag: AB::Expr = builder.periodic_values()[0].into();
+        builder.push_local_interaction(vec![
+            (vec![value.clone()], Count::bounded(flag.clone(), 1)),
+            (vec![value], Count::provided(-flag)),
+        ]);
+    }
+}
+
+#[test]
+fn a_periodic_count_reaches_the_permutation_trace() {
+    // Fixture state: 4 rows, periodic selector [1, 0], so rows 0 and 2 send and receive.
+    let main = RowMajorMatrix::new((0..4).map(F::from_u32).collect(), 1);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&PeriodicCountAir);
+
+    // Invariant: keygen accepts the periodic count, so the prover must evaluate it.
+    let multiplicity = &lookups[0].multiplicities[0];
+    assert!(matches!(
+        multiplicity,
+        SymbolicExpression::Leaf(BaseLeaf::Variable(v)) if v.entry == p3_air::symbolic::BaseEntry::Periodic
+    ));
+
+    let challenges = vec![EF::from_u32(7), EF::from_u32(11)];
+    let periodic = BaseAir::<F>::periodic_columns(&PeriodicCountAir);
+    let (_, terminal) = LogUpGadget::new().generate_permutation::<F, EF>(
+        &main,
+        &None,
+        &periodic,
+        &[],
+        &lookups,
+        &challenges,
+    );
+
+    // Each send cancels its receive, so the terminal is zero.
+    assert_eq!(terminal.expect("one lookup").0, EF::ZERO);
 }

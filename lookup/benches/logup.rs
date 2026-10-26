@@ -180,6 +180,7 @@ fn bench_generate_permutation(c: &mut Criterion) {
                         &main_trace,
                         &None,
                         &[],
+                        &[],
                         &lookups,
                         &challenges,
                     );
@@ -309,6 +310,7 @@ fn bench_exclusive_vs_additive(c: &mut Criterion) {
                         &trace,
                         &None,
                         &[],
+                        &[],
                         &exclusive,
                         &exclusive_challenges,
                     );
@@ -325,6 +327,7 @@ fn bench_exclusive_vs_additive(c: &mut Criterion) {
                     gadget.generate_permutation::<F, EF>(
                         &trace,
                         &None,
+                        &[],
                         &[],
                         &additive,
                         &additive_challenges,

@@ -1177,7 +1177,7 @@ where
         // That is Lemma 5.4's err*(d_{i+1}, rho_{i+1}, delta_{i+1}, t + s) term.
         // It is drawn after round i's query grind, so only round i's query PoW protects it.
         //
-        // The capacity-bound eta floor for stage i+1 prices this term at the PoW-assisted target.
+        // Stage i+1's eta floor prices this term at the PoW-assisted target, in both regimes.
         // That target assumes the whole grinding budget.
         // Round i only grinds what its own terms need, which can be far less.
         // Stage i+1's eta is only fixed once it is derived, so the term is charged from there.
@@ -1187,12 +1187,6 @@ where
                                         log_inv_rate: usize,
                                         eta: f64|
          -> Result<(), StirConfigError> {
-            // Only the capacity bound floors eta for this term.
-            //
-            // Johnson schedules do not price it yet, so charging them here would reject many.
-            if params.soundness_type != SecurityAssumption::CapacityBound {
-                return Ok(());
-            }
             let bits = params.soundness_type.prox_gaps_error_at_log_eta(
                 log_degree,
                 log_inv_rate,
@@ -1485,6 +1479,153 @@ mod tests {
             max_pow_bits: 20,
             mmcs: TestMmcs::new(val_mmcs),
         }
+    }
+
+    /// Bits of Lemma 5.4's degree-correction term for every round, with the target it must meet.
+    ///
+    /// Round i batches its t_i + s answers into the code of the stage it feeds.
+    /// Only round i's query grind protects that combination challenge.
+    fn degree_correction_margins<EF: ExtensionField<TestF>, M: Mmcs<EF>>(
+        config: &StirConfig<TestF, EF, M, TestChallenger>,
+    ) -> Vec<(f64, usize)> {
+        let soundness = config.soundness_type;
+        let field_bits = crate::pcs_budget::field_bits::<EF>(soundness);
+        let rounds = &config.round_configs;
+        let buffered =
+            config.security_level + libm::ceil(libm::log2((6 * rounds.len() + 3) as f64)) as usize;
+        rounds
+            .iter()
+            .enumerate()
+            .map(|(i, rc)| {
+                // The stage this round feeds: the next round, or the final fold.
+                let (log_degree, log_inv_rate, eta) = rounds.get(i + 1).map_or_else(
+                    || {
+                        let log_degree =
+                            config.log_final_degree + config.final_log_folding_factor();
+                        let log_domain = config.log_starting_domain_size() - rounds.len();
+                        (log_degree, log_domain - log_degree, config.final_eta)
+                    },
+                    |next| {
+                        (
+                            next.log_degree,
+                            next.log_domain_size - next.log_degree,
+                            next.eta,
+                        )
+                    },
+                );
+                let bits = soundness.prox_gaps_error_at_log_eta(
+                    log_degree,
+                    log_inv_rate,
+                    field_bits,
+                    rc.num_queries + rc.num_ood_samples,
+                    libm::log2(eta),
+                );
+                (bits, buffered - rc.pow_bits)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn johnson_degree_correction_meets_its_target() {
+        // Fixture state: JohnsonBound, 2^20 coefficients, rate 1/2, k = 4, 80 bits.
+        //
+        //     7 rounds  ->  45 error terms  ->  buffered target 80 + 6 = 86 bits
+        //
+        // Invariant: Lemma 5.4 charges each round's degree correction in the stage it feeds.
+        //
+        //     err*(d_(i+1), rho_(i+1), delta_(i+1), t_i + s) >= 86 - (round i's query grind)
+        let johnson = |max_pow_bits| {
+            let mut params = test_params(1, 2);
+            params.soundness_type = SecurityAssumption::JohnsonBound;
+            params.max_pow_bits = max_pow_bits;
+            StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::try_new(20, params)
+        };
+
+        // Without grinding, no permitted eta reaches 86 bits at stage 1, rate 1/4.
+        //
+        //     largest eta = sqrt(1/4) / 20 = 0.025  ->  80.46 bits < 86
+        //
+        // Mutation: drop the Johnson eta floor and the schedule is accepted at 78.64 bits.
+        match johnson(0) {
+            Err(StirConfigError::EtaInfeasibleForTarget {
+                label: "recursive STIR degree-correction bound",
+                upper_bits,
+                upper_bound,
+                target_bits: 86,
+            }) => {
+                assert_eq!(upper_bound, 0.025);
+                assert!((80.45..80.47).contains(&upper_bits), "{upper_bits}");
+            }
+            other => panic!(
+                "expected the degree-correction bound to be infeasible, got {:?}",
+                other.map(|config| config.num_rounds())
+            ),
+        }
+
+        // With a 10-bit budget, every round grinds 10 bits and keeps at least 76.
+        //
+        //     before the floor:  round 0 kept 68.78 bits against 76
+        let config = johnson(10).unwrap();
+        assert_eq!(config.num_rounds(), 7);
+        assert!(config.round_configs.iter().all(|rc| rc.pow_bits == 10));
+        for (round, (bits, target)) in degree_correction_margins(&config).into_iter().enumerate() {
+            assert_eq!(target, 76, "round {round}");
+            assert!(bits >= 76., "round {round}: {bits:.2} bits, below 76");
+        }
+    }
+
+    #[test]
+    fn every_schedule_meets_its_degree_correction_target() {
+        // Fixture state: a grid over both list-decoding regimes.
+        //
+        //     degree 2^8 .. 2^20,  rate 1/2 .. 1/8,  k in {4, 8, 16},
+        //     80 or 100 bits,  grinding budget 0 or 16 bits
+        //
+        // Invariant: whenever a schedule exists, every round meets its degree-correction target.
+        //
+        // Mutation: drop the Johnson eta floor and Johnson schedules miss by up to 9 bits.
+        let mut schedules = 0;
+        for soundness in [
+            SecurityAssumption::JohnsonBound,
+            SecurityAssumption::CapacityBound,
+        ] {
+            for log_degree in [8, 12, 16, 20] {
+                for log_blowup in 1..=3 {
+                    for log_folding_factor in 2..=4 {
+                        for security_level in [80, 100] {
+                            for max_pow_bits in [0, 16] {
+                                let mut params = test_params(log_blowup, log_folding_factor);
+                                params.soundness_type = soundness;
+                                params.security_level = security_level;
+                                params.max_pow_bits = max_pow_bits;
+                                // An infeasible grid point is a clean error, checked elsewhere.
+                                let Ok(config) =
+                                    StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::try_new(
+                                        log_degree, params,
+                                    )
+                                else {
+                                    continue;
+                                };
+                                schedules += 1;
+                                for (round, (bits, target)) in
+                                    degree_correction_margins(&config).into_iter().enumerate()
+                                {
+                                    assert!(
+                                        bits >= target as f64,
+                                        "{soundness:?}, 2^{log_degree}, blowup 2^{log_blowup}, \
+                                         k = 2^{log_folding_factor}, {security_level} bits, \
+                                         budget {max_pow_bits}, round {round}: \
+                                         {bits:.2} bits, below {target}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // The grid is not vacuous.
+        assert!(schedules > 100, "only {schedules} feasible schedules");
     }
 
     #[test]

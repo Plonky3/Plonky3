@@ -648,10 +648,15 @@ where
             .collect_vec();
 
         // Reject every committed height before absorbing claims or starting a driver.
-        for (matrices, _) in &mats_and_points {
-            for matrix in matrices {
+        for (batch, (matrices, points)) in mats_and_points.iter().enumerate() {
+            for (matrix, (mat, points_for_mat)) in matrices.iter().zip(points.iter()).enumerate() {
                 self.fri
-                    .validate_input_height(log2_strict_usize(matrix.height()))?;
+                    .validate_input_height(log2_strict_usize(mat.height()))?;
+                // Why: the verifier rejects a matrix with no claim, since nothing pins its width.
+                // A proof for it could never verify, so refuse before any transcript work.
+                if points_for_mat.is_empty() {
+                    return Err(FriProverError::MatrixWithoutOpeningPoints { batch, matrix });
+                }
             }
         }
 
@@ -1392,6 +1397,53 @@ mod tests {
         ];
 
         (pcs, claims, proof, v_challenger)
+    }
+
+    #[test]
+    fn open_rejects_a_matrix_without_opening_points() {
+        // Fixture state: one commitment of two 8-row matrices, the second opened at no point.
+        //
+        //     points = [[zeta], []]
+        //
+        // Invariant: the verifier pins each width to a claim, so the prover refuses up front.
+        let mut rng = SmallRng::seed_from_u64(42);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+        let val_mmcs = ValMmcs::new(hash.clone(), compress.clone(), 0);
+        let challenge_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress, 0));
+        let pcs = MyPcs::new(
+            Radix2Dit::default(),
+            val_mmcs,
+            FriParameters::new_testing(challenge_mmcs, 0),
+        );
+        let domain = <MyPcs as Pcs<EF, Challenger>>::natural_domain_for_degree(&pcs, 8);
+        let traces = [2, 3].map(|width| {
+            (
+                domain,
+                RowMajorMatrix::<F>::rand_nonzero(&mut rng, 8, width),
+            )
+        });
+        let (commitment, prover_data) =
+            <MyPcs as Pcs<EF, Challenger>>::commit(&pcs, traces).unwrap();
+
+        let mut challenger = Challenger::new(perm);
+        challenger.observe(&commitment);
+        let zeta: EF = challenger.sample_algebra_element();
+
+        // Mutation: dropping the guard lets the prover emit a proof the verifier rejects
+        // with `FriError::MatrixWithoutOpeningPoints { batch: 0, matrix: 1 }`.
+        let result = pcs.open(
+            vec![(&prover_data, vec![vec![zeta], vec![]]).into()],
+            &mut challenger,
+        );
+        assert_eq!(
+            result.err(),
+            Some(FriProverError::MatrixWithoutOpeningPoints {
+                batch: 0,
+                matrix: 1
+            })
+        );
     }
 
     /// Verify with fully qualified syntax so the type parameters are unambiguous.
