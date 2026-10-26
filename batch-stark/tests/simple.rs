@@ -15,8 +15,8 @@ use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, SymbolicExpression
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::verifier::commitments_with_opening_points;
 use p3_batch_stark::{
-    BatchShape, BatchTranscriptFailure, BatchVerificationError, ProverData, StarkGenericConfig,
-    StarkInstance, VerificationError, prove_batch, verify_batch,
+    BatchShape, BatchTranscriptFailure, BatchVerificationError, ProverData, ProvingError,
+    StarkGenericConfig, StarkInstance, VerificationError, prove_batch, verify_batch,
 };
 use p3_challenger::testing::pow_difficulties;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
@@ -4628,4 +4628,18 @@ fn a_lookup_may_read_periodic_columns() {
     let common = &prover_data.common;
     let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     verify_batch(&config, &[air], &proof, &[vec![]], common).expect("the proof verifies");
+}
+
+#[test]
+fn empty_batch_is_rejected_by_prover() {
+    // Fixture state: zero instances, and common data sized for zero instances.
+    let config = make_config(0);
+    let instances: [StarkInstance<'_, MyConfig, DemoAir>; 0] = [];
+    let prover_data = ProverData::empty(0);
+
+    // Invariant: an empty batch is a typed error, not a panic inside the commitment scheme.
+    //
+    //     instances = []  ->  Err(EmptyBatch), before any commitment
+    let result = prove_batch(&config, &instances, &prover_data);
+    assert!(matches!(result, Err(ProvingError::EmptyBatch)));
 }

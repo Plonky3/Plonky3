@@ -84,6 +84,15 @@ pub enum MerkleTreeError {
     #[error("empty batch: attempted to open an empty batch with no committed matrices")]
     EmptyBatch,
 
+    /// The tallest height rounds up past the largest power of two in `usize`.
+    ///
+    /// No tree has that leaf layer.
+    #[error("tallest height {max_height} exceeds the largest power of two in usize")]
+    HeightOverflow {
+        /// Height of the tallest matrix in the batch.
+        max_height: usize,
+    },
+
     /// The computed Merkle digest does not match any entry in the cap.
     #[error("cap mismatch: computed digest does not match any entry in the Merkle cap")]
     CapMismatch,

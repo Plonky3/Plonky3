@@ -8,13 +8,20 @@ use thiserror::Error;
 
 use crate::StarkTranscriptFailure;
 
-/// A recoverable PCS configuration or budget failure during proof generation.
+/// A recoverable failure during proof generation.
+///
+/// The prover returns it instead of emitting a partial proof.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ProvingError<E> {
     /// The backend error, annotated with the failing proving phase.
     #[error("PCS {phase} failed: {source:?}")]
     Pcs { phase: &'static str, source: E },
+    /// A batch prover was given no instances.
+    ///
+    /// A batch commitment needs at least one matrix, so there is nothing to prove.
+    #[error("cannot prove an empty batch: no instances were given")]
+    EmptyBatch,
 }
 
 /// Specific reasons why a proof's shape is invalid.

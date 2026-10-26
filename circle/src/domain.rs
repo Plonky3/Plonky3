@@ -402,6 +402,13 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             "periodic column length must be a power of 2"
         );
 
+        // A column of period 1 is the constant polynomial.
+        //
+        // Its periodic domain would have a single point, and a twin coset has at least two.
+        if let [value] = col {
+            return Ext::from(*value);
+        }
+
         let (log_period, log_repetitions) = self.periodic_column_fold_params(col.len());
         let periodic_domain = Self::standard(log_period);
 

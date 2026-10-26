@@ -105,12 +105,13 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
 /// # Returns
 ///
 /// A self-contained batch proof that can be verified with `verify_batch`.
-/// Configuration or disclosure-budget failures return the PCS error with its proving phase,
-/// without emitting a partial proof.
 ///
-/// # Panics
+/// # Errors
 ///
-/// When the batch has no instance.
+/// No partial proof is ever emitted.
+///
+/// - An empty list of instances is rejected up front as an empty batch.
+/// - Configuration or disclosure-budget failures return the PCS error with its proving phase.
 #[instrument(skip_all)]
 pub fn prove_batch<
     SC,
@@ -137,11 +138,11 @@ where
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::ProverData: Sync,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Commitment: Sync,
 {
-    // An empty batch commits no matrix, which the commitment scheme cannot do.
-    assert!(
-        !instances.is_empty(),
-        "prove_batch needs at least one instance"
-    );
+    // A batch commitment needs at least one matrix.
+    // Reject an empty batch here, before the commitment scheme fails on it.
+    if instances.is_empty() {
+        return Err(ProvingError::EmptyBatch);
+    }
 
     // Public inputs reach this proof only through AIR constraints.
     // A cell listed for backend binding would go completely unbound.
@@ -887,6 +888,11 @@ where
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
 
+    // The verifier folds zeros for a next row the AIR does not declare.
+    // The prover folds the same values, so both sides evaluate one constraint polynomial.
+    let main_next = !air.main_next_row_columns().is_empty();
+    let preprocessed_next = !air.preprocessed_next_row_columns().is_empty();
+
     // Pad selectors so every packed chunk can load `pack_width` scalars. When
     // `quotient_size` is not a multiple of `pack_width`, extend by repeating
     // coset values modulo `quotient_size` (matching wrapped trace indexing).
@@ -987,14 +993,20 @@ where
                 let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
 
                 // Pack the main trace rows (current + next) for this chunk.
+                //
+                // An undeclared next row holds zeros, the values the verifier folds for it.
                 main_buf.clear();
                 main_buf.extend(
                     trace_on_quotient_domain.vertically_packed_row::<PackedVal<SC>>(i_start),
                 );
-                main_buf.extend(
-                    trace_on_quotient_domain
-                        .vertically_packed_row::<PackedVal<SC>>(i_start + next_step),
-                );
+                if main_next {
+                    main_buf.extend(
+                        trace_on_quotient_domain
+                            .vertically_packed_row::<PackedVal<SC>>(i_start + next_step),
+                    );
+                } else {
+                    main_buf.resize(2 * main_width, PackedVal::<SC>::ZERO);
+                }
                 let main = RowMajorMatrixView::new(main_buf.as_slice(), main_width);
 
                 // Pack preprocessed rows if the AIR has preprocessed columns.
@@ -1004,10 +1016,14 @@ where
                         prep_buf.clear();
                         prep_buf
                             .extend(preprocessed.vertically_packed_row::<PackedVal<SC>>(i_start));
-                        prep_buf.extend(
-                            preprocessed
-                                .vertically_packed_row::<PackedVal<SC>>(i_start + next_step),
-                        );
+                        if preprocessed_next {
+                            prep_buf.extend(
+                                preprocessed
+                                    .vertically_packed_row::<PackedVal<SC>>(i_start + next_step),
+                            );
+                        } else {
+                            prep_buf.resize(2 * preprocessed.width(), PackedVal::<SC>::ZERO);
+                        }
                         RowMajorMatrixView::new(prep_buf.as_slice(), preprocessed.width())
                     },
                 );
