@@ -1691,7 +1691,7 @@ where
 fn a_periodic_count_reaches_the_permutation_trace() {
     // Fixture state: 4 rows, periodic selector [1, 0], so rows 0 and 2 send and receive.
     let main = RowMajorMatrix::new((0..4).map(F::from_u32).collect(), 1);
-    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&PeriodicCountAir);
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&PeriodicCountAir).unwrap();
 
     // Invariant: keygen accepts the periodic count, so the prover must evaluate it.
     let multiplicity = &lookups[0].multiplicities[0];
