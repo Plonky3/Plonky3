@@ -1,7 +1,8 @@
 //! AIRs for the Keccak-f permutation.
 //!
-//! [`KeccakAir`] assumes the field size is between 2^16 and 2^32.
-//! [`KeccakBinaryAir`] assumes the field has characteristic 2.
+//! The limb-based AIR needs a field of characteristic at least 2^16.
+//!
+//! The bit-based AIR needs a field of characteristic 2.
 
 #![no_std]
 

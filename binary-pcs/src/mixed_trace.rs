@@ -98,11 +98,32 @@ pub fn coordinate_basis<EF: Coordinates>() -> Vec<EF> {
         .collect()
 }
 
+/// Committed columns of a table with `bits` bit columns out of `width`.
+///
+/// Each dense column becomes one committed column per coordinate.
+///
+/// # Returns
+///
+/// Nothing when the bit region is wider than the table, or the count overflows a word.
+const fn committed_width<EF: Coordinates>(bits: usize, width: usize) -> Option<usize> {
+    // A bit region wider than its table names columns that do not exist.
+    let Some(dense) = width.checked_sub(bits) else {
+        return None;
+    };
+    // Why: a wrapped count would alias a huge table onto a small committed one.
+    match dense.checked_mul(EF::COORDINATES) {
+        Some(coordinates) => coordinates.checked_add(bits),
+        None => None,
+    }
+}
+
 /// The shapes a batch commits once every dense column is split into its coordinates.
 ///
 /// # Panics
 ///
-/// Panics if the two slices differ in length, or a bit region is wider than its table.
+/// - The two slices differ in length.
+/// - A bit region is wider than its table.
+/// - A committed width overflows a word.
 #[must_use]
 pub fn committed_shapes<EF: Coordinates>(
     shapes: &[TableShape],
@@ -118,7 +139,9 @@ pub fn committed_shapes<EF: Coordinates>(
         .zip(boolean_columns)
         .map(|(shape, &bits)| {
             assert!(bits <= shape.width(), "a bit region fits inside its table");
-            let width = bits + (shape.width() - bits) * EF::COORDINATES;
+            // The bit region fits, so only the coordinate count can fail.
+            let width = committed_width::<EF>(bits, shape.width())
+                .expect("the committed width fits in a word");
             TableShape::new(shape.num_variables(), width)
         })
         .collect()
@@ -195,6 +218,8 @@ impl<EF, B, F: Coordinates> MixedTraceCommitment<EF, B, F> {
 
 impl<EF: ExtensionField<F>, B, F: Field + Coordinates> MixedTraceCommitment<EF, B, F> {
     /// Refuse a protocol whose table count or widths disagree with the bit regions.
+    ///
+    /// A table whose committed width overflows a word is refused too.
     fn check_regions<E>(
         &self,
         shapes: &[TableShape],
@@ -212,6 +237,10 @@ impl<EF: ExtensionField<F>, B, F: Field + Coordinates> MixedTraceCommitment<EF, 
                     bits,
                     width: shape.width(),
                 });
+            }
+            // Every later width and column offset is bounded by this count.
+            if committed_width::<F>(bits, shape.width()).is_none() {
+                return Err(BooleanTraceCommitmentError::InvalidOpeningProtocol);
             }
         }
         Ok(())

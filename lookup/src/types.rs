@@ -21,7 +21,7 @@ use crate::symbolic::InteractionSymbolicBuilder;
 pub enum Kind {
     /// Intra-AIR lookup.
     ///
-    /// - Draws a fresh challenge pair, shared with no other lookup.
+    /// - Gets a fresh bus offset under the batch's one challenge pair, shared with no other lookup.
     /// - So its terminal contribution cannot cancel against another lookup.
     /// - The cross-AIR terminal sum forces it to balance on its own.
     /// - Its query-side count still carries a per-row weight bound, folded into
@@ -29,7 +29,7 @@ pub enum Kind {
     Local,
     /// Cross-AIR lookup on a named bus.
     ///
-    /// - Lookups sharing a bus name share one challenge pair.
+    /// - Lookups sharing a bus name share one bus offset.
     /// - Senders and receivers cancel only in the cross-AIR terminal sum.
     Global(String),
 }

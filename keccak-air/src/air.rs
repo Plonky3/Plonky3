@@ -12,7 +12,13 @@ use crate::constants::RC_BITS;
 use crate::round_flags::eval_round_flags;
 use crate::{BITS_PER_LIMB, NUM_ROUNDS_MIN_1, U64_LIMBS, generate_trace_rows};
 
-/// Assumes the field size is at least 16 bits.
+/// Needs a field of characteristic at least 2^16.
+///
+/// The AIR compares 16-bit limbs as field elements.
+/// Below that characteristic, two different limbs can be equal as field elements.
+/// The constraints then no longer pin the state from one round to the next.
+///
+/// A large field of small characteristic, such as an extension of a 16-bit prime field, is not enough.
 #[derive(Debug)]
 pub struct KeccakAir {}
 
