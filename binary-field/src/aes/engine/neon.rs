@@ -148,3 +148,118 @@ mod tests {
         }
     }
 }
+
+/// Sixteen bytes swept with NEON, for the `F_2`-linear map and the field product.
+///
+/// AArch64 has no byte-wise affine instruction, so the map is driven by two
+/// register-resident nibble tables instead. A map is linear, so a byte's image
+/// is the image of its low nibble added to the image of its high nibble, and
+/// `vqtbl1q_u8` reads sixteen of each per instruction. That is the same device
+/// `reduce` above already uses for the modulus fold.
+pub(super) mod lanes {
+    use core::arch::aarch64::*;
+
+    use super::reduce;
+    use crate::aes::engine::{ByteLanes, ByteMatrix};
+
+    /// The two nibble tables a byte matrix becomes: images of the low and high nibbles.
+    #[derive(Clone, Copy)]
+    pub(crate) struct NibbleTables {
+        low: uint8x16_t,
+        high: uint8x16_t,
+    }
+
+    /// Sixteen bytes in one NEON register.
+    pub(crate) type Wide = uint8x16_t;
+
+    /// The same register, since AArch64 has one width here.
+    pub(crate) type Narrow = uint8x16_t;
+
+    // SAFETY: `load` and `store` touch exactly sixteen contiguous bytes, the register width.
+    unsafe impl ByteLanes for uint8x16_t {
+        const WIDTH: usize = 16;
+
+        type Matrix = NibbleTables;
+
+        #[inline(always)]
+        fn matrix(quadword: u64) -> Self::Matrix {
+            let images = ByteMatrix::from_quadword(quadword).images();
+
+            // A nibble's image is the sum of the images of its set bits.
+            let mut low = [0u8; 16];
+            let mut high = [0u8; 16];
+            for n in 0..16usize {
+                let mut lo = 0u8;
+                let mut hi = 0u8;
+                for b in 0..4usize {
+                    if (n >> b) & 1 == 1 {
+                        lo ^= images[b];
+                        hi ^= images[b + 4];
+                    }
+                }
+                low[n] = lo;
+                high[n] = hi;
+            }
+
+            // SAFETY: both arrays are exactly one register of bytes.
+            unsafe {
+                NibbleTables {
+                    low: vld1q_u8(low.as_ptr()),
+                    high: vld1q_u8(high.as_ptr()),
+                }
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn load(from: *const u8) -> Self {
+            // SAFETY: the readability of the address is the caller's obligation.
+            unsafe { vld1q_u8(from) }
+        }
+
+        #[inline(always)]
+        unsafe fn store(to: *mut u8, value: Self) {
+            // SAFETY: the writability of the address is the caller's obligation.
+            unsafe { vst1q_u8(to, value) }
+        }
+
+        #[inline(always)]
+        fn mul(self, other: Self) -> Self {
+            // SAFETY: NEON is an AArch64 baseline feature; `vmull_p8` needs no extension.
+            unsafe {
+                let low = vmull_p8(
+                    vreinterpret_p8_u8(vget_low_u8(self)),
+                    vreinterpret_p8_u8(vget_low_u8(other)),
+                );
+                let high = vmull_high_p8(vreinterpretq_p8_u8(self), vreinterpretq_p8_u8(other));
+                reduce(vreinterpretq_u16_p16(low), vreinterpretq_u16_p16(high))
+            }
+        }
+
+        #[inline(always)]
+        fn affine(self, matrix: Self::Matrix) -> Self {
+            // SAFETY: NEON is an AArch64 baseline feature.
+            unsafe {
+                // Table reads are by index, so only the nibble may reach the lookup.
+                let low = vqtbl1q_u8(matrix.low, vandq_u8(self, vdupq_n_u8(0x0f)));
+                let high = vqtbl1q_u8(matrix.high, vshrq_n_u8::<4>(self));
+                veorq_u8(low, high)
+            }
+        }
+
+        #[inline(always)]
+        fn inverse_then_affine(self, matrix: Self::Matrix) -> Self {
+            // `x^254` is the inverse in this field, and it sends zero to zero,
+            // which is the behaviour this method owes its caller.
+            //
+            // `254 = 2 + 4 + ... + 128`, so the product of the seven repeated
+            // squarings of `x` is `x^254`, with no branch and no table.
+            let mut square = self.mul(self);
+            let mut inverse = square;
+            for _ in 0..6 {
+                square = square.mul(square);
+                inverse = inverse.mul(square);
+            }
+            inverse.affine(matrix)
+        }
+    }
+}
