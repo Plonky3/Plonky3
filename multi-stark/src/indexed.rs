@@ -262,6 +262,16 @@ impl IndexedPlan {
         &self.tables
     }
 
+    /// Every AIR the plan reads, as a reader or as a table, possibly more than once.
+    pub fn airs(&self) -> impl Iterator<Item = usize> + '_ {
+        self.tables.iter().flat_map(|plan| {
+            plan.readers
+                .iter()
+                .map(|reader| reader.air)
+                .chain(core::iter::once(plan.table.air))
+        })
+    }
+
     /// Number of readers across every table.
     pub fn num_readers(&self) -> usize {
         self.tables.iter().map(|table| table.readers.len()).sum()

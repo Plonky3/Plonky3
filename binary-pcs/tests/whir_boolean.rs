@@ -13,11 +13,11 @@ use p3_binary_field::{BinaryChallenger, BinaryField128, Gf2, Ghash128, PackedGf2
 use p3_binary_pcs::testing::assert_boolean_multilinear_commit_contract;
 use p3_binary_pcs::whir::{
     BinaryWhirBudget, BinaryWhirProfile, BooleanWhirDeferredProof, BooleanWhirDomain,
-    BooleanWhirError, BooleanWhirPcs, BooleanWhirProof, BooleanWhirProver, BooleanWhirTracePcs,
-    BudgetError, WeightedClaim, WeightedOpening, recommended_cap_height,
+    BooleanWhirError, BooleanWhirOpening, BooleanWhirPcs, BooleanWhirProof, BooleanWhirProver,
+    BooleanWhirTracePcs, BudgetError, WeightedClaim, WeightedOpening, recommended_cap_height,
 };
 use p3_binary_pcs::{
-    BinaryPcsConfig, BinaryPcsParams, BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs,
+    BinaryPcsConfig, BinaryPcsParams, BooleanMultilinearPcs, BooleanPcs,
     BooleanTraceCommitmentError, GroupedCodewordMmcs, PackError, PackedWords,
 };
 use p3_challenger::HashChallenger;
@@ -171,19 +171,6 @@ fn protocol(num_claims: usize) -> OpeningProtocol {
             .map(|_| OpeningBatch::new(vec![0], Vec::new()))
             .collect(),
     )])
-}
-
-/// Each point as an opening asking for the current reading alone.
-fn current_openings(points: &[Point<EF>]) -> Vec<BitOpening<EF>> {
-    points
-        .iter()
-        .map(|point| BitOpening {
-            point: point.clone(),
-            row_variables: point.num_variables(),
-            current: true,
-            next: false,
-        })
-        .collect()
 }
 
 /// The folding-only Boolean commitment, graded at the same target and the same rate.
@@ -618,7 +605,11 @@ fn a_batch_over_another_witness_leaves_a_claim_the_commitment_does_not_open() {
     let inner = whir_prover(profile);
 
     let points = points_at(0x5720, 3);
-    let openings = current_openings(&points);
+    // Weighted claims go through the batched route, the one whose closing comparison this pins.
+    let openings = points
+        .iter()
+        .map(|point| WeightedOpening::at_point(point, ABSORBED))
+        .collect::<Vec<_>>();
 
     // Witness A supplies the packing the batch runs over, B the root and the opening.
     let (_, data_a) = pcs
@@ -630,21 +621,23 @@ fn a_batch_over_another_witness_leaves_a_claim_the_commitment_does_not_open() {
 
     // The batch is a true proof about A, played on B's sponge.
     let claims = BitRingSwitchClaims::new(
-        points
+        openings
             .iter()
-            .map(|point| BitRingSwitch::new(point).unwrap())
+            .map(|opening| {
+                BitRingSwitch::with_low_weights(&opening.high, &opening.low_weights).unwrap()
+            })
             .collect(),
     )
     .unwrap();
     let (reduction, surviving_point, surviving_value) =
         claims.prove::<Ghash128, _, _>(&packing_a, &mut chal);
-    let readings = claims
-        .reductions()
+    let weighted = openings
         .iter()
+        .zip(claims.reductions())
         .zip(&reduction.claims)
-        .map(|(switch, elements)| BitReadings {
-            current: Some(switch.incoming_claim(&elements.tensor)),
-            next: None,
+        .map(|((opening, switch), elements)| WeightedClaim {
+            opening: opening.clone(),
+            value: switch.incoming_claim(&elements.tensor),
         })
         .collect::<Vec<_>>();
 
@@ -663,7 +656,7 @@ fn a_batch_over_another_witness_leaves_a_claim_the_commitment_does_not_open() {
     let mut verifier_chal = challenger();
     pcs.observe_commitment(&root_b, &mut verifier_chal);
     let refused = pcs
-        .verify_readings(&root_b, &openings, &readings, &proof, &mut verifier_chal)
+        .verify_weighted(&root_b, &weighted, &proof, &mut verifier_chal)
         .unwrap_err();
     assert!(
         matches!(refused, BooleanWhirError::SurvivingClaim),
@@ -695,8 +688,12 @@ fn a_tampered_proximity_transcript_is_refused_by_the_opening() {
     let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
     let (values, proof) = pcs.open_at_points(data, &points, &mut prover_chal).unwrap();
 
+    // Points read at the current row alone defer their ring switch to the first fold.
     let mut tampered = proof.clone();
-    tampered.opening.whir.initial_ood_answers[0] += EF::ONE;
+    let BooleanWhirOpening::Deferred(deferred) = &mut tampered else {
+        panic!("current readings defer their ring switch");
+    };
+    deferred.opening.initial_ood_answers[0] += EF::ONE;
     let mut verifier_chal = challenger();
     pcs.observe_commitment(&commitment, &mut verifier_chal);
     let refused = pcs
@@ -730,7 +727,10 @@ fn unread_final_sumcheck_data_is_refused_by_the_opening() {
     let mut prover_chal = challenger();
     let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
     let (values, proof) = pcs.open_at_points(data, &points, &mut prover_chal).unwrap();
-    assert!(proof.opening.whir.final_sumcheck.is_none());
+    let BooleanWhirOpening::Deferred(deferred) = &proof else {
+        panic!("current readings defer their ring switch");
+    };
+    assert!(deferred.opening.final_sumcheck.is_none());
 
     // The untouched proof is accepted, so the rejection below is the attached data alone.
     let mut verifier_chal = challenger();
@@ -739,7 +739,10 @@ fn unread_final_sumcheck_data_is_refused_by_the_opening() {
         .unwrap();
 
     let mut tampered = proof;
-    tampered.opening.whir.final_sumcheck = Some(SumcheckData {
+    let BooleanWhirOpening::Deferred(deferred) = &mut tampered else {
+        panic!("current readings defer their ring switch");
+    };
+    deferred.opening.final_sumcheck = Some(SumcheckData {
         polynomial_evaluations: vec![[EF::ONE, EF::TWO]],
         pow_witnesses: vec![],
     });
@@ -1256,7 +1259,7 @@ fn sparse_successors_and_indexed_extras_use_hybrid_claims_through_whir() {
     let (root, data) = pcs.commit(vec![source.clone()], &mut prover).unwrap();
     let proof = pcs.open_at(data, &protocol, &points, &mut prover).unwrap();
     // One current block, one sparse successor, two shared indexed claims.
-    assert_eq!(proof.opening.reduction.claims.len(), 4);
+    assert_eq!(proof.opening.elements().len(), 4);
     let mut verifier = challenger();
     pcs.observe_commitment(&root, &mut verifier);
     let evals = pcs

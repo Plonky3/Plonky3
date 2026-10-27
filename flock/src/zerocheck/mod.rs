@@ -49,6 +49,8 @@ use crate::{Challenge, Val};
 /// The fewest witness variables a zerocheck takes: the skip, then the fixed coordinates.
 pub const MIN_LOG_N: usize = K_SKIP + fixed::N_FIXED;
 
+pub(crate) use self::fixed::N_FIXED;
+
 /// Claims on the quirky extensions of `a = A z`, `b = B z` and `c = z`, all at one point.
 #[must_use = "the claims prove nothing until the lincheck pins them to the witness"]
 #[derive(Clone, Debug, PartialEq, Eq)]

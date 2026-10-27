@@ -98,7 +98,8 @@ use p3_multilinear_util::split_eq::SplitEq;
 use p3_sumcheck::layout::Table;
 use p3_sumcheck::ring_switch::bits::BitRingSwitch;
 use p3_sumcheck::{
-    OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
+    FoldedColumn, OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs,
+    TableShape, WeightedColumnClaim,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -108,7 +109,7 @@ use self::plan::{
 };
 use crate::boolean::{
     BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError,
-    BooleanProof,
+    BooleanProof, WeightedClaim,
 };
 #[cfg(test)]
 use crate::boolean_trace_transcript::ColumnBatchShape;
@@ -396,6 +397,20 @@ pub enum BooleanTraceCommitmentError<E> {
         batch: usize,
     },
 
+    /// A weighted claim names no committed column, or weighs it at the wrong number of rows.
+    #[error("weighted claim {claim} does not fit the column it names")]
+    WeightedClaimShape {
+        /// Position of the claim in the order supplied.
+        claim: usize,
+    },
+
+    /// The committed column disagrees with the value a weighted claim states.
+    #[error("weighted claim {claim} states a value the committed column does not take")]
+    WeightedValueMismatch {
+        /// Position of the claim in the order supplied.
+        claim: usize,
+    },
+
     /// The inner opening disagreed with the value combined from the claimed column values.
     ///
     /// This is the only check a supplied value run meets on the prover's side.
@@ -528,14 +543,102 @@ where
     }
 
     fn prescribed_security(&self, protocol: &OpeningProtocol) -> Option<PrescribedOpeningSecurity> {
+        self.security::<Challenger>(protocol, 0)
+    }
+
+    fn open_at(
+        &self,
+        prover_data: Self::ProverData,
+        protocol: &OpeningProtocol,
+        points: &[Point<EF>],
+        challenger: &mut Challenger,
+    ) -> Result<Self::Proof, Self::ProverError> {
+        Self::validate_source_shapes(&prover_data.tables, protocol)?;
+        self.validate_protocol(protocol)?;
+        let known = alloc::vec![None; opening_count(protocol)
+            .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?];
+        self.open_at_known(prover_data, protocol, points, &known, challenger)
+    }
+
+    fn open_at_known(
+        &self,
+        prover_data: Self::ProverData,
+        protocol: &OpeningProtocol,
+        points: &[Point<EF>],
+        known: &[Option<OpeningEvals<EF>>],
+        challenger: &mut Challenger,
+    ) -> Result<Self::Proof, Self::ProverError> {
+        self.open_weighted(prover_data, protocol, points, known, &[], challenger)
+    }
+
+    fn verify_at(
+        &self,
+        commitment: &Self::Commitment,
+        proof: &Self::Proof,
+        protocol: &OpeningProtocol,
+        points: &[Point<EF>],
+        challenger: &mut Challenger,
+    ) -> Result<Vec<OpeningEvals<EF>>, Self::Error> {
+        self.verify_weighted(commitment, proof, protocol, points, &[], challenger)
+    }
+
+    fn weighted_security(
+        &self,
+        protocol: &OpeningProtocol,
+        weighted: usize,
+    ) -> Option<PrescribedOpeningSecurity> {
+        self.security::<Challenger>(protocol, weighted)
+    }
+
+    fn open_at_known_weighted(
+        &self,
+        prover_data: Self::ProverData,
+        protocol: &OpeningProtocol,
+        points: &[Point<EF>],
+        known: &[Option<OpeningEvals<EF>>],
+        weighted: &[WeightedColumnClaim<EF>],
+        challenger: &mut Challenger,
+    ) -> Option<Result<Self::Proof, Self::ProverError>> {
+        Some(self.open_weighted(prover_data, protocol, points, known, weighted, challenger))
+    }
+
+    fn verify_at_weighted(
+        &self,
+        commitment: &Self::Commitment,
+        proof: &Self::Proof,
+        protocol: &OpeningProtocol,
+        points: &[Point<EF>],
+        weighted: &[WeightedColumnClaim<EF>],
+        challenger: &mut Challenger,
+    ) -> Option<Result<Vec<OpeningEvals<EF>>, Self::Error>> {
+        Some(self.verify_weighted(commitment, proof, protocol, points, weighted, challenger))
+    }
+}
+
+impl<EF, B> BooleanTraceCommitment<EF, B>
+where
+    EF: BitCoordinates + ExtensionField<B::Val>,
+    B: BooleanBackend<EF>,
+    B::Val: TranscriptField + TowerLevel,
+{
+    /// Soundness evidence for this protocol opened beside this many weighted column claims.
+    fn security<Challenger>(
+        &self,
+        protocol: &OpeningProtocol,
+        weighted: usize,
+    ) -> Option<PrescribedOpeningSecurity>
+    where
+        B: BooleanMultilinearPcs<EF, Challenger>,
+    {
         // A protocol this scheme would refuse gets no assessment, so a caller fails closed.
         self.validate_protocol(protocol).ok()?;
         let shapes = protocol.table_shapes();
         // A reduction sends carry and last once its successor view outruns one element.
         let absorbed = BitRingSwitch::<B::Val, EF>::ABSORBED;
         let route = OpeningRoute::new(protocol)?;
+        // A weighted claim is one more reduction in the same batch.
         let mut security = self.inner.readings_security(
-            route.num_reductions()?,
+            route.num_reductions()?.checked_add(weighted)?,
             route.successor_tensors(&shapes, absorbed),
         )?;
         let runs = route.runs();
@@ -565,41 +668,58 @@ where
         Some(security)
     }
 
-    fn open_at(
+    /// Open every batch at its point and every weighted column claim, in one proof.
+    #[allow(clippy::type_complexity)]
+    fn open_weighted<Challenger>(
         &self,
-        prover_data: Self::ProverData,
-        protocol: &OpeningProtocol,
-        points: &[Point<EF>],
-        challenger: &mut Challenger,
-    ) -> Result<Self::Proof, Self::ProverError> {
-        Self::validate_source_shapes(&prover_data.tables, protocol)?;
-        self.validate_protocol(protocol)?;
-        let known = alloc::vec![None; opening_count(protocol)
-            .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?];
-        self.open_at_known(prover_data, protocol, points, &known, challenger)
-    }
-
-    fn open_at_known(
-        &self,
-        prover_data: Self::ProverData,
+        prover_data: BooleanTraceCommitmentData<B::Val, B::ProverData>,
         protocol: &OpeningProtocol,
         points: &[Point<EF>],
         known: &[Option<OpeningEvals<EF>>],
+        weighted: &[WeightedColumnClaim<EF>],
         challenger: &mut Challenger,
-    ) -> Result<Self::Proof, Self::ProverError> {
+    ) -> Result<BooleanTraceCommitmentProof<EF, B::Proof>, BooleanTraceCommitmentError<B::Error>>
+    where
+        B: BooleanMultilinearPcs<EF, Challenger>,
+        Challenger: FieldChallenger<B::Val>
+            + GrindingChallenger<Witness = B::Val>
+            + CanSampleUniformBits<B::Val>
+            + CanObserve<B::Commitment>,
+    {
         // Every shape, point and supplied value run is checked before the transcript moves.
         Self::validate_source_shapes(&prover_data.tables, protocol)?;
         let placements = self.validate_opening(protocol, points)?;
         Self::validate_known(protocol, known)?;
+        let weighted_bits = Self::weighted_openings(protocol, weighted, &placements)?;
+        // A folded column keeps its values; its outer coordinates now lead with the slot address.
+        let folded = weighted
+            .iter()
+            .zip(&weighted_bits)
+            .map(|(claim, lifted)| {
+                claim.folded.as_ref().map(|folded| FoldedColumn {
+                    log_outer: folded.log_outer + lifted.high.num_variables()
+                        - claim.high.num_variables(),
+                    values: folded.values.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let folded = folded.iter().map(Option::as_ref).collect::<Vec<_>>();
         let (runs, residual) = match OpeningRoute::new(protocol)
             .ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?
         {
             OpeningRoute::PerColumn(plan) => {
                 let openings = Self::bit_openings(protocol, plan.claims(), points, &placements);
-                let (readings, opening) = self
+                let (readings, weighted_values, opening) = self
                     .inner
-                    .open_readings(prover_data.inner, &openings, challenger)
+                    .open_weighted_readings(
+                        prover_data.inner,
+                        &openings,
+                        &weighted_bits,
+                        &folded,
+                        challenger,
+                    )
                     .map_err(BooleanTraceCommitmentError::Boolean)?;
+                Self::check_weighted(weighted, &weighted_values)?;
                 let values = plan.values(&readings);
                 return Ok(BooleanTraceCommitmentProof { values, opening });
             }
@@ -684,10 +804,11 @@ where
             transcript.finish();
         }
         openings.extend(Self::bit_openings(protocol, &residual, points, &placements));
-        let (readings, opening) = self
+        let (readings, weighted_values, opening) = self
             .inner
-            .open_readings(inner, &openings, challenger)
+            .open_weighted_readings(inner, &openings, &weighted_bits, &folded, challenger)
             .map_err(BooleanTraceCommitmentError::Boolean)?;
+        Self::check_weighted(weighted, &weighted_values)?;
         if readings.len() != expected.len() + residual.len() {
             return Err(BooleanTraceCommitmentError::ColumnBatchValueMismatch {
                 batch: expected.len() + residual.len(),
@@ -718,16 +839,33 @@ where
         Ok(BooleanTraceCommitmentProof { values, opening })
     }
 
-    fn verify_at(
+    /// Verify every batch at its point and every weighted column claim, against one proof.
+    fn verify_weighted<Challenger>(
         &self,
-        commitment: &Self::Commitment,
-        proof: &Self::Proof,
+        commitment: &B::Commitment,
+        proof: &BooleanTraceCommitmentProof<EF, B::Proof>,
         protocol: &OpeningProtocol,
         points: &[Point<EF>],
+        weighted: &[WeightedColumnClaim<EF>],
         challenger: &mut Challenger,
-    ) -> Result<Vec<OpeningEvals<EF>>, Self::Error> {
+    ) -> Result<Vec<OpeningEvals<EF>>, BooleanTraceCommitmentError<B::Error>>
+    where
+        B: BooleanMultilinearPcs<EF, Challenger>,
+        Challenger: FieldChallenger<B::Val>
+            + GrindingChallenger<Witness = B::Val>
+            + CanSampleUniformBits<B::Val>
+            + CanObserve<B::Commitment>,
+    {
         // Every shape, point and value count is checked before the transcript moves.
         let placements = self.validate_opening(protocol, points)?;
+        let weighted_bits = Self::weighted_openings(protocol, weighted, &placements)?
+            .into_iter()
+            .zip(weighted)
+            .map(|(opening, claim)| WeightedClaim {
+                opening,
+                value: claim.value,
+            })
+            .collect::<Vec<_>>();
         let expected_values =
             value_count(protocol).ok_or(BooleanTraceCommitmentError::InvalidOpeningProtocol)?;
         if proof.values.len() != expected_values {
@@ -745,10 +883,11 @@ where
 
                 // One bit proof answers for every column of every batch at once.
                 self.inner
-                    .verify_readings(
+                    .verify_weighted_readings(
                         commitment,
                         &openings,
                         &plan.readings(&proof.values),
+                        &weighted_bits,
                         &proof.opening,
                         challenger,
                     )
@@ -803,10 +942,31 @@ where
 
         // One bit proof answers for every batched claim at once.
         self.inner
-            .verify_readings(commitment, &openings, &readings, &proof.opening, challenger)
+            .verify_weighted_readings(
+                commitment,
+                &openings,
+                &readings,
+                &weighted_bits,
+                &proof.opening,
+                challenger,
+            )
             .map_err(BooleanTraceCommitmentError::Boolean)?;
 
         Ok(opening_evals(protocol, &proof.values))
+    }
+
+    /// Refuse an opening whose committed columns disagree with a value a weighted claim states.
+    fn check_weighted(
+        weighted: &[WeightedColumnClaim<EF>],
+        values: &[EF],
+    ) -> Result<(), BooleanTraceCommitmentError<B::Error>> {
+        weighted
+            .iter()
+            .zip(values)
+            .position(|(claim, &value)| claim.value != value)
+            .map_or(Ok(()), |claim| {
+                Err(BooleanTraceCommitmentError::WeightedValueMismatch { claim })
+            })
     }
 }
 

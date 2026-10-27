@@ -86,6 +86,7 @@ use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
 use p3_security::SecurityTerm;
 use p3_security::multilinear::{
     bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term, bit_ring_switch_term,
@@ -96,8 +97,8 @@ use p3_sumcheck::ring_switch::bits::{
     BitRingSwitchProofError,
 };
 use p3_sumcheck::{
-    OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
-    TableSpec,
+    FoldedColumn, OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs,
+    TableShape, TableSpec,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -221,7 +222,11 @@ pub trait BooleanMultilinearPcs<EF, Challenger>: BooleanBackend<EF> {
         prover_data: Self::ProverData,
         openings: &[BitOpening<EF>],
         challenger: &mut Challenger,
-    ) -> Result<(Vec<BitReadings<EF>>, Self::Proof), Self::Error>;
+    ) -> Result<(Vec<BitReadings<EF>>, Self::Proof), Self::Error> {
+        let (readings, _, proof) =
+            self.open_weighted_readings(prover_data, openings, &[], &[], challenger)?;
+        Ok((readings, proof))
+    }
 
     /// Check one proof against the readings it claims at every opening.
     ///
@@ -233,6 +238,42 @@ pub trait BooleanMultilinearPcs<EF, Challenger>: BooleanBackend<EF> {
         commitment: &Self::Commitment,
         openings: &[BitOpening<EF>],
         readings: &[BitReadings<EF>],
+        proof: &Self::Proof,
+        challenger: &mut Challenger,
+    ) -> Result<(), Self::Error> {
+        self.verify_weighted_readings(commitment, openings, readings, &[], proof, challenger)
+    }
+
+    /// Open the readings of every opening and the value of every weighted claim, in one proof.
+    ///
+    /// The weighted claims join the openings' batch, after them.
+    ///
+    /// Entry `i` of `folded`, when present, is weighted claim `i`'s column folded, which a scheme may read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on an opening or a weighted claim this commitment refuses.
+    #[allow(clippy::type_complexity)]
+    fn open_weighted_readings(
+        &self,
+        prover_data: Self::ProverData,
+        openings: &[BitOpening<EF>],
+        weighted: &[WeightedOpening<EF>],
+        folded: &[Option<&FoldedColumn<EF>>],
+        challenger: &mut Challenger,
+    ) -> Result<(Vec<BitReadings<EF>>, Vec<EF>, Self::Proof), Self::Error>;
+
+    /// Check one proof against the readings of every opening and the value of every weighted claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on a false reading or value, a failed reduction, or an unclosed claim.
+    fn verify_weighted_readings(
+        &self,
+        commitment: &Self::Commitment,
+        openings: &[BitOpening<EF>],
+        readings: &[BitReadings<EF>],
+        weighted: &[WeightedClaim<EF>],
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error>;
@@ -303,6 +344,54 @@ pub struct BitReadings<EF> {
     pub current: Option<EF>,
     /// The witness one row further on, the last row repeating.
     pub next: Option<EF>,
+}
+
+/// One claim weighing the absorbed bit patterns itself: `sum_v low_weights[v] * t(high, v)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeightedOpening<EF> {
+    /// The kept coordinates: the witness's variables less the ones one element absorbs.
+    pub high: Point<EF>,
+    /// Weight `v` weighs bit `v` of every packed element.
+    pub low_weights: Vec<EF>,
+}
+
+impl<EF: Field> WeightedOpening<EF> {
+    /// The multilinear claim at `point`: its last `absorbed` coordinates weigh the bits by their equality table.
+    ///
+    /// # Panics
+    ///
+    /// The point has fewer than `absorbed` coordinates.
+    #[must_use]
+    pub fn at_point(point: &Point<EF>, absorbed: usize) -> Self {
+        let (high, low) = point.split_at(point.num_variables() - absorbed);
+        Self {
+            high,
+            low_weights: Poly::new_from_point(low.as_slice(), EF::ONE).into_evals(),
+        }
+    }
+
+    /// The same claim on the region a Boolean prefix selects, most significant bit first.
+    #[must_use]
+    pub fn within(self, selector: &[bool]) -> Self {
+        let mut high = selector
+            .iter()
+            .map(|&bit| if bit { EF::ONE } else { EF::ZERO })
+            .collect::<Vec<_>>();
+        high.extend_from_slice(self.high.as_slice());
+        Self {
+            high: Point::new(high),
+            low_weights: self.low_weights,
+        }
+    }
+}
+
+/// A weighted opening and the value the verifier holds for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeightedClaim<EF> {
+    /// Where and how the claim weighs the witness.
+    pub opening: WeightedOpening<EF>,
+    /// The claimed value.
+    pub value: EF,
 }
 
 /// A Boolean commitment built from the packing, the bit ring switch and the binary PCS.
@@ -473,12 +562,13 @@ where
             .expect("a committed table is a hypercube over a byte-aligned level")
     }
 
-    /// Check that every opening names the witness's variables and asks for a reading it has.
+    /// Check that some claim is made and every opening names the witness's variables and a reading it has.
     fn check_openings(
         &self,
         openings: &[BitOpening<EF>],
+        weighted: usize,
     ) -> Result<(), BooleanPcsError<EF, MT::Error>> {
-        if openings.is_empty() {
+        if openings.is_empty() && weighted == 0 {
             return Err(BooleanPcsError::NoPoints);
         }
         for (index, opening) in openings.iter().enumerate() {
@@ -502,14 +592,21 @@ where
         Ok(())
     }
 
-    /// Every opening's reduction, gathered into the one batch that reduces them all.
-    fn claims(
+    /// Every opening's reduction, then every weighted claim's, gathered into the one batch that reduces them all.
+    fn claims<'a>(
         openings: &[BitOpening<EF>],
+        weighted: impl Iterator<Item = &'a WeightedOpening<EF>>,
     ) -> Result<BitRingSwitchClaims<EF>, BooleanPcsError<EF, MT::Error>> {
-        let reductions = openings
+        let mut reductions = openings
             .iter()
             .map(Self::reduction)
             .collect::<Result<Vec<_>, _>>()?;
+        for opening in weighted {
+            reductions.push(
+                BitRingSwitch::with_low_weights(&opening.high, &opening.low_weights)
+                    .map_err(BooleanPcsError::Reduction)?,
+            );
+        }
         BitRingSwitchClaims::new(reductions).map_err(BooleanPcsError::Reduction)
     }
 
@@ -571,7 +668,7 @@ where
             .map_err(BooleanPcsError::Commitment)
     }
 
-    /// Open the bit witness with the readings every opening asks for, in one proof.
+    /// Open the bit witness with the readings every opening asks for and every weighted claim, in one proof.
     ///
     /// No point needs prior transcript binding: each reduction binds its own.
     ///
@@ -580,20 +677,26 @@ where
     /// One set of readings per opening, in the order the openings were supplied.
     /// Each holds a value exactly where its opening asks for one.
     ///
+    /// Then one value per weighted claim, in the order supplied.
+    ///
     /// # Errors
     ///
-    /// Before the transcript moves, an opening that:
+    /// Before the transcript moves, no claim at all, a weighted claim of the wrong width, or an opening that:
     ///
     /// - does not name the committed function's variables,
     /// - asks for no reading,
     /// - or steps within more rows than the witness has.
     #[allow(clippy::type_complexity)]
-    pub fn open_readings<Challenger>(
+    pub fn open_weighted_readings<Challenger>(
         &self,
         prover_data: BinaryPcsProverData<EF, EF, MT>,
         openings: &[BitOpening<EF>],
+        weighted: &[WeightedOpening<EF>],
         challenger: &mut Challenger,
-    ) -> Result<(Vec<BitReadings<EF>>, BooleanProof<EF, MT, MX>), BooleanPcsError<EF, MT::Error>>
+    ) -> Result<
+        (Vec<BitReadings<EF>>, Vec<EF>, BooleanProof<EF, MT, MX>),
+        BooleanPcsError<EF, MT::Error>,
+    >
     where
         Challenger: FieldChallenger<EF>
             + GrindingChallenger<Witness = EF>
@@ -601,9 +704,9 @@ where
             + CanObserve<MT::Commitment>
             + CanObserve<MX::Commitment>,
     {
-        self.check_openings(openings)?;
+        self.check_openings(openings, weighted.len())?;
         // Every reduction is set up before any runs, so a refused one leaves the transcript alone.
-        let claims = Self::claims(openings)?;
+        let claims = Self::claims(openings, weighted.iter())?;
         let packing =
             tracing::info_span!("read committed packing").in_scope(|| Self::packing(&prover_data));
 
@@ -631,6 +734,12 @@ where
                 Ok(BitReadings { current, next })
             })
             .collect::<Result<Vec<_>, BooleanPcsError<EF, MT::Error>>>()?;
+        // A weighted claim's value is its incoming claim, read off the same elements.
+        let values = claims.reductions()[openings.len()..]
+            .iter()
+            .zip(&reduction.claims[openings.len()..])
+            .map(|(switch, elements)| switch.incoming_claim(&elements.tensor))
+            .collect();
 
         // The surviving value crosses the wire twice, and the closing check is that the two agree.
         // The surviving point came out of the batch's rounds, so it is bound already.
@@ -646,7 +755,7 @@ where
             )
             .map_err(BooleanPcsError::Commitment)?;
 
-        Ok((readings, BooleanProof { reduction, opening }))
+        Ok((readings, values, BooleanProof { reduction, opening }))
     }
 
     /// Check one proof against the readings it claims at every opening.
@@ -662,11 +771,12 @@ where
     /// - A reading present where its opening asks for none, or missing where it asks for one.
     ///
     /// After it: a false reading, a failed reduction, the commitment, or an unclosed claim.
-    pub fn verify_readings<Challenger>(
+    pub fn verify_weighted_readings<Challenger>(
         &self,
         commitment: &MT::Commitment,
         openings: &[BitOpening<EF>],
         readings: &[BitReadings<EF>],
+        weighted: &[WeightedClaim<EF>],
         proof: &BooleanProof<EF, MT, MX>,
         challenger: &mut Challenger,
     ) -> Result<(), BooleanPcsError<EF, MT::Error>>
@@ -677,11 +787,12 @@ where
             + CanObserve<MT::Commitment>
             + CanObserve<MX::Commitment>,
     {
-        self.check_openings(openings)?;
-        if readings.len() != openings.len() || proof.reduction.claims.len() != openings.len() {
+        self.check_openings(openings, weighted.len())?;
+        let expected = openings.len() + weighted.len();
+        if readings.len() != openings.len() || proof.reduction.claims.len() != expected {
             return Err(BooleanPcsError::ClaimCount {
-                expected: openings.len(),
-                values: readings.len(),
+                expected,
+                values: readings.len() + weighted.len(),
                 reductions: proof.reduction.claims.len(),
             });
         }
@@ -696,12 +807,13 @@ where
         {
             return Err(BooleanPcsError::ReadingShape { index });
         }
-        let claims = Self::claims(openings)?;
+        let claims = Self::claims(openings, weighted.iter().map(|claim| &claim.opening))?;
 
-        // The batch turns every reading about the bits into one claim about the packing.
+        // The batch turns every reading and every weighted value into one claim about the packing.
         let readings = readings
             .iter()
             .map(|reading| (reading.current, reading.next))
+            .chain(weighted.iter().map(|claim| (Some(claim.value), None)))
             .collect::<Vec<_>>();
         let (surviving_point, surviving_value) = claims
             .verify_readings(&proof.reduction, &readings, challenger)
@@ -750,24 +862,30 @@ where
         self.inner.observe_commitment(commitment, challenger);
     }
 
-    fn open_readings(
+    fn open_weighted_readings(
         &self,
         prover_data: Self::ProverData,
         openings: &[BitOpening<EF>],
+        weighted: &[WeightedOpening<EF>],
+        _folded: &[Option<&FoldedColumn<EF>>],
         challenger: &mut Challenger,
-    ) -> Result<(Vec<BitReadings<EF>>, Self::Proof), Self::Error> {
-        Self::open_readings(self, prover_data, openings, challenger)
+    ) -> Result<(Vec<BitReadings<EF>>, Vec<EF>, Self::Proof), Self::Error> {
+        // The folding commitment sweeps every claim in its own sumcheck, so it reads no hint.
+        Self::open_weighted_readings(self, prover_data, openings, weighted, challenger)
     }
 
-    fn verify_readings(
+    fn verify_weighted_readings(
         &self,
         commitment: &Self::Commitment,
         openings: &[BitOpening<EF>],
         readings: &[BitReadings<EF>],
+        weighted: &[WeightedClaim<EF>],
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        Self::verify_readings(self, commitment, openings, readings, proof, challenger)
+        Self::verify_weighted_readings(
+            self, commitment, openings, readings, weighted, proof, challenger,
+        )
     }
 
     fn readings_security(

@@ -31,7 +31,7 @@ pub mod zerocheck;
 #[cfg(test)]
 mod tests;
 
-pub use batch::{Batch, BatchError};
+pub use batch::{Batch, BatchError, LINCHECK_LABEL, ZEROCHECK_LABEL};
 pub use circuit::{Builder, Circuit, Port, Wire, Word};
 pub use config::{FlockChallenger, FlockConfig, PcsParams};
 pub use error::{ProvingError, VerificationError};

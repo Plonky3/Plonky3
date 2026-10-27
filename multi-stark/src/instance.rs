@@ -8,18 +8,23 @@ use alloc::vec::Vec;
 use core::ops::Deref;
 
 use p3_air::BaseAir;
+use p3_binary_field::{Poly64, Poly192};
+use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_field::Field;
+use p3_flock::{Circuit, Witness};
 use p3_lookup::TraceWindow;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 
+use crate::circuit::{CircuitArgument, fits, port_table, witness_table, witness_variables};
 use crate::config::MultiStarkConfig;
 use crate::indexed::IndexedPlan;
 pub use crate::keys::{ProvingKey, VerifyingKey, setup};
 use crate::logup_star::LogupStarOutput;
 pub use crate::proof::MultiStarkProof;
 pub use crate::prover::prove;
+use crate::transcript::CircuitStatement;
 pub use crate::verifier::{VerificationError, verify};
 
 /// Cut the row coordinates of one table out of a bound point.
@@ -155,23 +160,24 @@ impl<P> OpeningSchedule<P> {
     ///
     /// # Arguments
     ///
-    /// - `tables`: each table's committed shape, and the batches it is opened in paired with
-    ///   what each is opened against.
+    /// - `tables`: each table's shape, its batches with what each is opened against, and whether weighted claims open it.
     ///
     /// # Panics
     ///
-    /// Panics if a table schedules no opening, which would commit columns nothing reads.
+    /// Panics if a table is opened neither by a batch nor by weighted claims.
+    ///
+    /// Its columns would then be committed with nothing reading them.
     pub(super) fn new<I>(tables: I) -> Self
     where
-        I: IntoIterator<Item = (TableShape, Vec<(OpeningBatch<usize>, P)>)>,
+        I: IntoIterator<Item = (TableShape, Vec<(OpeningBatch<usize>, P)>, bool)>,
     {
         let mut specs = Vec::new();
         let mut payloads = Vec::new();
 
         // One walk over the tables fills both lists, so their order agrees by construction.
-        for (shape, openings) in tables {
+        for (shape, openings, weighted) in tables {
             assert!(
-                !openings.is_empty(),
+                weighted || !openings.is_empty(),
                 "a committed table must be opened at least once"
             );
 
@@ -221,21 +227,17 @@ impl<P> OpeningSchedule<P> {
     ///
     /// A table's columns are opened in the first batch it owns.
     ///
-    /// The batches of one table are consecutive.
+    /// A table opened only by weighted claims owns no batch, and maps to nothing.
     ///
     /// This reads that off the shape agreement the scheme itself walks.
     ///
     /// A list kept beside it would be one more thing to hold in step.
-    pub(super) fn first_batch_per_table(&self) -> Vec<usize> {
-        let mut first = Vec::new();
+    pub(super) fn first_batch_per_table(&self) -> Vec<Option<usize>> {
+        let mut first = alloc::vec![None; self.protocol.table_shapes().len()];
 
-        // Owners are non-decreasing.
-        //
-        // A batch starts a table when its owner is the first one not yet recorded.
+        // The first batch a table owns is the one it reads its own columns from.
         for (batch, (table, _)) in self.protocol.iter_openings().enumerate() {
-            if first.len() == table {
-                first.push(batch);
-            }
+            first[table].get_or_insert(batch);
         }
         first
     }
@@ -264,6 +266,21 @@ where
     proving_key: &'a ProvingKey<C>,
     /// Public values forwarded to the AIR.
     public_values: &'a [C::Val],
+    /// The circuit every row runs, when the table is a circuit's.
+    circuit: Option<ProverCircuit<'a, C>>,
+}
+
+/// What a circuit table adds to a proving instance.
+pub(super) struct ProverCircuit<'a, C>
+where
+    C: MultiStarkConfig,
+{
+    /// The circuit's argument at the batch's types.
+    pub(super) argument: &'a dyn CircuitArgument<C::Val, C::Challenge, C::Challenger>,
+    /// `A z` and `B z`, the bits themselves being the committed table.
+    pub(super) witness: Witness,
+    /// The port words the AIR reads, never committed.
+    pub(super) ports: Table<C::Val>,
 }
 
 /// Collection of prover-side AIR instances proved with one shared proof.
@@ -287,6 +304,8 @@ where
     num_variables: usize,
     /// Public values forwarded to the AIR.
     public_values: &'a [C::Val],
+    /// The circuit every row runs, when the table is a circuit's.
+    circuit: Option<&'a dyn CircuitArgument<C::Val, C::Challenge, C::Challenger>>,
 }
 
 /// Collection of verifier-side AIR instances checked against one shared proof.
@@ -307,6 +326,8 @@ where
     pub(super) public_values: &'a [C::Val],
     /// Base-two logarithm of this instance's main trace height.
     num_variables: usize,
+    /// The circuit every row runs, when the table is a circuit's.
+    pub(super) circuit: Option<&'a dyn CircuitArgument<C::Val, C::Challenge, C::Challenger>>,
 }
 
 pub(super) struct Instances<'a, C, A>(Vec<Instance<'a, C, A>>)
@@ -324,12 +345,22 @@ where
     pub(super) tables: Vec<Table<C::Val>>,
     /// Per-instance metadata retained for the zerocheck and openings.
     pub(super) instances: Instances<'a, C, A>,
+    /// What each circuit table adds, in batch order, absent for every other table.
+    pub(super) circuits: Vec<Option<ProverCircuit<'a, C>>>,
 }
 
 impl<'a, C, A> ProverInstance<'a, C, A>
 where
     C: MultiStarkConfig,
 {
+    /// Rows the AIR's own table has: a circuit's instances, else the committed table's rows.
+    fn zerocheck_variables(&self) -> usize {
+        self.circuit.as_ref().map_or_else(
+            || self.table.num_variables(),
+            |circuit| circuit.ports.num_variables(),
+        )
+    }
+
     /// Create a prover-side AIR instance from proof-time data.
     ///
     /// The table must already be transposed into the multilinear layout: one row
@@ -345,6 +376,49 @@ where
             table,
             proving_key,
             public_values,
+            circuit: None,
+        }
+    }
+}
+
+impl<'a, C, A> ProverInstance<'a, C, A>
+where
+    C: MultiStarkConfig<Val = Poly64, Challenge = Poly192>,
+    C::Challenger: CanObserve<Poly64> + CanSample<Poly64> + GrindingChallenger<Witness = Poly64>,
+    A: BaseAir<Poly64>,
+{
+    /// A table whose rows are the instances of a circuit, its AIR reading their port words.
+    ///
+    /// The witness bits are committed as one column, and the port words are never committed.
+    ///
+    /// # Panics
+    ///
+    /// When the AIR does not read one column per port word.
+    pub fn circuit(
+        air: &'a A,
+        circuit: &'a Circuit,
+        mut witness: Witness,
+        proving_key: &'a ProvingKey<C>,
+        public_values: &'a [Poly64],
+    ) -> Self {
+        let log_instances = witness.log_instances();
+        assert!(
+            fits(circuit, log_instances, air.width()),
+            "a circuit table's AIR reads one column per port word, on a batch Flock proves"
+        );
+        // The bits move into the committed column, and the ports are read off them once.
+        let bits = witness.take_z();
+        let ports = port_table(circuit, &bits);
+        Self {
+            air,
+            table: witness_table(bits, witness_variables(circuit, log_instances)),
+            proving_key,
+            public_values,
+            circuit: Some(ProverCircuit {
+                argument: circuit,
+                witness,
+                ports,
+            }),
         }
     }
 }
@@ -367,6 +441,7 @@ where
             verifying_key,
             num_variables,
             public_values,
+            circuit: None,
         }
     }
 
@@ -386,6 +461,29 @@ where
     #[must_use]
     pub const fn public_values(&self) -> &'a [C::Val] {
         self.public_values
+    }
+}
+
+impl<'a, C, A> VerifierInstance<'a, C, A>
+where
+    C: MultiStarkConfig<Val = Poly64, Challenge = Poly192>,
+    C::Challenger: CanObserve<Poly64> + CanSample<Poly64> + GrindingChallenger<Witness = Poly64>,
+{
+    /// A table whose `2^log_instances` rows are the instances of a circuit.
+    pub fn circuit(
+        air: &'a A,
+        circuit: &'a Circuit,
+        verifying_key: &'a VerifyingKey<C>,
+        log_instances: usize,
+        public_values: &'a [Poly64],
+    ) -> Self {
+        Self {
+            air,
+            verifying_key,
+            num_variables: log_instances,
+            public_values,
+            circuit: Some(circuit),
+        }
     }
 }
 
@@ -433,7 +531,8 @@ where
                 .map(|instance| Instance {
                     air: instance.air,
                     public_values: instance.public_values,
-                    num_variables: instance.table.num_variables(),
+                    num_variables: instance.zerocheck_variables(),
+                    circuit: instance.circuit.as_ref().map(|circuit| circuit.argument),
                 })
                 .collect(),
         )
@@ -469,19 +568,23 @@ where
         // Read the borrowed metadata, then move the table out.
         let mut instances = Vec::with_capacity(self.0.len());
         let mut tables = Vec::with_capacity(self.0.len());
+        let mut circuits = Vec::with_capacity(self.0.len());
         for instance in self.0 {
             instances.push(Instance {
                 air: instance.air,
                 public_values: instance.public_values,
-                num_variables: instance.table.num_variables(),
+                num_variables: instance.zerocheck_variables(),
+                circuit: instance.circuit.as_ref().map(|circuit| circuit.argument),
             });
             tables.push(instance.table);
+            circuits.push(instance.circuit);
         }
 
         ProverParts {
             proving_key,
             tables,
             instances: Instances(instances),
+            circuits,
         }
     }
 }
@@ -498,6 +601,7 @@ where
                     air: instance.air,
                     public_values: instance.public_values,
                     num_variables: instance.num_variables,
+                    circuit: instance.circuit,
                 })
                 .collect(),
         )
@@ -535,6 +639,7 @@ where
                 air: instance.air,
                 public_values: instance.public_values,
                 num_variables: instance.num_variables,
+                circuit: instance.circuit,
             })
             .collect();
 
@@ -552,10 +657,6 @@ where
             .iter()
             .map(|instance| instance.num_variables)
             .collect()
-    }
-
-    pub(super) fn widths(&self) -> Vec<usize> {
-        self.0.iter().map(|instance| instance.air.width()).collect()
     }
 
     pub(super) fn next_columns(&self) -> Vec<Vec<usize>> {
@@ -579,6 +680,27 @@ where
             .collect()
     }
 
+    /// Each instance's circuit argument, nothing for a table that is not a circuit's.
+    pub(super) fn circuits(
+        &self,
+    ) -> impl ExactSizeIterator<
+        Item = Option<&'a dyn CircuitArgument<C::Val, C::Challenge, C::Challenger>>,
+    > + '_ {
+        self.0.iter().map(|instance| instance.circuit)
+    }
+
+    /// What fixes each instance's circuit, nothing for a table that is not a circuit's.
+    pub(super) fn circuit_statements(
+        &self,
+    ) -> impl ExactSizeIterator<Item = Option<CircuitStatement>> + '_ {
+        self.0.iter().map(|instance| {
+            instance.circuit.map(|argument| CircuitStatement {
+                k_log: argument.circuit().k_log(),
+                digest: *argument.circuit().digest(),
+            })
+        })
+    }
+
     /// Schedule the main trace opening, in the order the scheme walks the batches.
     ///
     /// Every table opens its whole width at the point the zerocheck bound.
@@ -599,20 +721,29 @@ where
         against: impl Fn(BatchRole, usize) -> P,
     ) -> OpeningSchedule<Opening<P>> {
         let mut tables = self
-            .num_variables()
+            .0
             .iter()
-            .zip(self.widths().iter())
-            .zip(self.next_columns())
-            .map(|((&log_height, &width), next_columns)| {
+            .map(|instance| {
+                let log_height = instance.num_variables;
+                // A circuit's witness column is opened by weighted claims alone.
+                if let Some(circuit) = instance.circuit {
+                    let rows = witness_variables(circuit.circuit(), log_height);
+                    return (TableShape::new(rows, 1), Vec::new(), true);
+                }
+                let width = instance.air.width();
                 (
                     TableShape::new(log_height, width),
                     alloc::vec![(
-                        OpeningBatch::new((0..width).collect::<Vec<_>>(), next_columns),
+                        OpeningBatch::new(
+                            (0..width).collect::<Vec<_>>(),
+                            instance.air.main_next_row_columns(),
+                        ),
                         Opening {
                             role: BatchRole::Air,
                             against: against(BatchRole::Air, log_height),
                         },
                     )],
+                    false,
                 )
             })
             .collect::<Vec<_>>();
@@ -686,6 +817,7 @@ where
                             against: against(BatchRole::Air, instance.num_variables),
                         },
                     )],
+                    false,
                 )
             })
             .collect::<Vec<_>>();
@@ -747,6 +879,7 @@ mod tests {
             (
                 TableShape::new(3, 2),
                 vec![(OpeningBatch::new(vec![0, 1], Vec::new()), labelled(10))],
+                false,
             ),
             (
                 TableShape::new(4, 3),
@@ -754,10 +887,12 @@ mod tests {
                     (OpeningBatch::new(vec![0, 1, 2], Vec::new()), labelled(20)),
                     (OpeningBatch::new(vec![2], Vec::new()), labelled(21)),
                 ],
+                false,
             ),
             (
                 TableShape::new(2, 1),
                 vec![(OpeningBatch::new(vec![0], Vec::new()), labelled(30))],
+                false,
             ),
         ])
     }
@@ -803,7 +938,10 @@ mod tests {
         //     table 2 -> batch 3
         //
         // Reading the per-batch results in order would hand table 2's values to table 1.
-        assert_eq!(uneven_schedule().first_batch_per_table(), vec![0, 1, 3]);
+        assert_eq!(
+            uneven_schedule().first_batch_per_table(),
+            vec![Some(0), Some(1), Some(3)]
+        );
     }
 
     #[test]
@@ -813,14 +951,16 @@ mod tests {
             (
                 TableShape::new(3, 2),
                 vec![(OpeningBatch::new(vec![0, 1], Vec::new()), labelled(1))],
+                false,
             ),
             (
                 TableShape::new(2, 1),
                 vec![(OpeningBatch::new(vec![0], vec![0]), labelled(2))],
+                false,
             ),
         ]);
 
-        assert_eq!(schedule.first_batch_per_table(), vec![0, 1]);
+        assert_eq!(schedule.first_batch_per_table(), vec![Some(0), Some(1)]);
         assert_eq!(schedule.payloads(), [labelled(1), labelled(2)]);
     }
 
@@ -828,6 +968,35 @@ mod tests {
     #[should_panic(expected = "a committed table must be opened at least once")]
     fn a_committed_table_cannot_go_unopened() {
         // Committing columns nothing opens leaves them bound by no claim.
-        let _ = OpeningSchedule::<F>::new(vec![(TableShape::new(3, 2), Vec::new())]);
+        let _ = OpeningSchedule::<F>::new(vec![(TableShape::new(3, 2), Vec::new(), false)]);
+    }
+
+    #[test]
+    fn a_table_opened_by_weighted_claims_owns_no_batch() {
+        // A circuit's witness column is opened by weighted claims, never by a batch.
+        //
+        //     table 0 -> batch 0
+        //     table 1 -> no batch, weighted claims only
+        //     table 2 -> batch 1
+        //
+        // Its neighbours keep their own batches, so table 2 is not read from table 1's place.
+        let schedule = OpeningSchedule::new(vec![
+            (
+                TableShape::new(3, 2),
+                vec![(OpeningBatch::new(vec![0, 1], Vec::new()), labelled(1))],
+                false,
+            ),
+            (TableShape::new(9, 1), Vec::new(), true),
+            (
+                TableShape::new(2, 1),
+                vec![(OpeningBatch::new(vec![0], Vec::new()), labelled(2))],
+                false,
+            ),
+        ]);
+
+        assert_eq!(
+            schedule.first_batch_per_table(),
+            vec![Some(0), None, Some(1)]
+        );
     }
 }

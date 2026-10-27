@@ -437,21 +437,43 @@ where
 }
 
 #[test]
-#[should_panic = "zerocheck requires every AIR to contribute constraints"]
-fn a_table_of_boundary_flushes_alone_panics_in_setup() {
+fn a_table_of_boundary_flushes_alone_proves_and_verifies() {
     // A boundary indicator leaves the zerocheck nothing at all.
     //
-    // An AIR carrying only boundary declarations therefore reaches the batch with no constraints.
+    // Such a table joins no zerocheck stage, and its columns are read at the bound point directly.
     //
-    // The same two written with a caller-supplied selector keep their Booleanity checks.
+    // Fixture state: the two tables agree at their ends and nowhere between.
     //
-    // Those are accepted, so the first-class form widens the gap tracked in #2284.
-    //
-    // This pins the behaviour rather than endorsing it, and should start failing when #2284 lands.
+    //     push table -> 7, 1, 2, 7
+    //     pull table -> 7, 3, 4, 7
+    //     -> first and last rows balance, 7 and 7 against 7 and 7
     let push = BareBoundaryAir(BusDirection::Push);
     let pull = BareBoundaryAir(BusDirection::Pull);
-    let config = config_for(2, 2);
-    let _ = setup(&config, &[&push, &pull], &mut challenger());
+    let log_height = 2;
+    let config = config_for(log_height, 2);
+    let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&push, table([7, 1, 2, 7]), &pk, &[]),
+            ProverInstance::new(&pull, table([7, 3, 4, 7]), &pk, &[]),
+        ]),
+        0,
+        &mut challenger(),
+    )
+    .expect("two bare boundary tables whose ends agree are provable");
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&push, &vk, log_height, &[]),
+            VerifierInstance::new(&pull, &vk, log_height, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect("two bare boundary tables whose ends agree verify");
 }
 
 #[test]

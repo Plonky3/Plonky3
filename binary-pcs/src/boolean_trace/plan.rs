@@ -9,10 +9,12 @@ use p3_challenger::fs::TranscriptField;
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::{Selector, Table, TablePlacement, plan_stacked_layout};
-use p3_sumcheck::{OpeningEvals, OpeningPointMismatch, OpeningProtocol, TableShape};
+use p3_sumcheck::{
+    OpeningEvals, OpeningPointMismatch, OpeningProtocol, TableShape, WeightedColumnClaim,
+};
 
 use super::{BooleanTraceCommitment, BooleanTraceCommitmentError};
-use crate::boolean::{BitOpening, BitReadings, BooleanBackend};
+use crate::boolean::{BitOpening, BitReadings, BooleanBackend, WeightedOpening};
 use crate::boolean_trace_transcript::ColumnBatchShape;
 
 /// Validate cell arithmetic and the padded witness before the shared infallible planner allocates selectors.
@@ -120,6 +122,48 @@ where
                     current: claim.current_at.is_some(),
                     next: claim.next_at.is_some(),
                 }
+            })
+            .collect()
+    }
+
+    /// Each weighted column claim as the same claim on the bit witness, its slot address leading.
+    ///
+    /// # Errors
+    ///
+    /// A claim naming no committed column, or weighing a column of another height.
+    pub(super) fn weighted_openings(
+        protocol: &OpeningProtocol,
+        weighted: &[WeightedColumnClaim<EF>],
+        placements: &[TablePlacement],
+    ) -> Result<Vec<WeightedOpening<EF>>, BooleanTraceCommitmentError<B::Error>> {
+        let shapes = protocol.table_shapes();
+        weighted
+            .iter()
+            .enumerate()
+            .map(|(claim, column_claim)| {
+                // Invariant: the claim's coordinates and weights together span the column's rows.
+                //
+                //     high coordinates + log2(weights) = row variables
+                let fits = shapes.get(column_claim.table).is_some_and(|shape| {
+                    column_claim.column < shape.width()
+                        && column_claim.low_weights.len().is_power_of_two()
+                        && column_claim.high.num_variables()
+                            + column_claim.low_weights.len().ilog2() as usize
+                            == shape.num_variables()
+                });
+                if !fits {
+                    return Err(BooleanTraceCommitmentError::WeightedClaimShape { claim });
+                }
+                let placement = placements
+                    .iter()
+                    .find(|placement| placement.idx() == column_claim.table)
+                    .expect("the planner places every supplied shape");
+                Ok(WeightedOpening {
+                    // The column's slot address leads, as for a claim at a point.
+                    high: placement.selectors()[column_claim.column]
+                        .lift_prefix(&column_claim.high),
+                    low_weights: column_claim.low_weights.clone(),
+                })
             })
             .collect()
     }

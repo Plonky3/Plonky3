@@ -109,6 +109,38 @@ impl PrescribedOpeningSecurity {
     }
 }
 
+/// A claim on one committed column whose weights the caller chooses on its lowest row coordinates.
+///
+/// It states `sum_x eq(high, x_high) * low_weights[x_low] * column(x) = value`.
+///
+/// How many low coordinates the weights cover is the scheme's own choice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeightedColumnClaim<EF> {
+    /// Position of the table in commitment order.
+    pub table: usize,
+    /// Position of the column in its table.
+    pub column: usize,
+    /// The row coordinates the weights leave out, most significant first.
+    pub high: Point<EF>,
+    /// One weight per pattern of the low row coordinates.
+    pub low_weights: Vec<EF>,
+    /// The claimed value.
+    pub value: EF,
+    /// The column folded over the claim's leading high coordinates, when the prover holds it.
+    pub folded: Option<FoldedColumn<EF>>,
+}
+
+/// A column folded over the leading coordinates of a claim's point, one value per position of the rest.
+///
+/// A prover hint: a scheme may read it in place of sweeping the column, and a verifier needs none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoldedColumn<EF> {
+    /// High coordinates folded away, leading ones first.
+    pub log_outer: usize,
+    /// `sum_x eq(high[..log_outer], x) * column(x, j)`, one value per position `j` of the rest.
+    pub values: Vec<EF>,
+}
+
 /// A multilinear commitment scheme that opens columns at caller-chosen points.
 ///
 /// The base opening path draws each evaluation point from the transcript.
@@ -289,6 +321,63 @@ where
         points: &[Point<Challenge>],
         challenger: &mut Challenger,
     ) -> Result<Vec<OpeningEvals<Challenge>>, Self::Error>;
+
+    /// Soundness evidence for this protocol opened beside this many weighted column claims.
+    ///
+    /// The default prices only an opening with no weighted claim.
+    fn weighted_security(
+        &self,
+        protocol: &OpeningProtocol,
+        weighted: usize,
+    ) -> Option<PrescribedOpeningSecurity> {
+        if weighted == 0 {
+            self.prescribed_security(protocol)
+        } else {
+            None
+        }
+    }
+
+    /// Open every batch at its point and every weighted column claim, in one proof.
+    ///
+    /// # Returns
+    ///
+    /// Nothing when the scheme opens no weighted claim.
+    ///
+    /// The default opens only a protocol with none.
+    fn open_at_known_weighted(
+        &self,
+        prover_data: Self::ProverData,
+        protocol: &OpeningProtocol,
+        points: &[Point<Challenge>],
+        known: &[Option<OpeningEvals<Challenge>>],
+        weighted: &[WeightedColumnClaim<Challenge>],
+        challenger: &mut Challenger,
+    ) -> Option<Result<Self::Proof, Self::ProverError>> {
+        weighted
+            .is_empty()
+            .then(|| self.open_at_known(prover_data, protocol, points, known, challenger))
+    }
+
+    /// Verify every batch at its point and every weighted column claim, against one proof.
+    ///
+    /// # Returns
+    ///
+    /// Nothing when the scheme opens no weighted claim.
+    ///
+    /// The default verifies only a protocol with none.
+    fn verify_at_weighted(
+        &self,
+        commitment: &Self::Commitment,
+        proof: &Self::Proof,
+        protocol: &OpeningProtocol,
+        points: &[Point<Challenge>],
+        weighted: &[WeightedColumnClaim<Challenge>],
+        challenger: &mut Challenger,
+    ) -> Option<Result<Vec<OpeningEvals<Challenge>>, Self::Error>> {
+        weighted
+            .is_empty()
+            .then(|| self.verify_at(commitment, proof, protocol, points, challenger))
+    }
 }
 
 #[cfg(test)]

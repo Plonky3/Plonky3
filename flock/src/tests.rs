@@ -303,3 +303,27 @@ fn a_proof_on_fixed_seeds_has_a_pinned_digest() {
         hex_literal::hex!("a7c678c7d48a8a692045d1229a493d2f208d5d7cd6bead20db0b53ec1d79505c")
     );
 }
+
+#[test]
+fn a_batch_charges_its_two_reductions_by_their_bad_challenge_counts() {
+    // Fixture state: a 2^8-bit circuit on 2^10 instances, so 18 witness variables.
+    //
+    //     zerocheck   n = 18 - 6 = 12 past the skip  ->  (12 - 7) + 127 + 2 * 12 = 156
+    //     lincheck    3 + 2 * (8 - 6) + 63 + 10                                  =  80
+    let mut c = Builder::new(&[64], &[64]);
+    let x = c.input(0).to_vec();
+    let y = c.and_word(&x, &x);
+    for (bit, &wire) in y.iter().enumerate() {
+        c.output(0, bit, wire);
+    }
+    let circuit = c.finish();
+    assert_eq!(circuit.k_log(), 8);
+    let batch = crate::Batch::new(&circuit, 10).unwrap();
+
+    // Each term is the field's 192 bits less the logarithm of its count.
+    let [zerocheck, lincheck] = batch.security_terms();
+    assert_eq!(zerocheck.label, crate::ZEROCHECK_LABEL);
+    assert_eq!(lincheck.label, crate::LINCHECK_LABEL);
+    assert!((zerocheck.bits.bits() - (192.0 - 156f64.log2())).abs() < 1e-9);
+    assert!((lincheck.bits.bits() - (192.0 - 80f64.log2())).abs() < 1e-9);
+}

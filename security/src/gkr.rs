@@ -127,20 +127,9 @@ fn push_nonzero_term(
     if numerator != 0 {
         terms.push(SecurityTerm::new(
             label,
-            error_from_numerator(field_bits, numerator),
+            ErrorBits::from_numerator(field_bits, numerator),
         ));
     }
-}
-
-/// Convert an exact numerator over the challenge-field order into bits.
-pub(crate) fn error_from_numerator(field_bits: usize, numerator: u128) -> ErrorBits {
-    // Round upward before taking the logarithm.
-    // This keeps the reported error at least as large up to f64 rounding.
-    let mut rounded = numerator as f64;
-    if (rounded as u128) < numerator {
-        rounded = rounded.next_up();
-    }
-    ErrorBits::from_log2((field_bits as f64 - libm::log2(rounded)).max(0.0))
 }
 
 #[cfg(test)]
