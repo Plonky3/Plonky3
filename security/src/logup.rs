@@ -41,12 +41,21 @@
 //! `Challenges`), so it contributes no separate error term. The multiplicity
 //! height bound (`Σ wᵢ·hᵢ < p`) is enforced in-circuit and is not modeled here.
 //!
-//! The resulting term is passed to [`crate::stark::proven_security_report`] or
-//! [`crate::stark::conjectured_security_report`] as an `extras`
-//! [`SecurityTerm`] by the protocol call site; it is not wired into the
-//! composite automatically, since not every STARK uses lookups. In the
-//! conjectured composite it is often the binding term at large trace lengths:
-//! `N` grows linearly in the trace while the query-phase error does not.
+//! The resulting [`SecurityTerm`] is passed to the composite by the protocol
+//! call site; it is not wired in automatically, since not every STARK uses
+//! lookups. `(alpha, beta)` are sampled after the main commitment, which the
+//! low-degree test only proves close to the code. In the list-decoding regime
+//! that committed word may be close to up to L⁺ codewords, and the prover may
+//! pick which one it meant after seeing `(alpha, beta)`, so the proven
+//! composite charges the term over the list, exactly as it charges ALI and
+//! DEEP-ALI. Pass it as a `list_extras` term of
+//! [`crate::stark::proven_security_report_with_list_extras`]: that costs
+//! `log2(L⁺)` bits in the list-decoding regime and nothing in the
+//! unique-decoding one, where L⁺ = 1. The conjectured regime assumes list size
+//! 1, so there it is an ordinary `extras` term of
+//! [`crate::stark::conjectured_security_report`]. In the conjectured composite
+//! it is often the binding term at large trace lengths: `N` grows linearly in
+//! the trace while the query-phase error does not.
 //!
 //! # References
 //! - Haböck, *Multivariate lookups based on logarithmic derivatives*
@@ -108,8 +117,11 @@ pub fn fingerprint_error(air: &LogUpAir, shape: &InstanceShape) -> ErrorBits {
     ErrorBits::from_log2(bits.max(0.0))
 }
 
-/// The LogUp fingerprint term for use in `extras`, or `None` when the AIR has
-/// no interactions (no lookup argument, hence no term).
+/// The LogUp fingerprint term, or `None` when the AIR has no interactions (no
+/// lookup argument, hence no term).
+///
+/// The proven composite takes it as a `list_extras` term and the conjectured
+/// one as an `extras` term; see the module docs.
 ///
 /// `grinding.lookup_challenge` is the grind sited immediately before
 /// `(alpha, beta)` are sampled; it boosts this term and nothing else.
@@ -235,13 +247,14 @@ mod tests {
         assert!((ground.bits.bits() - base.bits.bits() - 20.0).abs() < 1e-12);
     }
 
-    /// The term flows through `proven_security_report`'s `extras` and appears
-    /// in the breakdown, only ever tightening the bound.
+    /// The term flows through `proven_security_report_with_list_extras`'s
+    /// `list_extras` and appears in the breakdown, only ever tightening the
+    /// bound.
     #[test]
     fn logup_term_composes_as_extra() {
         use crate::fri::FriRegime;
         use crate::shape::StarkAirParams;
-        use crate::stark::proven_security_report;
+        use crate::stark::{proven_security_report, proven_security_report_with_list_extras};
 
         let regime = FriRegime {
             log_blowup: 1,
@@ -267,7 +280,14 @@ mod tests {
 
         let baseline = proven_security_report(&regime, &air, &s, &[], &GrindingSites::NONE);
         let term = security_term(&logup, &s, &GrindingSites::NONE).expect("has interactions");
-        let with_logup = proven_security_report(&regime, &air, &s, &[term], &GrindingSites::NONE);
+        let with_logup = proven_security_report_with_list_extras(
+            &regime,
+            &air,
+            &s,
+            &[],
+            &[term],
+            &GrindingSites::NONE,
+        );
 
         // Extras only tighten.
         assert!(with_logup.security_bits() <= baseline.security_bits());

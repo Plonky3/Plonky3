@@ -111,7 +111,7 @@ mod tests {
     use crate::fri::FriRegime;
     use crate::grinding::GrindingSites;
     use crate::shape::{InstanceShape, StarkAirParams};
-    use crate::stark::proven_security_report;
+    use crate::stark::proven_security_report_with_list_extras;
 
     fn profile(
         log_height: usize,
@@ -283,7 +283,16 @@ mod tests {
         let term = model.combined_term();
 
         // The report contains one composed event rather than four independent minima.
-        let report = proven_security_report(&regime, &air, &shape, &[term], &GrindingSites::NONE);
+        //
+        // The bus challenges follow the tuple commitment, so the term is charged over the list.
+        let report = proven_security_report_with_list_extras(
+            &regime,
+            &air,
+            &shape,
+            &[],
+            &[term],
+            &GrindingSites::NONE,
+        );
         assert!(
             report
                 .udr

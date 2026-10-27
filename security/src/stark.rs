@@ -12,9 +12,27 @@
 //! variants, batched openings, …) are passed through `extras: &[ErrorBits]`
 //! at every entry point and folded into the same round-by-round min.
 //! Pass `&[]` when only the baseline AIR + DEEP + LDT terms apply.
+//!
+//! `extras` are charged as given, in every regime. That is sound for a round
+//! whose set of bad challenges does not depend on which codeword a committed
+//! oracle decodes to. A round whose challenge is sampled after a commitment
+//! that the low-degree test only proves *close* to the code, and before an
+//! opening pins one codeword, is not such a round. In the list-decoding regime
+//! the committed word may be close to up to L⁺ codewords, and the prover picks
+//! among them after seeing the challenge, so the round's error is
+//! union-bounded over the list, `ε → L⁺·ε`. That is the charge ALI and
+//! DEEP-ALI already pay. The LogUp fingerprint ([`crate::logup`]) is the
+//! canonical such round. The proven composite takes those terms as
+//! `list_extras` of [`proven_security_report_with_list_extras`], charging each
+//! at the list size of the regime it is reported in. The unique-decoding list
+//! size is 1, so the charge there is nothing. The conjectured composites
+//! assume list size 1 ([`list_size_conjectured`]), so such a term is an
+//! ordinary `extras` term there.
 
 use alloc::vec::Vec;
 use core::cmp::Ordering;
+
+use libm::log2;
 
 use crate::assumption::SecurityAssumption;
 use crate::error::ErrorBits;
@@ -22,8 +40,8 @@ use crate::grinding::{GrindingSites, boost};
 use crate::ldt::LowDegreeTest;
 use crate::proximity::{list_size_conjectured, list_size_ldr_m, list_size_udr};
 use crate::report::{
-    ALI_LABEL, BATCH_LABEL, COLLISION_LABEL, DEEP_LABEL, LDT_LABEL, LDT_QUERY_LABEL, Regime,
-    RegimeReport, SecurityReport, SecurityTerm,
+    ALI_LABEL, BATCH_LABEL, COLLISION_LABEL, CandidateSet, DEEP_LABEL, LDT_LABEL, LDT_QUERY_LABEL,
+    Regime, RegimeReport, SecurityReport, SecurityTerm,
 };
 use crate::shape::{InstanceShape, StarkAirParams};
 use crate::{air, deep};
@@ -35,6 +53,9 @@ use crate::{air, deep};
 /// phases (see e.g. [`crate::fri::proven_error_udr`]). `list_size` is the
 /// regime's L⁺. `extras` lets the caller fold in additional independent
 /// error sources (lookup, custom DEEP, …) without dropping the orchestrator.
+/// They are charged as given, so a term whose challenge follows a commitment
+/// the low-degree test only proves close to the code, such as the LogUp
+/// fingerprint, must already be charged over `list_size` (see the module docs).
 ///
 /// The result is capped at `shape.collision_resistance`: a collision in the
 /// commitment hash forges the proof regardless of the algebraic bound, so
@@ -90,6 +111,10 @@ pub fn proven_security_ldr_m(
 /// applied to both regimes. Each regime is an independent valid lower
 /// bound, so the max is itself a valid (and tighter) bound on
 /// round-by-round soundness.
+///
+/// `extras` are applied unchanged to both regimes. A term that must be
+/// charged over the list belongs in [`proven_security_report_with_list_extras`]
+/// instead.
 pub fn proven_security(
     air: &StarkAirParams,
     shape: &InstanceShape,
@@ -182,11 +207,30 @@ fn conjectured_batching_term(
     )
 }
 
+/// `term` charged over a regime's list of `list_size` candidate codewords.
+///
+/// A list size below one, or not finite, names no candidate set. The term is
+/// then reported at zero bits rather than credited, failing closed as
+/// [`air::composition_error`] and [`deep::deep_ali_error`] do.
+fn over_list(term: SecurityTerm, list_size: f64) -> SecurityTerm {
+    CandidateSet::from_log2(log2(list_size)).map_or_else(
+        || SecurityTerm {
+            bits: ErrorBits::from_log2(0.0),
+            ..term
+        },
+        |candidates| term.over_candidates(candidates),
+    )
+}
+
 /// Labeled term list for one proximity regime: ALI, DEEP, LDT, the optional
-/// batch-combination term, `extras`, and the commitment-collision cap.
+/// batch-combination term, `extras`, `list_extras` charged over the regime's
+/// list, and the commitment-collision cap.
 /// Attained security is the min over these (see
 /// [`RegimeReport::security_bits`]), matching [`proven_security_regime`] plus
 /// the batching term.
+///
+/// `list_extras` are charged at `list_size`, the same list size the ALI and
+/// DEEP terms are evaluated at.
 ///
 /// `grinding.out_of_domain` boosts the DEEP term and
 /// `grinding.batch_combination` the batch term (applied by the caller, which
@@ -200,6 +244,7 @@ fn regime_report(
     ldt_term: SecurityTerm,
     batch: Option<SecurityTerm>,
     extras: &[SecurityTerm],
+    list_extras: &[SecurityTerm],
     grinding: &GrindingSites,
 ) -> RegimeReport {
     let ali = air::composition_error(air.num_constraints, list_size, shape.modulus_bits);
@@ -207,12 +252,13 @@ fn regime_report(
         deep::deep_ali_error(air, shape, list_size),
         grinding.out_of_domain,
     );
-    let mut terms = Vec::with_capacity(5 + extras.len());
+    let mut terms = Vec::with_capacity(5 + extras.len() + list_extras.len());
     terms.push(SecurityTerm::new(ALI_LABEL, ali));
     terms.push(SecurityTerm::new(DEEP_LABEL, deep));
     terms.push(ldt_term);
     terms.extend(batch);
     terms.extend_from_slice(extras);
+    terms.extend(list_extras.iter().map(|&term| over_list(term, list_size)));
     terms.push(SecurityTerm::new(
         COLLISION_LABEL,
         ErrorBits::from_log2(shape.collision_resistance as f64),
@@ -225,8 +271,12 @@ fn regime_report(
 /// Evaluates the UDR and best-`m` LDR regimes via `ldt`, composes each with
 /// the ALI, DEEP, `extras`, and commitment-collision terms, and returns the
 /// full labeled breakdown. `extras` fold protocol-specific error sources
-/// (lookup arguments, custom DEEP variants, batched openings, …) into every
-/// regime; pass `&[]` for the baseline AIR + DEEP + LDT composite.
+/// (custom DEEP variants, batched openings, …) into every regime unchanged;
+/// pass `&[]` for the baseline AIR + DEEP + LDT composite. A term whose
+/// challenge follows a commitment the low-degree test only proves close to the
+/// code, such as the LogUp fingerprint, is charged over each regime's list by
+/// [`proven_security_report_with_list_extras`] instead; this report is that
+/// one with no such terms.
 ///
 /// [`SecurityReport::security_bits`] matches [`proven_security`] when `shape.num_batched_functions
 /// < 2`, i.e. when there is no batching term to make the two regimes' choice of `m` diverge (see
@@ -241,6 +291,42 @@ pub fn proven_security_report<L: LowDegreeTest>(
     air: &StarkAirParams,
     shape: &InstanceShape,
     extras: &[SecurityTerm],
+    grinding: &GrindingSites,
+) -> SecurityReport {
+    proven_security_report_with_list_extras(ldt, air, shape, extras, &[], grinding)
+}
+
+/// [`proven_security_report`], with each `list_extras` term charged over the
+/// list of the regime it is reported in.
+///
+/// A term belongs in `list_extras` when its challenge is sampled after a
+/// commitment to oracles the low-degree test only proves close to the code,
+/// and before an opening pins which codeword they decode to. The LogUp
+/// fingerprint ([`crate::logup::security_term`]) is one: `(alpha, beta)` are
+/// sampled after the main commitment. In the list-decoding regime at proximity
+/// parameter `m` the committed word may be close to up to
+/// `L⁺ = list_size_ldr_m(log_blowup, m)` codewords, and the prover may pick
+/// which one it meant after seeing the challenge. Each such term is therefore
+/// union-bounded over the list and reported at `bits − log2(L⁺)` bits, clamped
+/// at zero (see [`SecurityTerm::over_candidates`]). That is the charge
+/// [`air::composition_error`] and [`deep::deep_ali_error`] already pay. In the
+/// unique-decoding regime `L⁺ = 1` ([`list_size_udr`]), so a `list_extras` term
+/// of at least zero bits is reported exactly as an `extras` term would be.
+///
+/// The charge grows with `m`, so it takes part in choosing `m`: the
+/// list-decoding regime is the candidate of [`LowDegreeTest::ldr_candidates`]
+/// that maximises the full composite, `list_extras` included.
+///
+/// Grinding before such a round's challenge is credited by the term itself
+/// (e.g. [`GrindingSites::lookup_challenge`] in
+/// [`crate::logup::security_term`]) before it is passed here. The charge
+/// subtracts `log2(L⁺)` from those boosted bits.
+pub fn proven_security_report_with_list_extras<L: LowDegreeTest>(
+    ldt: &L,
+    air: &StarkAirParams,
+    shape: &InstanceShape,
+    extras: &[SecurityTerm],
+    list_extras: &[SecurityTerm],
     grinding: &GrindingSites,
 ) -> SecurityReport {
     let log_blowup = ldt.log_blowup();
@@ -260,11 +346,13 @@ pub fn proven_security_report<L: LowDegreeTest>(
             grinding.batch_combination,
         ),
         extras,
+        list_extras,
         grinding,
     );
 
     // Pick `m` by the composite rather than by the low-degree test alone. The
-    // batching term grows as `(m + 1/2)^3`, so the LDT's own optimum can be far
+    // batching term grows as `(m + 1/2)^3` and every `list_extras` term pays
+    // `log2(L⁺)`, which grows with `m`, so the LDT's own optimum can be far
     // from the composite's; see `LowDegreeTest::ldr_candidates`.
     let ldr = ldt
         .ldr_candidates(air, shape)
@@ -285,6 +373,7 @@ pub fn proven_security_report<L: LowDegreeTest>(
                     grinding.batch_combination,
                 ),
                 extras,
+                list_extras,
                 grinding,
             )
         })
@@ -491,6 +580,7 @@ pub fn legacy_security_report<L: LowDegreeTest>(
         SecurityTerm::new(LDT_QUERY_LABEL, ldt_error),
         conjectured_batching_term(shape, ldt.log_blowup(), grinding.batch_combination),
         extras,
+        &[],
         grinding,
     ))
 }
@@ -571,6 +661,7 @@ mod tests {
             SecurityTerm::new(LDT_LABEL, ldt),
             None,
             &[SecurityTerm::new("extra", extra)],
+            &[],
             &GrindingSites::NONE,
         );
 
@@ -1375,5 +1466,286 @@ mod tests {
         let b24 = proven_security_report(&regime, &air, &shape, &[], &ground);
         assert!(b24.udr.security_bits() >= b0.udr.security_bits());
         assert!(b24.security_bits() >= b0.security_bits());
+    }
+
+    /// A lookup-heavy instance over a small field. The low-degree test
+    /// tolerates a large proximity parameter, and the LogUp fingerprint sits
+    /// just below it in the list-decoding regime.
+    fn lookup_heavy() -> (crate::fri::FriRegime, InstanceShape, SecurityTerm) {
+        use crate::logup::{LogUpAir, security_term};
+
+        let regime = crate::fri::FriRegime {
+            log_blowup: 3,
+            num_queries: 40,
+            log_final_poly_len: 0,
+            max_log_arity: 2,
+            commit_pow_bits: 16,
+            query_pow_bits: 16,
+        };
+        let shape = InstanceShape {
+            modulus_bits: 100,
+            ..shape()
+        };
+        let logup = LogUpAir {
+            num_interactions: 1 << 12,
+            num_interactions_per_proof: 0,
+            max_message_width: 8,
+        };
+        let term = security_term(&logup, &shape, &GrindingSites::NONE).expect("has interactions");
+        (regime, shape, term)
+    }
+
+    /// A low-degree test that forwards to a [`crate::fri::FriRegime`] but
+    /// admits a single list-decoding proximity parameter, so the composite can
+    /// be read off at any one `m`.
+    struct PinnedM(crate::fri::FriRegime, usize);
+
+    impl LowDegreeTest for PinnedM {
+        fn log_blowup(&self) -> usize {
+            self.0.log_blowup()
+        }
+
+        fn proven_error_udr(&self, air: &StarkAirParams, shape: &InstanceShape) -> ErrorBits {
+            self.0.proven_error_udr(air, shape)
+        }
+
+        fn best_ldr(
+            &self,
+            air: &StarkAirParams,
+            shape: &InstanceShape,
+        ) -> Option<(usize, ErrorBits)> {
+            Some((
+                self.1,
+                crate::fri::proven_error_ldr_m(&self.0, air, shape, self.1),
+            ))
+        }
+
+        fn conjectured_error(&self, shape: &InstanceShape) -> ErrorBits {
+            self.0.conjectured_error(shape)
+        }
+    }
+
+    /// With no `list_extras` the report is `proven_security_report`'s, term
+    /// for term and bit for bit, in both regimes.
+    #[test]
+    fn empty_list_extras_reproduce_the_proven_report() {
+        let (lookup_regime, lookup_shape, lookup_term) = lookup_heavy();
+        let ground = GrindingSites {
+            out_of_domain: 8,
+            batch_combination: 12,
+            ..GrindingSites::NONE
+        };
+        let extra = [SecurityTerm::new("extra", ErrorBits::from_log2(60.0))];
+        let cases: [(_, _, &[SecurityTerm], _); 4] = [
+            (benchmark_regime(), shape(), &[], GrindingSites::NONE),
+            (benchmark_regime(), batched_shape(), &[], ground),
+            (
+                grindable_regime(16),
+                batched_shape(),
+                &extra,
+                GrindingSites::NONE,
+            ),
+            (lookup_regime, lookup_shape, &[lookup_term], ground),
+        ];
+
+        for (regime, shape, extras, grinding) in cases {
+            let proven = proven_security_report(&regime, &air(), &shape, extras, &grinding);
+            let listed = proven_security_report_with_list_extras(
+                &regime,
+                &air(),
+                &shape,
+                extras,
+                &[],
+                &grinding,
+            );
+
+            assert_eq!(proven.udr.regime, listed.udr.regime);
+            assert_eq!(proven.udr.terms(), listed.udr.terms());
+            assert_eq!(
+                proven.ldr.as_ref().map(|r| (r.regime, r.terms())),
+                listed.ldr.as_ref().map(|r| (r.regime, r.terms()))
+            );
+        }
+    }
+
+    /// The unique-decoding list size is one, so a `list_extras` term is
+    /// reported there exactly as the same term passed through `extras`.
+    #[test]
+    fn list_extras_leave_the_unique_decoding_regime_unchanged() {
+        let (regime, shape, term) = lookup_heavy();
+
+        let plain = proven_security_report(&regime, &air(), &shape, &[term], &GrindingSites::NONE);
+        let listed = proven_security_report_with_list_extras(
+            &regime,
+            &air(),
+            &shape,
+            &[],
+            &[term],
+            &GrindingSites::NONE,
+        );
+
+        assert_eq!(listed.udr.regime, Regime::UniqueDecoding);
+        assert_eq!(plain.udr.terms(), listed.udr.terms());
+    }
+
+    /// In the list-decoding regime a `list_extras` term pays `log2(L⁺)` at the
+    /// `m` the regime reports, the list size its ALI term carries too.
+    #[test]
+    fn list_extras_pay_the_list_size_of_the_reported_m() {
+        use crate::logup::LOGUP_LABEL;
+
+        let (regime, shape, term) = lookup_heavy();
+        let air = air();
+
+        let report = proven_security_report_with_list_extras(
+            &regime,
+            &air,
+            &shape,
+            &[],
+            &[term],
+            &GrindingSites::NONE,
+        );
+        let ldr = report
+            .ldr
+            .as_ref()
+            .expect("the instance admits a list-decoding regime");
+        let Regime::ListDecoding { m } = ldr.regime else {
+            panic!("expected a list-decoding regime");
+        };
+        let list_size = list_size_ldr_m(regime.log_blowup, m);
+        let find = |label| {
+            ldr.terms()
+                .iter()
+                .find(|t| t.label == label)
+                .expect("the term is reported")
+                .bits
+                .bits()
+        };
+
+        let expected = (term.bits.bits() - log2(list_size)).max(0.0);
+        assert!((find(LOGUP_LABEL) - expected).abs() < 1e-12);
+        let ali = air::composition_error(air.num_constraints, list_size, shape.modulus_bits);
+        assert!((find(ALI_LABEL) - ali.bits()).abs() < 1e-12);
+
+        // Every admissible `m` is at least 3, so the charge is never below
+        // `log2(3.5 · 2^1.5)` bits at this blowup.
+        assert!(term.bits.bits() - find(LOGUP_LABEL) > 3.0);
+    }
+
+    /// The overstatement this closes: where the lookup term binds the
+    /// list-decoding regime, charging it over the list lowers the reported
+    /// level, and `m` is chosen with the charge included.
+    #[test]
+    fn a_binding_list_scaled_lookup_term_lowers_the_level_and_moves_m() {
+        use crate::logup::LOGUP_LABEL;
+
+        let (regime, shape, term) = lookup_heavy();
+        let air = air();
+
+        let plain = proven_security_report(&regime, &air, &shape, &[term], &GrindingSites::NONE);
+        let listed = proven_security_report_with_list_extras(
+            &regime,
+            &air,
+            &shape,
+            &[],
+            &[term],
+            &GrindingSites::NONE,
+        );
+
+        // Passed unchanged, the lookup term binds the winning list-decoding
+        // regime at its own bits.
+        let (Regime::ListDecoding { m: plain_m }, plain_binding) = plain.binding() else {
+            panic!("expected the list-decoding regime to win");
+        };
+        assert_eq!(plain_binding.label, LOGUP_LABEL);
+        assert!((plain.security_bits() - term.bits.bits()).abs() < 1e-12);
+
+        // Charged over the list, it still binds, `log2(L⁺)` bits lower.
+        let (Regime::ListDecoding { m: listed_m }, listed_binding) = listed.binding() else {
+            panic!("expected the list-decoding regime to win");
+        };
+        assert_eq!(listed_binding.label, LOGUP_LABEL);
+        let charge = log2(list_size_ldr_m(regime.log_blowup, listed_m));
+        assert!((listed.security_bits() - (term.bits.bits() - charge)).abs() < 1e-12);
+        assert!(listed.security_bits() < plain.security_bits());
+
+        // The charge grows with `m`, so the composite settles on a smaller one.
+        assert!(listed_m < plain_m, "{listed_m} >= {plain_m}");
+
+        // The reported `m` is the best candidate for the full composite,
+        // charge included. Charging the plain report's `m` instead would
+        // report strictly less.
+        let at = |m| {
+            proven_security_report_with_list_extras(
+                &PinnedM(regime, m),
+                &air,
+                &shape,
+                &[],
+                &[term],
+                &GrindingSites::NONE,
+            )
+            .ldr
+            .expect("a pinned regime is always reported")
+            .security_bits()
+        };
+        let best = listed.security_bits();
+        for (m, _) in regime.ldr_candidates(&air, &shape) {
+            assert!(at(m) <= best, "m = {m} beats the reported m = {listed_m}");
+        }
+        assert!(at(plain_m) < best);
+    }
+
+    proptest! {
+        /// A `list_extras` term charges only the list: the unique-decoding
+        /// regime is the one plain `extras` give, and the level never rises
+        /// above the plain report's.
+        #[test]
+        fn list_extras_never_raise_the_proven_level(
+            fri in (1usize..=4, 1usize..=64, 0usize..=4, 1usize..=4, 0usize..=24, 0usize..=24),
+            log_trace_length in 1usize..=24,
+            modulus_bits in 32usize..=160,
+            extra in 0usize..=160,
+        ) {
+            let (log_blowup, num_queries, log_final_poly_len, max_log_arity, commit_pow_bits, query_pow_bits) = fri;
+            let regime = crate::fri::FriRegime {
+                log_blowup,
+                num_queries,
+                log_final_poly_len,
+                max_log_arity,
+                commit_pow_bits,
+                query_pow_bits,
+            };
+            let shape = InstanceShape {
+                log_trace_length,
+                modulus_bits,
+                ..shape()
+            };
+            let term = SecurityTerm::new("list-extra", ErrorBits::from_log2(extra as f64));
+
+            let plain = proven_security_report(&regime, &air(), &shape, &[term], &GrindingSites::NONE);
+            let listed = proven_security_report_with_list_extras(
+                &regime,
+                &air(),
+                &shape,
+                &[],
+                &[term],
+                &GrindingSites::NONE,
+            );
+
+            prop_assert_eq!(plain.udr.terms(), listed.udr.terms());
+            prop_assert!(listed.security_bits() <= plain.security_bits());
+            if let Some(ldr) = &listed.ldr {
+                let Regime::ListDecoding { m } = ldr.regime else {
+                    panic!("expected a list-decoding regime");
+                };
+                let charged = ldr
+                    .terms()
+                    .iter()
+                    .find(|t| t.label == "list-extra")
+                    .expect("the term is reported");
+                let expected = (extra as f64 - log2(list_size_ldr_m(log_blowup, m))).max(0.0);
+                prop_assert!((charged.bits.bits() - expected).abs() < 1e-12);
+            }
+        }
     }
 }

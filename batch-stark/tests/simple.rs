@@ -681,7 +681,7 @@ fn security_estimate_with_and_without_lookups() {
     use p3_security::grinding::GrindingSites;
     use p3_security::logup::{self, LOGUP_LABEL, LogUpAir};
     use p3_security::shape::{InstanceShape, StarkAirParams};
-    use p3_security::stark::proven_security_report;
+    use p3_security::stark::{proven_security_report, proven_security_report_with_list_extras};
 
     // A real batch: MulAir sends (a, b) on a bus, FibAir receives it.
     let config = make_config(1337);
@@ -761,7 +761,16 @@ fn security_estimate_with_and_without_lookups() {
     let without = proven_security_report(&regime, &air, &shape, &[], &grinding);
     let lookup_term =
         logup::security_term(&lookups, &shape, &grinding).expect("batch uses a LogUp bus");
-    let with = proven_security_report(&regime, &air, &shape, &[lookup_term], &grinding);
+    // `(alpha, beta)` follow the main commitment, so the lookup term is charged
+    // over each regime's list.
+    let with = proven_security_report_with_list_extras(
+        &regime,
+        &air,
+        &shape,
+        &[],
+        &[lookup_term],
+        &grinding,
+    );
     let lookup_bits = logup::fingerprint_error(&lookups, &shape).bits();
 
     let (wo_regime, wo_bind) = without.binding();
