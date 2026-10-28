@@ -5,11 +5,10 @@ use core::iter::repeat;
 use core::marker::PhantomData;
 
 use p3_challenger::{
-    CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger,
-    GrindingChallenger, HashChallenger, ResamplingError,
+    ByteGrindingChallenger, CanObserve, CanSample, CanSampleBits, CanSampleUniformBits,
+    FieldChallenger, GrindingChallenger, HashChallenger, ResamplingError,
 };
 use p3_field::BasedVectorSpace;
-use p3_maybe_rayon::search::find_map_first;
 use p3_symmetric::{CryptographicHasher, Hash, MerkleCap};
 use tracing::instrument;
 
@@ -238,10 +237,32 @@ fn candidate<F: TowerLevel>(index: u64) -> F {
     F::from_le_byte_iter(index.to_le_bytes().into_iter().chain(repeat(0)))
 }
 
+impl<F: TowerLevel, Inner: ByteGrindingChallenger> BinaryChallenger<F, Inner> {
+    /// The smallest candidate index that passes the grinding check, searched by the inner challenger.
+    ///
+    /// `W` is the number of bytes observing one candidate absorbs.
+    fn find_witness_index<const W: usize>(&self, num_candidates: u64, bits: usize) -> Option<u64> {
+        let mask = (1u64 << bits) - 1;
+        self.inner.find_witness::<W, BITS_SAMPLE_BYTES>(
+            num_candidates,
+            // The bytes `observe` absorbs for the candidate.
+            |index| {
+                let mut bytes = [0; W];
+                for (slot, byte) in bytes.iter_mut().zip(candidate::<F>(index).into_bytes()) {
+                    *slot = byte;
+                }
+                bytes
+            },
+            // The test `check_witness` applies to the word `sample_bits` reads.
+            |bytes| u64::from_le_bytes(bytes) & mask == 0,
+        )
+    }
+}
+
 impl<F, Inner> GrindingChallenger for BinaryChallenger<F, Inner>
 where
     F: TowerLevel,
-    Inner: CanSample<u8> + CanObserve<u8> + Clone + Send + Sync,
+    Inner: ByteGrindingChallenger,
 {
     type Witness = F;
 
@@ -270,16 +291,19 @@ where
         };
 
         // The smallest passing candidate, whatever the thread count.
-        let witness = find_map_first(
-            0..num_candidates,
-            || self.clone(),
-            |worker, index| {
-                worker.inner.clone_from(&self.inner);
-                let witness = candidate(index);
-                worker.check_witness(bits, witness).then_some(witness)
-            },
-        )
+        //
+        // The inner challenger runs the search, hashing candidates in batches where its hasher has lanes.
+        // A candidate absorbs its level's bytes, and the search takes that width as a constant.
+        let index = match F::NUM_BYTES {
+            2 => self.find_witness_index::<2>(num_candidates, bits),
+            4 => self.find_witness_index::<4>(num_candidates, bits),
+            8 => self.find_witness_index::<8>(num_candidates, bits),
+            16 => self.find_witness_index::<16>(num_candidates, bits),
+            // The margin above refuses every request on the one-byte levels.
+            _ => unreachable!("a level wide enough to grind is 2, 4, 8 or 16 bytes"),
+        }
         .expect("failed to find witness");
+        let witness = candidate(index);
         assert!(self.check_witness(bits, witness));
         witness
     }
@@ -298,8 +322,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_challenger::{
-        CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger,
-        GrindingChallenger, HashChallenger,
+        ByteGrindingChallenger, CanObserve, CanSample, CanSampleBits, CanSampleUniformBits,
+        FieldChallenger, GrindingChallenger, HashChallenger,
     };
     use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing, RawDataSerializable};
     use p3_keccak::Keccak256Hash;
@@ -307,7 +331,10 @@ mod tests {
 
     use crate::challenger::{BITS_SAMPLE_BYTES, BinaryChallenger, candidate};
     use crate::tower::TowerLevel;
-    use crate::{BinaryField4, BinaryField8, BinaryField32, BinaryField128, Gf2, Ghash128};
+    use crate::{
+        BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField128, Gf2, Ghash128,
+        Poly64,
+    };
 
     type Inner = HashChallenger<u8, Keccak256Hash, 32>;
 
@@ -620,6 +647,8 @@ mod tests {
         }
     }
 
+    impl ByteGrindingChallenger for AlwaysZeroInner {}
+
     #[test]
     #[should_panic = "requested bit count leaves too small a margin"]
     fn grind_rejects_a_request_the_u64_cap_no_longer_allows() {
@@ -681,9 +710,12 @@ mod tests {
         assert!(challenger.check_witness(8, witness));
     }
 
-    /// Assert that grinding returns the smallest candidate `check_witness` accepts.
-    fn assert_grinds_smallest<F: TowerLevel>(challenger: &BinaryChallenger<F, Inner>) {
-        for bits in [0, 1, 8, 14] {
+    /// Assert that grinding returns the smallest candidate `check_witness` accepts, at each difficulty.
+    fn assert_grinds_smallest<F: TowerLevel>(
+        challenger: &BinaryChallenger<F, Inner>,
+        difficulties: &[usize],
+    ) {
+        for &bits in difficulties {
             let witness = challenger.clone().grind(bits);
             // The serial search: candidates 0, 1, 2, ... on a fresh transcript each.
             let smallest = (0..)
@@ -697,14 +729,35 @@ mod tests {
     fn grind_returns_the_smallest_witness() {
         // Three transcripts, at the widest level and at a narrow one.
         for seed in [0u8, 1, 2] {
-            assert_grinds_smallest(&BinaryChallenger::<BinaryField128, Inner>::from_hasher(
-                vec![seed],
-                Keccak256Hash,
-            ));
-            assert_grinds_smallest(&BinaryChallenger::<BinaryField32, Inner>::from_hasher(
-                vec![seed],
-                Keccak256Hash,
-            ));
+            assert_grinds_smallest(
+                &BinaryChallenger::<BinaryField128, Inner>::from_hasher(vec![seed], Keccak256Hash),
+                &[0, 1, 8, 14],
+            );
+            assert_grinds_smallest(
+                &BinaryChallenger::<BinaryField32, Inner>::from_hasher(vec![seed], Keccak256Hash),
+                &[0, 1, 8, 14],
+            );
+        }
+    }
+
+    #[test]
+    fn grind_returns_the_smallest_witness_at_every_candidate_width() {
+        // Invariant: the search finds the serial witness at every byte width a candidate can take.
+        //
+        //     level            bytes   difficulties
+        //     BinaryField16    2       0, 1, 8          (the margin caps it at 8)
+        //     BinaryField32    4       above
+        //     Poly64           8       0, 1, 8, 14
+        //     BinaryField128   16      above
+        for seed in [3u8, 4] {
+            assert_grinds_smallest(
+                &BinaryChallenger::<BinaryField16, Inner>::from_hasher(vec![seed], Keccak256Hash),
+                &[0, 1, 8],
+            );
+            assert_grinds_smallest(
+                &BinaryChallenger::<Poly64, Inner>::from_hasher(vec![seed], Keccak256Hash),
+                &[0, 1, 8, 14],
+            );
         }
     }
 
