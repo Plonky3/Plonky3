@@ -365,7 +365,7 @@ impl BatchShape {
         //
         // Why: a witness for this step always travels in the proof.
         // The step is therefore described whatever the difficulty.
-        // At zero bits the search is free and the witness is still absorbed.
+        // At zero bits the search is free and nothing is absorbed.
         steps.push(Interaction::algebra::<F, F>(
             Hierarchy::Atomic,
             Kind::Pow,

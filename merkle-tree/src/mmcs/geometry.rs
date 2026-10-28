@@ -7,7 +7,9 @@ use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
 use crate::MerkleTreeError;
-use crate::MerkleTreeError::{EmptyBatch, IncompatibleHeights, WrongBatchSize, WrongWidth};
+use crate::MerkleTreeError::{
+    EmptyBatch, HeightOverflow, IncompatibleHeights, WrongBatchSize, WrongWidth,
+};
 
 /// Check that the opened rows pair one-to-one with the committed matrices, each at its own width.
 ///
@@ -92,6 +94,7 @@ pub struct ArityAndPositions {
 /// # Errors
 ///
 /// - A batch with no matrices, or only zero-height matrices, has no tree.
+/// - A tallest height above the largest power of two in `usize` has no leaf layer.
 /// - Any height off the reachable ladder is rejected,
 ///   with the offending and expected heights attached.
 ///
@@ -114,6 +117,13 @@ where
         .max()
         .filter(|&height| height > 0)
         .ok_or(EmptyBatch)?;
+
+    // The leaf layer rounds the tallest height up to a power of two, which must fit a word.
+    //
+    //     64-bit word:  2^63 fits,  2^63 + 1 rounds up to 2^64
+    if max_height.checked_next_power_of_two().is_none() {
+        return Err(HeightOverflow { max_height });
+    }
     let log_max_height = log2_ceil_usize(max_height);
 
     // Pass 2: pin every height to the one rung of the ladder it claims.
@@ -359,6 +369,56 @@ mod tests {
 
         // Duplicates on a rung are fine: both matrices inject at the same layer.
         assert_eq!(validate_commit_reachable_heights([7, 4, 4]).unwrap(), 7);
+    }
+
+    #[test]
+    fn height_validation_rejects_heights_past_the_largest_power_of_two() {
+        // Fixture state: on a 64-bit word the largest power of two is 2^63.
+        //
+        //     tallest height     rounded up
+        //     2^63               2^63           fits
+        //     2^63 + 1           2^64           overflows
+        let top = 1usize << (usize::BITS - 1);
+
+        // Invariant: the largest power of two still anchors a ladder down to 1.
+        assert_eq!(validate_commit_reachable_heights([top, 1]).unwrap(), top);
+
+        // One row more has no leaf layer.
+        assert!(matches!(
+            validate_commit_reachable_heights([top + 1]),
+            Err(MerkleTreeError::HeightOverflow { max_height }) if max_height == top + 1
+        ));
+
+        // A height 0 next to usize::MAX would sit 64 halvings down the ladder.
+        //
+        //     usize::MAX >> 64   shifts by the full word size
+        assert!(matches!(
+            validate_commit_reachable_heights([usize::MAX, 0]),
+            Err(MerkleTreeError::HeightOverflow {
+                max_height: usize::MAX
+            })
+        ));
+    }
+
+    #[test]
+    fn schedule_rejects_heights_past_the_largest_power_of_two() {
+        // Fixture state: one matrix of height 2^63 + 1, binary tree, cap of one root.
+        //
+        //
+        //     2^63 + 1   rounds up to 2^64, past the word
+        let mut rng = SmallRng::seed_from_u64(321);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+        let top = 1usize << (usize::BITS - 1);
+        let dims = [Dimensions {
+            width: 1,
+            height: top + 1,
+        }];
+
+        assert!(matches!(
+            mmcs.arity_schedule_and_proof_levels(&dims),
+            Err(MerkleTreeError::HeightOverflow { max_height }) if max_height == top + 1
+        ));
     }
 
     #[test]

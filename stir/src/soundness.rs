@@ -357,7 +357,28 @@ impl StirSoundness for SecurityAssumption {
                     + log_inv_rate as f64
                     - log_field_minus_domain)
                     / 2.;
-                libm::pow(2., log_ood_term)
+                // Lemma 5.4: the previous round's degree correction lands in this stage's code.
+                //
+                //     err*(d_i, rho_i, delta_i, t_(i-1) + s)
+                //
+                // Its combination challenge follows the previous round's query grind.
+                // So it targets the PoW-assisted level, like the capacity arm's third term.
+                // The schedule then charges the remaining grind to that round.
+                let degree_correction_eta = minimum_eta_for_target(
+                    self.stir_eta_upper_bound(log_inv_rate),
+                    pow_target_bits,
+                    |eta| {
+                        self.prox_gaps_error_at_log_eta(
+                            log_degree,
+                            log_inv_rate,
+                            field_size_bits,
+                            prev_queries + self.stir_num_ood_samples(),
+                            libm::log2(eta),
+                        )
+                    },
+                    "recursive STIR degree-correction bound",
+                )?;
+                libm::pow(2., log_ood_term).max(degree_correction_eta)
             }
             Self::CapacityBound => {
                 let log_term_1 = 1. - log_domain;

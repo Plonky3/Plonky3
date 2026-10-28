@@ -117,6 +117,15 @@ pub trait InteractionBuilder: AirBuilder {
     ///
     /// - A constant count fixes its bound automatically.
     /// - A variable count must declare a bound the AIR constrains it to respect.
+    /// - Neither the count nor a field may read a row selector.
+    ///
+    /// The permutation trace reads each selector as 0 or 1.
+    ///
+    /// The STARK reads it as its unnormalized Lagrange value, for instance the trace height on the first row.
+    ///
+    /// A message filtered by a selector is therefore counted differently by the prover and the verifier.
+    ///
+    /// Filter it by a column the AIR constrains to the selector's 0/1 value instead.
     fn push_interaction<E: Into<Self::Expr>>(
         &mut self,
         bus_name: &str,
@@ -135,6 +144,7 @@ pub trait InteractionBuilder: AirBuilder {
     /// - A variable count must declare a bound the AIR constrains it to respect.
     /// - The provided (table) side of a query should use `Count::provided`, keeping
     ///   it out of the multiplicity height-bound check.
+    /// - No count or field may read a row selector, for the reason given on global messages.
     fn push_local_interaction(
         &mut self,
         tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,

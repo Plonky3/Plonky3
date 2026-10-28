@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_air::symbolic::SymbolicAirBuilder;
+use p3_air::symbolic::{SymbolicAirBuilder, UndeclaredNextRowRead};
 use p3_air::{Air, RowWindow};
 use p3_challenger::GrindingChallenger;
 use p3_commit::{
@@ -20,9 +20,8 @@ use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
 use crate::error::{InvalidProofShapeError, VerificationError};
-use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 use crate::{
-    AirLayout, Com, Commitments, Domain, PcsError, PreprocessedOpenedValues,
+    AirConstraints, AirLayout, Com, Commitments, Domain, PcsError, PreprocessedOpenedValues,
     PreprocessedVerifierKey, Proof, StarkGenericConfig, StarkShape, StarkVerifierTranscript, Val,
     VerifierConstraintFolder,
 };
@@ -641,13 +640,23 @@ where
     // Base trace length `N` (before any ZK extension); the quotient degree model
     // measures trace columns as degree-`(N - 1)` polynomials and accounts for ZK
     // separately via `is_zk`.
+    //
+    // The same symbolic evaluation checks the next-row declaration.
+    // Why: with an empty declaration the next row is never opened, and the constraints fold zeros for it.
+    // An AIR reading such a row would otherwise fail as an opaque evaluation mismatch.
     let base_degree = 1usize << base_degree_bits;
-    let log_num_quotient_chunks = get_log_num_quotient_chunks_for_domain::<Val<SC>, A>(
-        air,
-        layout,
-        pcs.natural_domain_for_degree(base_degree),
-        config.is_zk(),
-    );
+    let constraints = AirConstraints::<Val<SC>>::evaluate(air, layout);
+    constraints
+        .check_next_row_reads()
+        .map_err(|UndeclaredNextRowRead { trace, column }| {
+            VerificationError::UndeclaredNextRowRead {
+                air: None,
+                trace,
+                column,
+            }
+        })?;
+    let log_num_quotient_chunks = constraints
+        .log_num_quotient_chunks(pcs.natural_domain_for_degree(base_degree), config.is_zk());
     let (_, num_quotient_chunks) = checked_log_size_sum(log_num_quotient_chunks, config.is_zk())
         .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,

@@ -4,7 +4,9 @@ use p3_binary_field::{BinaryChallenger, Poly64, Poly192};
 use p3_binary_pcs::whir::{
     BinaryWhirDomain, BinaryWhirProfile, BooleanWhirPcs, BooleanWhirProver, recommended_cap_height,
 };
-use p3_binary_pcs::{BooleanTraceCommitment, MixedTraceCommitment, committed_shapes};
+use p3_binary_pcs::{
+    BooleanTraceCommitment, BooleanTraceCommitmentError, MixedTraceCommitment, committed_shapes,
+};
 use p3_challenger::HashChallenger;
 use p3_commit::MultilinearPcs;
 use p3_field::PrimeCharacteristicRing;
@@ -208,4 +210,43 @@ fn security_prices_the_widened_source_coordinates_at_the_challenge_width() {
         assert_eq!(security.error(), inner.error());
         assert!(actual.bits.bits() > 128.0);
     }
+}
+
+#[test]
+fn a_dense_width_whose_coordinates_wrap_is_refused() {
+    // Invariant: a protocol names exactly the table the commitment holds.
+    //
+    // Fixture state: one table of 2^6 rows, 1 bit column and 2 dense Poly64 columns.
+    //
+    //     committed width = 1 + 2 * 64 = 129
+    //
+    // On a word of w bits, a forged table of 2^(w - 6) + 3 columns has 2^(w - 6) + 2 dense columns.
+    //
+    //     1 + (2^(w - 6) + 2) * 64 = 2^w + 129, which wraps to 129
+    //
+    // Wrapped, it commits the same shape, and its last column aliases dense column 2.
+    let shapes = [TableShape::new(6, 3)];
+    let bits = [1];
+    let pcs = scheme(&shapes, &bits);
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        shapes[0],
+        vec![OpeningBatch::new(vec![0, 1, 2], vec![])],
+    )]);
+    let points = vec![Point::<EF>::rand(&mut SmallRng::seed_from_u64(1), 6)];
+    let mut prover = challenger();
+    let (commitment, data) = pcs.commit(tables(&shapes, &bits), &mut prover).unwrap();
+    let proof = pcs.open_at(data, &protocol, &points, &mut prover).unwrap();
+
+    // Mutation: the same proof, against the forged table.
+    let wide = (1usize << (usize::BITS - 6)) + 3;
+    let forged = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(6, wide),
+        vec![OpeningBatch::new(vec![0, 1, wide - 1], vec![])],
+    )]);
+    let mut verifier = challenger();
+    pcs.observe_commitment(&commitment, &mut verifier);
+    assert!(matches!(
+        pcs.verify_at(&commitment, &proof, &forged, &points, &mut verifier),
+        Err(BooleanTraceCommitmentError::InvalidOpeningProtocol)
+    ));
 }

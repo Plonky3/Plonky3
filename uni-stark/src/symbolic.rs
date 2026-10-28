@@ -1,10 +1,12 @@
 //! STARK-specific quotient polynomial degree calculations.
 
-use p3_air::Air;
+use alloc::vec::Vec;
+
 use p3_air::symbolic::{
-    AirLayout, SymbolicAirBuilder, get_all_symbolic_constraints,
-    get_max_constraint_degree_extension,
+    AirLayout, NextRowColumns, SymbolicAirBuilder, SymbolicConstraints, UndeclaredNextRowRead,
+    capture_symbolic_constraints, get_max_constraint_degree_extension,
 };
+use p3_air::{Air, BaseAir};
 use p3_commit::PolynomialSpace;
 use p3_field::{ExtensionField, Field};
 use p3_util::log2_ceil_usize;
@@ -26,30 +28,120 @@ where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    let transition_degree = domain.transition_degree_multiple();
-    if transition_degree == 0 {
-        return get_log_num_quotient_chunks(air, layout, domain.size(), is_zk);
+    AirConstraints::<F>::evaluate(air, layout).log_num_quotient_chunks(domain, is_zk)
+}
+
+/// The constraints of one AIR from a single symbolic evaluation.
+///
+/// It also keeps the AIR facts a STARK reads next to them:
+///
+/// - the declared next-row columns;
+/// - the period of each periodic column;
+/// - the optional constraint degree hint.
+///
+/// Provers and verifiers evaluate the AIR once and answer every question from this value.
+#[derive(Debug)]
+pub struct AirConstraints<F: Field, EF: ExtensionField<F> = F> {
+    /// The evaluated constraints.
+    constraints: SymbolicConstraints<F, EF>,
+    /// The next-row columns the AIR declares.
+    next_row: NextRowColumns,
+    /// The period of each periodic column, empty when the AIR has none.
+    periodic_periods: Vec<usize>,
+    /// The constraint degree the AIR states, if any.
+    degree_hint: Option<usize>,
+}
+
+impl<F: Field, EF: ExtensionField<F>> AirConstraints<F, EF> {
+    /// Pair constraints already evaluated from an AIR with that AIR's facts.
+    ///
+    /// The constraints may include more than the AIR's own, such as lookup constraints.
+    pub fn new(air: &impl BaseAir<F>, constraints: SymbolicConstraints<F, EF>) -> Self {
+        // Materialize the periods only when the AIR has periodic columns.
+        let periodic_periods = if air.num_periodic_columns() == 0 {
+            Vec::new()
+        } else {
+            air.periodic_periods()
+        };
+        Self {
+            constraints,
+            next_row: NextRowColumns::from_air(air),
+            periodic_periods,
+            degree_hint: air.max_constraint_degree(),
+        }
     }
 
-    assert!(is_zk <= 1, "is_zk must be either 0 or 1");
-    let (base, extension) = get_all_symbolic_constraints::<F, F, A>(air, layout);
-    let degree = base
-        .iter()
-        .map(|c| c.degree_multiple_with_transition(transition_degree))
-        .chain(
-            extension
-                .iter()
-                .map(|c| c.degree_multiple_with_transition(transition_degree)),
-        )
-        .max()
-        .unwrap_or(0)
-        .max(air.max_constraint_degree().unwrap_or(0));
+    /// Evaluate an AIR symbolically.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a layout width that the AIR itself determines disagrees with the AIR.
+    pub fn evaluate<A>(air: &A, layout: AirLayout) -> Self
+    where
+        A: Air<SymbolicAirBuilder<F, EF>>,
+    {
+        // A mismatched width would silently point the AIR at the wrong variables.
+        layout.validate_against_air(air);
+        let constraints = capture_symbolic_constraints(layout, |builder| air.eval(builder));
+        Self::new(air, constraints)
+    }
 
-    // Circle STARKs, section 5.3: an odd constraint degree d gives a quotient
-    // in the FFT subspace L^-_{(d-1)N}. For even d >= 4, rounding d-1 up to a
-    // power of two provides strict room; d <= 2 uses Circle's doubled disjoint
-    // domain. Thus the same chunk formula applies once d counts all selectors.
-    log2_ceil_usize((degree + is_zk).max(2) - 1)
+    /// Log of the number of quotient chunks, before the zero-knowledge doubling.
+    ///
+    /// # Arguments
+    ///
+    /// - `domain`: the trace domain, which sets the weight of the transition selector.
+    /// - `is_zk`: 1 when the PCS is zero-knowledge, 0 otherwise.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `is_zk` is neither 0 nor 1.
+    pub fn log_num_quotient_chunks(
+        &self,
+        domain: impl PolynomialSpace<Val = F>,
+        is_zk: usize,
+    ) -> usize {
+        assert!(is_zk <= 1, "is_zk must be either 0 or 1");
+
+        // A zero transition weight marks a two-adic domain.
+        // There the degree is measured against the trace size, including periodic columns.
+        let transition_degree = domain.transition_degree_multiple();
+        let symbolic_degree = if transition_degree == 0 {
+            self.max_constraint_degree(domain.size())
+        } else {
+            let degrees = self
+                .constraints
+                .max_constraint_degrees_with_transition(transition_degree);
+            degrees.base.max(degrees.extension)
+        };
+        let degree = symbolic_degree.max(self.degree_hint.unwrap_or(0));
+
+        // Circle STARKs, section 5.3: an odd constraint degree d gives a quotient
+        // in the FFT subspace L^-_{(d-1)N}. For even d >= 4, rounding d-1 up to a
+        // power of two provides strict room; d <= 2 uses Circle's doubled disjoint
+        // domain. Thus the same chunk formula applies once d counts all selectors.
+        //
+        // On a two-adic domain the quotient has degree about (d - 1) N.
+        // The floor of 2 keeps a quotient argument meaningful for smaller degrees.
+        log2_ceil_usize((degree + is_zk).max(2) - 1)
+    }
+
+    /// Maximum constraint degree on a two-adic trace of the given height.
+    ///
+    /// The degree hint plays no part here.
+    pub fn max_constraint_degree(&self, trace_len: usize) -> usize {
+        self.constraints
+            .max_constraint_degree(trace_len, &self.periodic_periods)
+    }
+
+    /// Check that every next-row column the constraints read is one the AIR declares.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first undeclared read in constraint order.
+    pub fn check_next_row_reads(&self) -> Result<(), UndeclaredNextRowRead> {
+        self.constraints.check_next_row_reads(&self.next_row)
+    }
 }
 
 /// Two-adic quotient sizing; use [`get_log_num_quotient_chunks_for_domain`] for other domains.

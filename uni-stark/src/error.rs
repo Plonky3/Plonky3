@@ -3,18 +3,42 @@
 use alloc::format;
 use alloc::string::String;
 
+use p3_air::symbolic::NextRowTrace;
 pub use p3_commit::PeriodicColumnShapeError;
 use thiserror::Error;
 
 use crate::StarkTranscriptFailure;
 
-/// A recoverable PCS configuration or budget failure during proof generation.
+/// A recoverable failure during proof generation.
+///
+/// The prover returns it instead of emitting a partial proof.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ProvingError<E> {
     /// The backend error, annotated with the failing proving phase.
     #[error("PCS {phase} failed: {source:?}")]
     Pcs { phase: &'static str, source: E },
+    /// A batch prover was given no instances.
+    ///
+    /// A batch commitment needs at least one matrix, so there is nothing to prove.
+    #[error("cannot prove an empty batch: no instances were given")]
+    EmptyBatch,
+    /// A constraint reads a next-row column that the AIR does not declare.
+    ///
+    /// Provers and verifiers open the next row only when the declared set is nonempty.
+    /// A read outside that set breaks the contract they rely on.
+    #[error(
+        "{}a constraint reads column {column} of the next {trace} row, which the AIR does not declare",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    UndeclaredNextRowRead {
+        /// The instance index, for a batch of AIRs.
+        air: Option<usize>,
+        /// The trace the read comes from.
+        trace: NextRowTrace,
+        /// The column index within that trace.
+        column: usize,
+    },
 }
 
 /// Specific reasons why a proof's shape is invalid.
@@ -207,6 +231,22 @@ where
     UnsupportedOodPowBits {
         /// The configured difficulty.
         bits: usize,
+    },
+    /// A constraint reads a next-row column that the AIR does not declare.
+    ///
+    /// Provers and verifiers open the next row only when the declared set is nonempty.
+    /// A read outside that set breaks the contract they rely on.
+    #[error(
+        "{}a constraint reads column {column} of the next {trace} row, which the AIR does not declare",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    UndeclaredNextRowRead {
+        /// The instance index, for a batch of AIRs.
+        air: Option<usize>,
+        /// The trace the read comes from.
+        trace: NextRowTrace,
+        /// The column index within that trace.
+        column: usize,
     },
 }
 

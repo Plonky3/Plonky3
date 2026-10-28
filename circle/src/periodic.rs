@@ -27,6 +27,7 @@
 //! with the same period. The interpolation setup could be shared across columns with the
 //! same period.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_commit::{PeriodicColumns, PeriodicEvaluator, PeriodicLdeTable, PolynomialSpace};
@@ -116,6 +117,15 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
             } else {
                 (0..max_period).map(|i| col[i % period]).collect()
             };
+
+            // Every column has period 1 when the longest period is 1.
+            //
+            // Such a column is a constant, which extrapolates to itself.
+            // The circle FFT needs a domain of at least two points, so it is skipped.
+            if max_period == 1 {
+                columns.push(vec![padded[0]; extended_height]);
+                continue;
+            }
 
             // Interpolate on the max_period domain
             let periodic_domain = CircleDomain::standard(log_max_period);
@@ -226,6 +236,60 @@ mod tests {
                 "Mismatch at random point: LDE interpolation={:?}, eval_at_point={:?}",
                 lde_at_point, eval_at_point_result[0]
             );
+        }
+    }
+
+    #[test]
+    fn period_one_column_is_its_constant_everywhere() {
+        // Fixture state: 16 trace rows, blowup 2.
+        //
+        //     column 0: period 1, value 7
+        //     column 1: period 4, values 10 20 30 40
+        let trace_domain = CircleDomain::<F>::standard(4);
+        let lde_domain = CircleDomain::<F>::standard(5);
+        let periodic_table = vec![
+            vec![F::from_u32(7)],
+            vec![
+                F::from_u32(10),
+                F::from_u32(20),
+                F::from_u32(30),
+                F::from_u32(40),
+            ],
+        ];
+
+        // Invariant: the prover's table holds 7 on every LDE row of column 0.
+        let lde_table =
+            CirclePeriodicEvaluator::eval_on_lde(&periodic_table, &trace_domain, &lde_domain);
+        for row in 0..lde_domain.size() {
+            assert_eq!(*lde_table.get(row, 0), F::from_u32(7));
+        }
+
+        // Invariant: the verifier reads 7 for column 0 at every point.
+        //
+        // A period-1 column has no twin coset of its own, so it is read as its constant.
+        let mut rng = SmallRng::seed_from_u64(7);
+        for _ in 0..10 {
+            let point: EF = rng.random();
+            let values =
+                CirclePeriodicEvaluator::eval_at_point(&periodic_table, &trace_domain, point);
+            assert_eq!(values[0], EF::from(F::from_u32(7)));
+        }
+    }
+
+    #[test]
+    fn period_one_table_alone_is_constant() {
+        // Fixture state: 16 trace rows, blowup 2, one column of period 1 with value 7.
+        //
+        // The longest period is 1, so the prover's table has 1 * 2 rows.
+        let trace_domain = CircleDomain::<F>::standard(4);
+        let lde_domain = CircleDomain::<F>::standard(5);
+        let periodic_table = vec![vec![F::from_u32(7)]];
+
+        let lde_table =
+            CirclePeriodicEvaluator::eval_on_lde(&periodic_table, &trace_domain, &lde_domain);
+        assert_eq!(lde_table.height(), 2);
+        for row in 0..lde_domain.size() {
+            assert_eq!(*lde_table.get(row, 0), F::from_u32(7));
         }
     }
 

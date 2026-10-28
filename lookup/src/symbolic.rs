@@ -5,8 +5,8 @@ use alloc::vec::Vec;
 use core::iter;
 
 use p3_air::symbolic::{
-    AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
-    SymbolicVariable, SymbolicVariableExt,
+    AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicConstraints, SymbolicExpression,
+    SymbolicExpressionExt, SymbolicVariable, SymbolicVariableExt,
 };
 use p3_air::{Air, AirBuilder, ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Algebra, ExtensionField, Field};
@@ -162,6 +162,14 @@ impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
     /// Mapping from global constraint indices into separated base / extension streams.
     pub fn constraint_layout(&self) -> ConstraintLayout {
         self.inner.constraint_layout()
+    }
+
+    /// Consume the builder, returning its constraints and their global ordering.
+    ///
+    /// The interactions and indexed declarations are dropped.
+    #[must_use]
+    pub fn finish(self) -> SymbolicConstraints<F, EF> {
+        self.inner.finish()
     }
 }
 

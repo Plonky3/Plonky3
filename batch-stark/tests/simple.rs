@@ -11,12 +11,14 @@ use config::{
     Val, make_circle_config, make_config, make_config_allow_tiny_trace, make_config_wide,
     make_config_zk, make_two_adic_compat_config,
 };
-use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, SymbolicExpression, WindowAccess};
+use p3_air::{
+    Air, AirBuilder, BaseAir, NextRowTrace, PermutationAirBuilder, SymbolicExpression, WindowAccess,
+};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::verifier::commitments_with_opening_points;
 use p3_batch_stark::{
-    BatchShape, BatchTranscriptFailure, BatchVerificationError, ProverData, StarkGenericConfig,
-    StarkInstance, VerificationError, prove_batch, verify_batch,
+    BatchShape, BatchTranscriptFailure, BatchVerificationError, ProverData, ProvingError,
+    StarkGenericConfig, StarkInstance, VerificationError, prove_batch, verify_batch,
 };
 use p3_challenger::testing::pow_difficulties;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
@@ -4563,4 +4565,219 @@ fn batch_preflight_preserves_shape_error_order() {
             "case {case}: {error:?}"
         );
     }
+}
+
+/// One column pinned to a periodic column, looked up against it under a periodic count.
+#[derive(Clone)]
+struct PeriodicLookupAir;
+
+impl<F: Field> BaseAir<F> for PeriodicLookupAir {
+    fn width(&self) -> usize {
+        1
+    }
+
+    fn num_periodic_columns(&self) -> usize {
+        2
+    }
+
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+        // Column 0: the values. Column 1: the count, active on even rows.
+        Cow::Owned(vec![
+            vec![
+                F::from_u64(3),
+                F::from_u64(5),
+                F::from_u64(7),
+                F::from_u64(9),
+            ],
+            vec![F::ONE, F::ZERO],
+        ])
+    }
+}
+
+impl<AB> Air<AB> for PeriodicLookupAir
+where
+    AB: AirBuilder + PermutationAirBuilder + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        let value: AB::Expr = builder.main().current_slice()[0].into();
+        let expected: AB::Expr = builder.periodic_values()[0].into();
+        let count: AB::Expr = builder.periodic_values()[1].into();
+        builder.assert_eq(value.clone(), expected.clone());
+        builder.push_local_interaction(vec![
+            (vec![value], Count::bounded(count.clone(), 1)),
+            (vec![expected], Count::provided(-count)),
+        ]);
+    }
+}
+
+#[test]
+fn a_lookup_may_read_periodic_columns() {
+    // Invariant: lookup tuples and counts see the same periodic values as the constraints.
+    //
+    // Fixture state: 64 rows, values [3, 5, 7, 9] repeating, count [1, 0] repeating.
+    let config = make_config(42);
+    let air = PeriodicLookupAir;
+    let values: Vec<Val> = (0..64)
+        .map(|i| Val::from_u64([3, 5, 7, 9][i % 4]))
+        .collect();
+    let trace = RowMajorMatrix::new(values, 1);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    verify_batch(&config, &[air], &proof, &[vec![]], common).expect("the proof verifies");
+}
+
+#[test]
+fn empty_batch_is_rejected_by_prover() {
+    // Fixture state: zero instances, and common data sized for zero instances.
+    let config = make_config(0);
+    let instances: [StarkInstance<'_, MyConfig, DemoAir>; 0] = [];
+    let prover_data = ProverData::empty(0);
+
+    // Invariant: an empty batch is a typed error, not a panic inside the commitment scheme.
+    //
+    //     instances = []  ->  Err(EmptyBatch), before any commitment
+    let result = prove_batch(&config, &instances, &prover_data);
+    assert!(matches!(result, Err(ProvingError::EmptyBatch)));
+}
+
+/// A counter: the first row is zero and each row adds one to the previous.
+///
+/// The transition reads column 1 of the next row.
+/// Column 0 is a copy of column 1, so the declaration can omit exactly one read column.
+#[derive(Clone, Debug)]
+struct CounterAir {
+    /// The main columns the AIR declares it reads on the next row.
+    declared_next: Vec<usize>,
+}
+
+impl<F> BaseAir<F> for CounterAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        self.declared_next.clone()
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for CounterAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let copy = main.current(0).unwrap();
+        let local = main.current(1).unwrap();
+        let next = main.next(1).unwrap();
+        builder.assert_eq(copy, local);
+        builder.when_first_row().assert_zero(local);
+        builder
+            .when_transition()
+            .assert_eq(next, local + AB::Expr::ONE);
+    }
+}
+
+/// Eight rows counting from zero, each value written to both columns.
+fn counter_trace() -> RowMajorMatrix<Val> {
+    let values = (0..8u64).flat_map(|i| [Val::from_u64(i); 2]).collect();
+    RowMajorMatrix::new(values, 2)
+}
+
+#[test]
+fn prover_rejects_an_undeclared_next_row_read() {
+    let config = make_config(0);
+    let trace = counter_trace();
+
+    // Fixture state: two counters, both satisfied on their real rows.
+    //
+    // Mutation: instance 1 declares no next-row column, yet its transition reads column 1.
+    //
+    //     instance 0: declared {1}, read {1}
+    //     instance 1: declared {},  read {1}   <- undeclared
+    let honest = CounterAir {
+        declared_next: vec![1],
+    };
+    let misdeclared = CounterAir {
+        declared_next: vec![],
+    };
+    let instances = [
+        StarkInstance {
+            air: &honest,
+            trace: &trace,
+            public_values: vec![],
+        },
+        StarkInstance {
+            air: &misdeclared,
+            trace: &trace,
+            public_values: vec![],
+        },
+    ];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+
+    // Invariant: the prover names the instance and the read before committing to anything.
+    let result = prove_batch(&config, &instances, &prover_data);
+    assert!(matches!(
+        result,
+        Err(ProvingError::UndeclaredNextRowRead {
+            air: Some(1),
+            trace: NextRowTrace::Main,
+            column: 1,
+        })
+    ));
+}
+
+#[test]
+fn verifier_rejects_an_undeclared_next_row_read() {
+    let config = make_config(0);
+    let trace = counter_trace();
+
+    // Fixture state: an honest batch of two counters, each declaring its next-row read.
+    let honest = CounterAir {
+        declared_next: vec![1],
+    };
+    let instances = [
+        StarkInstance {
+            air: &honest,
+            trace: &trace,
+            public_values: vec![],
+        },
+        StarkInstance {
+            air: &honest,
+            trace: &trace,
+            public_values: vec![],
+        },
+    ];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    let public_values = [vec![], vec![]];
+    let airs = [honest.clone(), honest.clone()];
+    assert!(matches!(
+        verify_batch(&config, &airs, &proof, &public_values, &prover_data.common),
+        Ok(())
+    ));
+
+    // Mutation: the verifier's second AIR declares only column 0, which no transition reads.
+    //
+    //     declared next row:  {0}
+    //     read next row:      {1}   <- undeclared
+    let misdeclared = CounterAir {
+        declared_next: vec![0],
+    };
+    let airs = [honest, misdeclared];
+
+    // Invariant: the verifier names the instance and the read.
+    let result = verify_batch(&config, &airs, &proof, &public_values, &prover_data.common);
+    assert!(matches!(
+        result,
+        Err(BatchVerificationError::Verification(
+            VerificationError::UndeclaredNextRowRead {
+                air: Some(1),
+                trace: NextRowTrace::Main,
+                column: 1,
+            }
+        ))
+    ));
 }
