@@ -81,9 +81,10 @@ fn combine_tuple<F: Field, EF: ExtensionField<F>>(
 ///
 /// Per AIR the auxiliary trace carries one fraction column per lookup plus
 /// a single shared accumulator column at index 0. Writing
-/// `f_c[r] = V_c(r) / U_c(r)` for the per-row rational value of lookup `c`:
+/// `f_c[r] = V_c(r) / U_c(r)` for the per-row rational value of lookup `c`
+/// and `d` for the accumulator's free starting offset:
 /// ```text
-/// acc[0]   = 0
+/// acc[0]   = d
 /// acc[i+1] = acc[i] + ∑_c f_c[i]
 /// ```
 ///
@@ -92,9 +93,11 @@ fn combine_tuple<F: Field, EF: ExtensionField<F>>(
 ///
 /// Constraints are defined as:
 /// - **Fraction pin** (per lookup `c`): `U_c(r) * f_c[r] - V_c(r) = 0`
-/// - **Initial Constraint**: `acc[0] = 0`
 /// - **Transition Constraint**: `acc[i+1] = acc[i] + ∑_c f_c[i]`
-/// - **Final Constraint**: `terminal = acc[n-1] + ∑_c f_c[n-1]`
+/// - **Final Constraint**: `terminal = acc[n-1] + ∑_c f_c[n-1] + (γ - 1) * acc[0]`
+///
+/// The final constraint reads `acc[0]` as the accumulator's next row, which wraps on the last row.
+/// So `terminal = ∑_rows ∑_c f_c + γ * d`, where `γ` is the terminal-mask challenge.
 #[derive(Debug, Clone, Default)]
 pub struct LogUpGadget;
 
@@ -381,11 +384,14 @@ impl LookupProtocol for LogUpGadget {
     /// # Mathematical Details
     ///
     /// The accumulator at column 0 of the permutation trace satisfies:
-    /// - **first row**: `acc[0] = 0`
     /// - **transition**: `acc[r + 1] - acc[r] - ∑_c f_c[r] = 0`
-    /// - **last row**: `terminal - acc[n - 1] - ∑_c f_c[n - 1] = 0`
+    /// - **last row**: `terminal - acc[n - 1] - ∑_c f_c[n - 1] - (γ - 1) * acc[0] = 0`
     ///
     /// `terminal` is provided by the prover and committed once per AIR.
+    ///
+    /// `γ` is the terminal-mask challenge, read after every lookup's challenge pair.
+    ///
+    /// `acc[0]` is unconstrained, so `terminal = ∑_rows ∑_c f_c + γ * acc[0]`.
     ///
     /// The cross-AIR sum of committed terminals is checked to be zero after every AIR has been verified.
     fn eval_accumulator<AB>(
@@ -401,6 +407,7 @@ impl LookupProtocol for LogUpGadget {
         let acc_local: AB::ExprEF;
         let acc_next: AB::ExprEF;
         let row_sum: AB::ExprEF;
+        let gamma: AB::ExprEF;
         {
             let permutation = builder.permutation();
             assert!(
@@ -418,20 +425,29 @@ impl LookupProtocol for LogUpGadget {
             row_sum = lookups.iter().fold(AB::ExprEF::ZERO, |sum, lookup| {
                 sum + permutation.current(lookup.column + 1).unwrap().into()
             });
-        }
 
-        // Anchor acc[0] = 0 at the start.
-        builder.when_first_row().assert_zero_ext(acc_local.clone());
+            // The terminal-mask challenge follows every lookup's challenge pair.
+            let permutation_challenges = builder.permutation_randomness();
+            let mask_index = lookups.len() * self.num_challenges();
+            assert!(
+                permutation_challenges.len() > mask_index,
+                "Missing terminal-mask challenge"
+            );
+            gamma = permutation_challenges[mask_index].into();
+        }
 
         // Transition: acc[r+1] = acc[r] + row_sum[r] for r in 0..n-1.
         builder
             .when_transition()
-            .assert_zero_ext(acc_next - acc_local.clone() - row_sum.clone());
+            .assert_zero_ext(acc_next.clone() - acc_local.clone() - row_sum.clone());
 
-        // Terminal binding on the last row: terminal = acc[n-1] + row_sum[n-1].
+        // Terminal binding on the last row, where the next row wraps to acc[0]:
+        //
+        //     terminal = acc[n-1] + row_sum[n-1] + (γ - 1) * acc[0]
+        //              = ∑_rows row_sum + γ * acc[0]
         builder
             .when_last_row()
-            .assert_zero_ext(terminal - acc_local - row_sum);
+            .assert_zero_ext(terminal - acc_local - row_sum - (gamma - AB::ExprEF::ONE) * acc_next);
     }
 
     fn verify_terminal_sum<EF: Field>(

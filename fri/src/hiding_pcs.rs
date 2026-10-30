@@ -788,6 +788,13 @@ where
         )))
     }
 
+    fn sample_hiding_values(&self, count: usize) -> Vec<Challenge> {
+        let mut rng = self.rng.lock();
+        (0..count)
+            .map(|_| Challenge::from_basis_coefficients_fn(|_| rng.random()))
+            .collect()
+    }
+
     fn build_periodic_lde_table(
         &self,
         periodic_cols: &[Vec<Val>],

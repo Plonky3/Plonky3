@@ -25,9 +25,29 @@ use crate::types::{Lookup, LookupError, LookupTerminal};
 /// ```
 ///
 /// Every AIR declaring any lookup commits exactly one extension-field terminal.
+///
+/// # Challenges
+///
+/// ```text
+///     per lookup:      num_challenges() values, drawn before the permutation trace
+///     then, once:      the terminal-mask challenge γ, drawn after the permutation commitment
+/// ```
+///
+/// The accumulator starts at a free offset `d`, so the terminal is the AIR's bus sum plus `γ * d`.
+/// Offsets that sum to zero across a batch leave the cross-AIR check unchanged.
+/// Both sums are committed before `γ` is drawn, so offsets cannot cancel an unbalanced bus.
 pub trait LookupProtocol {
     /// Random challenges per lookup (2 for LogUp: `α`, `β`).
     fn num_challenges(&self) -> usize;
+
+    /// Permutation challenges an AIR with `num_lookups` lookups reads, the terminal mask included.
+    fn num_permutation_challenges(&self, num_lookups: usize) -> usize {
+        if num_lookups == 0 {
+            0
+        } else {
+            num_lookups * self.num_challenges() + 1
+        }
+    }
 
     /// Pin one lookup's fraction column to its per-row LogUp value.
     ///
@@ -43,9 +63,9 @@ pub trait LookupProtocol {
     ///
     /// # Constraints
     ///
-    /// - **First row** — the accumulator is anchored to zero.
     /// - **Transition** — each step adds the per-row sum of every fraction column.
-    /// - **Last row** — accumulator plus the last row's fractions equals the committed terminal.
+    /// - **Last row** — accumulator plus the last row's fractions, plus `γ - 1` times the
+    ///   starting offset, equals the committed terminal.
     fn eval_accumulator<AB: PermutationAirBuilder>(
         &self,
         builder: &mut AB,
@@ -78,7 +98,7 @@ pub trait LookupProtocol {
             self.eval_fraction(builder, lookup);
         }
 
-        // Pin the accumulator: anchor, transition, and terminal binding.
+        // Pin the accumulator: transition and terminal binding.
         self.eval_accumulator(builder, lookups, terminal.into());
     }
 
@@ -86,9 +106,10 @@ pub trait LookupProtocol {
     ///
     /// # Returns
     ///
-    /// - A trace matrix with the accumulator at column `0` and one fraction
+    /// - A trace matrix with the accumulator at column `0`, starting at zero, and one fraction
     ///   column per declared lookup.
-    /// - The AIR's terminal: `Some(_)` when any lookup is declared, `None` otherwise.
+    /// - The AIR's terminal for that zero offset, its bus sum: `Some(_)` when any lookup is
+    ///   declared, `None` otherwise.
     ///
     /// # Arguments
     ///
@@ -102,6 +123,32 @@ pub trait LookupProtocol {
         lookups: &[Lookup<F>],
         challenges: &[EF],
     ) -> (RowMajorMatrix<EF>, Option<LookupTerminal<EF>>);
+
+    /// Shift the accumulator of a generated permutation trace by `offset`.
+    fn offset_accumulator<EF: Field>(&self, permutation: &mut RowMajorMatrix<EF>, offset: EF) {
+        if offset.is_zero() {
+            return;
+        }
+        // The accumulator is column 0 of every row.
+        let width = permutation.width;
+        permutation
+            .values
+            .iter_mut()
+            .step_by(width)
+            .for_each(|acc| *acc += offset);
+    }
+
+    /// The terminal committed for a bus sum whose accumulator starts at `offset`.
+    ///
+    /// Matches the last-row binding: `bus_sum + γ * offset`.
+    fn masked_terminal<EF: Field>(
+        &self,
+        bus_sum: LookupTerminal<EF>,
+        offset: EF,
+        gamma: EF,
+    ) -> LookupTerminal<EF> {
+        LookupTerminal(bus_sum.0 + gamma * offset)
+    }
 
     /// Verify the cross-AIR sum of committed terminals is zero.
     ///
