@@ -758,13 +758,23 @@ where
     //
     // Why: the check runs before the first squeeze.
     // A bad witness is therefore rejected without the challenges ever being drawn.
-    let challenges_per_instance =
+    let mut challenges_per_instance =
         transcript.lookup_phase(all_lookups, &lookup_gadget, *lookup_pow_witness)?;
+
+    // Replay the permutation commitment, then redraw the terminal mask.
+    //
+    // The mask joins the permutation challenges of every AIR with lookups, after every lookup's pair.
+    if let Some(terminal_mask) = transcript.permutation_phase(commitments.permutation.clone()) {
+        for (challenges, lookups) in challenges_per_instance.iter_mut().zip(all_lookups) {
+            if !lookups.is_empty() {
+                challenges.push(terminal_mask);
+            }
+        }
+    }
 
     let terminal_values: Vec<Challenge<SC>> =
         lookup_terminals.iter().flatten().map(|t| t.0).collect();
-    let alpha: Challenge<SC> =
-        transcript.permutation_phase(commitments.permutation.clone(), &terminal_values);
+    let alpha: Challenge<SC> = transcript.terminal_phase(&terminal_values);
 
     transcript.quotient_phase(
         commitments.quotient_chunks.clone(),
@@ -938,12 +948,15 @@ where
     // Single-terminal LogUp cross-AIR check.
     //
     // Each AIR with lookups commits one terminal: the sum of every per-row
-    // rational contribution across its trace.
+    // rational contribution across its trace, plus the terminal mask times
+    // its accumulator offset.
     //
     // Soundness:
     // - The total across the batch must be zero.
     // - Bus challenges are sampled after the main commitment, so any
     //   per-bus imbalance survives the collapse with overwhelming probability.
+    // - The terminal mask is sampled after the permutation commitment, so
+    //   offsets that do not sum to zero cancel an imbalance at one mask only.
     lookup_gadget.verify_terminal_sum(lookup_terminals)?;
 
     Ok(())

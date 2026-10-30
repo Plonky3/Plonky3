@@ -679,7 +679,7 @@ fn test_two_instances() -> Result<(), impl Debug> {
 fn security_estimate_with_and_without_lookups() {
     use p3_batch_stark::security::num_batched_openings;
     use p3_security::grinding::GrindingSites;
-    use p3_security::logup::{self, LOGUP_LABEL, LogUpAir};
+    use p3_security::logup::{self, LOGUP_LABEL, LOGUP_MASK_LABEL, LogUpAir};
     use p3_security::shape::{InstanceShape, StarkAirParams};
     use p3_security::stark::proven_security_report;
 
@@ -761,7 +761,9 @@ fn security_estimate_with_and_without_lookups() {
     let without = proven_security_report(&regime, &air, &shape, &[], &grinding);
     let lookup_term =
         logup::security_term(&lookups, &shape, &grinding).expect("batch uses a LogUp bus");
-    let with = proven_security_report(&regime, &air, &shape, &[lookup_term], &grinding);
+    let mask_term =
+        logup::mask_security_term(&lookups, &shape).expect("batch masks its LogUp terminals");
+    let with = proven_security_report(&regime, &air, &shape, &[lookup_term, mask_term], &grinding);
     let lookup_bits = logup::fingerprint_error(&lookups, &shape).bits();
 
     let (wo_regime, wo_bind) = without.binding();
@@ -787,6 +789,7 @@ fn security_estimate_with_and_without_lookups() {
     assert!(with.security_bits() <= without.security_bits());
     assert!(with.security_bits() <= lookup_bits + 1e-9);
     assert!(with.udr.terms().iter().any(|t| t.label == LOGUP_LABEL));
+    assert!(with.udr.terms().iter().any(|t| t.label == LOGUP_MASK_LABEL));
     // At these parameters the fingerprint sits below the lookup-free bound, so
     // accounting for lookups strictly lowers security and the term binds.
     if lookup_bits < without.security_bits() {

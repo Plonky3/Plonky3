@@ -360,7 +360,7 @@ struct MockAirBuilder {
     /// - column `0` is the accumulator,
     /// - columns `1..N+1` are fractions.
     permutation: RowMajorMatrix<EF>,
-    /// Random challenges used in the LogUp argument
+    /// Random challenges used in the LogUp argument, the terminal mask last.
     challenges: Vec<EF>,
     /// Single-element slice carrying the AIR's committed terminal.
     permutation_values: Vec<EF>,
@@ -370,14 +370,19 @@ struct MockAirBuilder {
     height: usize,
 }
 
+/// Terminal mask the mock appends after every lookup's challenge pair.
+const TERMINAL_MASK: u32 = 13;
+
 impl MockAirBuilder {
     fn new(
         main: RowMajorMatrix<F>,
         permutation: RowMajorMatrix<EF>,
-        challenges: Vec<EF>,
+        lookup_challenges: Vec<EF>,
         permutation_values: Vec<EF>,
     ) -> Self {
         let height = main.height();
+        let mut challenges = lookup_challenges;
+        challenges.push(EF::from_u32(TERMINAL_MASK));
         Self {
             main,
             preprocessed: RowMajorMatrix::new(vec![], 0),
@@ -402,13 +407,8 @@ impl MockAirBuilder {
         let mut view = Vec::with_capacity(2 * trace.width());
         // local row
         view.extend(trace.row(self.current_row).unwrap());
-        // next row (if it exists)
-        if self.current_row + 1 < self.height {
-            view.extend(trace.row(self.current_row + 1).unwrap());
-        } else {
-            // pad with zeros if we are on the last row
-            view.extend(vec![T::ZERO; trace.width()]);
-        }
+        // next row, wrapping to the first row on the last one
+        view.extend(trace.row((self.current_row + 1) % self.height).unwrap());
         RowMajorMatrix::new(view, trace.width())
     }
 }
@@ -671,6 +671,61 @@ fn eval_all_passes_on_balanced_trace() {
 
     // Walk every row and check the lookup constraints fire without panic.
     let mut builder = MockAirBuilder::new(main, aux, challenges, vec![terminal.0]);
+    for r in 0..builder.height {
+        builder.for_row(r);
+        gadget.eval_all(&mut builder, &lookups);
+    }
+}
+
+#[test]
+fn an_offset_accumulator_binds_the_masked_terminal() {
+    // Fixture state: a balanced range check whose accumulator starts at d instead of 0.
+    //
+    //     acc[0]    = d
+    //     terminal  = bus sum + mask * d
+    let mut rng = SmallRng::seed_from_u64(0x0ff5e7);
+    let main = balanced_range_check_main(16, &mut rng);
+    let air = RangeCheckAir::new();
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
+
+    let gadget = LogUpGadget::new();
+    let challenges = vec![EF::from_u32(0x1234_5678), EF::from_u32(0x0765_4321)];
+    let offset = EF::from_u32(0x00de_cade);
+
+    let (mut aux, bus_sum) =
+        gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
+    gadget.offset_accumulator(&mut aux, offset);
+    let terminal = gadget.masked_terminal(bus_sum.unwrap(), offset, EF::from_u32(TERMINAL_MASK));
+    assert_eq!(aux.row_slice(0).unwrap()[0], offset);
+
+    let mut builder = MockAirBuilder::new(main, aux, challenges, vec![terminal.0]);
+    for r in 0..builder.height {
+        builder.for_row(r);
+        gadget.eval_all(&mut builder, &lookups);
+    }
+}
+
+#[test]
+#[should_panic(expected = "Extension constraint failed at row 15")]
+fn an_offset_accumulator_rejects_the_unmasked_terminal() {
+    // Fixture state: the accumulator starts at d, but the terminal omits the mask.
+    //
+    //     terminal  = bus sum + d   instead of   bus sum + mask * d
+    let mut rng = SmallRng::seed_from_u64(0x0ff5e7);
+    let main = balanced_range_check_main(16, &mut rng);
+    let air = RangeCheckAir::new();
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air).unwrap();
+
+    let gadget = LogUpGadget::new();
+    let challenges = vec![EF::from_u32(0x1234_5678), EF::from_u32(0x0765_4321)];
+    let offset = EF::from_u32(0x00de_cade);
+
+    let (mut aux, bus_sum) =
+        gadget.generate_permutation::<F, EF>(&main, &None, &[], &[], &lookups, &challenges);
+    gadget.offset_accumulator(&mut aux, offset);
+    let terminal = bus_sum.unwrap().0 + offset;
+
+    let mut builder = MockAirBuilder::new(main, aux, challenges, vec![terminal]);
     for r in 0..builder.height {
         builder.for_row(r);
         gadget.eval_all(&mut builder, &lookups);
@@ -961,13 +1016,14 @@ fn test_symbolic_to_expr() {
             EF::ZERO
         };
 
-        // Get the local and next values for row `i`.
+        // Get the local and next values for row `i`; the next row wraps on the last one.
         let cloned_trace = main_trace.clone();
         let local = cloned_trace.row(i).unwrap().into_iter().collect::<Vec<F>>();
-        let next = cloned_trace.row(i + 1).map_or_else(
-            || vec![F::ZERO; 2],
-            |row| row.into_iter().collect::<Vec<F>>(),
-        );
+        let next = cloned_trace
+            .row((i + 1) % builder.height)
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<F>>();
 
         // Compute the expected constraint values at row `i`.
         let mul = EF::from(local[0]) * EF::from(next[1]);

@@ -36,6 +36,19 @@
 //!     ε_logup ≤ N·(W + 1) / |EF| + N / |EF| = N·(W + 2) / |EF|.
 //! ```
 //!
+//! # Terminal mask
+//!
+//! `p3-batch-stark` starts each AIR's accumulator at a free offset `d_i`, committed with the
+//! permutation trace, and publishes `terminal_i = bus_sum_i + γ·d_i`. The mask `γ` is drawn
+//! after that commitment, so `Σ terminal_i = Σ bus_sum_i + γ·Σ d_i` with both sums fixed. Offsets
+//! that do not sum to zero cancel an unbalanced bus only at one value of `γ`:
+//!
+//! ```text
+//!     ε_mask ≤ 1 / |EF|
+//! ```
+//!
+//! No grind guards `γ`, so [`mask_security_term`] is a separate term that grinding never boosts.
+//!
 //! Bus batching is subsumed: `N` already sums interactions over every bus, and
 //! the `beta^W` bus offset is injective by construction (`p3_lookup`'s
 //! `Challenges`), so it contributes no separate error term. The multiplicity
@@ -61,6 +74,9 @@ use crate::shape::InstanceShape;
 
 /// Label for the LogUp fingerprint term in a [`crate::report::SecurityReport`].
 pub const LOGUP_LABEL: &str = "logup-fingerprint";
+
+/// Label for the terminal-mask term in a [`crate::report::SecurityReport`].
+pub const LOGUP_MASK_LABEL: &str = "logup-terminal-mask";
 
 /// Shape of a LogUp lookup argument, as seen by its soundness bound.
 #[derive(Copy, Clone, Debug)]
@@ -125,6 +141,24 @@ pub fn security_term(
         LOGUP_LABEL,
         boost(fingerprint_error(air, shape), grinding.lookup_challenge),
     ))
+}
+
+/// `-log2(ε_mask)` in bits, following `ε_mask ≤ 1 / |EF|`.
+///
+/// Returns 0 bits for an unknown field size.
+pub const fn mask_error(shape: &InstanceShape) -> ErrorBits {
+    ErrorBits::from_log2(shape.modulus_bits as f64)
+}
+
+/// The terminal-mask term for use in `extras`, or `None` when the AIR has no interactions.
+///
+/// Pair it with [`security_term`] for `p3-batch-stark`, whose terminals carry the mask in every
+/// proof, hiding or not.
+pub const fn mask_security_term(air: &LogUpAir, shape: &InstanceShape) -> Option<SecurityTerm> {
+    if air.num_interactions == 0 && air.num_interactions_per_proof == 0 {
+        return None;
+    }
+    Some(SecurityTerm::new(LOGUP_MASK_LABEL, mask_error(shape)))
 }
 
 #[cfg(test)]
@@ -212,6 +246,26 @@ mod tests {
             security_term(&some, &shape(128), &GrindingSites::NONE).expect("has interactions");
         assert_eq!(term.label, LOGUP_LABEL);
         assert_eq!(term.bits, fingerprint_error(&some, &shape(128)));
+    }
+
+    /// The mask term is `|EF|` bits, present exactly when the fingerprint term is.
+    #[test]
+    fn mask_term_tracks_the_field_and_the_interactions() {
+        let none = LogUpAir {
+            num_interactions: 0,
+            num_interactions_per_proof: 0,
+            max_message_width: 4,
+        };
+        assert!(mask_security_term(&none, &shape(128)).is_none());
+
+        let some = LogUpAir {
+            num_interactions: 4,
+            num_interactions_per_proof: 0,
+            max_message_width: 4,
+        };
+        let term = mask_security_term(&some, &shape(124)).expect("has interactions");
+        assert_eq!(term.label, LOGUP_MASK_LABEL);
+        assert_eq!(term.bits.bits(), 124.0);
     }
 
     /// A grind sited before the lookup challenges adds its bits to this term

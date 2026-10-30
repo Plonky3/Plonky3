@@ -30,6 +30,8 @@ use p3_util::{DisjointMutPtr, log2_strict_usize};
 use tracing::{debug_span, info_span, instrument};
 
 use crate::ProvingError;
+#[cfg(debug_assertions)]
+use crate::check_constraints::check_constraints;
 use crate::common::ProverData;
 use crate::config::{
     Challenge, Commitment, Domain, PcsProverError, StarkGenericConfig as SGC, Val,
@@ -302,8 +304,16 @@ where
     // Why: the main-trace commitment and every public value are already bound.
     // The witness therefore commits the prover to the trace before the pair exists.
     // Searching for a favourable pair costs `2^lookup_proof_of_work_bits` per candidate.
-    let (challenges_per_instance, lookup_pow_witness) =
+    let (mut challenges_per_instance, lookup_pow_witness) =
         transcript.lookup_phase(&all_lookups, &lookup_gadget);
+
+    // Each accumulator starts at its own offset, which reaches the terminal scaled by the mask.
+    let accumulator_offsets = accumulator_offsets::<SC>(pcs, &all_lookups);
+
+    // Generated permutation traces, kept for the constraint check once the mask is drawn.
+    #[cfg(debug_assertions)]
+    let mut debug_permutations: Vec<Option<RowMajorMatrix<SC::Challenge>>> =
+        (0..n_instances).map(|_| None).collect();
 
     // Generate permutation traces for instances that have lookups.
     let mut permutation_commit_inputs = Vec::with_capacity(n_instances);
@@ -313,8 +323,8 @@ where
         .zip(ext_trace_domains.iter().cloned())
         .for_each(|((i, inst), ext_domain)| {
             if !all_lookups[i].is_empty() {
-                // Compute the permutation argument trace and the AIR's single terminal.
-                let (generated_perm, terminal) = lookup_gadget
+                // Compute the permutation argument trace and the AIR's bus sum.
+                let (mut generated_perm, bus_sum) = lookup_gadget
                     .generate_permutation::<Val<SC>, SC::Challenge>(
                         inst.trace,
                         &inst.air.preprocessed_trace(),
@@ -323,28 +333,14 @@ where
                         all_lookups[i],
                         &challenges_per_instance[i],
                     );
+                lookup_gadget.offset_accumulator(&mut generated_perm, accumulator_offsets[i]);
 
-                // Record the AIR's terminal for transcript observation and proof emission.
-                lookup_terminals[i] = terminal;
+                // The bus sum becomes the AIR's terminal once the mask is drawn.
+                lookup_terminals[i] = bus_sum;
 
                 #[cfg(debug_assertions)]
                 {
-                    use crate::check_constraints::check_constraints;
-
-                    let preprocessed_trace = inst.air.preprocessed_trace();
-
-                    let perm_vals: Vec<SC::Challenge> = terminal.iter().map(|t| t.0).collect();
-                    let lookup_constraints_inputs = (all_lookups[i], &lookup_gadget);
-                    check_constraints(
-                        inst.air,
-                        inst.trace,
-                        &preprocessed_trace,
-                        &generated_perm,
-                        &challenges_per_instance[i],
-                        &perm_vals,
-                        &inst.public_values,
-                        lookup_constraints_inputs,
-                    );
+                    debug_permutations[i] = Some(generated_perm.clone());
                 }
 
                 // Consume the generated matrix directly; no extra clone before flattening.
@@ -396,15 +392,49 @@ where
         None
     };
 
-    // Transcript: bind the permutation commitment and every terminal, then draw alpha.
-    let terminal_values: Vec<Challenge<SC>> =
-        lookup_terminals.iter().flatten().map(|t| t.0).collect();
-    let alpha: Challenge<SC> = transcript.permutation_phase(
+    // Transcript: bind the permutation commitment, then draw the terminal mask.
+    //
+    // Each terminal becomes its bus sum plus the mask times its accumulator offset.
+    // The mask joins that AIR's permutation challenges, after every lookup's pair.
+    if let Some(terminal_mask) = transcript.permutation_phase(
         permutation_commit_and_data
             .as_ref()
             .map(|(commitment, _)| commitment.clone()),
-        &terminal_values,
-    );
+    ) {
+        for (i, terminal) in lookup_terminals.iter_mut().enumerate() {
+            if let Some(bus_sum) = *terminal {
+                *terminal = Some(lookup_gadget.masked_terminal(
+                    bus_sum,
+                    accumulator_offsets[i],
+                    terminal_mask,
+                ));
+                challenges_per_instance[i].push(terminal_mask);
+            }
+        }
+    }
+
+    // Debug-only: check every permutation trace against its AIR's constraints.
+    #[cfg(debug_assertions)]
+    for (i, inst) in instances.iter().enumerate() {
+        if let Some(generated_perm) = &debug_permutations[i] {
+            let perm_vals: Vec<SC::Challenge> = lookup_terminals[i].iter().map(|t| t.0).collect();
+            check_constraints(
+                inst.air,
+                inst.trace,
+                &inst.air.preprocessed_trace(),
+                generated_perm,
+                &challenges_per_instance[i],
+                &perm_vals,
+                &inst.public_values,
+                (all_lookups[i], &lookup_gadget),
+            );
+        }
+    }
+
+    // Transcript: bind every terminal, then draw alpha.
+    let terminal_values: Vec<Challenge<SC>> =
+        lookup_terminals.iter().flatten().map(|t| t.0).collect();
+    let alpha: Challenge<SC> = transcript.terminal_phase(&terminal_values);
 
     // Capture only the permutation prover data;
     //
@@ -828,6 +858,36 @@ where
         lookup_pow_witness,
         ood_pow_witness,
     })
+}
+
+/// Starting offset of every instance's LogUp accumulator.
+///
+/// Under a hiding PCS, the offsets of the instances with lookups are uniform subject to
+/// summing to zero. Each published terminal is then uniform, and the terminals still sum to
+/// zero. Every other offset is zero.
+fn accumulator_offsets<SC: SGC>(
+    pcs: &SC::Pcs,
+    all_lookups: &[&[Lookup<Val<SC>>]],
+) -> Vec<SC::Challenge> {
+    let mut offsets = SC::Challenge::zero_vec(all_lookups.len());
+    if !SC::Pcs::ZK {
+        return offsets;
+    }
+
+    let with_lookups: Vec<usize> = (0..all_lookups.len())
+        .filter(|&i| !all_lookups[i].is_empty())
+        .collect();
+    let Some((&last, rest)) = with_lookups.split_last() else {
+        return offsets;
+    };
+
+    // Every offset but the last is uniform; the last cancels their sum.
+    let random = pcs.sample_hiding_values(rest.len());
+    for (&i, value) in rest.iter().zip(random) {
+        offsets[i] = value;
+        offsets[last] -= value;
+    }
+    offsets
 }
 
 /// Evaluate the quotient polynomial q(x) = C(x) / Z_H(x) over the quotient

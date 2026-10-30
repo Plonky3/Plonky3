@@ -39,7 +39,7 @@ where
     } else {
         (contexts.len() + 1, 1)
     };
-    let num_challenges = contexts.len() * lookup_gadget.num_challenges();
+    let num_challenges = lookup_gadget.num_permutation_challenges(contexts.len());
     let layout = AirLayout {
         permutation_width,
         num_permutation_challenges: num_challenges,
@@ -164,7 +164,7 @@ where
 {
     layout.validate_against_air(air);
     let num_lookups = contexts.len();
-    let num_challenges = num_lookups * lookup_gadget.num_challenges();
+    let num_challenges = lookup_gadget.num_permutation_challenges(num_lookups);
     // Permutation trace: accumulator column plus one fraction column per
     // lookup, or empty when the AIR declares no lookup.
     //

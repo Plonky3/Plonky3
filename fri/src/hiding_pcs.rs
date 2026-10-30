@@ -788,6 +788,14 @@ where
         )))
     }
 
+    fn sample_hiding_values(&self, count: usize) -> Vec<Challenge> {
+        // Fork a private RNG so the shared lock is released before any caller's parallel work.
+        let mut rng = StdRng::from_rng(&mut *self.rng.lock());
+        (0..count)
+            .map(|_| Challenge::from_basis_coefficients_fn(|_| rng.random()))
+            .collect()
+    }
+
     fn build_periodic_lde_table(
         &self,
         periodic_cols: &[Vec<Val>],

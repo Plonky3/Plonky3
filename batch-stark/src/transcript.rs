@@ -21,6 +21,7 @@
 //!         lookup alpha                    one extension element
 //!         lookup beta                     one extension element
 //!         permutation commitment          one opaque value
+//!         terminal mask                   one extension element
 //!         lookup terminals                one per instance that declares a lookup
 //!     constraint challenge                one extension element
 //!     quotient commitment                 one opaque value
@@ -53,6 +54,10 @@
 //! ```
 //!
 //! A prover who learns `(alpha, beta)` first fits the trace to balance a lookup it never ran.
+//!
+//! The terminal mask is drawn after the permutation commitment and before any terminal.
+//! Every accumulator offset is committed by then, so offsets that do not sum to zero
+//! cancel an unbalanced lookup only when the mask hits one value.
 //!
 //! A prover who learns `zeta` first fits the quotient to agree at that one point.
 //!
@@ -105,6 +110,9 @@ const LOOKUP_BETA: &str = "lookup_beta";
 
 /// Step label of the batched permutation-trace commitment.
 const PERMUTATION_COMMITMENT: &str = "permutation_commitment";
+
+/// Step label of the challenge scaling every accumulator offset into its terminal.
+const TERMINAL_MASK: &str = "terminal_mask";
 
 /// Step label of one AIR's lookup terminal.
 const LOOKUP_TERMINAL: &str = "lookup_terminal";
@@ -251,9 +259,9 @@ impl BatchShape {
         F: PrimeField64,
         EF: ExtensionField<F>,
     {
-        // Two steps per instance, one per lookup terminal, then at most nine closing steps.
+        // Two steps per instance, one per lookup terminal, then at most fourteen other steps.
         let mut steps =
-            Vec::with_capacity(2 * self.num_instances() + self.num_lookup_instances + 9);
+            Vec::with_capacity(2 * self.num_instances() + self.num_lookup_instances + 14);
 
         // Each instance states the size of its extended trace domain.
         //
@@ -321,6 +329,14 @@ impl BatchShape {
                 Hierarchy::Atomic,
                 Kind::Message,
                 PERMUTATION_COMMITMENT,
+                Length::Scalar,
+            ));
+
+            // The mask is drawn once the offsets it scales are committed.
+            steps.push(Interaction::algebra::<F, EF>(
+                Hierarchy::Atomic,
+                Kind::Challenge,
+                TERMINAL_MASK,
                 Length::Scalar,
             ));
 
@@ -662,7 +678,26 @@ where
         )
     }
 
-    /// Bind the permutation commitment and every terminal, then draw the folding challenge.
+    /// Bind the permutation commitment, then draw the terminal mask.
+    ///
+    /// # Returns
+    ///
+    /// The challenge every accumulator offset is scaled by in its terminal.
+    ///
+    /// `None` when there is no permutation commitment, since the batch then declares no lookup.
+    pub fn permutation_phase(&mut self, commitment: Option<Com>) -> Option<EF> {
+        let commitment = commitment?;
+        self.state
+            .observe_opaque(PERMUTATION_COMMITMENT, commitment);
+
+        Some(
+            self.state
+                .challenge_extension::<F, EF, FieldToFieldCodec<F>>(TERMINAL_MASK)
+                .into_inner(),
+        )
+    }
+
+    /// Bind every terminal, then draw the folding challenge.
     ///
     /// # Panics
     ///
@@ -671,12 +706,7 @@ where
     /// # Returns
     ///
     /// The challenge that folds every instance's constraints together.
-    pub fn permutation_phase(&mut self, commitment: Option<Com>, terminals: &[EF]) -> EF {
-        if let Some(commitment) = commitment {
-            self.state
-                .observe_opaque(PERMUTATION_COMMITMENT, commitment);
-        }
-
+    pub fn terminal_phase(&mut self, terminals: &[EF]) -> EF {
         // The cross-AIR sum is checked over these, so each is bound before folding starts.
         for terminal in terminals {
             self.state
@@ -899,7 +929,26 @@ where
         ))
     }
 
-    /// Replay the permutation commitment and every terminal, then redraw the folding challenge.
+    /// Replay the permutation commitment, then redraw the terminal mask.
+    ///
+    /// # Returns
+    ///
+    /// The challenge every accumulator offset is scaled by in its terminal.
+    ///
+    /// `None` when there is no permutation commitment, since the batch then declares no lookup.
+    pub fn permutation_phase(&mut self, commitment: Option<Com>) -> Option<EF> {
+        let commitment = commitment?;
+        self.state
+            .observe_opaque(PERMUTATION_COMMITMENT, commitment);
+
+        Some(
+            self.state
+                .challenge_extension::<F, EF, FieldToFieldCodec<F>>(TERMINAL_MASK)
+                .into_inner(),
+        )
+    }
+
+    /// Replay every terminal, then redraw the folding challenge.
     ///
     /// # Panics
     ///
@@ -910,12 +959,7 @@ where
     /// # Returns
     ///
     /// The challenge that folds every instance's constraints together.
-    pub fn permutation_phase(&mut self, commitment: Option<Com>, terminals: &[EF]) -> EF {
-        if let Some(commitment) = commitment {
-            self.state
-                .observe_opaque(PERMUTATION_COMMITMENT, commitment);
-        }
-
+    pub fn terminal_phase(&mut self, terminals: &[EF]) -> EF {
         for terminal in terminals {
             self.state
                 .observe_extension::<F, EF, FieldToFieldCodec<F>>(LOOKUP_TERMINAL, terminal);
@@ -1256,7 +1300,8 @@ mod tests {
         transcript
             .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), None)
             .expect("a batch with no lookups replays with no witness");
-        let _alpha = transcript.permutation_phase(None, &[]);
+        assert!(transcript.permutation_phase(None).is_none());
+        let _alpha = transcript.terminal_phase(&[]);
         transcript.quotient_phase([F::ZERO; 8], None);
 
         let err = transcript
@@ -1285,7 +1330,8 @@ mod tests {
         transcript
             .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), None)
             .expect("a batch with no lookups replays with no witness");
-        let _alpha = transcript.permutation_phase(None, &[]);
+        assert!(transcript.permutation_phase(None).is_none());
+        let _alpha = transcript.terminal_phase(&[]);
         transcript.quotient_phase([F::ZERO; 8], None);
 
         let err = transcript
@@ -1316,7 +1362,8 @@ mod tests {
         verifier
             .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), None)
             .expect("a batch with no lookups replays with no witness");
-        let verifier_alpha = verifier.permutation_phase(None, &[]);
+        assert!(verifier.permutation_phase(None).is_none());
+        let verifier_alpha = verifier.terminal_phase(&[]);
         verifier.quotient_phase([F::ZERO; 8], None);
         let verifier_zeta = verifier
             .ood_phase(F::ZERO)
@@ -1332,7 +1379,8 @@ mod tests {
         prover.main_phase([F::ONE; 8], &public_values);
         prover.preprocessed_phase(None);
         let (_, lookup_witness) = prover.lookup_phase(&NO_LOOKUPS, &LogUpGadget::new());
-        let prover_alpha = prover.permutation_phase(None, &[]);
+        assert!(prover.permutation_phase(None).is_none());
+        let prover_alpha = prover.terminal_phase(&[]);
         prover.quotient_phase([F::ZERO; 8], None);
         let (prover_zeta, ood_witness) = prover.ood_phase();
         prover.delegate(|_| ());
