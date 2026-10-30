@@ -152,7 +152,8 @@ pub const fn mask_error(shape: &InstanceShape) -> ErrorBits {
 
 /// The terminal-mask term for use in `extras`, or `None` when the AIR has no interactions.
 ///
-/// Pair it with [`security_term`] for a batch STARK that masks its terminals.
+/// Pair it with [`security_term`] for `p3-batch-stark`, whose terminals carry the mask in every
+/// proof, hiding or not.
 pub const fn mask_security_term(air: &LogUpAir, shape: &InstanceShape) -> Option<SecurityTerm> {
     if air.num_interactions == 0 && air.num_interactions_per_proof == 0 {
         return None;

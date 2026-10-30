@@ -259,9 +259,9 @@ impl BatchShape {
         F: PrimeField64,
         EF: ExtensionField<F>,
     {
-        // Two steps per instance, one per lookup terminal, then at most nine closing steps.
+        // Two steps per instance, one per lookup terminal, then at most fourteen other steps.
         let mut steps =
-            Vec::with_capacity(2 * self.num_instances() + self.num_lookup_instances + 9);
+            Vec::with_capacity(2 * self.num_instances() + self.num_lookup_instances + 14);
 
         // Each instance states the size of its extended trace domain.
         //

@@ -450,6 +450,29 @@ impl LookupProtocol for LogUpGadget {
             .assert_zero_ext(terminal - acc_local - row_sum - (gamma - AB::ExprEF::ONE) * acc_next);
     }
 
+    fn offset_accumulator<EF: Field>(&self, permutation: &mut RowMajorMatrix<EF>, offset: EF) {
+        if offset.is_zero() {
+            return;
+        }
+        // The accumulator is column 0 of every row.
+        let width = permutation.width;
+        permutation
+            .values
+            .iter_mut()
+            .step_by(width)
+            .for_each(|acc| *acc += offset);
+    }
+
+    /// The last-row binding gives `bus_sum + γ * offset`.
+    fn masked_terminal<EF: Field>(
+        &self,
+        bus_sum: LookupTerminal<EF>,
+        offset: EF,
+        gamma: EF,
+    ) -> LookupTerminal<EF> {
+        LookupTerminal(bus_sum.0 + gamma * offset)
+    }
+
     fn verify_terminal_sum<EF: Field>(
         &self,
         terminals: &[Option<LookupTerminal<EF>>],

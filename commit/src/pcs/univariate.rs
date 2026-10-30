@@ -265,6 +265,7 @@ where
     /// Draw `count` uniform extension-field values from the hiding randomness.
     ///
     /// A non-hiding implementation has no hiding randomness and returns zeros.
+    /// A hiding implementation must override this; the default panics when `ZK` is set.
     fn sample_hiding_values(&self, count: usize) -> Vec<Challenge> {
         assert!(
             !Self::ZK,

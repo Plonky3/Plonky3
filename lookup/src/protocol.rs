@@ -125,30 +125,17 @@ pub trait LookupProtocol {
     ) -> (RowMajorMatrix<EF>, Option<LookupTerminal<EF>>);
 
     /// Shift the accumulator of a generated permutation trace by `offset`.
-    fn offset_accumulator<EF: Field>(&self, permutation: &mut RowMajorMatrix<EF>, offset: EF) {
-        if offset.is_zero() {
-            return;
-        }
-        // The accumulator is column 0 of every row.
-        let width = permutation.width;
-        permutation
-            .values
-            .iter_mut()
-            .step_by(width)
-            .for_each(|acc| *acc += offset);
-    }
+    fn offset_accumulator<EF: Field>(&self, permutation: &mut RowMajorMatrix<EF>, offset: EF);
 
     /// The terminal committed for a bus sum whose accumulator starts at `offset`.
     ///
-    /// Matches the last-row binding: `bus_sum + γ * offset`.
+    /// Must match the last-row binding of [`Self::eval_accumulator`] under the terminal mask `gamma`.
     fn masked_terminal<EF: Field>(
         &self,
         bus_sum: LookupTerminal<EF>,
         offset: EF,
         gamma: EF,
-    ) -> LookupTerminal<EF> {
-        LookupTerminal(bus_sum.0 + gamma * offset)
-    }
+    ) -> LookupTerminal<EF>;
 
     /// Verify the cross-AIR sum of committed terminals is zero.
     ///
