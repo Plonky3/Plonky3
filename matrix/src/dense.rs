@@ -684,23 +684,39 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
         RowMajorMatrixCow::new(Cow::Owned(self.values), self.width)
     }
 
+    /// Create a matrix filled with random values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rows * cols` overflows `usize`.
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
     where
         StandardUniform: Distribution<T>,
     {
-        let values = rng.sample_iter(StandardUniform).take(rows * cols).collect();
+        let len = rows
+            .checked_mul(cols)
+            .expect("random matrix size overflows usize");
+        let values = rng.sample_iter(StandardUniform).take(len).collect();
         Self::new(values, cols)
     }
 
+    /// Create a matrix filled with random nonzero field elements.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rows * cols` overflows `usize`.
     pub fn rand_nonzero<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
     where
         T: Field,
         StandardUniform: Distribution<T>,
     {
+        let len = rows
+            .checked_mul(cols)
+            .expect("random matrix size overflows usize");
         let values = rng
             .sample_iter(StandardUniform)
             .filter(|x| !x.is_zero())
-            .take(rows * cols)
+            .take(len)
             .collect();
         Self::new(values, cols)
     }
@@ -729,6 +745,10 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     /// # Returns
     ///
     /// A new matrix with width equal to `self.width() + num_cols`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new width or the total number of values overflows `usize`.
     #[instrument(level = "debug", skip_all)]
     pub fn with_random_cols<R>(&self, num_cols: usize, mut rng: R) -> Self
     where
@@ -738,10 +758,15 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     {
         // Record the original width so we know where to split each row.
         let old_w = self.width();
-        let new_w = old_w + num_cols;
+        let new_w = old_w
+            .checked_add(num_cols)
+            .expect("random matrix width overflows usize");
+        let new_len = new_w
+            .checked_mul(self.height())
+            .expect("random matrix size overflows usize");
 
         // Allocate a zero-initialized buffer for the widened matrix.
-        let new_values = T::zero_vec(new_w * self.height());
+        let new_values = T::zero_vec(new_len);
         let mut result = Self::new(new_values, new_w);
 
         // Copy original data into the left portion of each row in parallel; this is a plain
@@ -2602,6 +2627,37 @@ mod tests {
             }
             assert_eq!(matrix, original);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "random matrix size overflows usize")]
+    fn test_rand_rejects_overflow() {
+        // Twice this row count wraps to zero, without requiring a large allocation.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let _ = RowMajorMatrix::<BabyBear>::rand(&mut rng, usize::MAX / 2 + 1, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "random matrix size overflows usize")]
+    fn test_rand_nonzero_rejects_overflow() {
+        let mut rng = SmallRng::seed_from_u64(0);
+        let _ = RowMajorMatrix::<BabyBear>::rand_nonzero(&mut rng, usize::MAX / 2 + 1, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "random matrix width overflows usize")]
+    fn test_with_random_cols_rejects_width_overflow() {
+        // The width would wrap to 1 even though the matrix has no values.
+        let matrix = RowMajorMatrix::<BabyBear>::new(vec![], 2);
+        let _ = matrix.with_random_cols(usize::MAX, SmallRng::seed_from_u64(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "random matrix size overflows usize")]
+    fn test_with_random_cols_rejects_size_overflow() {
+        // The new width fits in usize, but multiplying it by height 2 wraps to zero.
+        let matrix = RowMajorMatrix::new(vec![BabyBear::ONE; 2], 1);
+        let _ = matrix.with_random_cols(usize::MAX / 2, SmallRng::seed_from_u64(0));
     }
 
     #[test]
