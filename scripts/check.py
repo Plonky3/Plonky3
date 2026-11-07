@@ -46,13 +46,21 @@ FULL_CI_PREFIXES = (".cargo/", ".github/workflows/", "scripts/")
 
 def cargo_metadata(workspace_root: Path) -> dict[str, Any]:
     command = ["cargo", "metadata", "--no-deps", "--format-version", "1"]
-    completed = subprocess.run(
-        command,
-        cwd=workspace_root,
-        stdout=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=workspace_root,
+            stdout=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        print(
+            f"error: unable to run {command[0]} ({error}); "
+            "see CONTRIBUTING.md for the required tools",
+            file=sys.stderr,
+        )
+        raise subprocess.CalledProcessError(127, command) from error
     if completed.returncode:
         raise subprocess.CalledProcessError(completed.returncode, command)
     return json.loads(completed.stdout)
