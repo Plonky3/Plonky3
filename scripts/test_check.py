@@ -166,6 +166,18 @@ class CheckCliTests(unittest.TestCase):
             with self.subTest(check=check):
                 self.assertEqual(self.dry_run_lines("lint", "--check", check), [command])
 
+    def test_missing_cargo_during_metadata_reports_a_prerequisite(self):
+        with tempfile.TemporaryDirectory() as empty_path:
+            env = os.environ.copy()
+            env["PATH"] = empty_path
+            for arguments in [("fast",), ("plan", "--full")]:
+                with self.subTest(arguments=arguments):
+                    result = self.run_check(*arguments, env=env)
+                    self.assertEqual(result.returncode, 127)
+                    self.assertIn("CONTRIBUTING.md", result.stderr)
+                    self.assertIn("cargo", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+
     def test_unknown_command_has_usage_error(self):
         result = self.run_check("unknown")
         self.assertEqual(result.returncode, 2)
