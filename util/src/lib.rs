@@ -457,12 +457,17 @@ where
 /// pass the array to `func` as a slice. If less than `BUFLEN`
 /// elements are remaining, that smaller slice is passed to `func` (if
 /// it is non-empty) and the function returns.
+///
+/// # Panics
+///
+/// Panics if `BUFLEN` is zero.
 #[inline]
 pub fn apply_to_chunks<const BUFLEN: usize, I, H>(input: I, mut func: H)
 where
     I: IntoIterator<Item = u8>,
     H: FnMut(&[u8]),
 {
+    assert!(BUFLEN != 0, "chunk size must be non-zero");
     let mut iter = input.into_iter();
     loop {
         let (buf, n) = iter_next_chunk_erased::<BUFLEN, _>(&mut iter);
@@ -503,11 +508,16 @@ fn iter_next_chunk_padded<T: Copy, const N: usize>(
 /// This is essentially a copy pasted version of the nightly `array_chunks` function.
 /// <https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.array_chunks>
 /// Once that is stabilized this and the functions above it should be removed.
+///
+/// # Panics
+///
+/// Panics if `N` is zero.
 #[inline]
 pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
     iter: impl IntoIterator<Item = T>,
     default: T, // Needed due to [T; M] not always implementing Default. Can probably be dropped if const generics stabilize.
 ) -> impl Iterator<Item = [T; N]> {
+    assert!(N != 0, "chunk size must be non-zero");
     let mut iter = iter.into_iter();
     iter::from_fn(move || iter_next_chunk_padded(&mut iter, default))
 }
@@ -957,6 +967,18 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "chunk size must be non-zero")]
+    fn test_apply_to_chunks_rejects_zero_length() {
+        apply_to_chunks::<0, _, _>([1_u8], |_| {});
+    }
+
+    #[test]
+    #[should_panic(expected = "chunk size must be non-zero")]
+    fn test_iter_array_chunks_padded_rejects_zero_length() {
+        let _ = iter_array_chunks_padded::<_, 0>([1_u8], 0);
+    }
 
     #[test]
     fn test_reverse_bits_len() {
