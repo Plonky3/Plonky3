@@ -125,6 +125,10 @@ An implementation that skips the tail then produces a different codeword.
 **Give the commitment a digest at least twice the security level in bits.**
 The commitment trait reports no width, and the schedule is derived before any scheme exists.
 
+**Pair the two compressions of a `MixedCompression` so each is collision resistant in the hash-tree sense, and check the upper one on inputs the lower one produces.**
+A mixed tree is only as strong as its weaker compression, and at the switch level `upper` compresses outputs of `lower`, which neither function's standalone analysis covers.
+The type wraps two opaque compressions and cannot see the security of either.
+
 **Make sure a rejection predicate can admit as many candidates as are asked of it.**
 The predicate is an opaque closure, and a blanket bound would be wrong for one admitting repeats.
 

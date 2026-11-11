@@ -68,5 +68,9 @@ harness = false
 name = "blake2s_verify"
 harness = false
 
+[[bench]]
+name = "mixed_hash"
+harness = false
+
 [lints]
 workspace = true

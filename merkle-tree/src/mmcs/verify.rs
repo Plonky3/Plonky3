@@ -82,17 +82,22 @@ where
         out
     }
 
-    /// Compress independent parents (including binary bridges and injection pairs padded to N).
+    /// Compresses independent parents (including binary bridges and injection pairs padded to N), all at compression level `level`.
     // A lane count from a type parameter cannot be a const generic argument.
     #[allow(clippy::chunks_exact_to_as_chunks)]
     pub(super) fn compress_opened_groups(
         &self,
         inputs: &[[[PW::Value; DIGEST_ELEMS]; N]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
+        level: usize,
     ) {
         debug_assert_eq!(inputs.len(), out.len());
-        if <C as PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>>::LANES > 1 {
-            self.compress.compress_many(inputs, out);
+        if <C as PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>>::lanes_at_level(
+            &self.compress,
+            level,
+        ) > 1
+        {
+            self.compress.compress_many_at_level(inputs, out, level);
             return;
         }
         let packed_len = if PW::WIDTH > 1 {
@@ -106,11 +111,11 @@ where
         {
             let packed =
                 core::array::from_fn(|child| PW::pack_columns_fn(|lane| groups[lane][child]));
-            let digest = self.compress.compress(packed);
+            let digest = self.compress.compress_at_level(packed, level);
             PW::unpack_into(&digest, digests);
         }
         for (&input, digest) in inputs[packed_len..].iter().zip(&mut out[packed_len..]) {
-            *digest = self.compress.compress(input);
+            *digest = self.compress.compress_at_level(input, level);
         }
     }
 }

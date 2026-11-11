@@ -573,7 +573,9 @@ where
                         (None, Some(below)) => &below[layer.arity * first..],
                         (None, None) => &[],
                     };
-                    self.fill_layer(layer, kids, &mut out[..nodes], first, scratch);
+                    // Layer `l` is built by compression level `l - 1`; the leaves (`l = 0`) take none.
+                    let level = l.saturating_sub(1);
+                    self.fill_layer(layer, kids, &mut out[..nodes], first, level, scratch);
                 }
             };
 
@@ -600,6 +602,7 @@ where
     /// - `kids`: the layer below, from the first child of the run; empty at the leaves.
     /// - `out`: one slot per node of the run.
     /// - `first`: the index in the layer of the run's first node.
+    /// - `level`: the compression level that builds this layer, one below its index.
     /// - `scratch`: staging buffers owned by the calling task.
     fn fill_layer(
         &self,
@@ -607,9 +610,15 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
+        level: usize,
         scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
-        let (hash_lanes, compress_lanes) = (Self::HASH_LANES, Self::COMPRESS_LANES);
+        // A mixed compression may batch at some levels and pack at others.
+        let compress_lanes =
+            <C as PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>>::lanes_at_level(
+                self.c, level,
+            );
+        let hash_lanes = Self::HASH_LANES;
 
         // A batched arm reads a node's children as one contiguous group of `N`.
         //
@@ -622,12 +631,12 @@ where
             (0, _) => self.hash_rows_packed(&layer.matrices, first, out, scratch),
             (_, true) if full_groups && compress_lanes > 1 => {
                 let (groups, _) = kids[..out.len() * N].as_chunks::<N>();
-                self.c.compress_many(groups, out);
+                self.c.compress_many_at_level(groups, out, level);
             }
             (_, false) if full_groups && compress_lanes > 1 && hash_lanes > 1 => {
-                self.inject_batched(layer, kids, out, first, scratch);
+                self.inject_batched(layer, kids, out, first, level, scratch);
             }
-            _ => self.fold_packed(layer, kids, out, first, scratch),
+            _ => self.fold_packed(layer, kids, out, first, level, scratch),
         }
     }
 
@@ -780,6 +789,7 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
+        level: usize,
         scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let lanes = PW::WIDTH;
@@ -795,7 +805,7 @@ where
             let injected = !layer.matrices.is_empty() && node < rows;
             if injected && node + lanes > rows {
                 for (i, digest) in digests.iter_mut().enumerate() {
-                    *digest = self.node(layer, kids, local + i, node + i);
+                    *digest = self.node(layer, kids, local + i, node + i, level);
                 }
                 continue;
             }
@@ -805,7 +815,7 @@ where
                 layer.arity,
                 &mut scratch.digests,
             );
-            let mut packed = self.c.compress(children);
+            let mut packed = self.c.compress_at_level(children, level);
 
             // Mix in the row digest, or the default digest past the injected rows.
             if !layer.matrices.is_empty() {
@@ -815,11 +825,14 @@ where
                 } else {
                     default
                 };
-                packed = self.c.compress(array::from_fn(|slot| match slot {
-                    0 => packed,
-                    1 => row,
-                    _ => default,
-                }));
+                packed = self.c.compress_at_level(
+                    array::from_fn(|slot| match slot {
+                        0 => packed,
+                        1 => row,
+                        _ => default,
+                    }),
+                    level,
+                );
             }
 
             unpack_digests(&packed, digests);
@@ -828,7 +841,7 @@ where
         // Tail nodes past the last whole group.
         let tail_local = groups.len();
         for (i, digest) in tail.iter_mut().enumerate() {
-            *digest = self.node(layer, kids, tail_local + i, first + tail_local + i);
+            *digest = self.node(layer, kids, tail_local + i, first + tail_local + i, level);
         }
     }
 
@@ -849,6 +862,7 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
+        level: usize,
         scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let rows = Self::injected_height(layer);
@@ -866,7 +880,7 @@ where
             let count = out.len();
 
             // Pass 1: fold the children of every node in this chunk.
-            self.c.compress_many(groups, out);
+            self.c.compress_many_at_level(groups, out, level);
 
             // Pass 2: hash one row per node, for as many nodes as the matrices are tall.
             let injected_count = count.min(rows.saturating_sub(base));
@@ -883,7 +897,7 @@ where
                     _ => default,
                 });
             }
-            self.c.compress_many(pairs, out);
+            self.c.compress_many_at_level(pairs, out, level);
         }
         scratch.injected = injected;
     }
@@ -925,24 +939,29 @@ where
     /// - `kids`: the layer below, from the first child of the calling run.
     /// - `local`: the node's position in that run, which locates its children.
     /// - `node`: the node's index in the layer, which locates its injected row.
+    /// - `level`: the compression level that builds the layer.
     fn node(
         &self,
         layer: &Layer<'a, M>,
         kids: &[[PW::Value; DIGEST_ELEMS]],
         local: usize,
         node: usize,
+        level: usize,
     ) -> [PW::Value; DIGEST_ELEMS] {
         let default = [PW::Value::default(); DIGEST_ELEMS];
         let arity = layer.arity;
 
         // Fold the node's children, padded to the full arity.
-        let folded = self.c.compress(array::from_fn(|slot| {
-            if slot < arity {
-                kids[arity * local + slot]
-            } else {
-                default
-            }
-        }));
+        let folded = self.c.compress_at_level(
+            array::from_fn(|slot| {
+                if slot < arity {
+                    kids[arity * local + slot]
+                } else {
+                    default
+                }
+            }),
+            level,
+        );
         if layer.matrices.is_empty() {
             return folded;
         }
@@ -953,11 +972,14 @@ where
         } else {
             default
         };
-        self.c.compress(array::from_fn(|slot| match slot {
-            0 => folded,
-            1 => row,
-            _ => default,
-        }))
+        self.c.compress_at_level(
+            array::from_fn(|slot| match slot {
+                0 => folded,
+                1 => row,
+                _ => default,
+            }),
+            level,
+        )
     }
 }
 
@@ -1059,7 +1081,8 @@ mod tests {
     use p3_keccak::{Keccak256Hash, KeccakF, VECTOR_LEN};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::{
-        CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
+        CompressionFunctionFromHasher, MixedCompression, PaddingFreeSponge, SerializingCompression,
+        SerializingHasher, TruncatedPermutation,
     };
     use proptest::collection;
     use proptest::prelude::*;
@@ -1140,6 +1163,9 @@ mod tests {
             .expect("reference shape has reachable injections");
             let computed = below.len() / arity;
 
+            // Every step of the schedule is one compression level, counted from the leaves.
+            let level = arities.len();
+
             // Matrices whose padded height matches this layer are injected into it.
             let take = rest
                 .iter()
@@ -1150,13 +1176,16 @@ mod tests {
 
             let mut layer: Vec<_> = (0..computed)
                 .map(|i| {
-                    let folded = c.compress(array::from_fn(|n| {
-                        if n < arity {
-                            below[arity * i + n]
-                        } else {
-                            zero
-                        }
-                    }));
+                    let folded = c.compress_at_level(
+                        array::from_fn(|n| {
+                            if n < arity {
+                                below[arity * i + n]
+                            } else {
+                                zero
+                            }
+                        }),
+                        level,
+                    );
                     if inject.is_empty() {
                         return folded;
                     }
@@ -1165,11 +1194,14 @@ mod tests {
                     } else {
                         zero
                     };
-                    c.compress(array::from_fn(|n| match n {
-                        0 => folded,
-                        1 => row,
-                        _ => zero,
-                    }))
+                    c.compress_at_level(
+                        array::from_fn(|n| match n {
+                            0 => folded,
+                            1 => row,
+                            _ => zero,
+                        }),
+                        level,
+                    )
                 })
                 .collect();
             layer.resize(padded_len(computed, N), zero);
@@ -1279,6 +1311,10 @@ mod tests {
     {
         fn compress(&self, input: [[u64; 4]; N]) -> [u64; 4] {
             to_words(&self.0.compress(input.map(to_bytes)))
+        }
+
+        fn compress_at_level(&self, input: [[u64; 4]; N], level: usize) -> [u64; 4] {
+            to_words(&self.0.compress_at_level(input.map(to_bytes), level))
         }
     }
 
@@ -1414,6 +1450,13 @@ mod tests {
             let input = input.map(|d| d.map(F::from_u64));
             self.0.compress(input).map(|x| x.as_canonical_u64())
         }
+
+        fn compress_at_level(&self, input: [[u64; 8]; N], level: usize) -> [u64; 8] {
+            let input = input.map(|d| d.map(F::from_u64));
+            self.0
+                .compress_at_level(input, level)
+                .map(|x| x.as_canonical_u64())
+        }
     }
 
     #[test]
@@ -1451,6 +1494,149 @@ mod tests {
         let h = SerializingHasher::new(sponge);
         let c = CompressionFunctionFromHasher::<_, 2, 4>::new(sponge);
         assert_matches_reference::<[F; VECTOR_LEN], [u64; VECTOR_LEN], _, _, 2, 4>(&h, &c);
+    }
+
+    /// The switch levels the mixed-tree tests cover: all upper, a few low switches, and all lower.
+    const UPPER_FROM: &[usize] = &[0, 1, 2, 3, 5, usize::MAX];
+
+    #[test]
+    fn mixed_sha256_and_poseidon2_match_reference() {
+        // Lower levels: SHA-256 batched over field digests. Upper levels: packed Poseidon2.
+        //
+        // With a SIMD packing, the lower levels take the batched arm and the upper ones the packed arm.
+        // Every switch level therefore moves the boundary between the two.
+        let mut rng = SmallRng::seed_from_u64(7);
+        let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16.clone());
+        let lower = SerializingCompression::new(p3_sha256::Sha256Compress);
+        let upper = TruncatedPermutation::<_, 2, 8, 16>::new(perm16);
+        for &upper_from in UPPER_FROM {
+            let c = MixedCompression::new(lower, upper.clone(), upper_from);
+            assert_field_matches_reference::<_, _, 2>(&h, &c);
+        }
+    }
+
+    #[test]
+    fn mixed_byte_tree_with_batched_leaves_matches_reference() {
+        // A batched leaf hasher sends injected layers through `inject_batched`.
+        // Both of its batched compressions must carry the level, on both sides of the switch.
+        let h = SerializingHasher::new(p3_blake2s::Blake2s256);
+        for &upper_from in UPPER_FROM {
+            let c2 = MixedCompression::new(
+                CompressionFunctionFromHasher::<_, 2, 32>::new(p3_blake2s::Blake2s256),
+                CompressionFunctionFromHasher::<_, 2, 32>::new(Keccak256Hash),
+                upper_from,
+            );
+            assert_bytes_match_reference::<_, _, 2>(&h, &c2);
+
+            let c4 = MixedCompression::new(
+                CompressionFunctionFromHasher::<_, 4, 32>::new(p3_blake2s::Blake2s256),
+                CompressionFunctionFromHasher::<_, 4, 32>::new(Keccak256Hash),
+                upper_from,
+            );
+            assert_bytes_match_reference::<_, _, 4>(&h, &c4);
+        }
+    }
+
+    #[test]
+    fn mixed_quaternary_blake2s_and_poseidon2_match_reference() {
+        // Four-to-one steps, with binary bridges and injections, on both sides of the switch.
+        let mut rng = SmallRng::seed_from_u64(8);
+        let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let perm32 = Poseidon2BabyBear::<32>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16);
+        let lower = SerializingCompression::new(CompressionFunctionFromHasher::<_, 4, 32>::new(
+            p3_blake2s::Blake2s256,
+        ));
+        let upper = TruncatedPermutation::<_, 4, 8, 32>::new(perm32);
+        for &upper_from in UPPER_FROM {
+            let c = MixedCompression::new(lower.clone(), upper.clone(), upper_from);
+            assert_field_matches_reference::<_, _, 4>(&h, &c);
+        }
+    }
+
+    #[test]
+    fn mixed_scalar_tree_matches_reference() {
+        // One-lane packing: every level takes the scalar or the batched arm.
+        let mut rng = SmallRng::seed_from_u64(9);
+        let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16.clone());
+        let lower = SerializingCompression::new(p3_sha256::Sha256Compress);
+        let upper = TruncatedPermutation::<_, 2, 8, 16>::new(perm16);
+        for &upper_from in UPPER_FROM {
+            let c = MixedCompression::new(lower, upper.clone(), upper_from);
+            for &(heights, width) in SHAPES {
+                let leaves = matrices(heights, width);
+                let tree = MerkleTree::<F, F, _, 2, 8>::new::<F, F, _, _>(&h, &c, leaves.clone());
+                let (expected, _) =
+                    reference_layers::<_, _, 2, 8>(&FieldWords(&h), &FieldWords(&c), &leaves);
+                let got: Vec<Vec<[u64; 8]>> = tree
+                    .digest_layers
+                    .iter()
+                    .map(|layer| {
+                        layer
+                            .iter()
+                            .map(|d| d.map(|x| x.as_canonical_u64()))
+                            .collect()
+                    })
+                    .collect();
+                assert!(
+                    got == expected,
+                    "upper_from {upper_from}, heights {heights:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_mix_of_one_function_is_that_function() {
+        // The same compression on both sides must reproduce the plain tree bit for bit.
+        let mut rng = SmallRng::seed_from_u64(10);
+        let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16.clone());
+        let c = TruncatedPermutation::<_, 2, 8, 16>::new(perm16);
+        for &upper_from in UPPER_FROM {
+            let mixed = MixedCompression::new(c.clone(), c.clone(), upper_from);
+            for &(heights, width) in SHAPES {
+                let leaves = matrices(heights, width);
+                let plain = MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(
+                    &h,
+                    &c,
+                    leaves.clone(),
+                );
+                let mixed =
+                    MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &mixed, leaves);
+                assert_eq!(plain.digest_layers, mixed.digest_layers);
+            }
+        }
+    }
+
+    #[test]
+    fn the_switch_level_changes_exactly_the_layers_above_it() {
+        // Layer `l` is built at level `l - 1`.
+        // Moving the switch from `k` to `k + 1` therefore keeps layers `0..=k` and changes every layer above them.
+        let mut rng = SmallRng::seed_from_u64(11);
+        let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16.clone());
+        let lower = SerializingCompression::new(p3_sha256::Sha256Compress);
+        let upper = TruncatedPermutation::<_, 2, 8, 16>::new(perm16);
+        let leaves = matrices(&[64], 3);
+        let build = |upper_from| {
+            let c = MixedCompression::new(lower, upper.clone(), upper_from);
+            MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &c, leaves.clone())
+                .digest_layers
+        };
+        for k in 0..6 {
+            let (a, b) = (build(k), build(k + 1));
+            for layer in 0..a.len() {
+                assert_eq!(
+                    a[layer] == b[layer],
+                    layer <= k,
+                    "switch {k} vs {}, layer {layer}",
+                    k + 1
+                );
+            }
+        }
     }
 
     #[test]
@@ -1680,6 +1866,36 @@ mod tests {
                 .digest_layers
                 .iter()
                 .map(|layer| layer.iter().map(to_words).collect())
+                .collect();
+            prop_assert!(got == expected);
+        }
+
+        #[test]
+        fn random_mixed_ladders_match_reference(
+            max_height in 1usize..=600,
+            depths in collection::vec(0u32..10, 0..4),
+            width in 1usize..10,
+            upper_from in 0usize..12,
+        ) {
+            // A packed tree with SHA-256 below the switch and Poseidon2 above it.
+            let mut heights = vec![max_height];
+            heights.extend(depths.iter().map(|&k| max_height.div_ceil(1 << k)));
+            let leaves = matrices(&heights, width);
+
+            let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut SmallRng::seed_from_u64(12));
+            let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16.clone());
+            let c = MixedCompression::new(
+                SerializingCompression::new(p3_sha256::Sha256Compress),
+                TruncatedPermutation::<_, 2, 8, 16>::new(perm16),
+                upper_from,
+            );
+            let (expected, _) =
+                reference_layers::<_, _, 2, 8>(&FieldWords(&h), &FieldWords(&c), &leaves);
+            let tree = MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &c, leaves);
+            let got: Vec<Vec<[u64; 8]>> = tree
+                .digest_layers
+                .iter()
+                .map(|layer| layer.iter().map(|d| d.map(|x| x.as_canonical_u64())).collect())
                 .collect();
             prop_assert!(got == expected);
         }
