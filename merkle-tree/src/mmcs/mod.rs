@@ -675,7 +675,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // Phase 8: Walk up the tree. At each layer we collapse contiguous
         // groups of unique paths that share a parent, replacing each group
         // with a single combined digest.
-        for &step in &arity_schedule {
+        for (level, &step) in arity_schedule.iter().enumerate() {
             new_digests.clear();
             compression_inputs.clear();
             new_indices.clear();
@@ -739,7 +739,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             }
 
             new_digests.resize(compression_inputs.len(), default_digest);
-            self.compress_opened_groups(&compression_inputs, &mut new_digests);
+            self.compress_opened_groups(&compression_inputs, &mut new_digests, level);
             chunk_start += step - 1;
             core::mem::swap(&mut digests, &mut new_digests);
             core::mem::swap(&mut node_indices, &mut new_indices);
@@ -800,7 +800,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                     inputs[1] = row;
                     inputs
                 }));
-                self.compress_opened_groups(&compression_inputs, &mut digests);
+                self.compress_opened_groups(&compression_inputs, &mut digests, level);
             }
         }
 

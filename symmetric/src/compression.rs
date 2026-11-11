@@ -48,6 +48,50 @@ pub trait PseudoCompressionFunction<T, const N: usize>: Clone {
             *output = self.compress(group.clone());
         }
     }
+
+    /// Compresses `input` into a node of a hash tree, at compression level `level`.
+    ///
+    /// Level `0` folds leaf digests, and each compression step above it adds one.
+    /// When a tree layer also takes an injected matrix, the injection compression runs at the same level as the step that built the layer.
+    /// A Merkle tree calls this rather than [`Self::compress`] for every node it builds or checks.
+    /// That lets a compression pick its function by height.
+    ///
+    /// The default ignores the level.
+    ///
+    /// A tree compresses whole batches through [`Self::compress_many_at_level`] and picks its path with [`Self::lanes_at_level`].
+    /// An implementation that overrides this method must override those two consistently, or batched nodes would skip the level.
+    #[inline]
+    fn compress_at_level(&self, input: [T; N], level: usize) -> T {
+        let _ = level;
+        self.compress(input)
+    }
+
+    /// Batched [`Self::compress_at_level`]: every group is compressed at the same `level`.
+    ///
+    /// The default ignores the level and calls [`Self::compress_many`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the batch is ragged: the group count must equal the output count.
+    #[inline]
+    fn compress_many_at_level(&self, inputs: &[[T; N]], out: &mut [T], level: usize)
+    where
+        T: Clone,
+    {
+        let _ = level;
+        self.compress_many(inputs, out);
+    }
+
+    /// The [`Self::LANES`] of the function used at compression level `level`.
+    ///
+    /// Callers read it to decide, level by level, whether batching through [`Self::compress_many_at_level`] is worth the bookkeeping.
+    ///
+    /// The default is [`Self::LANES`] at every level.
+    #[inline]
+    fn lanes_at_level(&self, level: usize) -> usize {
+        let _ = level;
+        Self::LANES
+    }
 }
 
 /// An `N`-to-1 compression function.

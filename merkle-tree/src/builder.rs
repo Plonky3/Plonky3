@@ -573,7 +573,9 @@ where
                         (None, Some(below)) => &below[layer.arity * first..],
                         (None, None) => &[],
                     };
-                    self.fill_layer(layer, kids, &mut out[..nodes], first, scratch);
+                    // Layer `l` is built by compression level `l - 1`; the leaves (`l = 0`) take none.
+                    let level = l.saturating_sub(1);
+                    self.fill_layer(layer, kids, &mut out[..nodes], first, level, scratch);
                 }
             };
 
@@ -600,6 +602,7 @@ where
     /// - `kids`: the layer below, from the first child of the run; empty at the leaves.
     /// - `out`: one slot per node of the run.
     /// - `first`: the index in the layer of the run's first node.
+    /// - `level`: the compression level that builds this layer, one below its index.
     /// - `scratch`: staging buffers owned by the calling task.
     fn fill_layer(
         &self,
@@ -607,9 +610,15 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
+        level: usize,
         scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
-        let (hash_lanes, compress_lanes) = (Self::HASH_LANES, Self::COMPRESS_LANES);
+        // A mixed compression may batch at some levels and pack at others.
+        let compress_lanes =
+            <C as PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>>::lanes_at_level(
+                self.c, level,
+            );
+        let hash_lanes = Self::HASH_LANES;
 
         // A batched arm reads a node's children as one contiguous group of `N`.
         //
@@ -622,12 +631,12 @@ where
             (0, _) => self.hash_rows_packed(&layer.matrices, first, out, scratch),
             (_, true) if full_groups && compress_lanes > 1 => {
                 let (groups, _) = kids[..out.len() * N].as_chunks::<N>();
-                self.c.compress_many(groups, out);
+                self.c.compress_many_at_level(groups, out, level);
             }
             (_, false) if full_groups && compress_lanes > 1 && hash_lanes > 1 => {
-                self.inject_batched(layer, kids, out, first, scratch);
+                self.inject_batched(layer, kids, out, first, level, scratch);
             }
-            _ => self.fold_packed(layer, kids, out, first, scratch),
+            _ => self.fold_packed(layer, kids, out, first, level, scratch),
         }
     }
 
@@ -780,6 +789,7 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
+        level: usize,
         scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let lanes = PW::WIDTH;
@@ -795,7 +805,7 @@ where
             let injected = !layer.matrices.is_empty() && node < rows;
             if injected && node + lanes > rows {
                 for (i, digest) in digests.iter_mut().enumerate() {
-                    *digest = self.node(layer, kids, local + i, node + i);
+                    *digest = self.node(layer, kids, local + i, node + i, level);
                 }
                 continue;
             }
@@ -805,7 +815,7 @@ where
                 layer.arity,
                 &mut scratch.digests,
             );
-            let mut packed = self.c.compress(children);
+            let mut packed = self.c.compress_at_level(children, level);
 
             // Mix in the row digest, or the default digest past the injected rows.
             if !layer.matrices.is_empty() {
@@ -815,11 +825,14 @@ where
                 } else {
                     default
                 };
-                packed = self.c.compress(array::from_fn(|slot| match slot {
-                    0 => packed,
-                    1 => row,
-                    _ => default,
-                }));
+                packed = self.c.compress_at_level(
+                    array::from_fn(|slot| match slot {
+                        0 => packed,
+                        1 => row,
+                        _ => default,
+                    }),
+                    level,
+                );
             }
 
             unpack_digests(&packed, digests);
@@ -828,7 +841,7 @@ where
         // Tail nodes past the last whole group.
         let tail_local = groups.len();
         for (i, digest) in tail.iter_mut().enumerate() {
-            *digest = self.node(layer, kids, tail_local + i, first + tail_local + i);
+            *digest = self.node(layer, kids, tail_local + i, first + tail_local + i, level);
         }
     }
 
@@ -849,6 +862,7 @@ where
         kids: &[[PW::Value; DIGEST_ELEMS]],
         out: &mut [[PW::Value; DIGEST_ELEMS]],
         first: usize,
+        level: usize,
         scratch: &mut Scratch<P::Value, PW::Value, N, DIGEST_ELEMS>,
     ) {
         let rows = Self::injected_height(layer);
@@ -866,7 +880,7 @@ where
             let count = out.len();
 
             // Pass 1: fold the children of every node in this chunk.
-            self.c.compress_many(groups, out);
+            self.c.compress_many_at_level(groups, out, level);
 
             // Pass 2: hash one row per node, for as many nodes as the matrices are tall.
             let injected_count = count.min(rows.saturating_sub(base));
@@ -883,7 +897,7 @@ where
                     _ => default,
                 });
             }
-            self.c.compress_many(pairs, out);
+            self.c.compress_many_at_level(pairs, out, level);
         }
         scratch.injected = injected;
     }
@@ -925,24 +939,29 @@ where
     /// - `kids`: the layer below, from the first child of the calling run.
     /// - `local`: the node's position in that run, which locates its children.
     /// - `node`: the node's index in the layer, which locates its injected row.
+    /// - `level`: the compression level that builds the layer.
     fn node(
         &self,
         layer: &Layer<'a, M>,
         kids: &[[PW::Value; DIGEST_ELEMS]],
         local: usize,
         node: usize,
+        level: usize,
     ) -> [PW::Value; DIGEST_ELEMS] {
         let default = [PW::Value::default(); DIGEST_ELEMS];
         let arity = layer.arity;
 
         // Fold the node's children, padded to the full arity.
-        let folded = self.c.compress(array::from_fn(|slot| {
-            if slot < arity {
-                kids[arity * local + slot]
-            } else {
-                default
-            }
-        }));
+        let folded = self.c.compress_at_level(
+            array::from_fn(|slot| {
+                if slot < arity {
+                    kids[arity * local + slot]
+                } else {
+                    default
+                }
+            }),
+            level,
+        );
         if layer.matrices.is_empty() {
             return folded;
         }
@@ -953,11 +972,14 @@ where
         } else {
             default
         };
-        self.c.compress(array::from_fn(|slot| match slot {
-            0 => folded,
-            1 => row,
-            _ => default,
-        }))
+        self.c.compress_at_level(
+            array::from_fn(|slot| match slot {
+                0 => folded,
+                1 => row,
+                _ => default,
+            }),
+            level,
+        )
     }
 }
 
@@ -1140,6 +1162,9 @@ mod tests {
             .expect("reference shape has reachable injections");
             let computed = below.len() / arity;
 
+            // Every step of the schedule is one compression level, counted from the leaves.
+            let level = arities.len();
+
             // Matrices whose padded height matches this layer are injected into it.
             let take = rest
                 .iter()
@@ -1150,13 +1175,16 @@ mod tests {
 
             let mut layer: Vec<_> = (0..computed)
                 .map(|i| {
-                    let folded = c.compress(array::from_fn(|n| {
-                        if n < arity {
-                            below[arity * i + n]
-                        } else {
-                            zero
-                        }
-                    }));
+                    let folded = c.compress_at_level(
+                        array::from_fn(|n| {
+                            if n < arity {
+                                below[arity * i + n]
+                            } else {
+                                zero
+                            }
+                        }),
+                        level,
+                    );
                     if inject.is_empty() {
                         return folded;
                     }
@@ -1165,11 +1193,14 @@ mod tests {
                     } else {
                         zero
                     };
-                    c.compress(array::from_fn(|n| match n {
-                        0 => folded,
-                        1 => row,
-                        _ => zero,
-                    }))
+                    c.compress_at_level(
+                        array::from_fn(|n| match n {
+                            0 => folded,
+                            1 => row,
+                            _ => zero,
+                        }),
+                        level,
+                    )
                 })
                 .collect();
             layer.resize(padded_len(computed, N), zero);
@@ -1279,6 +1310,10 @@ mod tests {
     {
         fn compress(&self, input: [[u64; 4]; N]) -> [u64; 4] {
             to_words(&self.0.compress(input.map(to_bytes)))
+        }
+
+        fn compress_at_level(&self, input: [[u64; 4]; N], level: usize) -> [u64; 4] {
+            to_words(&self.0.compress_at_level(input.map(to_bytes), level))
         }
     }
 
@@ -1413,6 +1448,13 @@ mod tests {
         fn compress(&self, input: [[u64; 8]; N]) -> [u64; 8] {
             let input = input.map(|d| d.map(F::from_u64));
             self.0.compress(input).map(|x| x.as_canonical_u64())
+        }
+
+        fn compress_at_level(&self, input: [[u64; 8]; N], level: usize) -> [u64; 8] {
+            let input = input.map(|d| d.map(F::from_u64));
+            self.0
+                .compress_at_level(input, level)
+                .map(|x| x.as_canonical_u64())
         }
     }
 

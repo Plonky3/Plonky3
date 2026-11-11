@@ -373,7 +373,8 @@ where
 
         let mut proof_pos: usize = 0;
 
-        for &step in &arity_schedule {
+        // Step `level` of the schedule builds digest layer `level + 1`, at compression level `level`.
+        for (level, &step) in arity_schedule.iter().enumerate() {
             let num_siblings = step - 1;
             let siblings = &opening_proof[proof_pos..proof_pos + num_siblings];
             proof_pos += num_siblings;
@@ -394,7 +395,7 @@ where
                 }
             });
 
-            digest = self.compress.compress(inputs);
+            digest = self.compress.compress_at_level(inputs, level);
             index /= step;
             let logical_next = curr_height_padded / step;
             curr_height_padded = padded_len(logical_next, N);
@@ -421,7 +422,7 @@ where
                         default_digest
                     }
                 });
-                digest = self.compress.compress(inject_inputs);
+                digest = self.compress.compress_at_level(inject_inputs, level);
             }
         }
 
