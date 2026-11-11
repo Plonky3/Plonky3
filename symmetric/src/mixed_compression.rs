@@ -47,6 +47,7 @@ use crate::compression::PseudoCompressionFunction;
 /// Two different openings that authenticate against one root diverge at a first node, walking down from the root.
 /// That node's output agrees while its children differ, and both children are compression outputs, so they form a tree-setting collision of the function used at that level.
 /// At the switch level the children are outputs of `lower`, so the tree-setting analysis of `upper` must cover inputs produced by `lower`.
+/// No type can check that pairing, so it is recorded with the other [caller obligations](https://github.com/Plonky3/Plonky3/blob/main/docs/caller-obligations.md#parameters-whose-other-side-is-invisible).
 ///
 /// # Panics
 ///
