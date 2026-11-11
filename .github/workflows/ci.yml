@@ -275,9 +275,11 @@ jobs:
             modes: serial parallel
           # The inversion's repeated-squaring kernel also needs PCLMULQDQ and AVX-512 VBMI.
           # No other leg sets both, so this one compiles and tests that kernel.
+          # Flock's byte-sliced fold also needs VPCLMULQDQ, and no other leg sets it with GFNI,
+          # so without it the fold every binary prover runs is replaced by the portable tables.
           - name: linux, pclmulqdq+avx512vbmi+gfni, build only
             os: ubuntu-latest
-            features: "+pclmulqdq,+avx512f,+avx512bw,+avx512vbmi,+gfni"
+            features: "+pclmulqdq,+avx512f,+avx512bw,+avx512vbmi,+gfni,+vpclmulqdq"
             compile_only: true
             gfni: true
             target: x86_64-unknown-linux-gnu
@@ -429,8 +431,12 @@ jobs:
       # the instructions. The 512-bit ring-switch kernel also needs AVX-512F and AVX-512BW, and
       # the sliced zerocheck's plane-fold transposes also need AVX-512 VBMI.
       #
+      # The subfield butterfly and the zerocheck fold are generic over their register, and
+      # every other leg instantiates them with a scalar model. Only here do their own tests
+      # run against the instructions they are written for.
+      #
       # Every feature the leg sets is checked, since the binary runs none of them conditionally.
-      - name: Test binary-field and sumcheck (x86-64 GFNI)
+      - name: Test the byte-map crates (x86-64 GFNI)
         if: >-
           needs.plan.outputs.rust == 'true' &&
           matrix.gfni &&
@@ -444,9 +450,16 @@ jobs:
             python3 scripts/check.py test --package p3-binary-field
             if grep -q avx512bw <<< "${{ matrix.features }}"; then
               cargo test -p p3-sumcheck --lib ring_switch::bits
+              # The subfield butterfly's byte maps run on the 512-bit register here, where
+              # every other leg runs the same tests against the scalar model of it.
+              python3 scripts/check.py test --package p3-binary-dft
             fi
             if grep -q avx512vbmi <<< "${{ matrix.features }}"; then
               cargo test -p p3-multi-stark --lib sliced
+            fi
+            if grep -q vpclmulqdq <<< "${{ matrix.features }}"; then
+              # The zerocheck fold is the byte-sliced kernel only here.
+              python3 scripts/check.py test --package p3-flock
             fi
           else
             echo "This runner lacks the required SIMD features; the build above is the coverage."
