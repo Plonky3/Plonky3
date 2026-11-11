@@ -1081,7 +1081,8 @@ mod tests {
     use p3_keccak::{Keccak256Hash, KeccakF, VECTOR_LEN};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::{
-        CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
+        CompressionFunctionFromHasher, MixedCompression, PaddingFreeSponge, SerializingCompression,
+        SerializingHasher, TruncatedPermutation,
     };
     use proptest::collection;
     use proptest::prelude::*;
@@ -1495,6 +1496,149 @@ mod tests {
         assert_matches_reference::<[F; VECTOR_LEN], [u64; VECTOR_LEN], _, _, 2, 4>(&h, &c);
     }
 
+    /// The switch levels the mixed-tree tests cover: all upper, a few low switches, and all lower.
+    const UPPER_FROM: &[usize] = &[0, 1, 2, 3, 5, usize::MAX];
+
+    #[test]
+    fn mixed_sha256_and_poseidon2_match_reference() {
+        // Lower levels: SHA-256 batched over field digests. Upper levels: packed Poseidon2.
+        //
+        // With a SIMD packing, the lower levels take the batched arm and the upper ones the packed arm.
+        // Every switch level therefore moves the boundary between the two.
+        let mut rng = SmallRng::seed_from_u64(7);
+        let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16.clone());
+        let lower = SerializingCompression::new(p3_sha256::Sha256Compress);
+        let upper = TruncatedPermutation::<_, 2, 8, 16>::new(perm16);
+        for &upper_from in UPPER_FROM {
+            let c = MixedCompression::new(lower, upper.clone(), upper_from);
+            assert_field_matches_reference::<_, _, 2>(&h, &c);
+        }
+    }
+
+    #[test]
+    fn mixed_byte_tree_with_batched_leaves_matches_reference() {
+        // A batched leaf hasher sends injected layers through `inject_batched`.
+        // Both of its batched compressions must carry the level, on both sides of the switch.
+        let h = SerializingHasher::new(p3_blake2s::Blake2s256);
+        for &upper_from in UPPER_FROM {
+            let c2 = MixedCompression::new(
+                CompressionFunctionFromHasher::<_, 2, 32>::new(p3_blake2s::Blake2s256),
+                CompressionFunctionFromHasher::<_, 2, 32>::new(Keccak256Hash),
+                upper_from,
+            );
+            assert_bytes_match_reference::<_, _, 2>(&h, &c2);
+
+            let c4 = MixedCompression::new(
+                CompressionFunctionFromHasher::<_, 4, 32>::new(p3_blake2s::Blake2s256),
+                CompressionFunctionFromHasher::<_, 4, 32>::new(Keccak256Hash),
+                upper_from,
+            );
+            assert_bytes_match_reference::<_, _, 4>(&h, &c4);
+        }
+    }
+
+    #[test]
+    fn mixed_quaternary_blake2s_and_poseidon2_match_reference() {
+        // Four-to-one steps, with binary bridges and injections, on both sides of the switch.
+        let mut rng = SmallRng::seed_from_u64(8);
+        let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let perm32 = Poseidon2BabyBear::<32>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16);
+        let lower = SerializingCompression::new(CompressionFunctionFromHasher::<_, 4, 32>::new(
+            p3_blake2s::Blake2s256,
+        ));
+        let upper = TruncatedPermutation::<_, 4, 8, 32>::new(perm32);
+        for &upper_from in UPPER_FROM {
+            let c = MixedCompression::new(lower.clone(), upper.clone(), upper_from);
+            assert_field_matches_reference::<_, _, 4>(&h, &c);
+        }
+    }
+
+    #[test]
+    fn mixed_scalar_tree_matches_reference() {
+        // One-lane packing: every level takes the scalar or the batched arm.
+        let mut rng = SmallRng::seed_from_u64(9);
+        let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16.clone());
+        let lower = SerializingCompression::new(p3_sha256::Sha256Compress);
+        let upper = TruncatedPermutation::<_, 2, 8, 16>::new(perm16);
+        for &upper_from in UPPER_FROM {
+            let c = MixedCompression::new(lower, upper.clone(), upper_from);
+            for &(heights, width) in SHAPES {
+                let leaves = matrices(heights, width);
+                let tree = MerkleTree::<F, F, _, 2, 8>::new::<F, F, _, _>(&h, &c, leaves.clone());
+                let (expected, _) =
+                    reference_layers::<_, _, 2, 8>(&FieldWords(&h), &FieldWords(&c), &leaves);
+                let got: Vec<Vec<[u64; 8]>> = tree
+                    .digest_layers
+                    .iter()
+                    .map(|layer| {
+                        layer
+                            .iter()
+                            .map(|d| d.map(|x| x.as_canonical_u64()))
+                            .collect()
+                    })
+                    .collect();
+                assert!(
+                    got == expected,
+                    "upper_from {upper_from}, heights {heights:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_mix_of_one_function_is_that_function() {
+        // The same compression on both sides must reproduce the plain tree bit for bit.
+        let mut rng = SmallRng::seed_from_u64(10);
+        let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16.clone());
+        let c = TruncatedPermutation::<_, 2, 8, 16>::new(perm16);
+        for &upper_from in UPPER_FROM {
+            let mixed = MixedCompression::new(c.clone(), c.clone(), upper_from);
+            for &(heights, width) in SHAPES {
+                let leaves = matrices(heights, width);
+                let plain = MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(
+                    &h,
+                    &c,
+                    leaves.clone(),
+                );
+                let mixed =
+                    MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &mixed, leaves);
+                assert_eq!(plain.digest_layers, mixed.digest_layers);
+            }
+        }
+    }
+
+    #[test]
+    fn the_switch_level_changes_exactly_the_layers_above_it() {
+        // Layer `l` is built at level `l - 1`.
+        // Moving the switch from `k` to `k + 1` therefore keeps layers `0..=k` and changes every layer above them.
+        let mut rng = SmallRng::seed_from_u64(11);
+        let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16.clone());
+        let lower = SerializingCompression::new(p3_sha256::Sha256Compress);
+        let upper = TruncatedPermutation::<_, 2, 8, 16>::new(perm16);
+        let leaves = matrices(&[64], 3);
+        let build = |upper_from| {
+            let c = MixedCompression::new(lower, upper.clone(), upper_from);
+            MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &c, leaves.clone())
+                .digest_layers
+        };
+        for k in 0..6 {
+            let (a, b) = (build(k), build(k + 1));
+            for layer in 0..a.len() {
+                assert_eq!(
+                    a[layer] == b[layer],
+                    layer <= k,
+                    "switch {k} vs {}, layer {layer}",
+                    k + 1
+                );
+            }
+        }
+    }
+
     #[test]
     fn pass_shape_keeps_every_block_busy() {
         // Invariant: every pass but the last single-block one gives each block its minimum.
@@ -1722,6 +1866,36 @@ mod tests {
                 .digest_layers
                 .iter()
                 .map(|layer| layer.iter().map(to_words).collect())
+                .collect();
+            prop_assert!(got == expected);
+        }
+
+        #[test]
+        fn random_mixed_ladders_match_reference(
+            max_height in 1usize..=600,
+            depths in collection::vec(0u32..10, 0..4),
+            width in 1usize..10,
+            upper_from in 0usize..12,
+        ) {
+            // A packed tree with SHA-256 below the switch and Poseidon2 above it.
+            let mut heights = vec![max_height];
+            heights.extend(depths.iter().map(|&k| max_height.div_ceil(1 << k)));
+            let leaves = matrices(&heights, width);
+
+            let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut SmallRng::seed_from_u64(12));
+            let h = PaddingFreeSponge::<_, 16, 8, 8>::new(perm16.clone());
+            let c = MixedCompression::new(
+                SerializingCompression::new(p3_sha256::Sha256Compress),
+                TruncatedPermutation::<_, 2, 8, 16>::new(perm16),
+                upper_from,
+            );
+            let (expected, _) =
+                reference_layers::<_, _, 2, 8>(&FieldWords(&h), &FieldWords(&c), &leaves);
+            let tree = MerkleTree::<F, F, _, 2, 8>::new::<Packed, Packed, _, _>(&h, &c, leaves);
+            let got: Vec<Vec<[u64; 8]>> = tree
+                .digest_layers
+                .iter()
+                .map(|layer| layer.iter().map(|d| d.map(|x| x.as_canonical_u64())).collect())
                 .collect();
             prop_assert!(got == expected);
         }

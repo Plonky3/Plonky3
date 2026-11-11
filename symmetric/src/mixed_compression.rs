@@ -37,7 +37,7 @@ use crate::compression::PseudoCompressionFunction;
 ///
 /// Both functions take and return the same digest type, so the tree, its caps and its proofs stay uniform.
 /// A byte hash does not natively share a digest type with a field hash.
-/// Bridging the two families takes an adapter that runs the byte hash on field-element digests.
+/// [`SerializingCompression`](crate::SerializingCompression) runs a compression over 32-byte digests on field-element digests, which bridges the two families.
 ///
 /// # Security
 ///

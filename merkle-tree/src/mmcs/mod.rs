@@ -46,6 +46,8 @@ use crate::pruning::{MerkleAuthPath, PrunedMerklePaths, restore_paths, walk_fron
 mod batch;
 mod error;
 mod geometry;
+#[cfg(test)]
+mod mixed_tests;
 mod pruned;
 mod verify;
 
