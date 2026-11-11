@@ -197,8 +197,9 @@ impl<Inner> SerializingCompression<Inner> {
 #[inline]
 fn to_bytes<F: PrimeField32>(digest: &[F; 8]) -> [u8; 32] {
     let mut bytes = [0; 32];
-    for (chunk, x) in bytes.chunks_exact_mut(4).zip(digest) {
-        chunk.copy_from_slice(&x.to_unique_u32().to_le_bytes());
+    let (chunks, _) = bytes.as_chunks_mut::<4>();
+    for (chunk, x) in chunks.iter_mut().zip(digest) {
+        *chunk = x.to_unique_u32().to_le_bytes();
     }
     bytes
 }
