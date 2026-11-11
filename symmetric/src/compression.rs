@@ -54,7 +54,7 @@ pub trait PseudoCompressionFunction<T, const N: usize>: Clone {
     /// Level `0` folds leaf digests, and each compression step above it adds one.
     /// When a tree layer also takes an injected matrix, the injection compression runs at the same level as the step that built the layer.
     /// A Merkle tree calls this rather than [`Self::compress`] for every node it builds or checks.
-    /// That lets a compression pick its function by height.
+    /// That lets a compression such as [`MixedCompression`](crate::MixedCompression) pick its function by height.
     ///
     /// The default ignores the level.
     ///
