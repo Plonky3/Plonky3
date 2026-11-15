@@ -371,7 +371,7 @@ mod tests {
             let periodic_domain = CircleDomain::standard(log_period);
             let evals = CircleEvaluations::from_natural_order(
                 periodic_domain,
-                RowMajorMatrix::new_col(periodic_col.clone()),
+                RowMajorMatrix::new_col(periodic_col),
             );
 
             let naive_result: Vec<F> = (0..lde_len)

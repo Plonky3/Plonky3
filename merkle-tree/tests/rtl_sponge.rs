@@ -59,7 +59,7 @@ fn commits_open_and_verify() {
             .unwrap();
 
         // Any change to an opened cell breaks the proof.
-        let mut tampered = opening.clone();
+        let mut tampered = opening;
         tampered.opened_values[2][0] += F::ONE;
         assert!(
             packed

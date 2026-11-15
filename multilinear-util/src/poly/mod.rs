@@ -1563,7 +1563,7 @@ pub(crate) mod test {
             let fold_part = randomness[0..k].to_vec();
             let eval_part = Point::new(randomness[k..randomness.len()].to_vec());
             let fold_random = Point::new(fold_part.clone());
-            let eval_point1 = Point::new([fold_part.clone(), eval_part.0.clone()].concat());
+            let eval_point1 = Point::new([fold_part, eval_part.0.clone()].concat());
             let folded_evals = evals_list.compress_prefix(&fold_random, F::ONE);
             assert_eq!(folded_evals.num_variables(), num_variables - k);
             let folded_coeffs = evals_list.compress_prefix(&fold_random, F::ONE);

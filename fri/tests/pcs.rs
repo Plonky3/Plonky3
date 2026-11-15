@@ -336,7 +336,7 @@ mod babybear_fri_pcs {
             )
             .unwrap();
 
-            let mut v_challenger = challenger.clone();
+            let mut v_challenger = challenger;
             v_challenger.observe(commit.clone());
             let v_zs: [Challenge; 3] =
                 core::array::from_fn(|_| v_challenger.sample_algebra_element());

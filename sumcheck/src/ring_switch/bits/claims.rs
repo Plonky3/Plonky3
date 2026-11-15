@@ -1507,7 +1507,7 @@ mod tests {
             let low = Point::<EF>::rand(&mut rng, ABSORBED);
             let eq_low = Poly::<EF>::new_from_point(low.as_slice(), EF::ONE).into_evals();
             let weighted = BitRingSwitch::<EF>::with_low_weights(&high, &eq_low).unwrap();
-            let mut joined = high.clone();
+            let mut joined = high;
             joined.extend(&low);
             assert_eq!(
                 weighted.incoming_claim(&tensor),
@@ -1585,7 +1585,7 @@ mod tests {
             let other = BitRingSwitch::<EF>::with_low_weights(&high, &moved).unwrap();
             let mut reductions = setup.reductions().to_vec();
             reductions[index] = other;
-            let mut readings = readings.clone();
+            let mut readings = readings;
             readings[index].0 = Some(weighted_reference(&witness, &high, &moved));
             assert!(
                 BitRingSwitchClaims::new(reductions)

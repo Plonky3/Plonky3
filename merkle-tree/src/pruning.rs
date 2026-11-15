@@ -540,7 +540,7 @@ mod tests {
         let full = total_siblings_for_levels(schedule.len(), &schedule);
         for subset_end in 1..=32usize {
             let indices: Vec<usize> = (0..subset_end).map(|i| (i * 13) % 32).collect();
-            let mut su = indices.clone();
+            let mut su = indices;
             su.sort_unstable();
             su.dedup();
             assert!(pruned_count(&schedule, &su) <= su.len() * full);

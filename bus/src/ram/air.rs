@@ -156,8 +156,7 @@ impl RamAir {
                 }
                 // A continuing proof takes its opening value from the inherited image.
                 RamBoundary::Segment { .. } => {
-                    transition
-                        .assert_zero(read.clone() * same.clone() * (current - previous.clone()));
+                    transition.assert_zero(read.clone() * same.clone() * (current - previous));
                 }
             }
         }

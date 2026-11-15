@@ -1644,7 +1644,7 @@ mod tests {
                 );
 
                 let unpacked = run(
-                    ProductPolynomial::new_unpacked(order, evals.clone(), weights.clone()),
+                    ProductPolynomial::new_unpacked(order, evals, weights.clone()),
                     sum,
                 );
                 let packed = run(
