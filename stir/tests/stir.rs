@@ -178,7 +178,7 @@ mod babybear_stir {
             (10, 3, 5, 1, 5),
             (10, 3, usize::MAX, 0, 7),
         ] {
-            let (mut params, dft, challenger) = make_params(1, 2);
+            let (mut params, dft, mut challenger) = make_params(1, 2);
             params.log_starting_folding_factor = starting_fold;
             let config = StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
                 degree,
@@ -202,7 +202,7 @@ mod babybear_stir {
             );
 
             *proof.final_polynomial.last_mut().unwrap() += EF::ONE;
-            assert!(verify_stir(&config, &proof, &mut challenger.clone()).is_err());
+            assert!(verify_stir(&config, &proof, &mut challenger).is_err());
         }
     }
 
@@ -239,7 +239,7 @@ mod babybear_stir {
             (3, 0, None),
             (10, 0, Some(6)),
         ] {
-            let (params, dft, challenger) = make_params(1, 2);
+            let (params, dft, mut challenger) = make_params(1, 2);
             let options = StirOptions {
                 max_log_final_poly_len: cap,
                 ..Default::default()
@@ -325,7 +325,7 @@ mod babybear_stir {
                     .as_mut()
                     .unwrap()
                     .row_evals[0][0] += EF::ONE;
-                assert!(verify_stir(&compact, &bad, &mut challenger.clone()).is_err());
+                assert!(verify_stir(&compact, &bad, &mut challenger).is_err());
             }
         }
     }
@@ -2633,7 +2633,7 @@ mod babybear_pcs {
                 .map(|(&d, width)| (d, RowMajorMatrix::<Val>::rand(&mut rng, d.size(), width)))
                 .collect();
 
-            let mut p_ch = challenger_template.clone();
+            let mut p_ch = challenger_template;
             let (commit_a, data_a) =
                 <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, mats_a.iter().cloned())
                     .unwrap();
