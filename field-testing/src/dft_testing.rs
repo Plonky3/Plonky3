@@ -53,7 +53,7 @@ where
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
         let idft_naive = NaiveDft.idft_batch(mat.clone());
-        let idft_result = dft.idft_batch(mat.clone());
+        let idft_result = dft.idft_batch(mat);
         assert_eq!(idft_naive, idft_result.to_row_major_matrix());
     }
 }
@@ -178,7 +178,7 @@ where
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<EF>::rand(&mut rng, h, 3);
         let idft_naive = NaiveDft.idft_batch(mat.clone());
-        let idft_result = dft.idft_algebra_batch(mat.clone());
+        let idft_result = dft.idft_algebra_batch(mat);
         assert_eq!(idft_naive, idft_result.to_row_major_matrix());
     }
 }

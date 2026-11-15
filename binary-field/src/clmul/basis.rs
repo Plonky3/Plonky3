@@ -155,12 +155,8 @@ const fn invert(cols: &[u128; 128], bits: usize) -> [u128; 128] {
         }
         assert!(col < bits, "the change-of-basis matrix is singular");
 
-        let swapped = mat[pivot];
-        mat[pivot] = mat[col];
-        mat[col] = swapped;
-        let swapped = inv[pivot];
-        inv[pivot] = inv[col];
-        inv[col] = swapped;
+        mat.swap(pivot, col);
+        inv.swap(pivot, col);
 
         let mut col = 0;
         while col < bits {

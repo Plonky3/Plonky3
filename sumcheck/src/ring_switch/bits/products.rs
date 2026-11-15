@@ -355,6 +355,8 @@ mod kernel {
     use super::super::tensor::BitTensor;
 
     /// A layout no value can take, so every sum takes the buckets.
+    // Uninhabited on purpose; the never type `!` that clippy suggests is not stable.
+    #[allow(clippy::empty_enums)]
     pub(super) enum Prepared {}
 
     // The kernel's methods run intrinsics, so they cannot be `const`.

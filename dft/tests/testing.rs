@@ -660,7 +660,7 @@ fn dft_all_zeros() {
         let dit = Radix2Dit::default().dft_batch(mat.clone());
         assert!(dit.values.iter().all(|x| x.is_zero()), "log_h={log_h}");
 
-        let bowers = Radix2Bowers.dft_batch(mat.clone());
+        let bowers = Radix2Bowers.dft_batch(mat);
         assert!(bowers.values.iter().all(|x| x.is_zero()), "log_h={log_h}");
     }
 }
@@ -676,7 +676,7 @@ fn idft_all_zeros() {
         let dit = Radix2Dit::default().idft_batch(mat.clone());
         assert!(dit.values.iter().all(|x| x.is_zero()), "log_h={log_h}");
 
-        let bowers = Radix2Bowers.idft_batch(mat.clone());
+        let bowers = Radix2Bowers.idft_batch(mat);
         assert!(bowers.values.iter().all(|x| x.is_zero()), "log_h={log_h}");
     }
 }

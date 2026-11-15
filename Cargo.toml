@@ -79,6 +79,9 @@ unused_peekable = "allow"
 tuple_array_conversions = "allow"
 transmute_undefined_repr = "allow"
 cognitive_complexity = "allow"
+# Since 1.100 this also flags loops whose index is part of the arithmetic (nested `[y][x]`
+# indexing, `limb * 16`), which the AIRs write as index loops on purpose.
+needless_range_loop = "allow"
 
 [workspace.dependencies]
 blake2 = { version = "0.11.0", default-features = false }

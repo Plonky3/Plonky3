@@ -1083,7 +1083,7 @@ mod tests {
             assert_eq!(unpacked, expected);
 
             // SIMD-packed storage path must produce identical scalars.
-            let mut packed = initial.clone();
+            let mut packed = initial;
             SplitEq::<F, EF>::new_packed(&point, EF::ONE)
                 .eq1()
                 .accumulate_next_chunk_into(
@@ -1140,7 +1140,7 @@ mod tests {
             assert_eq!(unpacked, expected);
 
             // SIMD-packed storage path must produce identical scalars.
-            let mut packed = initial.clone();
+            let mut packed = initial;
             SplitEq::<F, EF>::new_packed(&point, EF::ONE)
                 .eq1()
                 .compress_prefix_shifted_into(packed.as_mut_slice(), chunk.as_slice(), w0);

@@ -267,7 +267,7 @@ mod tests {
         for bits in [0, 8] {
             let base = challenger();
             let mut prover = base.clone();
-            let mut verifier = base.clone();
+            let mut verifier = base;
 
             let (alpha, witness) = prove::<F, EF, _>(&mut prover, bits);
 

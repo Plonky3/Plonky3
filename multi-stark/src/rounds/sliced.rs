@@ -2610,7 +2610,7 @@ impl RowTile {
             {
                 fold.stage(&fold.trace.cells, columns.clone(), word, low, high_words);
             }
-            for (offset, column) in columns.clone().enumerate() {
+            for (offset, column) in columns.enumerate() {
                 let halves = [0, 1].map(|half| {
                     let at = half * half_len;
                     fold.staged_words(
