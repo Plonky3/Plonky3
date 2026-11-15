@@ -17,14 +17,11 @@ const EXAMPLE: &str = "prove_hash_binary";
 ///
 /// Rerunning the example under the same profile reuses its build artifacts.
 fn current_profile() -> String {
-    // The test binary lives at `<target>/<profile dir>/deps/<name>`.
-    let exe = env::current_exe().expect("the test binary has a path");
-    let profile_dir = exe
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::file_name)
+    let profile_dir = profile_dir().expect("the test binary sits under a profile directory");
+    let profile_dir = profile_dir
+        .file_name()
         .and_then(|name| name.to_str())
-        .expect("the test binary sits under a profile directory");
+        .expect("the profile directory has a UTF-8 name");
 
     // The dev profile is the only one whose directory name differs from its own.
     match profile_dir {
@@ -33,12 +30,28 @@ fn current_profile() -> String {
     }
 }
 
+/// `<target>/<profile dir>`, the directory the test binary was built under.
+///
+/// The binary sits at `<profile dir>/deps/<name>` up to Cargo 1.99 and at
+/// `<profile dir>/build/<package>/<hash>/out/<name>` since Cargo 1.100, so this takes the
+/// ancestor directly inside the target directory, which Cargo marks with a `CACHEDIR.TAG`.
+fn profile_dir() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    exe.ancestors()
+        .skip(1)
+        .find(|dir| {
+            dir.parent()
+                .is_some_and(|target| target.join("CACHEDIR.TAG").is_file())
+        })
+        .map(Path::to_path_buf)
+}
+
 /// The example executable built alongside this test, while no source has changed since.
 ///
 /// A default `cargo test` or `cargo nextest run` builds every example of the package with the
 /// test targets, under the same profile and features:
 ///
-///     <target>/<profile dir>/deps/json_output-<hash>
+///     <target>/<profile dir>/deps/json_output-<hash>      (Cargo 1.100: see `profile_dir`)
 ///     <target>/<profile dir>/examples/prove_hash_binary
 ///
 /// A `cargo run` from inside this test resolves features for this package alone. A run over
@@ -50,8 +63,7 @@ fn current_profile() -> String {
 /// used only while none of those sources is newer than it.
 /// When only this test is selected, the executable may have been built with a different feature set.
 fn prebuilt_example() -> Option<PathBuf> {
-    let exe = env::current_exe().ok()?;
-    let examples = exe.parent()?.parent()?.join("examples");
+    let examples = profile_dir()?.join("examples");
     let executable = examples.join(format!("{EXAMPLE}{}", env::consts::EXE_SUFFIX));
     let built = fs::metadata(&executable)
         .and_then(|metadata| metadata.modified())
