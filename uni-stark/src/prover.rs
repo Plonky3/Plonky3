@@ -7,7 +7,7 @@ use p3_air::symbolic::{
 };
 use p3_air::{Air, RowWindow};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
+use p3_commit::{PackedPeriodicColumns, Pcs, PolynomialSpace, UnivariateStarkPcs};
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use p3_field::Field;
 use p3_field::{PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
@@ -776,26 +776,7 @@ where
     let main_next = !air.main_next_row_columns().is_empty();
     let preprocessed_next = !air.preprocessed_next_row_columns().is_empty();
 
-    let pack_width = Pack::<SC, A, Strat>::WIDTH;
-    // The packed row groups of the periodic table repeat every `groups_in_period`
-    // groups, so only those are materialized and group `g` reads `g % groups_in_period`.
-    let ncols = periodic_table.width();
-    let groups_in_period = periodic_table.packed_group_period(pack_width);
-    let periodic_packed: Vec<Pack<SC, A, Strat>> = if periodic_table.is_empty() {
-        Vec::new()
-    } else {
-        let periodic_table_ref = &periodic_table;
-        (0..groups_in_period)
-            .flat_map(move |group| {
-                let i_start = group * pack_width;
-                (0..ncols).map(move |col_idx| {
-                    Pack::<SC, A, Strat>::from_fn(|offset| {
-                        *periodic_table_ref.get(i_start + offset, col_idx)
-                    })
-                })
-            })
-            .collect()
-    };
+    let periodic_packed = PackedPeriodicColumns::<Pack<SC, A, Strat>>::new(&periodic_table);
 
     // Buffers reused across row-groups on each worker thread: allocating the
     // packed row pairs and constraint accumulators fresh per group costs
@@ -806,6 +787,7 @@ where
         base_constraints: Vec<P>,
         ext_constraints: Vec<C>,
         base_coefficients: Vec<P>,
+        periodic: Vec<P>,
     }
 
     let mut quotient_values = SC::Challenge::zero_vec(quotient_size);
@@ -823,6 +805,7 @@ where
                 base_constraints: Vec::with_capacity(constraint_layout.base_indices.len()),
                 ext_constraints: Vec::with_capacity(constraint_layout.ext_indices.len()),
                 base_coefficients: Vec::with_capacity(base_alpha_powers.len()),
+                periodic: Vec::with_capacity(periodic_table.width()),
             },
             |bufs, (group, quotient_chunk)| {
                 let i_start = group * Pack::<SC, A, Strat>::WIDTH;
@@ -874,12 +857,8 @@ where
                     }
                     None => RowMajorMatrixView::new(&[], 0),
                 };
-                let periodic_values: &[Pack<SC, A, Strat>] = if periodic_packed.is_empty() {
-                    &[]
-                } else {
-                    let group = (i_start / pack_width) % groups_in_period;
-                    &periodic_packed[group * ncols..group * ncols + ncols]
-                };
+                periodic_packed.row_into(group, &mut bufs.periodic);
+                let periodic_values: &[Pack<SC, A, Strat>] = &bufs.periodic;
 
                 let (quotient, base_constraints, ext_constraints) = Strat::eval_row_group(
                     air,

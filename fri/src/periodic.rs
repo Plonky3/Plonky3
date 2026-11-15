@@ -4,21 +4,21 @@
 //! in two-adic STARK proofs. The implementation supports:
 //!
 //! - `eval_on_lde`: Evaluates periodic columns on the LDE domain using FFT extrapolation.
-//!   All columns are padded to the maximum period, creating a rectangular matrix that
-//!   stores only `max_period × blowup` rows with modular indexing for O(1) lookup.
+//!   Each column is extrapolated over its own periodic subdomain and stores only
+//!   `period × blowup` values, read with modular indexing for O(1) lookup.
 //!
 //! - `eval_at_point`: Evaluates periodic columns at arbitrary points using Lagrange
 //!   interpolation. This is used by the verifier.
 //!
 //! ## Memory Efficiency
 //!
-//! Instead of materializing the full LDE-sized table, we store only `max_period × blowup`
-//! rows. For a trace of size 2^20 with period-4 columns and blowup 4, this means storing
-//! 16 rows instead of 4M rows per column.
+//! Instead of materializing the full LDE-sized table, each column stores only
+//! `period × blowup` values. For a trace of size 2^20 with period-4 columns and blowup 4,
+//! this means storing 16 values instead of 4M per column, even next to longer columns.
 //!
 //! ## Complexity
 //!
-//! - `eval_on_lde`: O(max_period × blowup × log(max_period × blowup)) for FFT extrapolation,
+//! - `eval_on_lde`: O(period × blowup × log(period × blowup)) per column for FFT extrapolation,
 //!   then O(1) per LDE point lookup using modular indexing.
 //!
 //! - `eval_at_point`: O(period) per column using direct Lagrange interpolation.
@@ -33,7 +33,6 @@ use p3_commit::{PeriodicColumns, PeriodicEvaluator, PeriodicLdeTable};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 
 /// Build the compact periodic LDE table using the two-adic evaluator.
@@ -99,55 +98,24 @@ impl<Dft> TwoAdicPeriodicEvaluator<Dft> {
         let periodic_table =
             PeriodicColumns::new(periodic_table, trace_len).unwrap_or_else(|err| panic!("{err}"));
 
-        // No declared column means no table, and no longest period to pad up to.
-        let Some(max_period) = periodic_table.max_period() else {
+        if periodic_table.is_empty() {
             return PeriodicLdeTable::empty();
-        };
-
-        let extended_height = max_period
-            .checked_mul(blowup)
-            .expect("extended height overflow when computing max_period * blowup");
-        let num_cols = periodic_table.len();
-        let row_major_capacity = extended_height
-            .checked_mul(num_cols)
-            .expect("row-major periodic table capacity overflow");
-
-        // Compute the shift for the periodic subdomain at max_period.
-        // This aligns the periodic domain with the LDE domain so modular indexing works.
-        //
-        // Divisibility holds by construction: lde_len = blowup * trace_len.
-        // extended_height = blowup * max_period, and max_period divides trace_len.
-        // So extended_height divides lde_len.
-        let periodic_shift = lde_shift.exp_u64((lde_len / extended_height) as u64);
-
-        // Process each column: pad to max_period, then extrapolate
-        // Build the result in column-major order first, then transpose to row-major
-        let mut columns: Vec<Vec<F>> = Vec::with_capacity(num_cols);
-
-        for col in periodic_table.as_slice() {
-            let period = col.len();
-
-            // Pad column to max_period by repeating values
-            let padded: Vec<F> = if period == max_period {
-                col.clone()
-            } else {
-                (0..max_period).map(|i| col[i % period]).collect()
-            };
-
-            // Extrapolate to extended_height using DFT
-            let extended = dft.coset_lde(padded, log_blowup, periodic_shift);
-            columns.push(extended);
         }
 
-        // Convert from column-major to row-major storage
-        let mut row_major_values = Vec::with_capacity(row_major_capacity);
-        for row_idx in 0..extended_height {
-            for col in &columns {
-                row_major_values.push(col[row_idx]);
-            }
-        }
+        // Extrapolate each column over its own periodic subdomain: the LDE point
+        // x = shift·ω^i maps to x^(n / period), a point of a coset of order period × blowup,
+        // which divides lde_len = blowup × trace_len.
+        let columns = periodic_table
+            .as_slice()
+            .iter()
+            .map(|col| {
+                let extended_height = col.len() * blowup;
+                let periodic_shift = lde_shift.exp_u64((lde_len / extended_height) as u64);
+                dft.coset_lde(col.clone(), log_blowup, periodic_shift)
+            })
+            .collect();
 
-        PeriodicLdeTable::new(RowMajorMatrix::new(row_major_values, num_cols))
+        PeriodicLdeTable::from_columns(columns)
     }
 }
 
@@ -302,6 +270,41 @@ mod tests {
         let table = vec![vec![F::ONE, F::TWO, F::from_u64(3)]];
 
         TwoAdicPeriodicEvaluator::eval_on_lde_with_dft(&Radix2Dit::default(), &table, &trace, &lde);
+    }
+
+    // Columns of every period from 1 to 32 over a 32-row trace, at blowups 2, 4 and 8.
+    //
+    // The reference is the padded layout: every column repeated up to the longest period and
+    // extrapolated over that one subdomain. A column extrapolated over its own, smaller
+    // subdomain must give the same value at every LDE point.
+    #[test]
+    fn per_period_columns_match_the_padded_layout() {
+        let periods = [32, 1, 8, 2, 32, 8, 4, 16];
+        let table: Vec<Vec<F>> = periods
+            .iter()
+            .enumerate()
+            .map(|(c, &p)| (0..p).map(|i| F::from_usize(7 * c + i * i + 3)).collect())
+            .collect();
+        let dft = Radix2Dit::default();
+        let trace = TwoAdicMultiplicativeCoset::new(F::ONE, 5).unwrap();
+        for log_blowup in 1..=3 {
+            let lde = TwoAdicMultiplicativeCoset::new(F::GENERATOR, 5 + log_blowup).unwrap();
+            let got = TwoAdicPeriodicEvaluator::eval_on_lde_with_dft(&dft, &table, &trace, &lde);
+
+            let padded_height = 32 << log_blowup;
+            let shift = lde.shift().exp_u64((lde.size() / padded_height) as u64);
+            for (c, col) in table.iter().enumerate() {
+                let padded = (0..32).map(|i| col[i % col.len()]).collect();
+                let reference = dft.coset_lde(padded, log_blowup, shift);
+                for i in 0..lde.size() {
+                    assert_eq!(
+                        *got.get(i, c),
+                        reference[i % padded_height],
+                        "column {c}, point {i}, log_blowup {log_blowup}"
+                    );
+                }
+            }
+        }
     }
 
     // Sixteen values over an 8-point trace domain.

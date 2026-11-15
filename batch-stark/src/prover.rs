@@ -9,7 +9,7 @@ use p3_air::DebugConstraintBuilder;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt, UndeclaredNextRowRead};
 use p3_air::{Air, RowWindow};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
+use p3_commit::{PackedPeriodicColumns, Pcs, PolynomialSpace, UnivariateStarkPcs};
 use p3_field::{
     Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
     PrimeField64,
@@ -930,25 +930,7 @@ where
     let periodic_table =
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
-    // The packed row groups of the periodic table repeat every `groups_in_period`
-    // groups, so only those are materialized and group `g` reads `g % groups_in_period`.
-    let ncols = periodic_table.width();
-    let groups_in_period = periodic_table.packed_group_period(pack_width);
-    let periodic_packed: Vec<PackedVal<SC>> = if periodic_table.is_empty() {
-        Vec::new()
-    } else {
-        let periodic_table_ref = &periodic_table;
-        (0..groups_in_period)
-            .flat_map(move |group| {
-                let i_start = group * pack_width;
-                (0..ncols).map(move |col_idx| {
-                    PackedVal::<SC>::from_fn(|offset| {
-                        *periodic_table_ref.get(i_start + offset, col_idx)
-                    })
-                })
-            })
-            .collect()
-    };
+    let periodic_packed = PackedPeriodicColumns::<PackedVal<SC>>::new(&periodic_table);
 
     // Broadcast scalar challenges to packed representations for SIMD evaluation.
     let packed_perm_challenges: Vec<PackedChallenge<SC>> = permutation_challenges
@@ -992,9 +974,10 @@ where
                     Vec::with_capacity(
                         2 * preprocessed_on_quotient_domain.map_or(0, |p| p.width()),
                     ),
+                    Vec::with_capacity(periodic_table.width()),
                 )
             },
-            |(base_buf, ext_buf, perm_buf, main_buf, prep_buf), i_start| {
+            |(base_buf, ext_buf, perm_buf, main_buf, prep_buf, periodic_buf), i_start| {
                 let chunk_emit = pack_width.min(quotient_size - i_start);
                 // Load SIMD-packed selector values for this chunk.
                 let i_range = i_start..i_start + pack_width;
@@ -1073,12 +1056,8 @@ where
                 // Swap in the reusable constraint buffers (already cleared).
                 base_buf.clear();
                 ext_buf.clear();
-                let periodic_values: &[PackedVal<SC>] = if periodic_packed.is_empty() {
-                    &[]
-                } else {
-                    let group = (i_start / pack_width) % groups_in_period;
-                    &periodic_packed[group * ncols..group * ncols + ncols]
-                };
+                periodic_packed.row_into(i_start / pack_width, periodic_buf);
+                let periodic_values: &[PackedVal<SC>] = periodic_buf;
                 let inner_folder = ProverConstraintFolder {
                     main,
                     preprocessed: preprocessed_view,
