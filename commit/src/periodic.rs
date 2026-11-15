@@ -45,13 +45,13 @@
 //! ## Memory-Efficient Storage
 //!
 //! Instead of materializing the full LDE-sized table (which would be wasteful for small periods),
-//! we store only `max_period × blowup` rows in a [`PeriodicLdeTable`]. All periodic columns are
-//! padded to the maximum period, creating a rectangular matrix that can be efficiently accessed
-//! with modular indexing in the constraint evaluation hot loop.
+//! a [`PeriodicLdeTable`] stores each column's values over one period of the LDE domain, at most
+//! `period × blowup` of them, and reads them with modular indexing in the constraint evaluation
+//! hot loop. [`PackedPeriodicColumns`] keeps that layout for packed provers.
 
 use alloc::vec::Vec;
 
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PackedValue};
 use p3_matrix::dense::RowMajorMatrix;
 use thiserror::Error;
 
@@ -184,62 +184,74 @@ impl<'a, F> PeriodicColumns<'a, F> {
 
 /// Compact storage for periodic column values on the LDE domain.
 ///
-/// Instead of materializing the full LDE-sized table, stores only `extended_height` rows
-/// (where `extended_height = max_period × blowup`) and uses modular indexing to access values.
-///
-/// All periodic columns are padded to the maximum period before extrapolation, creating a
-/// rectangular matrix for cache-friendly row-wise access.
+/// Instead of materializing the full LDE-sized table, each column stores only its own
+/// `period × blowup` values and is read with modular indexing. Columns are not padded to the
+/// longest period, so an AIR mixing many short-period columns with a few long ones stays small.
 ///
 /// # Invariants
 ///
-/// - All periods must be powers of 2 (see module-level documentation)
-/// - Height is always `max_period × blowup` (both powers of 2, so height is power of 2)
+/// - All periods must be powers of 2 (see module-level documentation), so every column's
+///   length is a power of two and divides [`height`](Self::height).
 #[derive(Clone, Debug)]
 pub struct PeriodicLdeTable<F> {
-    /// Values in row-major form: height = extended_height, width = num_columns.
-    /// Empty if there are no periodic columns.
-    values: RowMajorMatrix<F>,
-    /// Cached `values.values.len() / values.width` (`0` if `values.width == 0`).
-    /// Guaranteed to be a power of two, so `get` can index with `& (height - 1)`
-    /// instead of `%`.
+    /// One vector per periodic column: its values on one period of the LDE domain.
+    columns: Vec<Vec<F>>,
+    /// The longest column's length (`0` if there are no columns).
     height: usize,
 }
 
 impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
-    /// Create a new periodic LDE table from extrapolated values.
+    /// Create a table from columns of extrapolated values, each `period × blowup` long.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a column's length is not a power of two.
+    pub fn from_columns(columns: Vec<Vec<F>>) -> Self {
+        for col in &columns {
+            assert!(
+                col.len().is_power_of_two(),
+                "PeriodicLdeTable height must be a power of two for bitmask indexing"
+            );
+        }
+        let height = columns.iter().map(Vec::len).max().unwrap_or(0);
+        Self { columns, height }
+    }
+
+    /// Create a table from a row-major matrix whose columns all share one period.
     ///
     /// The matrix should have height = `max_period × blowup` and width = `num_periodic_columns`.
-    pub const fn new(values: RowMajorMatrix<F>) -> Self {
-        let height = match values.values.len().checked_div(values.width) {
-            Some(h) => h,
-            None => 0,
-        };
-        debug_assert!(
-            height == 0 || height.is_power_of_two(),
-            "PeriodicLdeTable height must be a power of two for bitmask indexing"
-        );
-        Self { values, height }
+    pub fn new(values: RowMajorMatrix<F>) -> Self {
+        let width = values.width;
+        let height = values.values.len().checked_div(width).unwrap_or(0);
+        if height == 0 {
+            return Self::empty();
+        }
+        let mut columns: Vec<Vec<F>> = (0..width).map(|_| Vec::with_capacity(height)).collect();
+        for (i, v) in values.values.into_iter().enumerate() {
+            columns[i % width].push(v);
+        }
+        Self::from_columns(columns)
     }
 
     /// Create an empty table (for AIRs without periodic columns).
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
-            values: RowMajorMatrix::new(Vec::new(), 0),
+            columns: Vec::new(),
             height: 0,
         }
     }
 
     /// Returns true if there are no periodic columns.
     pub const fn is_empty(&self) -> bool {
-        self.values.values.is_empty()
+        self.columns.is_empty()
     }
 
     /// Number of periodic columns.
     pub const fn width(&self) -> usize {
-        self.values.width
+        self.columns.len()
     }
 
-    /// Height of the compact table (max_period × blowup).
+    /// Length of the longest column (max_period × blowup).
     pub const fn height(&self) -> usize {
         self.height
     }
@@ -247,31 +259,68 @@ impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
     /// Number of distinct packed row groups when the LDE domain is read in groups of
     /// `pack_width` consecutive indices, group `g` starting at `g * pack_width`.
     ///
-    /// [`get`](Self::get) reduces indices modulo `height`, and the group starts
-    /// `g * pack_width mod height` repeat with period `height / gcd(height, pack_width)`.
-    /// Group `g` therefore reads the same values as group `g % packed_group_period(pack_width)`.
+    /// [`get`](Self::get) reduces indices modulo each column's length, and the group starts
+    /// repeat with period `height / gcd(height, pack_width)`. Group `g` therefore reads the same
+    /// values as group `g % packed_group_period(pack_width)`.
     ///
     /// `pack_width` need not be a power of two or divide `height`. Returns `0` for an
     /// empty table.
     pub const fn packed_group_period(&self, pack_width: usize) -> usize {
-        debug_assert!(pack_width > 0, "pack_width must be nonzero");
-        // `height` is a power of two, so `gcd(height, pack_width)` is the largest power
-        // of two dividing `pack_width`, capped at `height`.
-        let log_gcd = if self.height.trailing_zeros() < pack_width.trailing_zeros() {
-            self.height.trailing_zeros()
-        } else {
-            pack_width.trailing_zeros()
-        };
-        self.height >> log_gcd
+        packed_group_period(self.height, pack_width)
     }
 
     /// Get a specific periodic column value for a given LDE index.
     #[inline]
     pub fn get(&self, lde_idx: usize, col_idx: usize) -> &F {
-        let height = self.height;
-        debug_assert!(height > 0, "cannot index into empty periodic table");
-        let row_idx = lde_idx & (height - 1);
-        &self.values.values[row_idx * self.values.width + col_idx]
+        let col = &self.columns[col_idx];
+        &col[lde_idx & (col.len() - 1)]
+    }
+}
+
+/// `height / gcd(height, pack_width)` for a power-of-two `height` (`0` if `height` is `0`).
+const fn packed_group_period(height: usize, pack_width: usize) -> usize {
+    debug_assert!(pack_width > 0, "pack_width must be nonzero");
+    // `height` is a power of two, so `gcd(height, pack_width)` is the largest power
+    // of two dividing `pack_width`, capped at `height`.
+    let log_gcd = if height.trailing_zeros() < pack_width.trailing_zeros() {
+        height.trailing_zeros()
+    } else {
+        pack_width.trailing_zeros()
+    };
+    height >> log_gcd
+}
+
+/// Periodic values packed for a prover that reads the LDE domain `P::WIDTH` points at a time:
+/// group `g` covers points `g * WIDTH .. (g + 1) * WIDTH`.
+///
+/// Each column keeps only its own repeating groups, so short periods stay short here too.
+#[derive(Clone, Debug)]
+pub struct PackedPeriodicColumns<P> {
+    columns: Vec<Vec<P>>,
+}
+
+impl<P: PackedValue> PackedPeriodicColumns<P> {
+    /// Pack every column of `table`, each over its own repeating groups.
+    pub fn new(table: &PeriodicLdeTable<P::Value>) -> Self {
+        let columns = table
+            .columns
+            .iter()
+            .map(|col| {
+                let groups = packed_group_period(col.len(), P::WIDTH);
+                (0..groups)
+                    .map(|g| P::from_fn(|i| col[(g * P::WIDTH + i) & (col.len() - 1)]))
+                    .collect()
+            })
+            .collect();
+        Self { columns }
+    }
+
+    /// Overwrite `out` with every column's packed values for group `group`.
+    #[inline]
+    pub fn row_into(&self, group: usize, out: &mut Vec<P>) {
+        out.clear();
+        // each column's group count is a power of two
+        out.extend(self.columns.iter().map(|c| c[group & (c.len() - 1)]));
     }
 }
 
@@ -295,9 +344,8 @@ pub trait PeriodicEvaluator<F: Field, D: PolynomialSpace<Val = F>> {
     /// This is used by the prover to compute periodic column values on the
     /// low-degree extension domain for constraint evaluation.
     ///
-    /// The returned table stores only `max_period × blowup` rows. All columns are
-    /// padded to the maximum period before extrapolation, creating a rectangular
-    /// matrix for efficient row-wise access with modular indexing.
+    /// The returned table stores at most `max_period × blowup` values per column, read with
+    /// modular indexing. An implementation may store each column at its own period.
     ///
     /// # Arguments
     /// * `periodic_table` - Slice of periodic columns, each containing one period of values.
@@ -532,6 +580,34 @@ mod tests {
         }
 
         assert_eq!(PeriodicLdeTable::<u32>::empty().packed_group_period(3), 0);
+    }
+
+    // Columns of lengths 8, 1, 2 and 4 read by provers packing 1 to 8 points at a time: every
+    // packed group must hold exactly the values `get` returns for its points.
+    #[test]
+    fn packed_columns_match_get() {
+        fn check<const W: usize>(table: &PeriodicLdeTable<u32>) {
+            let packed = PackedPeriodicColumns::<[u32; W]>::new(table);
+            let mut row = Vec::new();
+            for group in 0..4 * table.height() {
+                packed.row_into(group, &mut row);
+                let expected: Vec<[u32; W]> = (0..table.width())
+                    .map(|c| core::array::from_fn(|i| *table.get(group * W + i, c)))
+                    .collect();
+                assert_eq!(row, expected, "width {W}, group {group}");
+            }
+        }
+        let columns = [8, 1, 2, 8, 4]
+            .iter()
+            .enumerate()
+            .map(|(c, &len)| (0..len).map(|i| (100 * c + i) as u32).collect())
+            .collect();
+        let table = PeriodicLdeTable::from_columns(columns);
+        check::<1>(&table);
+        check::<2>(&table);
+        check::<3>(&table);
+        check::<4>(&table);
+        check::<8>(&table);
     }
 
     #[cfg(debug_assertions)]
