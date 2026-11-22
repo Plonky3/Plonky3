@@ -774,6 +774,24 @@ pub trait Algebra<F>:
         Self::sum_array::<N>(&products)
     }
 
+    /// Compute `D` linear combinations of the same `R` algebra elements `values` with scalar `weights`.
+    ///
+    /// Returns `[Σ_j values[j] * weights[i][j]; i in 0..D]`.
+    ///
+    /// Expression algebras whose nodes wrap children in `Arc` override this so all `D`
+    /// outputs share the exact same heap-allocated `values` nodes in the resulting DAG.
+    #[must_use]
+    #[inline]
+    fn linear_combinations<const R: usize, const D: usize>(
+        values: &[Self; R],
+        weights: &[[F; R]; D],
+    ) -> [Self; D]
+    where
+        F: Field,
+    {
+        core::array::from_fn(|i| Self::mixed_dot_product(values, &weights[i]))
+    }
+
     /// Optimal chunk size for [`batched_linear_combination`](Self::batched_linear_combination).
     ///
     /// Override in implementations where a different chunk size is faster.

@@ -10,11 +10,20 @@ use p3_mersenne_31::{Mersenne31, PackedQM31};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
+type CM31 = Complex<Mersenne31>;
 type EF2 = BinomialExtensionField<Complex<Mersenne31>, 2>;
 type EF3 = BinomialExtensionField<Complex<Mersenne31>, 3>;
 
 const REPS: usize = 100;
 const L_REPS: usize = 10 * REPS;
+
+fn bench_complex_extension(c: &mut Criterion) {
+    let name = "Complex<Mersenne31>";
+    benchmark_square::<CM31>(c, name);
+    benchmark_inv::<CM31>(c, name);
+    benchmark_mul_throughput::<CM31, REPS>(c, name);
+    benchmark_mul_latency::<CM31, L_REPS>(c, name);
+}
 
 fn bench_quadratic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<Mersenne31Complex<Mersenne31>, 2>";
@@ -49,6 +58,7 @@ fn bench_packed_qm31(c: &mut Criterion) {
 
 criterion_group!(
     bench_mersennecomplex_ef2,
+    bench_complex_extension,
     bench_quadratic_extension,
     bench_packed_qm31
 );

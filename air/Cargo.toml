@@ -27,8 +27,11 @@ tracing.workspace = true
 criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-field = { path = "../field" }
+p3-goldilocks = { path = "../goldilocks" }
+p3-koala-bear = { path = "../koala-bear" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-monty-31 = { path = "../monty-31" }
+rand.workspace = true
 serde_json.workspace = true
 
 [[bench]]
