@@ -946,3 +946,220 @@ fn stark_degree_soundness_mixed_degrees_selectors_flatten_and_next_row() {
         Ok(())
     );
 }
+
+#[test]
+fn linear_combinations_edge_cases_zero_empty_aliased_and_neg_one() {
+    use p3_field::Algebra;
+
+    type F = Mersenne31;
+
+    // 1. Empty input slice (R = 0): exact degree-0 ZERO on both Symbolic and Arithmetic.
+    let sym_empty =
+        <SymbolicExpression<F> as Algebra<F>>::linear_combinations::<0, 3>(&[], &[[]; 3]);
+    let arith_empty =
+        <ArithmeticExpression<F> as Algebra<F>>::linear_combinations::<0, 3>(&[], &[[]; 3]);
+    let empty_stats = count_symbolic_dag(&sym_empty);
+    assert_eq!(
+        empty_stats,
+        SymDagStats {
+            quadratic_muls: 0,
+            scalar_muls: 0,
+            add_subs: 0,
+            negs: 0,
+        }
+    );
+    for (s, a) in sym_empty.iter().zip(arith_empty.iter()) {
+        assert_eq!(s.degree_multiple(), 0);
+        assert_eq!(a.degree_multiple(), 0);
+        assert_eq!(a.lower().degree_multiple(), 0);
+    }
+
+    // 2. All-zero row, single +1 / -1 (`F::NEG_ONE`) rows, and +/-1 combinations:
+    //    `F::NEG_ONE` must emit Neg / Sub with ZERO constant leaf multiplications (`scalar_muls == 0`)!
+    let sx0: SymbolicExpression<F> = SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0).into();
+    let sx1: SymbolicExpression<F> = SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 1).into();
+    let sq2 = sx0.clone() * sx1.clone(); // deg 2
+
+    let ax0: ArithmeticExpression<F> =
+        ArithmeticVariable::new(BaseEntry::Main { offset: 0 }, 0).into();
+    let ax1: ArithmeticExpression<F> =
+        ArithmeticVariable::new(BaseEntry::Main { offset: 0 }, 1).into();
+    let aq2 = ax0.clone() * ax1.clone(); // deg 2
+
+    let weights = [
+        [F::ZERO, F::ZERO, F::ZERO],      // all-zero row -> deg 0
+        [F::ZERO, F::NEG_ONE, F::ZERO],   // single -1 -> -x1 (Neg, deg 1, 0 scalar muls)
+        [F::ONE, F::ZERO, F::NEG_ONE],    // +x0 - q2 (Sub, deg 2, 0 scalar muls)
+        [F::NEG_ONE, F::NEG_ONE, F::ONE], // -x0 - x1 + q2 (deg 2, 0 scalar muls)
+    ];
+
+    let sym_out = <SymbolicExpression<F> as Algebra<F>>::linear_combinations::<3, 4>(
+        &[sx0, sx1, sq2.clone()],
+        &weights,
+    );
+    assert_eq!(sym_out[0].degree_multiple(), 0);
+    assert_eq!(sym_out[1].degree_multiple(), 1);
+    assert_eq!(sym_out[2].degree_multiple(), 2);
+    assert_eq!(sym_out[3].degree_multiple(), 2);
+    let sym_lc_stats = count_symbolic_dag(&sym_out);
+    assert_eq!(sym_lc_stats.quadratic_muls, 1);
+    assert_eq!(sym_lc_stats.scalar_muls, 0);
+
+    let arith_out = <ArithmeticExpression<F> as Algebra<F>>::linear_combinations::<3, 4>(
+        &[ax0, ax1, aq2.clone()],
+        &weights,
+    );
+    assert_eq!(arith_out[0].degree_multiple(), 0);
+    assert_eq!(arith_out[1].degree_multiple(), 1);
+    assert_eq!(arith_out[2].degree_multiple(), 2);
+    assert_eq!(arith_out[3].degree_multiple(), 2);
+    assert!(matches!(arith_out[1].node(), ArithmeticNode::Neg(_)));
+
+    let lowered_lc: [SymbolicExpression<F>; 4] = CapturedArithmeticConstraints::<F, F> {
+        base: arith_out.to_vec(),
+        extension: vec![],
+        layout: ConstraintLayout {
+            base_indices: (0..4).collect(),
+            ext_indices: vec![],
+        },
+    }
+    .lower()
+    .unwrap()
+    .base_constraints()
+    .to_vec()
+    .try_into()
+    .unwrap();
+    assert_eq!(lowered_lc[0].degree_multiple(), 0);
+    assert_eq!(lowered_lc[1].degree_multiple(), 1);
+    assert_eq!(lowered_lc[2].degree_multiple(), 2);
+    assert_eq!(lowered_lc[3].degree_multiple(), 2);
+    let lowered_lc_stats = count_symbolic_dag(&lowered_lc);
+    assert_eq!(lowered_lc_stats.quadratic_muls, 1);
+    assert_eq!(lowered_lc_stats.scalar_muls, 0);
+
+    // 3. Duplicate / aliased expressions in `values`:
+    //    - Passing `[sq2.clone(), sq2]` (two root Mul values across 3 rows) shares each slot's Arc
+    //      across all 3 rows (`2` quadratic muls instead of `6`, `0` scalar muls).
+    //    - Passing `[parent.clone(), parent]` where `parent = sq2 + x0` shares the inner `Arc<Mul>`
+    //      across both slots AND all 3 rows (`1` quadratic mul total on both Symbolic and lowered Arithmetic!).
+    let alias_weights = [
+        [F::ONE, F::ONE],
+        [F::ONE, F::NEG_ONE],
+        [F::NEG_ONE, F::NEG_ONE],
+    ];
+    let sym_dup_roots = <SymbolicExpression<F> as Algebra<F>>::linear_combinations::<2, 3>(
+        &[sq2.clone(), sq2.clone()],
+        &alias_weights,
+    );
+    assert_eq!(count_symbolic_dag(&sym_dup_roots).quadratic_muls, 2);
+    assert_eq!(count_symbolic_dag(&sym_dup_roots).scalar_muls, 0);
+
+    let arith_dup_roots = <ArithmeticExpression<F> as Algebra<F>>::linear_combinations::<2, 3>(
+        &[aq2.clone(), aq2.clone()],
+        &alias_weights,
+    );
+    let lowered_dup_roots: [SymbolicExpression<F>; 3] = CapturedArithmeticConstraints::<F, F> {
+        base: arith_dup_roots.to_vec(),
+        extension: vec![],
+        layout: ConstraintLayout {
+            base_indices: (0..3).collect(),
+            ext_indices: vec![],
+        },
+    }
+    .lower()
+    .unwrap()
+    .base_constraints()
+    .to_vec()
+    .try_into()
+    .unwrap();
+    assert_eq!(count_symbolic_dag(&lowered_dup_roots).quadratic_muls, 2);
+    assert_eq!(count_symbolic_dag(&lowered_dup_roots).scalar_muls, 0);
+
+    let sym_parent = sq2 + SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0);
+    let arith_parent = aq2 + ArithmeticVariable::new(BaseEntry::Main { offset: 0 }, 0);
+
+    let sym_alias = <SymbolicExpression<F> as Algebra<F>>::linear_combinations::<2, 3>(
+        &[sym_parent.clone(), sym_parent],
+        &alias_weights,
+    );
+    let arith_alias = <ArithmeticExpression<F> as Algebra<F>>::linear_combinations::<2, 3>(
+        &[arith_parent.clone(), arith_parent],
+        &alias_weights,
+    );
+    let lowered_alias: [SymbolicExpression<F>; 3] = CapturedArithmeticConstraints::<F, F> {
+        base: arith_alias.to_vec(),
+        extension: vec![],
+        layout: ConstraintLayout {
+            base_indices: (0..3).collect(),
+            ext_indices: vec![],
+        },
+    }
+    .lower()
+    .unwrap()
+    .base_constraints()
+    .to_vec()
+    .try_into()
+    .unwrap();
+    assert_eq!(count_symbolic_dag(&sym_alias).quadratic_muls, 1);
+    assert_eq!(count_symbolic_dag(&sym_alias).scalar_muls, 0);
+    assert_eq!(count_symbolic_dag(&lowered_alias).quadratic_muls, 1);
+    assert_eq!(count_symbolic_dag(&lowered_alias).scalar_muls, 0);
+    for r in sym_alias.iter().chain(lowered_alias.iter()) {
+        assert_eq!(r.degree_multiple(), 2);
+    }
+
+    // Verify evaluation agreement across random rows on all edge-case outputs.
+    let mut rng = SmallRng::seed_from_u64(0xED6E_CA5E);
+    let sym_refs: [&SymbolicExpression<F>; 4] = array::from_fn(|i| &sym_out[i]);
+    let low_refs: [&SymbolicExpression<F>; 4] = array::from_fn(|i| &lowered_lc[i]);
+    let sym_alias_refs: [&SymbolicExpression<F>; 3] = array::from_fn(|i| &sym_alias[i]);
+    let low_alias_refs: [&SymbolicExpression<F>; 3] = array::from_fn(|i| &lowered_alias[i]);
+    for _ in 0..32 {
+        let v0: F = rng.random();
+        let v1: F = rng.random();
+        let q = v0 * v1;
+        let p_val = q + v0;
+        let builder = RowEvalBuilder::new(vec![v0, v1]);
+        let expected = [F::ZERO, -v1, v0 - q, -v0 - v1 + q];
+        assert_eq!(resolve_symbolic_expressions(&sym_refs, &builder), expected);
+        assert_eq!(resolve_symbolic_expressions(&low_refs, &builder), expected);
+        let arith_eval: [F; 4] = array::from_fn(|i| arith_out[i].resolve(&builder));
+        assert_eq!(arith_eval, expected);
+
+        let expected_alias = [p_val + p_val, F::ZERO, -(p_val + p_val)];
+        assert_eq!(
+            resolve_symbolic_expressions(&sym_alias_refs, &builder),
+            expected_alias
+        );
+        assert_eq!(
+            resolve_symbolic_expressions(&low_alias_refs, &builder),
+            expected_alias
+        );
+    }
+
+    // 4. Complex<Mersenne31> (D = 2, W = -1 = F::NEG_ONE): both SymbolicExpression and lowered
+    //    ArithmeticExpression emit 3 quadratic muls and ZERO scalar muls!
+    let ca: [ArithmeticExpression<F>; 2] =
+        array::from_fn(|i| ArithmeticVariable::new(BaseEntry::Main { offset: 0 }, i).into());
+    let cb: [ArithmeticExpression<F>; 2] =
+        array::from_fn(|i| ArithmeticVariable::new(BaseEntry::Main { offset: 0 }, 2 + i).into());
+    let prod_c = BinomialExtensionField::<F, 2, ArithmeticExpression<F>>::new(ca)
+        * BinomialExtensionField::<F, 2, ArithmeticExpression<F>>::new(cb);
+    let lowered_c: [SymbolicExpression<F>; 2] = CapturedArithmeticConstraints::<F, F> {
+        base: prod_c.as_basis_coefficients_slice().to_vec(),
+        extension: vec![],
+        layout: ConstraintLayout {
+            base_indices: vec![0, 1],
+            ext_indices: vec![],
+        },
+    }
+    .lower()
+    .unwrap()
+    .base_constraints()
+    .to_vec()
+    .try_into()
+    .unwrap();
+    let stats_c = count_symbolic_dag(&lowered_c);
+    assert_eq!(stats_c.quadratic_muls, 3);
+    assert_eq!(stats_c.scalar_muls, 0);
+}

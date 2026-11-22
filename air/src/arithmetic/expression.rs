@@ -308,8 +308,14 @@ impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
             if non_zero_count == 0 {
                 return Self::ZERO;
             }
-            if non_zero_count == 1 && weights[i][single_idx].is_one() {
-                return shared[single_idx].clone().expression();
+            if non_zero_count == 1 {
+                let w = weights[i][single_idx];
+                if w.is_one() {
+                    return shared[single_idx].clone().expression();
+                }
+                if w == C::NEG_ONE {
+                    return -shared[single_idx].clone().expression();
+                }
             }
             let pairs: Arc<[(L::Operand, L::Operand)]> = weights[i]
                 .iter()
@@ -579,31 +585,56 @@ impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
                 sum
             }
             ArithmeticNode::Dot(a) | ArithmeticNode::MixedDot(a) => {
+                let neg_sym = |x: Arc<crate::SymbolicExpr<L::LegacyLeaf>>| {
+                    if matches!(x.as_ref(), S::Leaf(l) if crate::SymLeaf::as_const(l).is_some()) {
+                        -(*x).clone()
+                    } else {
+                        let degree_multiple = x.degree_multiple();
+                        S::Neg { x, degree_multiple }
+                    }
+                };
                 let mut terms = a.iter().filter_map(|(a, b)| {
                     if a.constant() == Some(L::Value::ZERO) || b.constant() == Some(L::Value::ZERO)
                     {
                         None
                     } else if a.constant() == Some(L::Value::ONE) {
-                        Some(b.lower(memo, base, depth + 1))
+                        Some((b.lower(memo, base, depth + 1), false))
                     } else if b.constant() == Some(L::Value::ONE) {
-                        Some(a.lower(memo, base, depth + 1))
+                        Some((a.lower(memo, base, depth + 1), false))
+                    } else if a.constant() == Some(L::Value::NEG_ONE) {
+                        Some((b.lower(memo, base, depth + 1), true))
+                    } else if b.constant() == Some(L::Value::NEG_ONE) {
+                        Some((a.lower(memo, base, depth + 1), true))
                     } else {
-                        Some(Arc::new(Self::lower_binary(
-                            a.lower(memo, base, depth + 1),
-                            b.lower(memo, base, depth + 1),
-                            Mul,
-                        )))
+                        Some((
+                            Arc::new(Self::lower_binary(
+                                a.lower(memo, base, depth + 1),
+                                b.lower(memo, base, depth + 1),
+                                Mul,
+                            )),
+                            false,
+                        ))
                     }
                 });
-                let Some(first) = terms.next() else {
+                let Some((first, first_neg)) = terms.next() else {
                     return S::ZERO;
                 };
-                let Some(second) = terms.next() else {
-                    return Arc::try_unwrap(first).unwrap_or_else(|s| (*s).clone());
+                let Some((second, second_neg)) = terms.next() else {
+                    return if first_neg {
+                        neg_sym(first)
+                    } else {
+                        Arc::try_unwrap(first).unwrap_or_else(|s| (*s).clone())
+                    };
                 };
-                let mut sum = Self::lower_binary(first, second, Add);
-                for term in terms {
-                    sum = Self::lower_binary(Arc::new(sum), term, Add);
+                let first_lhs = if first_neg {
+                    Arc::new(neg_sym(first))
+                } else {
+                    first
+                };
+                let mut sum =
+                    Self::lower_binary(first_lhs, second, if second_neg { Sub } else { Add });
+                for (term, is_neg) in terms {
+                    sum = Self::lower_binary(Arc::new(sum), term, if is_neg { Sub } else { Add });
                 }
                 sum
             }
