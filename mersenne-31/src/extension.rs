@@ -599,14 +599,16 @@ mod tests {
         let w2 = <Mersenne31 as HasComplexBinomialExtension<2>>::W;
         let w3 = <Mersenne31 as HasComplexBinomialExtension<3>>::W;
 
-        // Include non-canonical zero P = 2^31 - 1 alongside 0, 1, 2, P - 1, and 858993459
-        // (where 5 * 858993459 = 2^32 - 1 hits lo = P in reduce_34).
+        // Include non-canonical zero P = 2^31 - 1 alongside 0, 1, 2, (P - 1) / 2 (maximizer of
+        // `(a0 + a1) * (a0 + (P ^ a1))` at `a0 = P`), 858_993_459 (where `5 * x = 2^32 - 1` hits
+        // `lo = P` in `reduce_34`), and P - 1.
         let p_zero = Mersenne31::new_reduced((1 << 31) - 1);
         let edges = [
             Mersenne31::ZERO,
             Mersenne31::ONE,
             Mersenne31::TWO,
             Mersenne31::new_reduced(858_993_459),
+            Mersenne31::new_reduced(1_073_741_823),
             Mersenne31::NEG_ONE,
             p_zero,
         ];
@@ -614,14 +616,18 @@ mod tests {
         for &a0 in &edges {
             for &a1 in &edges {
                 let c = Complex::new_complex(a0, a1);
-                assert_eq!(
-                    <Mersenne31 as HasComplexBinomialExtension<2>>::mul_by_w(c),
-                    w2 * c
-                );
-                assert_eq!(
-                    <Mersenne31 as HasComplexBinomialExtension<3>>::mul_by_w(c),
-                    w3 * c
-                );
+                let sq = c.square();
+                assert_eq!(sq, c * c);
+                assert_eq!(sq.real().value >> 31, 0);
+                assert_eq!(sq.imag().value >> 31, 0);
+                let mw2 = <Mersenne31 as HasComplexBinomialExtension<2>>::mul_by_w(c);
+                let mw3 = <Mersenne31 as HasComplexBinomialExtension<3>>::mul_by_w(c);
+                assert_eq!(mw2, w2 * c);
+                assert_eq!(mw3, w3 * c);
+                assert_eq!(mw2.real().value >> 31, 0);
+                assert_eq!(mw2.imag().value >> 31, 0);
+                assert_eq!(mw3.real().value >> 31, 0);
+                assert_eq!(mw3.imag().value >> 31, 0);
             }
         }
 

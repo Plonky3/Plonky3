@@ -683,7 +683,12 @@ fn qm31_min_rank_symbolic_and_arithmetic_ast_counts() {
 
 #[test]
 fn complete_ast_node_census_before_vs_after() {
-    fn row_binomial<F: BinomiallyExtendable<D>, const D: usize>(label: &str) {
+    fn assert_binomial_counts<F: BinomiallyExtendable<D>, const D: usize>(
+        expected_mul_q: (usize, usize),
+        expected_sq_q: (usize, usize),
+        expected_arith_mul: (usize, usize),
+        expected_arith_sq: (usize, usize),
+    ) {
         let w = <F as BinomiallyExtendable<D>>::W;
         let sym_a: [SymbolicExpression<F>; D] =
             array::from_fn(|i| SymbolicVariable::new(BaseEntry::Main { offset: 0 }, i).into());
@@ -712,6 +717,15 @@ fn complete_ast_node_census_before_vs_after() {
         let after_mul = count_symbolic_dag(&after_mul_roots);
         let after_sq = count_symbolic_dag(&after_sq_roots);
 
+        assert_eq!(
+            (before_mul.quadratic_muls, after_mul.quadratic_muls),
+            expected_mul_q
+        );
+        assert_eq!(
+            (before_sq.quadratic_muls, after_sq.quadratic_muls),
+            expected_sq_q
+        );
+
         let arith_a: [ArithmeticExpression<F>; D] =
             array::from_fn(|i| ArithmeticVariable::new(BaseEntry::Main { offset: 0 }, i).into());
         let arith_b: [ArithmeticExpression<F>; D] = array::from_fn(|i| {
@@ -732,145 +746,203 @@ fn complete_ast_node_census_before_vs_after() {
             .unwrap();
         let am = count_arithmetic_dag(&am_roots);
         let asq = count_arithmetic_dag(&as_roots);
-
-        std::println!(
-            "{label:<36} | Mul Q-Muls: {:>2} -> {:>2} (Add/Sub {:>3} -> {:>3}) | Sq Q-Muls: {:>2} -> {:>2} | Arith Mul(m,sq,md): ({},{},{}) Sq: ({},{},{})",
-            before_mul.quadratic_muls,
-            after_mul.quadratic_muls,
-            before_mul.add_subs,
-            after_mul.add_subs,
-            before_sq.quadratic_muls,
-            after_sq.quadratic_muls,
-            am.muls,
-            am.squares,
-            am.mixed_dots,
-            asq.muls,
-            asq.squares,
-            asq.mixed_dots,
-        );
+        assert_eq!((am.muls, am.squares), expected_arith_mul);
+        assert_eq!((asq.muls, asq.squares), expected_arith_sq);
     }
 
-    row_binomial::<Mersenne31, 2>("Complex<Mersenne31> (D=2)");
-    row_binomial::<Goldilocks, 2>("Goldilocks Binomial (D=2)");
-    row_binomial::<Mersenne31, 3>("Mersenne31 Binomial (D=3)");
-    row_binomial::<BabyBear, 4>("BabyBear Binomial (D=4)");
-    row_binomial::<KoalaBear, 4>("KoalaBear Binomial (D=4)");
-    row_binomial::<BabyBear, 5>("BabyBear Binomial (D=5)");
-    row_binomial::<Goldilocks, 5>("Goldilocks Binomial (D=5)");
-    row_binomial::<BabyBear, 8>("BabyBear Binomial (D=8)");
-    row_binomial::<KoalaBear, 8>("KoalaBear Binomial (D=8)");
+    assert_binomial_counts::<Mersenne31, 2>((4, 3), (3, 2), (3, 0), (2, 0));
+    assert_binomial_counts::<Goldilocks, 2>((4, 3), (3, 2), (3, 0), (2, 0));
+    assert_binomial_counts::<Mersenne31, 3>((9, 5), (9, 5), (5, 0), (0, 5));
+    assert_binomial_counts::<BabyBear, 4>((16, 7), (10, 7), (7, 0), (0, 7));
+    assert_binomial_counts::<KoalaBear, 4>((16, 7), (10, 7), (7, 0), (0, 7));
+    assert_binomial_counts::<BabyBear, 5>((25, 9), (15, 9), (9, 0), (0, 9));
+    assert_binomial_counts::<Goldilocks, 5>((25, 9), (15, 9), (9, 0), (0, 9));
+    assert_binomial_counts::<BabyBear, 8>((64, 15), (36, 15), (15, 0), (0, 15));
+    assert_binomial_counts::<KoalaBear, 8>((64, 15), (36, 15), (15, 0), (0, 15));
+}
 
-    // CubicTrinomial<Goldilocks>
-    {
-        type F = Goldilocks;
-        let sym_a: [SymbolicExpression<F>; 3] =
-            array::from_fn(|i| SymbolicVariable::new(BaseEntry::Main { offset: 0 }, i).into());
-        let sym_b: [SymbolicExpression<F>; 3] =
-            array::from_fn(|i| SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 3 + i).into());
-        let mut bm = array::from_fn(|_| SymbolicExpression::ZERO);
-        trinomial_cubic_mul(&sym_a, &sym_b, &mut bm);
-        let mut bs = array::from_fn(|_| SymbolicExpression::ZERO);
-        cubic_square(&sym_a, &mut bs);
-        let ea = CubicTrinomialExtensionField::<F, SymbolicExpression<F>>::new(sym_a);
-        let eb = CubicTrinomialExtensionField::<F, SymbolicExpression<F>>::new(sym_b);
-        let am: [SymbolicExpression<F>; 3] = (ea.clone() * eb)
-            .as_basis_coefficients_slice()
-            .to_vec()
-            .try_into()
-            .unwrap();
-        let asq: [SymbolicExpression<F>; 3] = ea
-            .square()
-            .as_basis_coefficients_slice()
-            .to_vec()
-            .try_into()
-            .unwrap();
-        std::println!(
-            "{:<36} | Mul Q-Muls: {:>2} -> {:>2} (Add/Sub {:>3} -> {:>3}) | Sq Q-Muls: {:>2} -> {:>2}",
-            "Goldilocks CubicTrinomial (D=3)",
-            count_symbolic_dag(&bm).quadratic_muls,
-            count_symbolic_dag(&am).quadratic_muls,
-            count_symbolic_dag(&bm).add_subs,
-            count_symbolic_dag(&am).add_subs,
-            count_symbolic_dag(&bs).quadratic_muls,
-            count_symbolic_dag(&asq).quadratic_muls,
-        );
+#[test]
+fn extension_expr_and_arith_ext_min_rank_and_lowering() {
+    use p3_air::arithmetic::{ArithmeticExpressionExt, ArithmeticVariableExt};
+    use p3_air::{ExtEntry, SymbolicExpressionExt, SymbolicVariableExt};
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+
+    let sym_ext_a: [SymbolicExpressionExt<F, EF>; 4] = array::from_fn(|i| {
+        SymbolicVariableExt::<F, EF>::new(ExtEntry::Permutation { offset: 0 }, i).into()
+    });
+    let sym_ext_b: [SymbolicExpressionExt<F, EF>; 4] = array::from_fn(|i| {
+        if i == 3 {
+            // Mix a non-base extension constant (deg 0) with permutation variables (deg 1).
+            SymbolicExpressionExt::from(EF::new([
+                F::from_u8(2),
+                F::from_u8(3),
+                F::from_u8(5),
+                F::from_u8(7),
+            ]))
+        } else {
+            SymbolicVariable::new(BaseEntry::Main { offset: 0 }, i).into()
+        }
+    });
+
+    let ea = BinomialExtensionField::<F, 4, SymbolicExpressionExt<F, EF>>::new(sym_ext_a);
+    let eb = BinomialExtensionField::<F, 4, SymbolicExpressionExt<F, EF>>::new(sym_ext_b);
+    let prod = ea.clone() * eb;
+    let sq = ea.square();
+    for c in prod.as_basis_coefficients_slice() {
+        assert_eq!(c.degree_multiple(), 2);
+        assert_eq!(c.poly_degree(16, &[]), 30);
+    }
+    for c in sq.as_basis_coefficients_slice() {
+        assert_eq!(c.degree_multiple(), 2);
+        assert_eq!(c.poly_degree(16, &[]), 30);
     }
 
-    // QuinticTrinomial<KoalaBear>
-    {
-        type F = KoalaBear;
-        let sym_a: [SymbolicExpression<F>; 5] =
-            array::from_fn(|i| SymbolicVariable::new(BaseEntry::Main { offset: 0 }, i).into());
-        let sym_b: [SymbolicExpression<F>; 5] =
-            array::from_fn(|i| SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 5 + i).into());
-        let mut bm = array::from_fn(|_| SymbolicExpression::ZERO);
-        trinomial_quintic_mul(&sym_a, &sym_b, &mut bm);
-        let mut bs = array::from_fn(|_| SymbolicExpression::ZERO);
-        quintic_square(&sym_a, &mut bs);
-        let ea = QuinticTrinomialExtensionField::<F, SymbolicExpression<F>>::new(sym_a);
-        let eb = QuinticTrinomialExtensionField::<F, SymbolicExpression<F>>::new(sym_b);
-        let am: [SymbolicExpression<F>; 5] = (ea.clone() * eb)
-            .as_basis_coefficients_slice()
-            .to_vec()
-            .try_into()
-            .unwrap();
-        let asq: [SymbolicExpression<F>; 5] = ea
-            .square()
-            .as_basis_coefficients_slice()
-            .to_vec()
-            .try_into()
-            .unwrap();
-        std::println!(
-            "{:<36} | Mul Q-Muls: {:>2} -> {:>2} (Add/Sub {:>3} -> {:>3}) | Sq Q-Muls: {:>2} -> {:>2}",
-            "KoalaBear QuinticTrinomial (D=5)",
-            count_symbolic_dag(&bm).quadratic_muls,
-            count_symbolic_dag(&am).quadratic_muls,
-            count_symbolic_dag(&bm).add_subs,
-            count_symbolic_dag(&am).add_subs,
-            count_symbolic_dag(&bs).quadratic_muls,
-            count_symbolic_dag(&asq).quadratic_muls,
-        );
+    let arith_ext_a: [ArithmeticExpressionExt<F, EF>; 4] = array::from_fn(|i| {
+        ArithmeticVariableExt::<F, EF>::new(ExtEntry::Permutation { offset: 0 }, i).into()
+    });
+    let arith_ext_b: [ArithmeticExpressionExt<F, EF>; 4] = array::from_fn(|i| {
+        if i == 3 {
+            ArithmeticExpressionExt::from_extension(EF::new([
+                F::from_u8(2),
+                F::from_u8(3),
+                F::from_u8(5),
+                F::from_u8(7),
+            ]))
+        } else {
+            ArithmeticVariable::new(BaseEntry::Main { offset: 0 }, i).into()
+        }
+    });
+    let aea = BinomialExtensionField::<F, 4, ArithmeticExpressionExt<F, EF>>::new(arith_ext_a);
+    let aeb = BinomialExtensionField::<F, 4, ArithmeticExpressionExt<F, EF>>::new(arith_ext_b);
+    let aprod = aea * aeb;
+    let ext_roots: Vec<ArithmeticExpressionExt<F, EF>> =
+        aprod.as_basis_coefficients_slice().to_vec();
+    for c in &ext_roots {
+        assert_eq!(c.degree_multiple(), 2);
+        assert_eq!(c.poly_degree(16, &[]), 30);
     }
 
-    // QM31 over Mersenne31
-    {
-        type F = Mersenne31;
-        let a: [SymbolicExpression<F>; 4] =
-            array::from_fn(|i| SymbolicVariable::new(BaseEntry::Main { offset: 0 }, i).into());
-        let b: [SymbolicExpression<F>; 4] =
-            array::from_fn(|i| SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 4 + i).into());
-        // Schoolbook QM31 (16 muls):
-        let wb2 = b[2].clone() + b[2].clone() - b[3].clone();
-        let wb3 = b[2].clone() + b[3].clone() + b[3].clone();
-        let schoolbook_qm31 = [
-            a[0].clone() * b[0].clone() - a[1].clone() * b[1].clone() + a[2].clone() * wb2.clone()
-                - a[3].clone() * wb3.clone(),
-            a[0].clone() * b[1].clone()
-                + a[1].clone() * b[0].clone()
-                + a[2].clone() * wb3
-                + a[3].clone() * wb2,
-            a[0].clone() * b[2].clone() - a[1].clone() * b[3].clone() + a[2].clone() * b[0].clone()
-                - a[3].clone() * b[1].clone(),
-            a[0].clone() * b[3].clone()
-                + a[1].clone() * b[2].clone()
-                + a[2].clone() * b[1].clone()
-                + a[3].clone() * b[0].clone(),
-        ];
-        assert_eq!(count_symbolic_dag(&schoolbook_qm31).quadratic_muls, 16);
-
-        let mut am = array::from_fn(|_| SymbolicExpression::ZERO);
-        qm31_mul_min_rank::<F, _>(&a, &b, &mut am);
-        let mut asq = array::from_fn(|_| SymbolicExpression::ZERO);
-        qm31_square_min_rank::<F, _>(&a, &mut asq);
-        std::println!(
-            "{:<36} | Mul Q-Muls: {:>2} -> {:>2} (Add/Sub {:>3} -> {:>3}) | Sq Q-Muls: {:>2} -> {:>2}",
-            "Mersenne31 QM31 Tower (D=4)",
-            count_symbolic_dag(&schoolbook_qm31).quadratic_muls,
-            count_symbolic_dag(&am).quadratic_muls,
-            count_symbolic_dag(&schoolbook_qm31).add_subs,
-            count_symbolic_dag(&am).add_subs,
-            8,
-            count_symbolic_dag(&asq).quadratic_muls,
-        );
+    let captured = CapturedArithmeticConstraints::<F, EF> {
+        base: vec![],
+        extension: ext_roots,
+        layout: ConstraintLayout {
+            base_indices: vec![],
+            ext_indices: (0..4).collect(),
+        },
+    };
+    let lowered = captured.lower().unwrap();
+    for c in lowered.extension_constraints() {
+        assert_eq!(c.degree_multiple(), 2);
+        assert_eq!(c.poly_degree(16, &[]), 30);
     }
+}
+
+#[test]
+fn stark_degree_soundness_mixed_degrees_selectors_flatten_and_next_row() {
+    use p3_air::{
+        BaseAir, NextRowColumns, NextRowTrace, SymbolicConstraints, UndeclaredNextRowRead,
+    };
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    const N: usize = 16;
+
+    // Mix degree-0 constant, degree-1 main column, degree-2 quadratic term, IsFirstRow,
+    // IsTransition, and a period-4 periodic column!
+    let c0 = SymbolicExpression::<F>::from(F::from_u8(9));
+    let v0: SymbolicExpression<F> = SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0).into();
+    let v1_next: SymbolicExpression<F> =
+        SymbolicVariable::new(BaseEntry::Main { offset: 1 }, 1).into();
+    let q2 = v0.clone() * v1_next.clone(); // deg 2
+    let is_trans = SymbolicExpression::<F>::Leaf(BaseLeaf::IsTransition); // dm=0, trans_dm=1, poly=1
+    let is_first = SymbolicExpression::<F>::Leaf(BaseLeaf::IsFirstRow); // dm=1, poly=N-1
+    let per0: SymbolicExpression<F> = SymbolicVariable::new(BaseEntry::Periodic, 0).into(); // dm=1, poly=N - N/4 = 12
+
+    let a = BinomialExtensionField::<F, 4, SymbolicExpression<F>>::new([
+        c0,                      // dm=0, t_dm=0, poly=0
+        v0.clone(),              // dm=1, t_dm=1, poly=15
+        q2,                      // dm=2, t_dm=2, poly=30
+        is_trans.clone() * per0, // dm=1, t_dm=2, poly=13
+    ]);
+    let b = BinomialExtensionField::<F, 4, SymbolicExpression<F>>::new([
+        is_first, // dm=1, t_dm=1, poly=15
+        is_trans, // dm=0, t_dm=1, poly=1
+        SymbolicExpression::ZERO,
+        SymbolicExpression::ONE,
+    ]);
+    let prod = a * b;
+    let coords = prod.as_basis_coefficients_slice();
+
+    // Exact maximum bounds across coordinates:
+    // d_A(dm)=2, d_B(dm)=1 => max dm == 3
+    // d_A(t_dm=1)=2, d_B(t_dm=1)=1 => max t_dm == 3
+    // d_A(poly)=30, d_B(poly)=15 => max poly == 45
+    assert_eq!(coords.iter().map(|c| c.degree_multiple()).max(), Some(3));
+    assert_eq!(
+        coords
+            .iter()
+            .map(|c| c.degree_multiple_with_transition(1))
+            .max(),
+        Some(3)
+    );
+    assert_eq!(
+        coords.iter().map(|c| c.poly_degree(N, &[4])).max(),
+        Some(45)
+    );
+
+    // Leading-term cancellation must NEVER under-report degree:
+    let cancel_lhs = v0.clone() * v1_next.clone() + v0.clone();
+    let cancel_rhs = -(v0 * v1_next);
+    let cancelled = <SymbolicExpression<F> as p3_field::Algebra<F>>::linear_combinations::<2, 1>(
+        &[cancel_lhs, cancel_rhs],
+        &[[F::ONE, F::ONE]],
+    );
+    assert!(cancelled[0].degree_multiple() >= 1);
+
+    // JSON wire-flattening roundtrip preserves shared DAG structure, degree, and evaluation:
+    for coord in coords {
+        let encoded = serde_json::to_string(coord).unwrap();
+        let decoded: SymbolicExpression<F> = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.degree_multiple(), coord.degree_multiple());
+        assert_eq!(
+            decoded.degree_multiple_with_transition(1),
+            coord.degree_multiple_with_transition(1)
+        );
+        assert_eq!(decoded.poly_degree(N, &[4]), coord.poly_degree(N, &[4]));
+    }
+
+    // Next-row offset-1 read inside ExtensionAlgebra product MUST be caught when undeclared:
+    struct DummyAir(Vec<usize>);
+    impl BaseAir<F> for DummyAir {
+        fn width(&self) -> usize {
+            3
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            self.0.clone()
+        }
+    }
+
+    let layout = AirLayout {
+        main_width: 3,
+        num_periodic_columns: 1,
+        ..Default::default()
+    };
+    let mut builder = SymbolicAirBuilder::<F, EF>::new(layout);
+    for coord in coords {
+        builder.assert_zero(coord.clone());
+    }
+    let constraints: SymbolicConstraints<F, EF> = builder.finish();
+    assert_eq!(
+        constraints.check_next_row_reads(&NextRowColumns::from_air(&DummyAir(vec![0]))),
+        Err(UndeclaredNextRowRead {
+            trace: NextRowTrace::Main,
+            column: 1,
+        })
+    );
+    assert_eq!(
+        constraints.check_next_row_reads(&NextRowColumns::from_air(&DummyAir(vec![1]))),
+        Ok(())
+    );
 }

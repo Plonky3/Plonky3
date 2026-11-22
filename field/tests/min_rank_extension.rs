@@ -407,3 +407,41 @@ fn qm31_min_rank_matches_mersenne31_qm31() {
         );
     }
 }
+
+#[test]
+fn binomial_fallback_degree_matches_schoolbook() {
+    type F = BabyBear;
+    const D: usize = 6;
+    let w = F::from_u8(11);
+    let mut rng = SmallRng::seed_from_u64(0x6666_BBBB);
+    for _ in 0..32 {
+        let raw_a: [F; D] = array::from_fn(|_| rng.random());
+        let raw_b: [F; D] = array::from_fn(|_| rng.random());
+        let a = raw_a.map(CountingAlgebra);
+        let b = raw_b.map(CountingAlgebra);
+
+        let mut res_mul = [CountingAlgebra(F::ZERO); D];
+        reset_counts();
+        binomial_mul_min_rank::<F, CountingAlgebra<F>, D>(&a, &b, &mut res_mul, w);
+        assert_eq!(counts(), (D * D, 0));
+
+        let mut expected_mul = [F::ZERO; D];
+        for i in 0..D {
+            for j in 0..D {
+                let prod = raw_a[i] * raw_b[j];
+                if i + j >= D {
+                    expected_mul[i + j - D] += prod * w;
+                } else {
+                    expected_mul[i + j] += prod;
+                }
+            }
+        }
+        assert_eq!(res_mul.map(|x| x.0), expected_mul);
+
+        let mut res_sq = [CountingAlgebra(F::ZERO); D];
+        binomial_square_min_rank::<F, CountingAlgebra<F>, D>(&a, &mut res_sq, w);
+        let mut res_self_mul = [CountingAlgebra(F::ZERO); D];
+        binomial_mul_min_rank::<F, CountingAlgebra<F>, D>(&a, &a, &mut res_self_mul, w);
+        assert_eq!(res_sq, res_self_mul);
+    }
+}
