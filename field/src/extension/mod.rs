@@ -7,6 +7,7 @@ use crate::{Algebra, Dup, ExtensionField, PackedField, PrimeCharacteristicRing};
 mod binomial_extension;
 mod complex;
 mod cubic_extension;
+mod min_rank;
 mod packed_binomial_extension;
 mod packed_cubic_extension;
 mod packed_quintic_extension;
@@ -17,6 +18,7 @@ use alloc::vec::Vec;
 pub use binomial_extension::*;
 pub use complex::*;
 pub use cubic_extension::{CubicTrinomialExtensionField, cubic_square, trinomial_cubic_mul};
+pub use min_rank::*;
 pub use packed_binomial_extension::*;
 pub use packed_cubic_extension::PackedCubicTrinomialExtensionField;
 pub use packed_quintic_extension::PackedQuinticTrinomialExtensionField;
@@ -172,6 +174,21 @@ impl<F: Field, A: Algebra<F>, const D: usize, Shape: ExtensionShape> Default
     #[inline]
     fn default() -> Self {
         Self::new(core::array::from_fn(|_| A::ZERO))
+    }
+}
+
+impl<F: Field, A: ExtensionAlgebra<F, D, Shape>, const D: usize, Shape: ExtensionShape>
+    ExtField<F, D, Shape, A>
+{
+    /// Square this extension element using [`ExtensionAlgebra::ext_square`].
+    ///
+    /// Available for non-`Copy` algebras `A` (such as symbolic or arithmetic AIR expressions)
+    /// in addition to scalar field elements.
+    #[inline(always)]
+    pub fn square(&self) -> Self {
+        let mut res = Self::default();
+        <A as ExtensionAlgebra<F, D, Shape>>::ext_square(&self.value, &mut res.value);
+        res
     }
 }
 

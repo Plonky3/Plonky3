@@ -282,6 +282,44 @@ impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
             ArithmeticNode::Dot(pairs)
         })
     }
+    pub(crate) fn shared_mixed_linear_combinations<C, const R: usize, const D: usize>(
+        values: &[Self; R],
+        weights: &[[C; R]; D],
+    ) -> [Self; D]
+    where
+        C: Field + Into<L::Operand>,
+    {
+        let shared: [L::Operand; R] = core::array::from_fn(|j| {
+            values[j].constant().map_or_else(
+                || L::Operand::from_expression(values[j].clone()),
+                |c| L::Operand::from_expression(Self::leaf(L::from_constant(c), 0)),
+            )
+        });
+
+        core::array::from_fn(|i| {
+            let mut non_zero_count = 0usize;
+            let mut single_idx = 0usize;
+            for (j, w) in weights[i].iter().enumerate() {
+                if !w.is_zero() {
+                    non_zero_count += 1;
+                    single_idx = j;
+                }
+            }
+            if non_zero_count == 0 {
+                return Self::ZERO;
+            }
+            if non_zero_count == 1 && weights[i][single_idx].is_one() {
+                return shared[single_idx].clone().expression();
+            }
+            let pairs: Arc<[(L::Operand, L::Operand)]> = weights[i]
+                .iter()
+                .enumerate()
+                .filter(|&(_, w)| !w.is_zero())
+                .map(|(j, &w)| (shared[j].clone(), w.into()))
+                .collect();
+            Self::build(ArithmeticNode::MixedDot(pairs))
+        })
+    }
     fn binary(self, rhs: L::Operand, op: BinaryOperation) -> Self {
         let a = L::Operand::from_expression(self);
         if let (Some(x), Some(y)) = (a.constant(), rhs.constant()) {
@@ -540,25 +578,35 @@ impl<L: ArithmeticLeaf> ArithmeticExpr<L> {
                 }
                 sum
             }
-            ArithmeticNode::Dot(a) | ArithmeticNode::MixedDot(a) => a
-                .iter()
-                .map(|(a, b)| {
+            ArithmeticNode::Dot(a) | ArithmeticNode::MixedDot(a) => {
+                let mut terms = a.iter().filter_map(|(a, b)| {
                     if a.constant() == Some(L::Value::ZERO) || b.constant() == Some(L::Value::ZERO)
                     {
-                        S::ZERO
+                        None
                     } else if a.constant() == Some(L::Value::ONE) {
-                        b.lower_value(memo, base, depth + 1)
+                        Some(b.lower(memo, base, depth + 1))
                     } else if b.constant() == Some(L::Value::ONE) {
-                        a.lower_value(memo, base, depth + 1)
+                        Some(a.lower(memo, base, depth + 1))
                     } else {
-                        Self::lower_binary(
+                        Some(Arc::new(Self::lower_binary(
                             a.lower(memo, base, depth + 1),
                             b.lower(memo, base, depth + 1),
                             Mul,
-                        )
+                        )))
                     }
-                })
-                .sum(),
+                });
+                let Some(first) = terms.next() else {
+                    return S::ZERO;
+                };
+                let Some(second) = terms.next() else {
+                    return Arc::try_unwrap(first).unwrap_or_else(|s| (*s).clone());
+                };
+                let mut sum = Self::lower_binary(first, second, Add);
+                for term in terms {
+                    sum = Self::lower_binary(Arc::new(sum), term, Add);
+                }
+                sum
+            }
         }
     }
 }

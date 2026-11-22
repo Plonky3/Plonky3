@@ -1,3 +1,9 @@
+use p3_field::extension::{
+    Binomial, BinomiallyExtendable, CubicTrinomial, CubicTrinomialExtendable, ExtensionAlgebra,
+    QuinticTrinomial, QuinticTrinomialExtendable, binomial_mul_min_rank, binomial_square_min_rank,
+    cubic_trinomial_mul_min_rank, cubic_trinomial_square_min_rank, quintic_trinomial_mul_min_rank,
+    quintic_trinomial_square_min_rank,
+};
 use p3_field::{Algebra, ExtensionField, Field, InjectiveMonomial};
 use serde::{Deserialize, Serialize};
 
@@ -177,9 +183,57 @@ impl<F: Field> SymbolicExpression<F> {
     }
 }
 
-impl<F: Field> Algebra<F> for SymbolicExpression<F> {}
+impl<F: Field> Algebra<F> for SymbolicExpression<F> {
+    #[inline]
+    fn linear_combinations<const R: usize, const D: usize>(
+        values: &[Self; R],
+        weights: &[[F; R]; D],
+    ) -> [Self; D] {
+        Self::shared_linear_combinations(values, weights)
+    }
+}
 
 impl<F: Field> Algebra<SymbolicVariable<F>> for SymbolicExpression<F> {}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionAlgebra<F, D, Binomial<F>>
+    for SymbolicExpression<F>
+{
+    #[inline]
+    fn ext_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D]) {
+        binomial_mul_min_rank::<F, Self, D>(a, b, res, <F as BinomiallyExtendable<D>>::W);
+    }
+
+    #[inline]
+    fn ext_square(a: &[Self; D], res: &mut [Self; D]) {
+        binomial_square_min_rank::<F, Self, D>(a, res, <F as BinomiallyExtendable<D>>::W);
+    }
+}
+
+impl<F: CubicTrinomialExtendable> ExtensionAlgebra<F, 3, CubicTrinomial> for SymbolicExpression<F> {
+    #[inline]
+    fn ext_mul(a: &[Self; 3], b: &[Self; 3], res: &mut [Self; 3]) {
+        cubic_trinomial_mul_min_rank::<F, Self>(a, b, res);
+    }
+
+    #[inline]
+    fn ext_square(a: &[Self; 3], res: &mut [Self; 3]) {
+        cubic_trinomial_square_min_rank::<F, Self>(a, res);
+    }
+}
+
+impl<F: QuinticTrinomialExtendable> ExtensionAlgebra<F, 5, QuinticTrinomial>
+    for SymbolicExpression<F>
+{
+    #[inline]
+    fn ext_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
+        quintic_trinomial_mul_min_rank::<F, Self>(a, b, res);
+    }
+
+    #[inline]
+    fn ext_square(a: &[Self; 5], res: &mut [Self; 5]) {
+        quintic_trinomial_square_min_rank::<F, Self>(a, res);
+    }
+}
 
 // Note we cannot implement PermutationMonomial due to the degree_multiple part which makes
 // operations non invertible.

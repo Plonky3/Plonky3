@@ -8,6 +8,9 @@ use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBinomialExtension};
 
 use crate::Mersenne31;
+use crate::mersenne_31::reduce_64;
+
+const P64: u64 = (1 << 31) - 1;
 
 impl Mersenne31 {
     /// Precomputed table of generators for two-adic subgroups of the circle group
@@ -72,6 +75,23 @@ impl ComplexExtendable for Mersenne31 {
         // sage: assert(g.norm() == 1)
         assert!(bits <= Self::CIRCLE_TWO_ADICITY);
         Self::CIRCLE_TWO_ADIC_GENERATORS[bits]
+    }
+
+    #[inline(always)]
+    fn complex_mul(a: &[Self; 2], b: &[Self; 2], res: &mut [Self; 2]) {
+        let (a0, a1) = (a[0].value as u64, a[1].value as u64);
+        let (b0, b1) = (b[0].value as u64, b[1].value as u64);
+        // Since `0 <= a1 <= P = 2^31 - 1`, `P ^ a1 == P - a1` without branches.
+        let na1 = P64 ^ a1;
+        res[0] = Self::new_reduced(reduce_64(a0 * b0 + na1 * b1));
+        res[1] = Self::new_reduced(reduce_64(a0 * b1 + a1 * b0));
+    }
+
+    #[inline(always)]
+    fn complex_square(a: &[Self; 2], res: &mut [Self; 2]) {
+        let (a0, a1) = (a[0].value as u64, a[1].value as u64);
+        res[0] = Self::new_reduced(reduce_64((a0 + a1) * (a0 + (P64 ^ a1))));
+        res[1] = Self::new_reduced(reduce_64((a0 << 1) * a1));
     }
 }
 

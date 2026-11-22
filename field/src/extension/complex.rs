@@ -15,17 +15,34 @@ pub trait ComplexExtendable: Field {
     const COMPLEX_GENERATOR: Complex<Self>;
 
     fn circle_two_adic_generator(bits: usize) -> Complex<Self>;
+
+    /// Multiply two elements in `Self[i] = Self[X] / (X^2 + 1)`.
+    ///
+    /// Uses `-b[1]` directly rather than multiplying by `W = -1`.
+    #[inline]
+    fn complex_mul(a: &[Self; 2], b: &[Self; 2], res: &mut [Self; 2]) {
+        res[0] = Self::dot_product(a, &[b[0], -b[1]]);
+        res[1] = Self::dot_product(a, &[b[1], b[0]]);
+    }
+
+    /// Square an element in `Self[i] = Self[X] / (X^2 + 1)` in 2 base multiplications:
+    /// `(a_0 + a_1 i)^2 = (a_0 + a_1)(a_0 - a_1) + 2 a_0 a_1 i`.
+    #[inline]
+    fn complex_square(a: &[Self; 2], res: &mut [Self; 2]) {
+        res[0] = (a[0] + a[1]) * (a[0] - a[1]);
+        res[1] = (a[0] * a[1]).double();
+    }
 }
 
 impl<F: ComplexExtendable> ExtensionAlgebra<F, 2, Binomial<F>> for F {
     #[inline]
     fn ext_mul(a: &[Self; 2], b: &[Self; 2], res: &mut [Self; 2]) {
-        binomial_mul::<F, Self, Self, 2>(a, b, res, <F as BinomiallyExtendable<2>>::W);
+        F::complex_mul(a, b, res);
     }
 
     #[inline]
     fn ext_square(a: &[Self; 2], res: &mut [Self; 2]) {
-        binomial_square::<F, Self, 2>(a, res, <F as BinomiallyExtendable<2>>::W);
+        F::complex_square(a, res);
     }
 }
 
@@ -126,6 +143,69 @@ pub trait HasComplexBinomialExtension<const D: usize>: ComplexExtendable {
     fn mul_by_w(z: Complex<Self>) -> Complex<Self> {
         <Complex<Self> as BinomiallyExtendable<D>>::W * z
     }
+
+    /// Multiply two elements in `Complex<Self>[X] / (X^D - W)`.
+    ///
+    /// Specializes `D = 2` (3-mul Karatsuba + [`Self::mul_by_w`]) and `D = 3`
+    /// (6-mul Karatsuba + [`Self::mul_by_w`]) to avoid full complex multiplications
+    /// by `W`. Base fields may override this with delayed-reduction kernels.
+    #[inline]
+    fn complex_ext_mul(
+        a: &[Complex<Self>; D],
+        b: &[Complex<Self>; D],
+        res: &mut [Complex<Self>; D],
+    ) {
+        match D {
+            2 => {
+                let m0 = a[0] * b[0];
+                let m1 = a[1] * b[1];
+                let m2 = (a[0] + a[1]) * (b[0] + b[1]);
+                res[0] = m0 + Self::mul_by_w(m1);
+                res[1] = m2 - m0 - m1;
+            }
+            3 => {
+                let m0 = a[0] * b[0];
+                let m1 = a[1] * b[1];
+                let m2 = a[2] * b[2];
+                let t0 = (a[1] + a[2]) * (b[1] + b[2]) - m1 - m2;
+                let t1 = (a[0] + a[1]) * (b[0] + b[1]) - m0 - m1;
+                let t2 = (a[0] + a[2]) * (b[0] + b[2]) - m0 - m2;
+                res[0] = m0 + Self::mul_by_w(t0);
+                res[1] = t1 + Self::mul_by_w(m2);
+                res[2] = t2 + m1;
+            }
+            _ => binomial_mul::<Complex<Self>, Complex<Self>, Complex<Self>, D>(
+                a,
+                b,
+                res,
+                <Complex<Self> as BinomiallyExtendable<D>>::W,
+            ),
+        }
+    }
+
+    /// Square an element in `Complex<Self>[X] / (X^D - W)`.
+    ///
+    /// Specializes `D = 2` and `D = 3` using [`Self::mul_by_w`] so base fields with
+    /// cheap `W` scaling avoid full complex multiplications by `W`.
+    #[inline]
+    fn complex_ext_square(a: &[Complex<Self>; D], res: &mut [Complex<Self>; D]) {
+        match D {
+            2 => {
+                res[0] = a[0].square() + Self::mul_by_w(a[1].square());
+                res[1] = (a[0] * a[1]).double();
+            }
+            3 => {
+                res[0] = a[0].square() + Self::mul_by_w(a[1] * a[2]).double();
+                res[1] = Self::mul_by_w(a[2].square()) + (a[0] * a[1]).double();
+                res[2] = a[1].square() + (a[0] * a[2]).double();
+            }
+            _ => binomial_square::<Complex<Self>, Complex<Self>, D>(
+                a,
+                res,
+                <Complex<Self> as BinomiallyExtendable<D>>::W,
+            ),
+        }
+    }
 }
 
 impl<F, const D: usize> ExtensionAlgebra<Self, D, Binomial<Self>> for Complex<F>
@@ -134,26 +214,12 @@ where
 {
     #[inline]
     fn ext_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D]) {
-        binomial_mul::<Self, Self, Self, D>(a, b, res, <Self as BinomiallyExtendable<D>>::W);
+        F::complex_ext_mul(a, b, res);
     }
 
     #[inline]
     fn ext_square(a: &[Self; D], res: &mut [Self; D]) {
-        match D {
-            2 => {
-                // QM31-style: (a0, a1) with modulus X² − W.
-                // res[0] = a0² + W·a1²   (two CM31 squares + add-only W-mul)
-                // res[1] = 2·a0·a1        (one CM31 mul)
-                let a0 = a[0];
-                let a1 = a[1];
-                let a0_sq = a0.square();
-                let a1_sq = a1.square();
-                let w_a1_sq = F::mul_by_w(a1_sq);
-                res[0] = a0_sq + w_a1_sq;
-                res[1] = (a0 * a1).double();
-            }
-            _ => binomial_square::<Self, Self, D>(a, res, <Self as BinomiallyExtendable<D>>::W),
-        }
+        F::complex_ext_square(a, res);
     }
 }
 

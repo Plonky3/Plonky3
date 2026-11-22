@@ -273,6 +273,129 @@ impl<A: SymLeaf> SymbolicExpr<A> {
             degree_multiple: dm,
         }
     }
+
+    /// Build `D` linear combinations of `values` while sharing a single `Arc<Self>` per
+    /// non-constant input across all `D` output DAGs.
+    pub(crate) fn shared_linear_combinations<const R: usize, const D: usize>(
+        values: &[Self; R],
+        weights: &[[A::F; R]; D],
+    ) -> [Self; D] {
+        enum SharedNode<A: SymLeaf> {
+            Const(A::F),
+            Expr(Arc<SymbolicExpr<A>>),
+        }
+
+        let shared: [SharedNode<A>; R] = core::array::from_fn(|j| match values[j].as_const() {
+            Some(&c) => SharedNode::Const(c),
+            None => SharedNode::Expr(Arc::new(values[j].clone())),
+        });
+
+        let neg_two = -A::F::TWO;
+
+        core::array::from_fn(|i| {
+            let mut const_acc = A::F::ZERO;
+            let mut acc_opt: Option<(Arc<Self>, bool)> = None;
+
+            for (j, &w) in weights[i].iter().enumerate() {
+                if w.is_zero() {
+                    continue;
+                }
+                match &shared[j] {
+                    SharedNode::Const(c) => {
+                        const_acc += *c * w;
+                    }
+                    SharedNode::Expr(arc) => {
+                        let dm = arc.degree_multiple();
+                        let (term_arc, is_neg) = if w.is_one() {
+                            (arc.clone(), false)
+                        } else if w == A::F::NEG_ONE {
+                            (arc.clone(), true)
+                        } else if w == A::F::TWO {
+                            (
+                                Arc::new(Self::Add {
+                                    x: arc.clone(),
+                                    y: arc.clone(),
+                                    degree_multiple: dm,
+                                }),
+                                false,
+                            )
+                        } else if w == neg_two {
+                            (
+                                Arc::new(Self::Add {
+                                    x: arc.clone(),
+                                    y: arc.clone(),
+                                    degree_multiple: dm,
+                                }),
+                                true,
+                            )
+                        } else {
+                            (
+                                Arc::new(Self::Mul {
+                                    x: arc.clone(),
+                                    y: Arc::new(Self::Leaf(A::from_const(w))),
+                                    degree_multiple: dm,
+                                }),
+                                false,
+                            )
+                        };
+
+                        acc_opt = Some(match acc_opt {
+                            None => (term_arc, is_neg),
+                            Some((prev_arc, prev_neg)) => {
+                                let lhs = if prev_neg {
+                                    Arc::new(Self::Neg {
+                                        degree_multiple: prev_arc.degree_multiple(),
+                                        x: prev_arc,
+                                    })
+                                } else {
+                                    prev_arc
+                                };
+                                let next_dm = lhs.degree_multiple().max(term_arc.degree_multiple());
+                                let combined = if is_neg {
+                                    Self::Sub {
+                                        x: lhs,
+                                        y: term_arc,
+                                        degree_multiple: next_dm,
+                                    }
+                                } else {
+                                    Self::Add {
+                                        x: lhs,
+                                        y: term_arc,
+                                        degree_multiple: next_dm,
+                                    }
+                                };
+                                (Arc::new(combined), false)
+                            }
+                        });
+                    }
+                }
+            }
+
+            let Some((acc_arc, acc_neg)) = acc_opt else {
+                return Self::Leaf(A::from_const(const_acc));
+            };
+
+            let finalized = if acc_neg {
+                Arc::new(Self::Neg {
+                    degree_multiple: acc_arc.degree_multiple(),
+                    x: acc_arc,
+                })
+            } else {
+                acc_arc
+            };
+
+            if !const_acc.is_zero() {
+                let dm = finalized.degree_multiple();
+                Self::Add {
+                    x: finalized,
+                    y: Arc::new(Self::Leaf(A::from_const(const_acc))),
+                    degree_multiple: dm,
+                }
+            } else {
+                Arc::try_unwrap(finalized).unwrap_or_else(|s| (*s).clone())
+            }
+        })
+    }
 }
 
 impl<A: SymLeaf> PrimeCharacteristicRing for SymbolicExpr<A> {

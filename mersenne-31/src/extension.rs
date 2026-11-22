@@ -5,6 +5,180 @@ use p3_field::extension::{
 use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array};
 
 use crate::Mersenne31;
+use crate::mersenne_31::{partial_reduce, reduce_64};
+
+const P64: u64 = (1 << 31) - 1;
+
+/// Reduce a value in `[0, 2^34)` modulo `P = 2^31 - 1` into `[0, P)`.
+#[inline(always)]
+const fn reduce_34(val: u64) -> u32 {
+    let lo = (val & P64) as u32;
+    let hi = (val >> 31) as u32;
+    let sum = lo + hi;
+    let sub = sum.wrapping_sub(P64 as u32);
+    if sum < sub { sum } else { sub }
+}
+
+/// Unreduced 2-multiply Gauss squaring in `Mersenne31[i]`.
+///
+/// Returns `(re, im)` congruent to `(a0 + a1 i)^2 (mod P)` with `0 <= re, im < 4 * P`.
+#[inline(always)]
+fn cm31_square_unreduced(a: Complex<Mersenne31>) -> (u64, u64) {
+    let a0 = a.real().value as u64;
+    let a1 = a.imag().value as u64;
+    (
+        partial_reduce((a0 + a1) * (a0 + (P64 ^ a1))),
+        partial_reduce((a0 << 1) * a1),
+    )
+}
+
+/// Branchless 4-channel `u64` delayed-reduction kernel for `QM31` (`Complex<Mersenne31>[Y] / (Y^2 - (2 + i))`).
+#[inline(always)]
+fn qm31_mul_u64_dot4(
+    a: &[Complex<Mersenne31>; 2],
+    b: &[Complex<Mersenne31>; 2],
+    res: &mut [Complex<Mersenne31>; 2],
+) {
+    let wb = <Mersenne31 as HasComplexBinomialExtension<2>>::mul_by_w(b[1]);
+    let (a0, a1) = (a[0].real().value as u64, a[0].imag().value as u64);
+    let (a2, a3) = (a[1].real().value as u64, a[1].imag().value as u64);
+    let (b0, b1) = (b[0].real().value as u64, b[0].imag().value as u64);
+    let (b2, b3) = (b[1].real().value as u64, b[1].imag().value as u64);
+    let (wb2, wb3) = (wb.real().value as u64, wb.imag().value as u64);
+    let na1 = P64 ^ a1;
+    let na3 = P64 ^ a3;
+
+    let c0 = reduce_64(a0 * b0 + na1 * b1 + a2 * wb2 + na3 * wb3);
+    let c1 = reduce_64(a0 * b1 + a1 * b0 + a2 * wb3 + a3 * wb2);
+    let c2 = reduce_64(a0 * b2 + na1 * b3 + a2 * b0 + na3 * b1);
+    let c3 = reduce_64(a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0);
+
+    res[0] = Complex::new_complex(Mersenne31::new_reduced(c0), Mersenne31::new_reduced(c1));
+    res[1] = Complex::new_complex(Mersenne31::new_reduced(c2), Mersenne31::new_reduced(c3));
+}
+
+/// Branchless parallel `u64` squaring kernel for `QM31` (`Complex<Mersenne31>[Y] / (Y^2 - (2 + i))`).
+#[inline(always)]
+fn qm31_square_u64_parallel8(a: &[Complex<Mersenne31>; 2], res: &mut [Complex<Mersenne31>; 2]) {
+    const Q16: u64 = P64 << 4;
+    let a0 = a[0].real().value as u64;
+    let a1 = a[0].imag().value as u64;
+    let a2 = a[1].real().value as u64;
+    let a3 = a[1].imag().value as u64;
+
+    let s0 = cm31_square_unreduced(a[0]);
+    let s1 = cm31_square_unreduced(a[1]);
+
+    let c0 = reduce_64(s0.0 + (s1.0 << 1) + Q16 - s1.1);
+    let c1 = reduce_64(s0.1 + s1.0 + (s1.1 << 1));
+    let c2 = reduce_64((a0 * a2 + (P64 ^ a1) * a3) << 1);
+    let c3 = reduce_64((a0 * a3 + a1 * a2) << 1);
+
+    res[0] = Complex::new_complex(Mersenne31::new_reduced(c0), Mersenne31::new_reduced(c1));
+    res[1] = Complex::new_complex(Mersenne31::new_reduced(c2), Mersenne31::new_reduced(c3));
+}
+
+/// Branchless 6-channel `u64` delayed-reduction kernel for degree-6 `Complex<Mersenne31>[Y] / (Y^3 - 5i)`.
+#[inline(always)]
+fn sextic_mul_u64_dot6(
+    a: &[Complex<Mersenne31>; 3],
+    b: &[Complex<Mersenne31>; 3],
+    res: &mut [Complex<Mersenne31>; 3],
+) {
+    let wb1 = <Mersenne31 as HasComplexBinomialExtension<3>>::mul_by_w(b[1]);
+    let wb2 = <Mersenne31 as HasComplexBinomialExtension<3>>::mul_by_w(b[2]);
+
+    let (a0, a1) = (a[0].real().value as u64, a[0].imag().value as u64);
+    let (a2, a3) = (a[1].real().value as u64, a[1].imag().value as u64);
+    let (a4, a5) = (a[2].real().value as u64, a[2].imag().value as u64);
+
+    let (b0, b1) = (b[0].real().value as u64, b[0].imag().value as u64);
+    let (b2, b3) = (b[1].real().value as u64, b[1].imag().value as u64);
+    let (b4, b5) = (b[2].real().value as u64, b[2].imag().value as u64);
+
+    let (wb1_0, wb1_1) = (wb1.real().value as u64, wb1.imag().value as u64);
+    let (wb2_0, wb2_1) = (wb2.real().value as u64, wb2.imag().value as u64);
+
+    let na1 = P64 ^ a1;
+    let na3 = P64 ^ a3;
+    let na5 = P64 ^ a5;
+
+    let c0_re = reduce_64(
+        partial_reduce(a0 * b0 + na1 * b1 + a2 * wb2_0 + na3 * wb2_1) + a4 * wb1_0 + na5 * wb1_1,
+    );
+    let c0_im = reduce_64(
+        partial_reduce(a0 * b1 + a1 * b0 + a2 * wb2_1 + a3 * wb2_0) + a4 * wb1_1 + a5 * wb1_0,
+    );
+    let c1_re = reduce_64(
+        partial_reduce(a0 * b2 + na1 * b3 + a2 * b0 + na3 * b1) + a4 * wb2_0 + na5 * wb2_1,
+    );
+    let c1_im =
+        reduce_64(partial_reduce(a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0) + a4 * wb2_1 + a5 * wb2_0);
+    let c2_re =
+        reduce_64(partial_reduce(a0 * b4 + na1 * b5 + a2 * b2 + na3 * b3) + a4 * b0 + na5 * b1);
+    let c2_im =
+        reduce_64(partial_reduce(a0 * b5 + a1 * b4 + a2 * b3 + a3 * b2) + a4 * b1 + a5 * b0);
+
+    res[0] = Complex::new_complex(
+        Mersenne31::new_reduced(c0_re),
+        Mersenne31::new_reduced(c0_im),
+    );
+    res[1] = Complex::new_complex(
+        Mersenne31::new_reduced(c1_re),
+        Mersenne31::new_reduced(c1_im),
+    );
+    res[2] = Complex::new_complex(
+        Mersenne31::new_reduced(c2_re),
+        Mersenne31::new_reduced(c2_im),
+    );
+}
+
+/// Branchless parallel `u64` squaring kernel for degree-6 `Complex<Mersenne31>[Y] / (Y^3 - 5i)`.
+#[inline(always)]
+fn sextic_square_u64_fast(a: &[Complex<Mersenne31>; 3], res: &mut [Complex<Mersenne31>; 3]) {
+    const Q128: u64 = P64 << 7;
+    let (a0, a1) = (a[0].real().value as u64, a[0].imag().value as u64);
+    let (a2, a3) = (a[1].real().value as u64, a[1].imag().value as u64);
+    let (a4, a5) = (a[2].real().value as u64, a[2].imag().value as u64);
+
+    let na1 = P64 ^ a1;
+    let na3 = P64 ^ a3;
+    let na5 = P64 ^ a5;
+
+    let s0_re = partial_reduce((a0 + a1) * (a0 + na1));
+    let s0_im = partial_reduce((a0 << 1) * a1);
+    let s1_re = partial_reduce((a2 + a3) * (a2 + na3));
+    let s1_im = partial_reduce((a2 << 1) * a3);
+    let s2_re = partial_reduce((a4 + a5) * (a4 + na5));
+    let s2_im = partial_reduce((a4 << 1) * a5);
+
+    let c01_re = partial_reduce(a0 * a2 + na1 * a3);
+    let c01_im = partial_reduce(a0 * a3 + a1 * a2);
+    let c02_re = partial_reduce(a0 * a4 + na1 * a5);
+    let c02_im = partial_reduce(a0 * a5 + a1 * a4);
+    let c12_re = partial_reduce(a2 * a4 + na3 * a5);
+    let c12_im = partial_reduce(a2 * a5 + a3 * a4);
+
+    let c0_re = reduce_64(s0_re + Q128 - 10 * c12_im);
+    let c0_im = reduce_64(s0_im + 10 * c12_re);
+    let c1_re = reduce_64((c01_re << 1) + Q128 - 5 * s2_im);
+    let c1_im = reduce_64((c01_im << 1) + 5 * s2_re);
+    let c2_re = reduce_64(s1_re + (c02_re << 1));
+    let c2_im = reduce_64(s1_im + (c02_im << 1));
+
+    res[0] = Complex::new_complex(
+        Mersenne31::new_reduced(c0_re),
+        Mersenne31::new_reduced(c0_im),
+    );
+    res[1] = Complex::new_complex(
+        Mersenne31::new_reduced(c1_re),
+        Mersenne31::new_reduced(c1_im),
+    );
+    res[2] = Complex::new_complex(
+        Mersenne31::new_reduced(c2_re),
+        Mersenne31::new_reduced(c2_im),
+    );
+}
 
 impl ExtensionAlgebra<Self, 3, Binomial<Self>> for Mersenne31 {
     #[inline]
@@ -91,6 +265,20 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
         let im = z.imag();
         Complex::new_complex(re + re - im, re + im + im)
     }
+
+    #[inline(always)]
+    fn complex_ext_mul(
+        a: &[Complex<Self>; 2],
+        b: &[Complex<Self>; 2],
+        res: &mut [Complex<Self>; 2],
+    ) {
+        qm31_mul_u64_dot4(a, b, res);
+    }
+
+    #[inline(always)]
+    fn complex_ext_square(a: &[Complex<Self>; 2], res: &mut [Complex<Self>; 2]) {
+        qm31_square_u64_parallel8(a, res);
+    }
 }
 
 impl HasTwoAdicComplexBinomialExtension<2> for Mersenne31 {
@@ -148,6 +336,32 @@ impl HasComplexBinomialExtension<3> for Mersenne31 {
         Complex::new_real(Self::ONE),
         Complex::ZERO,
     ];
+
+    /// Multiply a `Complex<Mersenne31>` element by `W = 5i` branchlessly:
+    /// `(a + bi)(5i) = -5b + 5ai`.
+    #[inline(always)]
+    fn mul_by_w(z: Complex<Self>) -> Complex<Self> {
+        let five_re = reduce_34(5 * (z.real().value as u64));
+        let five_im = reduce_34(5 * (z.imag().value as u64));
+        Complex::new_complex(
+            Self::new_reduced((P64 as u32) ^ five_im),
+            Self::new_reduced(five_re),
+        )
+    }
+
+    #[inline(always)]
+    fn complex_ext_mul(
+        a: &[Complex<Self>; 3],
+        b: &[Complex<Self>; 3],
+        res: &mut [Complex<Self>; 3],
+    ) {
+        sextic_mul_u64_dot6(a, b, res);
+    }
+
+    #[inline(always)]
+    fn complex_ext_square(a: &[Complex<Self>; 3], res: &mut [Complex<Self>; 3]) {
+        sextic_square_u64_fast(a, res);
+    }
 }
 
 impl HasTwoAdicComplexBinomialExtension<3> for Mersenne31 {
@@ -367,5 +581,92 @@ mod tests {
         // The cubic root is a primitive cube root of unity.
         assert_ne!(dth3, Complex::ONE);
         assert_eq!(dth3.cube(), Complex::ONE);
+    }
+
+    #[test]
+    fn qm31_and_sextic_kernels_match_schoolbook_across_extremes_and_random() {
+        use core::array;
+
+        use p3_field::extension::{BinomialExtensionField, binomial_mul, binomial_square};
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        use super::*;
+
+        type EF2 = BinomialExtensionField<Complex<Mersenne31>, 2>;
+        type EF3 = BinomialExtensionField<Complex<Mersenne31>, 3>;
+
+        let w2 = <Mersenne31 as HasComplexBinomialExtension<2>>::W;
+        let w3 = <Mersenne31 as HasComplexBinomialExtension<3>>::W;
+
+        // Include non-canonical zero P = 2^31 - 1 alongside 0, 1, 2, P - 1, and 858993459
+        // (where 5 * 858993459 = 2^32 - 1 hits lo = P in reduce_34).
+        let p_zero = Mersenne31::new_reduced((1 << 31) - 1);
+        let edges = [
+            Mersenne31::ZERO,
+            Mersenne31::ONE,
+            Mersenne31::TWO,
+            Mersenne31::new_reduced(858_993_459),
+            Mersenne31::NEG_ONE,
+            p_zero,
+        ];
+
+        for &a0 in &edges {
+            for &a1 in &edges {
+                let c = Complex::new_complex(a0, a1);
+                assert_eq!(
+                    <Mersenne31 as HasComplexBinomialExtension<2>>::mul_by_w(c),
+                    w2 * c
+                );
+                assert_eq!(
+                    <Mersenne31 as HasComplexBinomialExtension<3>>::mul_by_w(c),
+                    w3 * c
+                );
+            }
+        }
+
+        // Exhaustive extreme-value stress test (including non-canonical P) against binomial_mul/square
+        for &x in &edges {
+            for &y in &edges {
+                for &z in &edges {
+                    let a = [Complex::new_complex(x, y), Complex::new_complex(z, x)];
+                    let b = [Complex::new_complex(y, p_zero), Complex::new_complex(x, z)];
+                    let mut ref2 = [Complex::ZERO; 2];
+                    binomial_mul::<Complex<Mersenne31>, _, _, 2>(&a, &b, &mut ref2, w2);
+                    assert_eq!(EF2::new(a) * EF2::new(b), EF2::new(ref2));
+
+                    let mut ref2_sq = [Complex::ZERO; 2];
+                    binomial_square::<Complex<Mersenne31>, _, 2>(&a, &mut ref2_sq, w2);
+                    assert_eq!(EF2::new(a).square(), EF2::new(ref2_sq));
+
+                    let a3 = [a[0], a[1], b[0]];
+                    let b3 = [b[0], b[1], a[1]];
+                    let mut ref3 = [Complex::ZERO; 3];
+                    binomial_mul::<Complex<Mersenne31>, _, _, 3>(&a3, &b3, &mut ref3, w3);
+                    assert_eq!(EF3::new(a3) * EF3::new(b3), EF3::new(ref3));
+
+                    let mut ref3_sq = [Complex::ZERO; 3];
+                    binomial_square::<Complex<Mersenne31>, _, 3>(&a3, &mut ref3_sq, w3);
+                    assert_eq!(EF3::new(a3).square(), EF3::new(ref3_sq));
+                }
+            }
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x1234_5678_9ABC_DEF0);
+        for _ in 0..2_000 {
+            let a: [Complex<Mersenne31>; 2] = array::from_fn(|_| rng.random());
+            let b: [Complex<Mersenne31>; 2] = array::from_fn(|_| rng.random());
+            let mut ref2 = [Complex::ZERO; 2];
+            binomial_mul::<Complex<Mersenne31>, _, _, 2>(&a, &b, &mut ref2, w2);
+            assert_eq!(EF2::new(a) * EF2::new(b), EF2::new(ref2));
+            assert_eq!(EF2::new(a).square(), EF2::new(a) * EF2::new(a));
+
+            let a3: [Complex<Mersenne31>; 3] = array::from_fn(|_| rng.random());
+            let b3: [Complex<Mersenne31>; 3] = array::from_fn(|_| rng.random());
+            let mut ref3 = [Complex::ZERO; 3];
+            binomial_mul::<Complex<Mersenne31>, _, _, 3>(&a3, &b3, &mut ref3, w3);
+            assert_eq!(EF3::new(a3) * EF3::new(b3), EF3::new(ref3));
+            assert_eq!(EF3::new(a3).square(), EF3::new(a3) * EF3::new(a3));
+        }
     }
 }

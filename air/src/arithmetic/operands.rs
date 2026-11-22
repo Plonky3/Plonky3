@@ -4,7 +4,11 @@ use alloc::vec::Vec;
 use core::ops;
 
 use p3_field::extension::{
-    BinomialExtensionField, Complex, CubicTrinomialExtensionField, QuinticTrinomialExtensionField,
+    Binomial, BinomialExtensionField, BinomiallyExtendable, Complex, CubicTrinomial,
+    CubicTrinomialExtendable, CubicTrinomialExtensionField, ExtensionAlgebra, QuinticTrinomial,
+    QuinticTrinomialExtendable, QuinticTrinomialExtensionField, binomial_mul_min_rank,
+    binomial_square_min_rank, cubic_trinomial_mul_min_rank, cubic_trinomial_square_min_rank,
+    quintic_trinomial_mul_min_rank, quintic_trinomial_square_min_rank,
 };
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 
@@ -412,6 +416,49 @@ impl<F: Field> Algebra<F> for ArithmeticExpression<F> {
             true,
         )
     }
+    #[inline]
+    fn linear_combinations<const R: usize, const D: usize>(
+        values: &[Self; R],
+        weights: &[[F; R]; D],
+    ) -> [Self; D] {
+        Self::shared_mixed_linear_combinations(values, weights)
+    }
+}
+impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionAlgebra<F, D, Binomial<F>>
+    for ArithmeticExpression<F>
+{
+    #[inline]
+    fn ext_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D]) {
+        binomial_mul_min_rank::<F, Self, D>(a, b, res, <F as BinomiallyExtendable<D>>::W);
+    }
+    #[inline]
+    fn ext_square(a: &[Self; D], res: &mut [Self; D]) {
+        binomial_square_min_rank::<F, Self, D>(a, res, <F as BinomiallyExtendable<D>>::W);
+    }
+}
+impl<F: CubicTrinomialExtendable> ExtensionAlgebra<F, 3, CubicTrinomial>
+    for ArithmeticExpression<F>
+{
+    #[inline]
+    fn ext_mul(a: &[Self; 3], b: &[Self; 3], res: &mut [Self; 3]) {
+        cubic_trinomial_mul_min_rank::<F, Self>(a, b, res);
+    }
+    #[inline]
+    fn ext_square(a: &[Self; 3], res: &mut [Self; 3]) {
+        cubic_trinomial_square_min_rank::<F, Self>(a, res);
+    }
+}
+impl<F: QuinticTrinomialExtendable> ExtensionAlgebra<F, 5, QuinticTrinomial>
+    for ArithmeticExpression<F>
+{
+    #[inline]
+    fn ext_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
+        quintic_trinomial_mul_min_rank::<F, Self>(a, b, res);
+    }
+    #[inline]
+    fn ext_square(a: &[Self; 5], res: &mut [Self; 5]) {
+        quintic_trinomial_square_min_rank::<F, Self>(a, res);
+    }
 }
 impl<F: Field> Algebra<ArithmeticVariable<F>> for ArithmeticExpression<F> {
     fn mixed_dot_product<const N: usize>(a: &[Self; N], b: &[ArithmeticVariable<F>; N]) -> Self {
@@ -441,6 +488,49 @@ impl<F: Field, EF: ExtensionField<F>> Algebra<F> for ArithmeticExpressionExt<F, 
                 .collect::<Vec<ExtOperand<F, EF>>>(),
             true,
         )
+    }
+    #[inline]
+    fn linear_combinations<const R: usize, const D: usize>(
+        values: &[Self; R],
+        weights: &[[F; R]; D],
+    ) -> [Self; D] {
+        Self::shared_mixed_linear_combinations(values, weights)
+    }
+}
+impl<F: BinomiallyExtendable<D>, EF: ExtensionField<F>, const D: usize>
+    ExtensionAlgebra<F, D, Binomial<F>> for ArithmeticExpressionExt<F, EF>
+{
+    #[inline]
+    fn ext_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D]) {
+        binomial_mul_min_rank::<F, Self, D>(a, b, res, <F as BinomiallyExtendable<D>>::W);
+    }
+    #[inline]
+    fn ext_square(a: &[Self; D], res: &mut [Self; D]) {
+        binomial_square_min_rank::<F, Self, D>(a, res, <F as BinomiallyExtendable<D>>::W);
+    }
+}
+impl<F: CubicTrinomialExtendable, EF: ExtensionField<F>> ExtensionAlgebra<F, 3, CubicTrinomial>
+    for ArithmeticExpressionExt<F, EF>
+{
+    #[inline]
+    fn ext_mul(a: &[Self; 3], b: &[Self; 3], res: &mut [Self; 3]) {
+        cubic_trinomial_mul_min_rank::<F, Self>(a, b, res);
+    }
+    #[inline]
+    fn ext_square(a: &[Self; 3], res: &mut [Self; 3]) {
+        cubic_trinomial_square_min_rank::<F, Self>(a, res);
+    }
+}
+impl<F: QuinticTrinomialExtendable, EF: ExtensionField<F>> ExtensionAlgebra<F, 5, QuinticTrinomial>
+    for ArithmeticExpressionExt<F, EF>
+{
+    #[inline]
+    fn ext_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
+        quintic_trinomial_mul_min_rank::<F, Self>(a, b, res);
+    }
+    #[inline]
+    fn ext_square(a: &[Self; 5], res: &mut [Self; 5]) {
+        quintic_trinomial_square_min_rank::<F, Self>(a, res);
     }
 }
 impl<F: Field, EF: ExtensionField<F>> Algebra<ArithmeticExpression<F>>
