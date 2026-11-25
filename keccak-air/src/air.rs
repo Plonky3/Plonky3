@@ -2,6 +2,7 @@ use core::array;
 use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_field::integers::QuotientMap;
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
@@ -48,6 +49,16 @@ impl<F> BaseAir<F> for KeccakAir {
 impl<AB: AirBuilder> Air<AB> for KeccakAir {
     #[inline]
     fn eval(&self, builder: &mut AB) {
+        // 16-bit limbs take values in [0, 2^16); a smaller characteristic identifies distinct limbs,
+        // so round outputs no longer pin the next round's input or preimage.
+        assert!(
+            <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(
+                1u32 << BITS_PER_LIMB,
+            )
+            .is_some(),
+            "characteristic must be at least 2^16"
+        );
+
         eval_round_flags(builder);
 
         let main = builder.main();
