@@ -307,13 +307,25 @@ pub fn proven_error_udr(
 }
 
 /// Proven LDT-only error in the LDR regime with explicit `m`.
+///
+/// Returns 0 bits when `m < 3`, the trace size cannot be represented in `usize`,
+/// or `m` exceeds [`compute_upper_m`] (where `alpha > sqrt(rho^+)` fails).
 pub fn proven_error_ldr_m(
     regime: &FriRegime,
     air: &StarkAirParams,
     shape: &InstanceShape,
     m: usize,
 ) -> ErrorBits {
-    if regime.log_blowup == 0 || shape.log_trace_length == 0 || shape.modulus_bits == 0 {
+    if regime.log_blowup == 0 || shape.log_trace_length == 0 || shape.modulus_bits == 0 || m < 3 {
+        return ErrorBits::from_log2(0.0);
+    }
+    let Some(trace_length) = u32::try_from(shape.log_trace_length)
+        .ok()
+        .and_then(|s| 1usize.checked_shl(s))
+    else {
+        return ErrorBits::from_log2(0.0);
+    };
+    if m > compute_upper_m(trace_length, air.max_combo) {
         return ErrorBits::from_log2(0.0);
     }
     let alpha = alpha_ldr_m(regime.log_blowup, m);
@@ -322,11 +334,6 @@ pub fn proven_error_ldr_m(
     }
     let pp = gamma_ldr_m(regime.log_blowup, m);
     if pp <= 0.0 {
-        return ErrorBits::from_log2(0.0);
-    }
-    let lde = (1u64 << (shape.log_trace_length + regime.log_blowup)) as f64;
-    let k = (1u64 << shape.log_trace_length) as f64;
-    if k + air.max_combo as f64 >= (1.0 - pp) * lde {
         return ErrorBits::from_log2(0.0);
     }
     let query = query_phase_error(alpha, regime.num_queries, regime.query_pow_bits);
@@ -769,5 +776,47 @@ mod tests {
 
         // It sits below the curve term, so the curve term does not bind here.
         assert!(bits < 128.0 - log2(28.0));
+    }
+
+    #[test]
+    fn proven_error_ldr_m_rejects_m_above_johnson_radius_bound() {
+        let regime = FriRegime {
+            log_blowup: 1,
+            num_queries: 100,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            commit_pow_bits: 0,
+            query_pow_bits: 0,
+        };
+        let air = benchmark_air();
+        let shape = InstanceShape {
+            log_trace_length: 4,
+            modulus_bits: 128,
+            collision_resistance: 128,
+            num_batched_functions: 1,
+        };
+
+        // Trace k = 16, max_combo = 2, blowup 2 (lde = 32) gives rho^+ = 18/32 = 9/16.
+        // compute_upper_m(16, 2) = 8:
+        // - m = 8 satisfies alpha > 3/4 = sqrt(rho^+)
+        // - m = 9, 10 satisfy rho^+ < alpha <= sqrt(rho^+), violating ethSTARK Thm 1
+        let m_max = compute_upper_m(1usize << shape.log_trace_length, air.max_combo);
+        assert_eq!(m_max, 8);
+        assert!(proven_error_ldr_m(&regime, &air, &shape, m_max).bits() > 0.0);
+        assert_eq!(
+            proven_error_ldr_m(&regime, &air, &shape, m_max + 1).bits(),
+            0.0
+        );
+        assert_eq!(
+            proven_error_ldr_m(&regime, &air, &shape, m_max + 2).bits(),
+            0.0
+        );
+        assert_eq!(proven_error_ldr_m(&regime, &air, &shape, 2).bits(), 0.0);
+
+        let oversized = InstanceShape {
+            log_trace_length: usize::BITS as usize,
+            ..shape
+        };
+        assert_eq!(proven_error_ldr_m(&regime, &air, &oversized, 3).bits(), 0.0);
     }
 }
