@@ -1,7 +1,7 @@
 //! Zero-tail coefficient transforms must retain the full DFT's roots and row ordering.
 
 use p3_baby_bear::BabyBear;
-use p3_dft::{Radix2Bowers, Radix2DitParallel, TwoAdicSubgroupDft};
+use p3_dft::{NaiveDft, Radix2Bowers, Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{PrimeCharacteristicRing, TwoAdicField};
 use p3_goldilocks::Goldilocks;
@@ -156,6 +156,40 @@ fn padded_dit_evaluates_sparse_coefficients_at_declared_roots() {
         dft.dft_batch_padded(zero.clone(), 3).to_row_major_matrix(),
         zero
     );
+}
+
+#[test]
+fn padded_dit_ignores_values_past_the_last_row() {
+    // Fixture state: 8 x 8 matrix (64 elements), then 4 values past the last full row.
+    //
+    //     buffer:  8 x 8 = 64 matrix values | 4 trailing values  (height = 68 / 8 = 8)
+    //
+    // Zero trailing values pass the padded-tail assertion yet still misalign block strides
+    // unless values past `height * width` are truncated first.
+    let (log_h, w) = (3, 8);
+    let h = 1 << log_h;
+    let dft = Radix2DitParallel::<BabyBear>::default();
+    let mut rng = SmallRng::seed_from_u64(0x51a7);
+
+    for log_inv_rate in 0..=log_h {
+        let mut mat = RowMajorMatrix::<BabyBear>::rand(&mut rng, h >> log_inv_rate, w);
+        mat.values.resize(h * w, BabyBear::ZERO);
+        let expected = NaiveDft.dft_batch(mat.clone());
+
+        for trailing in [
+            vec![BabyBear::ZERO; 4],
+            (1..=4u8).map(BabyBear::from_u8).collect(),
+        ] {
+            let mut ragged = mat.clone();
+            ragged.values.extend(trailing);
+            assert_eq!(
+                dft.dft_batch_padded(ragged, log_inv_rate)
+                    .to_row_major_matrix(),
+                expected,
+                "log_inv_rate={log_inv_rate}"
+            );
+        }
+    }
 }
 
 // A field with only two subgroup points keeps invalid-domain tests small.

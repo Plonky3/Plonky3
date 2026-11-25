@@ -133,8 +133,14 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         mut mat: RowMajorMatrix<F>,
         log_inv_rate: usize,
     ) -> Self::Evaluations {
-        let log_h = log2_strict_usize(mat.height());
+        let h = mat.height();
+        let log_h = log2_strict_usize(h);
         assert!(log_inv_rate <= log_h, "padding exceeds matrix height");
+        let width = mat.width;
+        // Values past the last full row are not part of the matrix.
+        //
+        // `block_len` and `debug_assert!` below assume `mat.values.len() == h * width`.
+        mat.values.truncate(h * width);
         if log_inv_rate == 0 {
             return self.dft_batch(mat);
         }
@@ -147,14 +153,13 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             return self.dft_batch(mat);
         }
 
-        let width = mat.width;
-        let live_rows = mat.height() >> log_inv_rate;
+        let live_rows = h >> log_inv_rate;
         let live_len = live_rows * width;
         debug_assert!(
             mat.values[live_len..].iter().all(|x| x.is_zero()),
             "padded tail must be zero"
         );
-        let block_len = mat.values.len() / live_rows;
+        let block_len = width << log_inv_rate;
         reverse_matrix_index_bits(&mut RowMajorMatrixViewMut::new(
             &mut mat.values[..live_len],
             width,
