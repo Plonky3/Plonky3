@@ -284,6 +284,12 @@ impl StarkSecurityParams {
     /// sees the reported level not move has hit exactly that. Pass
     /// `fri_params.grinding_sites()`, extended with the sites the surrounding
     /// protocol enforces — see [`Self::grinding`] for the full recipe.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_combo` does not cover the row rotations declared by `air`
+    /// (`max_combo == 0`, or `max_combo <= 1` when `air.main_next_row_columns()`
+    /// or `air.preprocessed_next_row_columns()` is non-empty).
     // The list is the inputs a security level is a function of: the low-degree
     // test, the AIR and its layout, the two crypto parameters, the opening
     // shape, and where the protocol grinds. Grouping any of them behind another
@@ -307,7 +313,7 @@ impl StarkSecurityParams {
     {
         let main_next = !air.main_next_row_columns().is_empty();
         let preprocessed_next = !air.preprocessed_next_row_columns().is_empty();
-        debug_assert!(
+        assert!(
             max_combo > (main_next || preprocessed_next) as usize,
             "max_combo ({max_combo}) must cover every rotation the AIR reads: \
              main_next={main_next}, preprocessed_next={preprocessed_next}"
@@ -911,6 +917,54 @@ mod tests {
 
         assert_eq!(a.num_batched_functions, 20);
         assert_eq!(b.num_batched_functions, 12);
+    }
+
+    #[test]
+    #[should_panic(expected = "max_combo")]
+    fn from_air_rejects_undersized_max_combo_for_transition_air() {
+        let regime = benchmark_high_arity_params(124).fri_regime();
+        let air = MockAir {
+            width: 8,
+            num_constraints: 3,
+            reads_next_row: true,
+        };
+        let layout = AirLayout::from_air(&air);
+
+        let _ = StarkSecurityParams::from_air::<BabyBear, Ext, _>(
+            regime,
+            &air,
+            layout,
+            TwoAdicMultiplicativeCoset::new(BabyBear::ONE, 4).unwrap(),
+            124,
+            128,
+            1,
+            OpeningShape::new(),
+            GrindingSites::NONE,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "max_combo")]
+    fn from_air_rejects_zero_max_combo() {
+        let regime = benchmark_high_arity_params(124).fri_regime();
+        let air = MockAir {
+            width: 8,
+            num_constraints: 3,
+            reads_next_row: false,
+        };
+        let layout = AirLayout::from_air(&air);
+
+        let _ = StarkSecurityParams::from_air::<BabyBear, Ext, _>(
+            regime,
+            &air,
+            layout,
+            TwoAdicMultiplicativeCoset::new(BabyBear::ONE, 4).unwrap(),
+            124,
+            128,
+            0,
+            OpeningShape::new(),
+            GrindingSites::NONE,
+        );
     }
 
     /// A grinding site the protocol enforces must move the reported level.
